@@ -1,0 +1,7 @@
+{
+  "session_id": "sess-main-0001",
+  "transcript_path": "@TRANSCRIPT@",
+  "cwd": "@ROOT@/acme",
+  "hook_event_name": "Stop",
+  "stop_hook_active": false
+}

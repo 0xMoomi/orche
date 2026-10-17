@@ -1,0 +1,9 @@
+docs/internal/
+config/orche.json
+*.jsonl
+.superpowers/
+__pycache__/
+*.pyc
+.DS_Store
+tests/.tmp/
+!tests/fixtures/transcripts/*.jsonl

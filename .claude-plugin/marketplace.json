@@ -1,0 +1,14 @@
+{
+  "name": "orche",
+  "owner": {
+    "name": "0xmoomi"
+  },
+  "plugins": [
+    {
+      "name": "orche",
+      "source": "./",
+      "description": "Orchestration layer for Claude Code + Orca: divisions in worktrees, hook-relayed briefs, verification ledger, token-economy guardrails",
+      "version": "0.1.0"
+    }
+  ]
+}

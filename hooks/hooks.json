@@ -1,0 +1,22 @@
+{
+  "hooks": {
+    "Stop": [
+      {"hooks": [{"type": "command", "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/dispatch_relay.py\""}]}
+    ],
+    "UserPromptSubmit": [
+      {"hooks": [{"type": "command", "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/report_inject.py\""}]}
+    ],
+    "PreToolUse": [
+      {"matcher": "Read|Bash|Grep|Edit|Write",
+       "hooks": [{"type": "command", "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/env_read_gate.py\""}]},
+      {"matcher": "Edit|Write|NotebookEdit|MultiEdit",
+       "hooks": [{"type": "command", "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/scope_gate.py\""}]}
+    ],
+    "SessionStart": [
+      {"hooks": [{"type": "command", "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/session_start.py\""}]}
+    ],
+    "SessionEnd": [
+      {"hooks": [{"type": "command", "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/session_end.py\""}]}
+    ]
+  }
+}

@@ -1,0 +1,88 @@
+{
+  "version": 1,
+  "limits": {
+    "per_project_per_day": 3,
+    "per_project_per_week": 10,
+    "per_request_auto": 2,
+    "global_per_day_freeze": 20,
+    "idle_days_to_sleep": 14,
+    "max_awake_sessions": 12
+  },
+  "frozen": false,
+  "projects": {
+    "acme-shop": {
+      "repo_id": "repo-acme",
+      "path": "/srv/orca/acme-shop",
+      "stage": "building",
+      "aliases": ["Acme", "shop"],
+      "main_session": "main-acme-shop",
+      "liaison_session": "liaison-acme-shop",
+      "card": "~/.claude/orche/cards/acme-shop.md",
+      "standing": ".orche/STANDING.md",
+      "divisions": {
+        "rnd": {
+          "status": "dormant",
+          "worktree": "repo-acme::/srv/orca/acme-shop-rnd",
+          "branch": "div/rnd",
+          "session": "div-acme-shop-rnd",
+          "model": "claude-opus-5-5",
+          "effort": "high",
+          "last_activity": "2026-10-01T09:00:00+09:00"
+        },
+        "build": {
+          "status": "active",
+          "worktree": "repo-acme::/srv/orca/acme-shop-build",
+          "branch": "div/build",
+          "session": "div-acme-shop-build",
+          "model": "claude-opus-5-5",
+          "effort": "high",
+          "last_activity": "2026-10-15T18:30:00+09:00",
+          "features": [
+            {
+              "name": "checkout",
+              "worktree": "repo-acme::/srv/orca/acme-shop-checkout",
+              "branch": "feat/checkout",
+              "scope": ["src/checkout/**", "tests/checkout/**"],
+              "session": "feat-acme-shop-checkout",
+              "status": "active",
+              "created": "2026-10-10T10:00:00+09:00",
+              "last_activity": "2026-10-15T18:00:00+09:00",
+              "reason": "persistent owner for checkout flow"
+            },
+            {
+              "name": "search",
+              "worktree": "repo-acme::/srv/orca/acme-shop-search",
+              "branch": "feat/search",
+              "scope": ["src/search/**"],
+              "session": "feat-acme-shop-search",
+              "status": "paused",
+              "created": "2026-10-02T10:00:00+09:00",
+              "last_activity": "2026-10-03T10:00:00+09:00",
+              "reason": "search rewrite"
+            }
+          ]
+        }
+      }
+    },
+    "docs-site": {
+      "repo_id": "repo-docs",
+      "path": "/srv/orca/docs-site",
+      "stage": "public",
+      "aliases": [],
+      "main_session": "main-docs-site",
+      "liaison_session": "liaison-docs-site",
+      "card": "~/.claude/orche/cards/docs-site.md",
+      "standing": ".orche/STANDING.md",
+      "divisions": {}
+    }
+  },
+  "events": [
+    {
+      "at": "2026-10-10T10:00:00+09:00",
+      "type": "create",
+      "project": "acme-shop",
+      "unit": "build/checkout",
+      "by": "div-acme-shop-build"
+    }
+  ]
+}

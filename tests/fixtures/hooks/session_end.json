@@ -1,0 +1,7 @@
+{
+  "session_id": "sess-orphan-0001",
+  "transcript_path": "@TRANSCRIPT@",
+  "cwd": "@ROOT@/elsewhere",
+  "hook_event_name": "SessionEnd",
+  "reason": "exit"
+}

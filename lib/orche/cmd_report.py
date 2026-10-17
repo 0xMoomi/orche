@@ -1,0 +1,166 @@
+"""`orche report <status> --summary TEXT [--unit ID] [--to SESSION] [--report-path PATH] [--urgent]`.
+
+A worker files its completion (or block, question, stop) as one inbox pointer:
+- from: $ORCHE_SESSION, else the session owning the cwd;
+- to: the project's Main; a feature session reports to its Build division (override with --to);
+- unit: the newest `.orche/units/*/BRIEF.md` addressed (TO) to `from`; brief_rev from its `rev:` line;
+  with no such brief, `external-request|question|info` use `adhoc-<from>-<yyyymmdd>` (others need one);
+- head_sha: git HEAD of the cwd; ledger_row: whether the canonical ledger has a row for it;
+- report_path: --report-path, else the unit's REPORT.md when it exists.
+The recipient must be a session the registry knows; the summary is masked (mask.redact).
+`done` from the Build division or a feature agent needs a canonical ledger row for HEAD with a
+verdict >= type-check-only (the Stop hook's gate; exit 3 otherwise).
+"""
+import json
+import os
+import re
+import sys
+from pathlib import Path
+
+from . import dispatch, inbox, ledger, mask, registry, units, util
+
+EXIT_OK, EXIT_USER, EXIT_BLOCKED = 0, 1, 3
+MAX_LINES = 5
+TRUNCATED = "[…truncated]"
+ADHOC_STATUSES = ("external-request", "question", "info")
+_REV = re.compile(r"^rev:\s*(\d+)\s*$", re.MULTILINE)
+
+
+def register(subparsers):
+    p = subparsers.add_parser("report", help="file a completion/blocker as an inbox pointer (to Main or Build)")
+    p.add_argument("status", help="|".join(inbox.STATUSES))
+    p.add_argument("--summary", required=True, help="what happened, <= 5 lines")
+    p.add_argument("--unit", help="unit id (default: the newest brief addressed to this session)")
+    p.add_argument("--to", help="recipient session (default: Main; a feature reports to Build)")
+    p.add_argument("--report-path", help="REPORT.md path (default: the unit's REPORT.md if present)")
+    p.add_argument("--urgent", action="store_true", help="mark the pointer urgent (drained at Main's next prompt; does not wake a pane)")
+    p.set_defaults(func=cmd_report)
+
+
+def _fail(msg):
+    print(f"orche: {msg}", file=sys.stderr)
+    return EXIT_USER
+
+
+def identified_session(reg, cwd):
+    """$ORCHE_SESSION, else the session of the unit worktree holding `cwd`; never guessed from the
+    main checkout (ruling 137). None when unidentified."""
+    env = os.environ.get("ORCHE_SESSION")
+    if env:
+        return env
+    unit = units.unit_from_cwd(reg, cwd)
+    return unit.session if unit is not None and unit.session else None
+
+
+def unidentified_message(reg, cwd) -> str:
+    key = units.project_from_cwd(reg, cwd)
+    main = (reg.get("projects", {}).get(key) or {}).get("main_session") if key else None
+    return (f"cannot tell which session is reporting: set ORCHE_SESSION={main or 'main-<proj>'} "
+            "(ORCHE panes set it automatically) or run inside a unit worktree")
+
+
+def sender(reg, cwd):
+    """(session, project key, default recipient) or None."""
+    me = identified_session(reg, cwd)
+    if not me:
+        return None
+    for key, proj in reg.get("projects", {}).items():
+        if me in (proj.get("main_session"), proj.get("liaison_session")):
+            return me, key, proj.get("main_session")
+    unit = units.find_unit(reg, me)
+    if unit is None:
+        return None
+    proj = reg["projects"][unit.project]
+    if unit.kind == "feat":
+        parent = proj.get("divisions", {}).get(unit.event_unit.split("/")[0], {})
+        return me, unit.project, parent.get("session") or proj.get("main_session")
+    return me, unit.project, proj.get("main_session")
+
+
+def newest_brief(root: Path, me):
+    """(unit id, BRIEF.md path) of the newest brief whose TO is `me`, else None."""
+    found = []
+    for brief in (root / ".orche" / "units").glob("*/BRIEF.md"):
+        if dispatch.read_brief_fields(root, brief.parent.name).get("TO", "").strip() == me:
+            found.append((brief.stat().st_mtime, brief.parent.name, brief))
+    return max(found)[1:] if found else None
+
+
+def brief_rev(path: Path) -> int:
+    try:
+        m = _REV.search(path.read_text(encoding="utf-8"))
+    except OSError:
+        return 1
+    return int(m.group(1)) if m else 1
+
+
+def clip(summary: str) -> str:
+    lines = summary.strip().splitlines()
+    return "\n".join(lines[:MAX_LINES - 1] + [TRUNCATED]) if len(lines) > MAX_LINES else "\n".join(lines)
+
+
+def cmd_report(args):
+    if args.status not in inbox.STATUSES:
+        return _fail(f"status must be one of {'|'.join(inbox.STATUSES)}, got {args.status!r}")
+    if args.unit and not dispatch.UNIT_ID.match(args.unit):
+        return _fail(f"bad unit id {args.unit!r} (want <proj>-<slug>-<yyyymmdd>-<n>)")
+    reg = registry.load()
+    cwd = os.getcwd()
+    who = sender(reg, cwd)
+    if who is None:
+        if identified_session(reg, cwd) is None:
+            return _fail(unidentified_message(reg, cwd))
+        return _fail("cannot tell which session is reporting; set ORCHE_SESSION or run inside a unit")
+    me, key, default_to = who
+    to = args.to or default_to
+    if not to:
+        return _fail(f"no recipient for {me}; pass --to")
+    if to not in units.all_sessions(reg):
+        return _fail(f"unknown target session {to!r} (not in the registry)")
+    target = units.find_unit(reg, to)
+    if target is not None and target.entry.get("status") == "retired":
+        return _fail(f"target session {to!r} is retired")
+    summary = clip(mask.redact(args.summary)[0])
+    if not summary:
+        return _fail("--summary is empty")
+    root = units.project_root(reg, key)
+    if args.unit:
+        unit = args.unit
+        brief = root / ".orche" / "units" / unit / "BRIEF.md" if root else None
+        if brief is None or not brief.is_file():
+            return _fail(f"unknown unit {unit!r} (no .orche/units/{unit}/BRIEF.md)")
+    else:
+        found = newest_brief(root, me) if root else None
+        if found is None and args.status in ADHOC_STATUSES:
+            found = (f"adhoc-{util.slugify(me)}-{units.now():%Y%m%d}", None)
+        if found is None:
+            return _fail(f"no brief addressed to {me}; pass --unit")
+        unit, brief = found
+    if args.report_path:
+        report = str(Path(args.report_path).expanduser().resolve())
+    else:
+        default = brief.parent / "REPORT.md" if brief else None
+        report = str(default) if default and default.is_file() else ""
+    head = dispatch.git_head(cwd) or ""
+    if args.status == "done" and dispatch.gated_sender(units.find_unit(reg, me)):
+        missing, _row = dispatch.ledger_missing(key, head or None, "type-check-only")
+        if missing:
+            print(dispatch.GATE_PREFIX + "; ".join(missing) + dispatch.GATE_SUFFIX, file=sys.stderr)
+            return EXIT_BLOCKED
+    try:
+        ptr = inbox.make(unit, me, to, args.status, report_path=report, head_sha=head,
+                         ledger_row=ledger.row_for_sha(key, head) is not None,
+                         brief_rev=brief_rev(brief) if brief else 1,
+                         urgent=args.urgent, summary=summary)
+        path = None if args.dry_run else inbox.write(ptr)
+        if not args.dry_run:
+            units.touch_activity(me)
+    except ValueError as exc:
+        return _fail(str(exc))
+    if args.json:
+        print(json.dumps(ptr, indent=2, ensure_ascii=False))
+    elif args.dry_run:
+        print(f"[dry-run] would write pointer {unit} {args.status} -> {to}")
+    else:
+        print(f"reported {unit} {args.status} -> {to}: {path}")
+    return EXIT_OK

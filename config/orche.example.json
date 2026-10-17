@@ -1,0 +1,13 @@
+{
+  "orca_bin": "orca",
+  "claude_bin": "claude",
+  "notify": true,
+  "lang": "en",
+  "jev": {
+    "enabled": false,
+    "base_url": "",
+    "model": "jev-1.13.0",
+    "timeout_s": 1.0,
+    "api_key_env": "JEV_API_KEY"
+  }
+}

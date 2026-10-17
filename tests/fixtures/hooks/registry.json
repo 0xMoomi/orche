@@ -1,0 +1,58 @@
+{
+  "version": 1,
+  "limits": {
+    "per_project_per_day": 3,
+    "per_project_per_week": 10,
+    "per_request_auto": 2,
+    "global_per_day_freeze": 20,
+    "idle_days_to_sleep": 14,
+    "max_awake_sessions": 12
+  },
+  "frozen": false,
+  "projects": {
+    "acme": {
+      "repo_id": "repo-acme",
+      "path": "@ROOT@/acme",
+      "stage": "building",
+      "aliases": ["shop"],
+      "main_session": "main-acme",
+      "liaison_session": "liaison-acme",
+      "card": "~/.claude/orche/cards/acme.md",
+      "standing": ".orche/STANDING.md",
+      "divisions": {
+        "rnd": {
+          "status": "dormant",
+          "worktree": "repo-acme::@ROOT@/acme-rnd",
+          "branch": "div/rnd",
+          "session": "div-acme-rnd",
+          "model": "claude-opus-5-5",
+          "effort": "high",
+          "last_activity": "2026-10-01T09:00:00+09:00"
+        },
+        "build": {
+          "status": "active",
+          "worktree": "repo-acme::@ROOT@/acme-build",
+          "branch": "div/build",
+          "session": "div-acme-build",
+          "model": "claude-opus-5-5",
+          "effort": "high",
+          "last_activity": "2026-10-15T18:30:00+09:00",
+          "features": [
+            {
+              "name": "checkout",
+              "worktree": "repo-acme::@ROOT@/acme-checkout",
+              "branch": "feat/checkout",
+              "scope": ["src/checkout/**", "tests/checkout/**"],
+              "session": "feat-acme-checkout",
+              "status": "active",
+              "created": "2026-10-10T10:00:00+09:00",
+              "last_activity": "2026-10-15T18:00:00+09:00",
+              "reason": "persistent owner for checkout flow"
+            }
+          ]
+        }
+      }
+    }
+  },
+  "events": []
+}
