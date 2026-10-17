@@ -1,0 +1,7 @@
+{
+  "session_id": "sess-feat-0001",
+  "transcript_path": "@TRANSCRIPT@",
+  "cwd": "@ROOT@/acme-checkout",
+  "hook_event_name": "SessionStart",
+  "source": "clear"
+}

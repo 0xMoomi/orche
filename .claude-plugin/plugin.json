@@ -1,0 +1,10 @@
+{
+  "name": "orche",
+  "version": "0.1.0",
+  "description": "Orchestration layer for Claude Code + Orca: divisions in worktrees, hook-relayed briefs, verification ledger, token-economy guardrails",
+  "author": {
+    "name": "0xmoomi"
+  },
+  "license": "MIT",
+  "keywords": ["orchestration", "claude-code", "orca", "worktree", "verification"]
+}
