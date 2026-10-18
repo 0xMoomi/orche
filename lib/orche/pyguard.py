@@ -1,4 +1,4 @@
-"""Python version guard, imported by `bin/orche` and every hook BEFORE any other orche module.
+"""Python version guard, imported by `bin/orche.py` and every hook BEFORE any other orche module.
 
 Keep this file importable by old interpreters (no annotations, no 3.10+ syntax): it is the one
 thing that must still run on macOS's stock /usr/bin/python3 (3.9) to say why ORCHE is idle.

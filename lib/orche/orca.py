@@ -131,11 +131,14 @@ def find_terminal_by_title(title, *, timeout=20):
     return match_title(terminals_of(terminal("list", timeout=timeout)), title)
 
 
-DEFAULT_HOOK_BUDGET_S = 1.8
+DEFAULT_HOOK_BUDGET_S = 3.0
+# Without --wait-submit, `terminal send --enter` waits for the Claude TUI to confirm the submit
+# (measured 8 s on an idle pane); with `--wait-submit 1` it returns in ~0.1 s. Must be a positive integer.
+SEND_ENTER = ("--enter", "--wait-submit", "1")
 
 
 def hook_deadline(started=None) -> float:
-    """Monotonic deadline for a fail-open hook: start + $ORCHE_HOOK_BUDGET_S (default 1.8 s)."""
+    """Monotonic deadline for a fail-open hook: start + $ORCHE_HOOK_BUDGET_S (default 3.0 s)."""
     try:
         budget = float(os.environ.get("ORCHE_HOOK_BUDGET_S") or DEFAULT_HOOK_BUDGET_S)
     except ValueError:
@@ -169,7 +172,7 @@ class Terminals:
 
     def send(self, term, text):
         """Send without the stale-handle retry (hooks have no time for a second list)."""
-        return terminal("send", "--terminal", term["handle"], "--text", text, "--enter",
+        return terminal("send", "--terminal", term["handle"], "--text", text, *SEND_ENTER,
                         timeout=max(self.remaining(), 0.1))
 
 
@@ -179,13 +182,13 @@ def nudge(title, text, *, dry_run=False, timeout=20):
     A stale handle is re-listed once and retried.
     """
     if dry_run:
-        return terminal("send", "--terminal", f"<{title}>", "--text", text, "--enter", dry_run=True)
+        return terminal("send", "--terminal", f"<{title}>", "--text", text, *SEND_ENTER, dry_run=True)
     for attempt in (1, 2):
         term = find_terminal_by_title(title, timeout=timeout)
         if term is None:
             return None
         try:
-            return terminal("send", "--terminal", term["handle"], "--text", text, "--enter", timeout=timeout)
+            return terminal("send", "--terminal", term["handle"], "--text", text, *SEND_ENTER, timeout=timeout)
         except OrcaError as exc:
             if exc.code not in STALE_CODES or attempt == 2:
                 raise

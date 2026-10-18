@@ -4,12 +4,11 @@ Shared CLI glue for `cmd_init`, `cmd_feat`, `cmd_stage` and `cmd_hr` lives here.
 """
 import json
 import sys
-from pathlib import Path
 
-from .. import statusline
+from .. import paths, statusline
 
 EXIT_OK, EXIT_USER, EXIT_NOT_FOUND, EXIT_BLOCKED = 0, 1, 2, 3
-PLUGIN_ROOT = Path(__file__).resolve().parents[3]
+PLUGIN_ROOT = paths.PLUGIN_ROOT
 
 
 def out(args, data, lines) -> None:

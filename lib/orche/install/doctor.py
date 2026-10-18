@@ -1,11 +1,13 @@
-"""`orche doctor`: one OK/WARN/FAIL line per check. FAIL only for python < 3.11 (this interpreter
-or the `python3` on PATH the hooks run), an invalid registry, or an unwritable ORCHE_HOME."""
+"""`orche doctor`: one OK/WARN/FAIL line per check. FAIL only for python < 3.11 (this interpreter,
+or no 3.11+ the launchers' finder can pick in a login shell), an invalid registry, or an unwritable
+ORCHE_HOME."""
 import os
 import re
+import shlex
 import shutil
 import sys
 
-from .. import orca, paths, registry, shell
+from .. import config, orca, paths, procs, registry, runner, runs, shell
 from . import careful, settings, statusline
 
 TOOLS = ("gcloud", "gh", "vercel", "age", "zstd")
@@ -28,19 +30,138 @@ def _orche_home():
     return "FAIL", f"ORCHE_HOME {home} cannot be created ({parent} is not writable)"
 
 
-def python3_on_path():
-    """(level, name, detail) for the `python3` the plugin hooks run (a bare `python3` on PATH)."""
-    exe = shutil.which("python3")
-    if not exe:
-        return "FAIL", "python3 on PATH", "not found (the hooks run `python3`)"
-    res = shell.run([exe, "--version"], timeout=10)
-    m = re.search(r"Python (\d+)\.(\d+)", (res.out or "") + (res.err or ""))
-    if not m:
-        return "WARN", "python3 on PATH", f"{exe}: cannot read its version"
-    version = (int(m.group(1)), int(m.group(2)))
-    if version < (3, 11):
-        return "FAIL", "python3 on PATH", f"{exe} is {version[0]}.{version[1]}: hooks do nothing (needs 3.11+)"
-    return "OK", "python3 on PATH", f"{exe} {version[0]}.{version[1]}"
+PY_HINT = "brew install python; put /opt/homebrew/bin before /usr/bin in PATH"
+PY_ROW = "python3 (login shell)"
+ORCHE_ROW = "orche on PATH"
+
+
+def login_shell(command):
+    """(shell, Result) of `$SHELL -lc <command>`: what a fresh login shell (a new pane) resolves."""
+    sh = os.environ.get("SHELL") or "/bin/sh"
+    return sh, shell.run([sh, "-lc", command], timeout=15)
+
+
+FINDER = paths.PLUGIN_ROOT / "lib" / "find_python.sh"
+LAUNCHERS_PICK = " (launchers pick a 3.11+ interpreter themselves)"
+
+
+def finder_command() -> str:
+    """Login-shell command running the launchers' own search (lib/find_python.sh) under /bin/sh."""
+    probe = '. "$0" && orche_find_python && command -v "$ORCHE_PY"'
+    return f"/bin/sh -c {shlex.quote(probe)} {shlex.quote(str(FINDER))}"
+
+
+def python3_login():
+    """(level, name, detail) for the `python3` a login shell resolves.
+
+    Below 3.11 (or missing) this is a WARN while lib/find_python.sh, which `bin/orche` and
+    `hooks/run.sh` use, still finds a 3.11+ interpreter in the login shell; FAIL only when it finds none.
+    """
+    sh, res = login_shell("command -v python3 && python3 --version 2>&1")
+    exe = next((ln.strip() for ln in (res.out or "").splitlines() if ln.strip().startswith("/")), "")
+    m = re.search(r"Python (\d+)\.(\d+)(?:\.(\d+))?", (res.out or "") + (res.err or "")) if exe else None
+    if exe and not m:
+        return "WARN", PY_ROW, f"{exe}: cannot read its version"
+    if m and (int(m.group(1)), int(m.group(2))) >= (3, 11):
+        return "OK", PY_ROW, f"{exe} {'.'.join(g for g in m.groups() if g is not None)}"
+    detail = (f"{exe} is {'.'.join(g for g in m.groups() if g is not None)} (needs 3.11+): {PY_HINT}" if m
+              else f"{sh} -lc finds no python3 (needs 3.11+): {PY_HINT}")
+    _, found = login_shell(finder_command())
+    if found.ok and (found.out or "").strip():
+        return "WARN", PY_ROW, detail + LAUNCHERS_PICK
+    return "FAIL", PY_ROW, detail
+
+
+def orche_login():
+    """(level, name, detail): can a login shell resolve `orche`? (Panes add it themselves.)"""
+    sh, res = login_shell("command -v orche")
+    found = (res.out or "").strip().splitlines()
+    if res.ok and found:
+        return "OK", ORCHE_ROW, found[-1].strip()
+    return "WARN", ORCHE_ROW, (f"{sh} -lc cannot find orche; add to your shell profile: "
+                               f"export PATH=\"{paths.PLUGIN_ROOT / 'bin'}:$PATH\"")
+
+
+def claude_checks() -> list:
+    """(level, name, detail) rows: the configured `claude` binary, its version, and whether its
+    `--help` lists `--setting-sources` (the runner passes `--setting-sources project`)."""
+    claude_bin = config.load().get("claude_bin") or "claude"
+    found = (claude_bin if os.path.isabs(claude_bin) and os.access(claude_bin, os.X_OK)
+             else shutil.which(claude_bin))
+    if not found:
+        return [("WARN", "claude", f"{claude_bin} not found (config claude_bin); the runner cannot start units")]
+    res = shell.run([found, "--version"], timeout=10)
+    version = (res.out or "").strip().splitlines()[:1]
+    rows = [("OK", "claude", f"{found} {version[0]}") if res.ok and version else
+            ("WARN", "claude", f"{found} --version failed: {(res.err or res.out or '').strip()[:200]}")]
+    flags = runner.probe(found)
+    rows.append(("OK", "claude --setting-sources", "supported") if flags["setting_sources"] else
+                ("WARN", "claude --setting-sources", "not listed in claude --help; the runner needs it "
+                                                     "(update Claude Code or set config delivery: pane)"))
+    return rows
+
+
+MIN_FREE = 1 << 30          # WARN below 1 GiB free on ORCHE_HOME's filesystem
+MAX_RUN_LOGS = 200 << 20    # WARN above 200 MiB of logs/runs
+
+
+def _existing(path):
+    while not path.exists() and path != path.parent:
+        path = path.parent
+    return path
+
+
+def disk_checks() -> list:
+    """(level, name, detail): free space where ORCHE_HOME lives (a full disk keeps the runner
+    from filing: reconcile files it later, once writes work again) and the size of logs/runs."""
+    home = paths.orche_home()
+    rows = []
+    try:
+        st = os.statvfs(_existing(home))
+        free = st.f_bavail * st.f_frsize
+        gib = f"{free / (1 << 30):.1f} GiB free"
+        rows.append(("OK", "disk", f"{gib} at {home}") if free >= MIN_FREE else
+                    ("WARN", "disk", f"{gib} at {home} (under 1 GiB: runs may fail to file their result)"))
+    except OSError as exc:
+        rows.append(("WARN", "disk", f"cannot read free space at {home}: {exc}"))
+    total = 0
+    for log_file in runs.logs_dir().glob("*.log"):
+        try:
+            total += log_file.stat().st_size
+        except OSError:
+            continue
+    mib = f"{total / (1 << 20):.1f} MiB in {runs.logs_dir()}"
+    rows.append(("OK", "run logs", mib) if total <= MAX_RUN_LOGS else
+                ("WARN", "run logs", f"{mib} (over 200 MiB: lower runner.log_keep_days or run "
+                                     "`orche janitor run`)"))
+    return rows
+
+
+def runner_lock_checks(reg, dry_run=False) -> list:
+    """runs.reconcile() of every project (not on a dry run): one WARN row per lost run it settled
+    (an `orche run` that died, or whose pid is another program now: `failed` filed, leftovers
+    killed, locks removed)."""
+    if dry_run:
+        return []
+    return [("WARN", "runner lock", f"{act['project']}: {runs.describe(act)}")
+            for key in sorted(reg.get("projects", {}))
+            for act in runs.reconcile(reg, key, budget_s=runs.RECONCILE_BUDGET_S)]
+
+
+def process_checks(reg) -> list:
+    """(level, name, detail): whether the process table can be read (the env sweep and reconcile
+    need `ps`; without it nothing a run left behind is ever killed) and one WARN row per pending
+    sweep (a lost run whose leftovers are not swept yet)."""
+    rows = [("OK", "process table", "readable") if procs.table() is not None else
+            ("WARN", "process table", "cannot read the process table (`ps` failed or timed out): "
+                                      "run sweeps and reconcile cannot kill what a run left running")]
+    for key in sorted(reg.get("projects", {})):
+        for rec in runs.pending_sweeps(key):
+            rows.append(("WARN", "pending sweep",
+                         f"{key}: {rec.get('unit')} (run {rec.get('run_id')}, claude pid {rec.get('child_pid')}): "
+                         f"leftovers not swept yet ({int(rec.get('sweep_failures') or 0)} unreadable "
+                         "process table(s) so far)"))
+    return rows
 
 
 def checks(ctx) -> list:
@@ -52,30 +173,43 @@ def checks(ctx) -> list:
     py = sys.version_info
     add("OK" if py >= (3, 11) else "FAIL", "python", f"{py.major}.{py.minor}.{py.micro}"
         + ("" if py >= (3, 11) else " (needs 3.11+)"))
-    add(*python3_on_path())
+    add(*python3_login())
+    add(*orche_login())
     try:
         orca.status(timeout=5)
         add("OK", "orca", "orca status answered")
     except orca.OrcaError as exc:
         add("WARN", "orca", f"orca status failed: {exc}")
+    for row in claude_checks():
+        add(*row)
     for tool in TOOLS:
         found = shutil.which(tool)
         add("OK" if found else "WARN", f"tool {tool}", found or "not found on PATH")
     level, detail = _orche_home()
     add(level, "orche_home", detail)
+    for row in disk_checks():
+        add(*row)
     try:
         reg = registry.load()
         add("OK", "registry", f"valid ({len(reg['projects'])} project(s))")
+        for row in runner_lock_checks(reg, ctx.dry_run):
+            add(*row)
+        for row in process_checks(reg):
+            add(*row)
     except registry.RegistryError as exc:
         add("FAIL", "registry", str(exc).splitlines()[0] if str(exc) else "invalid")
     data, err = settings.load(ctx)
     if err:
         add("WARN", "settings", err)
         data = {}
-    twice = settings.double_registered(data, ctx.plugin_root)
-    if twice:
-        add("WARN", "hooks", "hooks registered twice (plugin + settings): remove one "
-                             "(orche uninstall or disable the plugin)")
+    in_settings = settings.settings_hooks(data, ctx.plugin_root)
+    shapes = {"run.sh" if settings.legacy_command(ctx.plugin_root, cmd) else "python3" for _, cmd in in_settings}
+    if in_settings and settings.plugin_enabled(data):
+        add("WARN", "hooks", f"hooks registered twice (plugin + {len(in_settings)} settings.json entries): "
+                             "run orche install (plugin mode removes the settings entries) or disable the plugin")
+    elif len(shapes) == 2:
+        add("WARN", "hooks", "settings.json holds both hook shapes (python3 .../hooks/<hook>.py and "
+                             "hooks/run.sh <hook>): run orche install --mode settings to replace the old ones")
     elif settings.plugin_enabled(data):
         add("OK", "hooks", "orche plugin enabled")
     else:

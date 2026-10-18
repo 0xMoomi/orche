@@ -140,33 +140,37 @@ def write_settings(worktree_dir, agent, *, main_root=None, dry_run=False) -> Pat
     return target
 
 
-def persona_template(role, name):
-    """Most specific persona template that exists, else None."""
-    names = {"division": [f"div-{name}.md", "division.md"], "feature": ["feature.md"],
-             "liaison": ["liaison.md"]}[role]
+def persona_template(role, name, custom=False):
+    """Most specific persona template that exists, else None. A custom division always uses the
+    generic `div-custom.md`."""
+    names = {"division": ["div-custom.md"] if custom else [f"div-{name}.md", "division.md"],
+             "feature": ["feature.md"], "liaison": ["liaison.md"]}[role]
     return next((PERSONAS / n for n in names if (PERSONAS / n).is_file()), None)
 
 
-def persona_text(role, *, project, name, session, model, effort):
-    tmpl = persona_template(role, name)
+def persona_text(role, *, project, name, session, model, effort, custom=None):
+    """(persona text, rendered from a template?). `custom` = {"label", "charter"} of a custom division."""
+    tmpl = persona_template(role, name, custom=bool(custom))
     if tmpl is not None:
+        extra = {"LABEL": custom["label"], "CHARTER": custom["charter"]} if custom else {}
         return templates.render(tmpl.read_text(encoding="utf-8"), PROJECT=project, NAME=name,
-                                SESSION=session, MODEL=model, EFFORT=effort), True
+                                SESSION=session, MODEL=model, EFFORT=effort, **extra), True
     agent = "liaison" if role == "liaison" else session
     text = (f"---\nname: {agent}\ndescription: ORCHE {role} agent for {project} ({name})\nmodel: {model}\n---\n"
             f"{ROLE_TEXT[role].format(name=name, project=project)}\n"
-            "Read .orche/STANDING.md first; keep your HANDOFF.md current before any pause.\n")
+            + (f"Charter: {custom['charter']}\n" if custom else "")
+            + "Read .orche/STANDING.md first; keep your HANDOFF.md current before any pause.\n")
     return text, False
 
 
 def write_persona(dirs, agent, role, *, project, name, session, model, effort, main_root=None,
-                  dry_run=False) -> list:
+                  dry_run=False, custom=None) -> list:
     """Write `<dir>/.claude/agents/<agent>.md` into each of `dirs` (never overwrite). Returns written paths.
 
     Each target must resolve inside its own dir and, for dirs other than `main_root`, outside it.
     """
     text, from_template = persona_text(role, project=project, name=name, session=session, model=model,
-                                       effort=effort)
+                                       effort=effort, custom=custom)
     if not from_template and not dry_run:
         units.hr_log(f"persona template missing for {role} {name}; wrote a minimal persona for {agent}")
     written = []
@@ -190,9 +194,10 @@ def open_pane(worktree_id, session, command, *, dry_run=False):
 
 
 def onboard(*, project, repo_root, repo_id, kind, name, session, worktree_name, branch, model, effort,
-            wake, parent=None, existing=None, on_created=None, dry_run=False) -> dict:
+            wake, parent=None, existing=None, on_created=None, dry_run=False, custom=None) -> dict:
     """Create one unit's worktree, files and (if `wake`) pane. Returns the partial registry entry.
 
+    `custom` ({"label", "charter"}) marks a custom division: its persona comes from `div-custom.md`.
     `existing` (an `onboarding` registry entry) resumes: only the file steps and the pane run.
     Otherwise an Orca worktree already named `worktree_name` is adopted, else one is created,
     and `on_created({"worktree", "branch"})` lets the caller save a provisional entry at once.
@@ -222,7 +227,7 @@ def onboard(*, project, repo_root, repo_id, kind, name, session, worktree_name, 
     write_settings(wt_path, session, main_root=repo_root, dry_run=dry_run)
     exclude_settings(wt_path, dry_run=dry_run)
     write_persona([repo_root, wt_path], session, role, project=project, name=name, session=session,
-                  model=model, effort=effort, main_root=repo_root, dry_run=dry_run)
+                  model=model, effort=effort, main_root=repo_root, dry_run=dry_run, custom=custom)
     if wake:
         open_pane(wt_id, session, cmd_sleep_wake.pane_command(session, resume=False), dry_run=dry_run)
     now = util.now_iso()

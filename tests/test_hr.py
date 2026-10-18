@@ -17,7 +17,9 @@ from test_registry import load_cli
 
 SAMPLE = json.loads((support.FIXTURES / "registry.sample.json").read_text())
 NOW = dt.datetime.now(dt.timezone.utc).replace(microsecond=0)
+PANE = f"PATH={support.ROOT / 'bin'}:$PATH "   # every pane command puts the plugin's bin/ on PATH
 REAL_RUNNER = shell.RUNNER
+ALL = ",".join(registry.DIVISIONS)   # the five standard divisions (the setup default leaves ops out)
 
 
 def ago(**kw) -> str:
@@ -115,7 +117,7 @@ class HrCase(support.TempHomeCase):
 
 class InitTest(HrCase):
     def test_dry_run_prints_full_sequence_with_ops_dormant(self):
-        code, out, err = self.orche("--dry-run", "init", "Acme Shop")
+        code, out, err = self.orche("--dry-run", "init", "Acme Shop", "--divisions", ALL)
         self.assertEqual(code, 0, err)
         dry = [l for l in err.splitlines() if l.startswith("[dry-run] orca ")]
         creates = [l for l in dry if " worktree create " in l]
@@ -123,8 +125,8 @@ class InitTest(HrCase):
                                    for d in registry.DIVISIONS])
         panes = [l for l in dry if " terminal create " in l]
         self.assertEqual(len(panes), 2)
-        self.assertIn("--title main-acme-shop --command ORCHE_SESSION=main-acme-shop claude --name main-acme-shop --json", panes[0])
-        self.assertIn("--title liaison-acme-shop --command ORCHE_SESSION=liaison-acme-shop claude --agent liaison --name liaison-acme-shop",
+        self.assertIn(f"--title main-acme-shop --command {PANE}ORCHE_SESSION=main-acme-shop claude --name main-acme-shop --json", panes[0])
+        self.assertIn(f"--title liaison-acme-shop --command {PANE}ORCHE_SESSION=liaison-acme-shop claude --agent liaison --name liaison-acme-shop",
                       panes[1])
         autos = [l for l in dry if " automations create " in l]
         self.assertEqual(len(autos), 2)
@@ -141,7 +143,8 @@ class InitTest(HrCase):
         self.assertFalse(self.wtroot.exists())
 
     def test_real_run_onboards_divisions(self):
-        code, out, err = self.orche("init", "Acme Shop", "--aliases", "Acme,SHOP", "--wake", "build,gtm")
+        code, out, err = self.orche("init", "Acme Shop", "--aliases", "Acme,SHOP", "--wake", "build,gtm",
+                                    "--divisions", ALL)
         self.assertEqual(code, 0, err)
         reg = registry.load()
         proj = reg["projects"]["acme-shop"]
@@ -171,10 +174,10 @@ class InitTest(HrCase):
         self.assertIn("persona template missing for division build", units.hr_log_path().read_text())
         # Panes: the two woken divisions, then main and liaison.
         panes = [c[c.index("--title") + 1:c.index("--title") + 4] for c in self.orca_calls("terminal create")]
-        self.assertEqual(panes, [["div-acme-shop-build", "--command", "ORCHE_SESSION=div-acme-shop-build claude --name div-acme-shop-build"],
-                                 ["div-acme-shop-gtm", "--command", "ORCHE_SESSION=div-acme-shop-gtm claude --name div-acme-shop-gtm"],
-                                 ["main-acme-shop", "--command", "ORCHE_SESSION=main-acme-shop claude --name main-acme-shop"],
-                                 ["liaison-acme-shop", "--command", "ORCHE_SESSION=liaison-acme-shop claude --agent liaison --name liaison-acme-shop"]])
+        self.assertEqual(panes, [["div-acme-shop-build", "--command", f"{PANE}ORCHE_SESSION=div-acme-shop-build claude --name div-acme-shop-build"],
+                                 ["div-acme-shop-gtm", "--command", f"{PANE}ORCHE_SESSION=div-acme-shop-gtm claude --name div-acme-shop-gtm"],
+                                 ["main-acme-shop", "--command", f"{PANE}ORCHE_SESSION=main-acme-shop claude --name main-acme-shop"],
+                                 ["liaison-acme-shop", "--command", f"{PANE}ORCHE_SESSION=liaison-acme-shop claude --agent liaison --name liaison-acme-shop"]])
         self.assertEqual(self.orca_calls("automations create"), [])
         self.assertIn("[dry-run] orca automations create --name orche-hr-audit-acme-shop", err)
         # Project templates and card symlink.
@@ -201,7 +204,7 @@ class InitTest(HrCase):
         self.assertEqual(units.project_from_cwd(registry.load(), self.repo / "src"), "acme-shop")
 
     def test_wake_ops_refused_while_building(self):
-        code, _, err = self.orche("init", "Acme Shop", "--wake", "ops")
+        code, _, err = self.orche("init", "Acme Shop", "--wake", "ops", "--divisions", ALL)
         self.assertEqual(code, 3)
         self.assertIn("ops is gated by stage", err)
         self.assertEqual(registry.load()["projects"], {})
@@ -216,8 +219,52 @@ class InitTest(HrCase):
         self.assertIn("awake limit would be exceeded (0+2/1); sleep a unit first", err)
         self.assertEqual(self.orca_calls("worktree create"), [])
 
+    def test_init_by_registry_key_or_alias(self):
+        """R5: the registry key (`acme-shop`) or an alias resolves before the Orca display name."""
+        self.assertEqual(self.orche("init", "Acme Shop", "--divisions", "build", "--aliases", "shop")[0], 0)
+        self.calls.clear()
+        for needle in ("acme-shop", "SHOP"):
+            code, out, err = self.orche("init", needle, "--divisions", "build,gtm")
+            self.assertEqual(code, 0, err)
+            self.assertIn("build: skipped (already onboarded)", out)
+        self.assertEqual(sorted(registry.load()["projects"]), ["acme-shop"])
+        self.assertEqual([c[c.index("--name") + 1] for c in self.orca_calls("worktree create")], ["div-gtm"])
+
+    def test_registry_key_keeps_its_key_when_orca_name_differs(self):
+        reg = registry.empty()
+        reg["projects"]["shopfront"] = {"repo_id": "repo-acme", "path": str(self.repo), "stage": "building",
+                                        "aliases": [], "main_session": "main-shopfront",
+                                        "liaison_session": "liaison-shopfront", "card": "~/c.md",
+                                        "standing": ".orche/STANDING.md", "divisions": {}}
+        self.save(reg)
+        code, _, err = self.orche("init", "shopfront", "--divisions", "build")
+        self.assertEqual(code, 0, err)
+        reg = registry.load()
+        self.assertEqual(sorted(reg["projects"]), ["shopfront"])
+        self.assertEqual(reg["projects"]["shopfront"]["divisions"]["build"]["session"], "div-shopfront-build")
+
+    def test_registry_match_without_orca_repo_does_not_fall_through(self):
+        """Review M-1: alias "acme shop" belongs to `shopfront`, whose repo Orca no longer lists; the
+        Orca repo displayed as "Acme Shop" must not be onboarded in its place."""
+        reg = registry.empty()
+        reg["projects"]["shopfront"] = {"repo_id": "repo-gone", "path": str(self.home / "gone"),
+                                        "stage": "building", "aliases": ["acme shop"],
+                                        "main_session": "main-shopfront", "liaison_session": "liaison-shopfront",
+                                        "card": "~/c.md", "standing": ".orche/STANDING.md", "divisions": {}}
+        self.save(reg)
+        code, out, err = self.orche("init", "Acme Shop", "--divisions", "build")
+        self.assertEqual((code, out), (2, ""))
+        self.assertEqual(err, "orche: 'Acme Shop' is registered as shopfront but its Orca repo is not in "
+                              "`orca repo list`\n")
+        self.assertEqual(self.calls, [["orca", "repo", "list", "--json"]])
+        self.assertEqual(registry.load(), reg)
+
     def test_unknown_repo_and_division(self):
-        self.assertEqual(self.orche("init", "nope")[0], 2)
+        code, _, err = self.orche("init", "nope")
+        self.assertEqual(code, 2)
+        self.assertEqual(err, "orche: no registry project or Orca repo matches 'nope' "
+                              "(see: orche projects, orca repo list)\n")
+        # A setup the flags describe wrongly is a user error (exit 1); 2 stays "not found".
         self.assertEqual(self.orche("init", "Acme Shop", "--divisions", "rnd,sales")[0], 1)
         self.assertEqual(self.orche("init", str(self.repo), "--divisions", "build", "--wake", "gtm")[0], 1)
 
@@ -269,7 +316,7 @@ class InitTest(HrCase):
         self.calls.clear()
         self.terminals = [{"handle": "t1", "title": "main-acme-shop"}, {"handle": "t2", "title": "liaison-acme-shop"},
                           {"handle": "t3", "title": "div-acme-shop-build"}]
-        code, out, err = self.orche("init", "Acme Shop", "--wake", "build,gtm")
+        code, out, err = self.orche("init", "Acme Shop", "--wake", "build,gtm", "--divisions", ALL)
         self.assertEqual(code, 0, err)
         self.assertIn("skipped --wake build (already onboarded; use `orche wake`)", out)
         self.assertEqual([c[c.index("--name") + 1] for c in self.orca_calls("worktree create")],
@@ -473,7 +520,7 @@ class FeatNewTest(FeatCase):
                                   "--parent-worktree", "id:repo-acme::/srv/orca/acme-shop-build", "--json"])
         wt = self.wtroot / "feat-payments"
         pane = self.orca_calls("terminal create")[0]
-        self.assertEqual(pane[pane.index("--command") + 1], "ORCHE_SESSION=feat-acme-shop-payments claude --name feat-acme-shop-payments")
+        self.assertEqual(pane[pane.index("--command") + 1], f"{PANE}ORCHE_SESSION=feat-acme-shop-payments claude --name feat-acme-shop-payments")
         self.assertEqual(self.orca_calls("worktree set")[0],
                          ["orca", "worktree", "set", "--worktree", f"id:repo-acme::{wt}", "--unread", "--json"])
         reg = registry.load()
@@ -526,7 +573,7 @@ class FeatNewTest(FeatCase):
                                     "--reason", "r")
         self.assertEqual((code, out), (0, "would create feat-acme-shop-pay (dry-run)\n"))
         self.assertIn("[dry-run] orca worktree create --repo id:repo-acme --name feat-pay --parent-worktree", err)
-        self.assertIn("--command ORCHE_SESSION=feat-acme-shop-pay claude --name feat-acme-shop-pay --json", err)
+        self.assertIn(f"--command {PANE}ORCHE_SESSION=feat-acme-shop-pay claude --name feat-acme-shop-pay --json", err)
         self.assertIn("[dry-run] orca worktree set --worktree id:repo-acme::<feat-pay worktree> --unread", err)
         self.assertEqual(registry.load(), self.reg)
         self.assertEqual(self.calls, [])
@@ -534,6 +581,34 @@ class FeatNewTest(FeatCase):
         self.assertEqual(self.orche("feat", "new", "acme", "pay", "--scope", "src/pay/**", "--reason", "r")[0], 0)
         self.assertEqual(registry.load()["projects"]["acme-shop"]["divisions"]["build"]["features"][-1]["branch"],
                          "feat/pay")
+
+    def add_project_acme(self, features=()):
+        """A second project keyed `acme` (acme-shop loses its `Acme` alias): `feat-acme-shop-x` is
+        acme-shop's feature `x` and acme's feature `shop-x`."""
+        reg = registry.load()
+        reg["projects"]["acme-shop"]["aliases"] = ["shop"]
+        build = {**copy.deepcopy(reg["projects"]["acme-shop"]["divisions"]["build"]),
+                 "worktree": "repo-acme2::/srv/orca/acme-build", "session": "div-acme-build",
+                 "features": [dict(copy.deepcopy(reg["projects"]["acme-shop"]["divisions"]["build"]["features"][0]),
+                                   name=f, session=f"feat-acme-{f}", branch=f"feat/{f}") for f in features]}
+        reg["projects"]["acme"] = {**copy.deepcopy(reg["projects"]["acme-shop"]), "repo_id": "repo-acme2",
+                                   "path": str(self.home / "acme"), "aliases": [], "main_session": "main-acme",
+                                   "liaison_session": "liaison-acme", "divisions": {"build": build}}
+        return self.save(reg)
+
+    def test_a_feature_session_another_project_holds_is_refused_both_ways(self):
+        """I-1: session names are unique registry-wide (units.find_unit resolves one unit per name)."""
+        before = self.add_project_acme(features=("shop-pay",))
+        code, _, err = self.orche("feat", "new", "acme-shop", "pay", "--scope", "src/pay/**", "--reason", "r")
+        self.assertEqual((code, err), (1, "orche: session feat-acme-shop-pay is taken by project acme; "
+                                          "pick another name\n"))
+        # The other way: acme-shop already has `checkout`, so acme's `shop-checkout` is taken.
+        code, _, err = self.orche("feat", "new", "acme", "shop-checkout", "--scope", "src/c/**", "--reason", "r")
+        self.assertEqual((code, err), (1, "orche: session feat-acme-shop-checkout is taken by project "
+                                          "acme-shop; pick another name\n"))
+        self.assertEqual((registry.load(), self.calls), (before, []))
+        self.assertEqual(self.orche("feat", "new", "acme", "shop-other", "--scope", "src/o/**", "--reason", "r")[0],
+                         0)                                      # a free name still goes through
 
     def test_fourth_in_a_day_blocked_frozen_unchanged(self):
         self.creates(3)
@@ -605,11 +680,24 @@ class FeatSleepWakeTest(FeatCase):
         code, out, _ = self.orche("feat", "wake", "acme", "search")
         self.assertEqual((code, out), (0, "feat-acme-shop-search active\n"))
         pane = self.orca_calls("terminal create")[0]
-        self.assertEqual(pane[pane.index("--command") + 1], "ORCHE_SESSION=feat-acme-shop-search claude --resume feat-acme-shop-search")
+        self.assertEqual(pane[pane.index("--command") + 1], f"{PANE}ORCHE_SESSION=feat-acme-shop-search claude --resume feat-acme-shop-search")
         code, _, err = self.orche("feat", "sleep", "acme", "search")
         self.assertEqual(code, 3)
         self.assertIn("HANDOFF.md is stale (missing:", err)
         self.assertEqual(self.orche("feat", "wake", "acme", "nope")[0], 2)
+
+    def test_feat_wake_active_feature_reopens_missing_pane_only(self):
+        """R3: `feat wake` on an active feature whose pane is gone reopens it; with a pane it does not."""
+        code, out, _ = self.orche("feat", "wake", "acme", "checkout")
+        self.assertEqual((code, out), (0, "feat-acme-shop-checkout pane reopened\n"))
+        [pane] = self.orca_calls("terminal create")
+        self.assertEqual(pane[pane.index("--command") + 1],
+                         f"{PANE}ORCHE_SESSION=feat-acme-shop-checkout claude --resume feat-acme-shop-checkout")
+        self.calls.clear()
+        self.terminals = [{"handle": "t-3", "title": "feat-acme-shop-checkout"}]
+        code, out, _ = self.orche("feat", "wake", "acme", "checkout")
+        self.assertEqual((code, out), (0, "feat-acme-shop-checkout is already active\n"))
+        self.assertEqual(self.orca_calls("terminal create"), [])
 
     def test_wake_refreshes_status_line_and_last_activity(self):
         line = self.home / "status" / "acme-shop.line"
@@ -643,12 +731,100 @@ class FeatRetireTest(FeatCase):
         self.kept = self.home / "archive" / "feat-acme-shop-checkout" / "unit-files" / self.tag
 
     def fake_runner(self, argv, *, timeout, input):
-        """Pane checks (`terminal list`) are tracked apart from the destructive calls asserted below."""
+        """Pane checks (`terminal list`) are tracked apart from the destructive calls asserted below.
+
+        `worktree rm` behaves like Orca: it refuses a worktree whose `git status` is not empty
+        (or fails once with `self.rm_error`).
+        """
         res = super().fake_runner(argv, timeout=timeout, input=input)
         if argv[:3] == ["orca", "terminal", "list"]:
             self.calls.remove(argv)
             self.pane_checks = getattr(self, "pane_checks", 0) + 1
+        if argv[:3] == ["orca", "worktree", "rm"]:
+            error, self.rm_error = getattr(self, "rm_error", None), None
+            status = self.wt_status()
+            if error or status:
+                message = error or f"Failed to delete worktree {self.wt}: {status}"
+                return shell.Result(0, json.dumps({"ok": False, "error": {"message": message}}), "", argv)
         return res
+
+    def wt_status(self):
+        return subprocess.run(["git", "status", "--porcelain", "--untracked-files=all"], cwd=self.wt,
+                              capture_output=True, text=True).stdout.strip()
+
+    def kept_files(self):
+        return {p.name: p.read_text() for p in self.kept.iterdir() if p.is_file()}
+
+    # -- F2: untracked ORCHE files no longer stop `worktree rm`; a re-run completes ------------
+    def test_untracked_unit_files_are_kept_cleared_and_retire_completes(self):
+        memory = self.wt / ".claude" / "agent-memory" / "feat-acme-shop-checkout" / "MEMORY.md"
+        memory.parent.mkdir(parents=True)
+        memory.write_text("- prefer small commits\n")
+        self.assertIn("?? .orche/feat/checkout/CHARTER.md", self.wt_status())
+        code, out, err = self.orche("feat", "retire", "acme", "checkout", "--yes")
+        self.assertEqual((code, out), (0, f"feat-acme-shop-checkout retired (tag {self.tag})\n"), err)
+        self.assertEqual(self.wt_status(), "")
+        self.assertFalse((self.wt / ".claude").exists())
+        kept_memory = self.kept / "_worktree" / ".claude" / "agent-memory" / "feat-acme-shop-checkout" / "MEMORY.md"
+        self.assertEqual(kept_memory.read_text(), "- prefer small commits\n")
+        self.assertIn("Final: merged in #12", (self.kept / "HANDOFF.md").read_text())
+        self.assertEqual(self.tags(), [self.tag])
+        self.assertIn(f"feature checkout (worktree {self.wt}", (self.repo / "docs" / "GRAVEYARD.md").read_text())
+
+    def test_foreign_untracked_file_blocks_before_copy_and_tag(self):
+        (self.wt / "notes.txt").write_text("mine\n")
+        code, _, err = self.orche("feat", "retire", "acme", "checkout", "--yes")
+        self.assertEqual(code, 3)
+        self.assertIn("worktree has uncommitted work: notes.txt;", err)
+        self.assertEqual((self.calls, self.tags()), ([], []))
+        self.assertFalse(self.kept.exists())
+        self.assertIn("?? .orche/feat/checkout/HANDOFF.md", self.wt_status())
+
+    def test_modified_tracked_unit_file_is_uncommitted_work(self):
+        git("add", ".orche/feat/checkout", cwd=self.wt)
+        git("commit", "-q", "-m", "unit files", cwd=self.wt)
+        self.handoff.write_text("# HANDOFF\n\nFinal: done, edited after the commit\n")
+        code, _, err = self.orche("feat", "retire", "acme", "checkout", "--yes")
+        self.assertEqual(code, 3)
+        self.assertIn("worktree has uncommitted work: .orche/feat/checkout/HANDOFF.md;", err)
+        self.assertEqual((self.calls, self.tags()), ([], []))
+
+    def test_rerun_after_rm_failure_completes(self):
+        self.rm_error = "worktree is locked"
+        code, _, err = self.orche("feat", "retire", "acme", "checkout", "--yes")
+        self.assertEqual(code, 1)
+        self.assertIn(f"worktree is locked (tag {self.tag} and unit files in {self.kept} "
+                      "kept; re-run `orche feat retire acme-shop checkout --yes`", err)
+        self.assertEqual(registry.load()["projects"]["acme-shop"]["divisions"]["build"]["features"][0]["status"],
+                         "active")
+        self.assertFalse(self.handoff.exists())  # cleared; the kept copy carries the final line
+        code, out, err = self.orche("feat", "retire", "acme", "checkout", "--yes")
+        self.assertEqual((code, out), (0, f"feat-acme-shop-checkout retired (tag {self.tag})\n"), err)
+        self.assertIn(f"already kept in {self.kept}; reusing them", err)
+        self.assertIn(f"tag {self.tag} already points at feat/checkout; reusing it", err)
+        self.assertEqual(self.tags(), [self.tag])
+        self.assertIn("Final: merged in #12", (self.kept / "HANDOFF.md").read_text())
+
+    def test_rerun_from_pilot_stuck_state_completes(self):
+        """The 0.1.0 failure: files copied and tag set, then `worktree rm` refused the untracked unit files."""
+        unit_dir = self.wt / ".orche" / "feat" / "checkout"
+        self.kept.mkdir(parents=True)
+        for p in unit_dir.iterdir():
+            (self.kept / p.name).write_bytes(p.read_bytes())
+        git("tag", self.tag, "feat/checkout", cwd=self.wt)
+        code, out, err = self.orche("feat", "retire", "acme", "checkout", "--yes")
+        self.assertEqual((code, out), (0, f"feat-acme-shop-checkout retired (tag {self.tag})\n"), err)
+        self.assertIn("reusing them", err)
+        self.assertEqual(self.wt_status(), "")
+
+    def test_rerun_with_tag_at_another_commit_fails(self):
+        git("tag", self.tag, "feat/checkout", cwd=self.wt)
+        git("commit", "-q", "--allow-empty", "-m", "later", cwd=self.wt)
+        code, _, err = self.orche("feat", "retire", "acme", "checkout", "--yes")
+        self.assertEqual(code, 1)
+        self.assertIn(f"git tag {self.tag} failed", err)
+        self.assertEqual(self.calls, [])
+        self.assertTrue(self.handoff.exists())
 
     def test_open_pane_refused_dry_run_prints_check(self):
         self.terminals = [{"handle": "t-9", "title": "✳ feat-acme-shop-checkout"}]
@@ -708,14 +884,14 @@ class FeatRetireTest(FeatCase):
 
     def test_same_day_second_retirement_refused_first_archive_intact(self):
         wt2 = self.recreate()
-        first = {p.name: p.read_text() for p in self.kept.iterdir()}
+        first = self.kept_files()
         code, _, err = self.orche("feat", "retire", "acme", "checkout", "--yes")
         self.assertEqual(code, 1)
         self.assertIn(f"{self.kept} already holds the unit files of an earlier retirement", err)
         self.assertEqual(self.calls, [])
         tags = subprocess.run(["git", "tag", "-l"], cwd=wt2, capture_output=True, text=True).stdout
         self.assertEqual(tags, "")
-        self.assertEqual({p.name: p.read_text() for p in self.kept.iterdir()}, first)
+        self.assertEqual(self.kept_files(), first)
         self.assertIn("Final: merged in #12", first["HANDOFF.md"])
         self.assertEqual(registry.load()["projects"]["acme-shop"]["divisions"]["build"]["features"][-1]["status"],
                          "active")
@@ -738,8 +914,11 @@ class FeatRetireTest(FeatCase):
         (self.wt / "wip.py").write_text("x\n")
         code, _, err = self.orche("feat", "retire", "acme", "checkout", "--yes")
         self.assertEqual(code, 3)
-        self.assertIn("has 1 uncommitted change(s)", err)
-        self.assertEqual(self.calls, [])
+        self.assertIn("worktree has uncommitted work: wip.py; commit or stash it (or `orche report stop`) "
+                      "before retiring", err)
+        self.assertEqual((self.calls, self.tags()), ([], []))
+        self.assertFalse(self.kept.exists())
+        self.assertTrue((self.wt / ".orche" / "feat" / "checkout" / "CHARTER.md").exists())
 
     def test_onboarding_files_are_untracked_but_not_dirty(self):
         status = subprocess.run(["git", "status", "--porcelain", "--untracked-files=all"], cwd=self.wt,
@@ -753,7 +932,7 @@ class FeatRetireTest(FeatCase):
         (self.wt / "README.md").write_text("changed\n")
         code, _, err = self.orche("feat", "retire", "acme", "checkout", "--yes")
         self.assertEqual(code, 3)
-        self.assertIn("has 1 uncommitted change(s)", err)
+        self.assertIn("worktree has uncommitted work: README.md;", err)
 
     def test_untracked_persona_of_another_unit_is_dirty(self):
         (self.wt / ".claude" / "agents" / "feat-acme-shop-other.md").write_text("x\n")
@@ -801,7 +980,9 @@ class FeatRetireTest(FeatCase):
         self.assertEqual(err.splitlines(), [
             "[dry-run] check no Orca pane is titled feat-acme-shop-checkout",
             f"[dry-run] copy {self.wt / '.orche' / 'feat' / 'checkout'} -> {self.kept}",
+            f"[dry-run] copy 2 other ORCHE file(s) -> {self.kept / '_worktree'}",
             f"[dry-run] git -C {shlex.quote(str(self.wt))} tag {self.tag} feat/checkout",
+            f"[dry-run] delete 6 ORCHE-owned untracked file(s) from {self.wt}",
             f"[dry-run] orca worktree rm --worktree id:repo-acme::{self.wt} --json",
             "[dry-run] archive 1 transcript file(s) of feat-acme-shop-checkout",
             f"[dry-run] append GRAVEYARD row in {self.repo / 'docs' / 'GRAVEYARD.md'}"])
@@ -817,7 +998,12 @@ class FeatRetireTest(FeatCase):
         self.assertEqual((code, out, err), (0, f"feat-acme-shop-checkout retired (tag {self.tag})\n",
                                             f"orche: unit files of feat-acme-shop-checkout kept in {self.kept}\n"))
         self.assertEqual(sorted(before), ["CHARTER.md", "DECISIONS.tsv", "HANDOFF.md", "STATUS.md"])
-        self.assertEqual({p.name: p.read_text() for p in self.kept.iterdir()}, before)
+        self.assertEqual(self.kept_files(), before)
+        self.assertEqual(sorted(str(p.relative_to(self.kept / "_worktree"))
+                                for p in (self.kept / "_worktree").rglob("*") if p.is_file()),
+                         [".claude/agents/feat-acme-shop-checkout.md", ".claude/settings.local.json"])
+        self.assertFalse((self.wt / ".orche").exists())
+        self.assertEqual(self.wt_status(), "")
         self.assertEqual(self.tags(), [self.tag])
         self.assertEqual(self.calls, [["orca", "worktree", "rm", "--worktree", f"id:repo-acme::{self.wt}", "--json"]])
         self.assertFalse(self.mine.exists())
@@ -887,7 +1073,7 @@ class StageTest(FeatCase):
         self.assertEqual((data["stage"], data["woke"], len(data["checklist"])), ("public", True, 4))
         self.assertTrue(any("docs/runbooks/" in c for c in data["checklist"]))
         pane = self.orca_calls("terminal create")[0]
-        self.assertEqual(pane[pane.index("--command") + 1], "ORCHE_SESSION=div-acme-shop-ops claude --name div-acme-shop-ops")
+        self.assertEqual(pane[pane.index("--command") + 1], f"{PANE}ORCHE_SESSION=div-acme-shop-ops claude --name div-acme-shop-ops")
         reg = registry.load()
         self.assertEqual(reg["projects"]["acme-shop"]["stage"], "public")
         self.assertEqual(reg["projects"]["acme-shop"]["divisions"]["ops"]["status"], "active")

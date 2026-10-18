@@ -19,6 +19,7 @@ DRAIN_AGE = _dt.timedelta(minutes=90)
 STALL_AGE_MS = 20 * 60 * 1000
 CACHE_TTL = 600
 IN_FLIGHT = ("blocked", "question", "info")
+RECONCILE_RESERVE_S = 1.0   # of the prompt hook's budget, kept for the inbox, Jev and stall marks
 
 
 def box(session: str) -> Path:
@@ -217,6 +218,27 @@ def _jev(prompt, items, deadline=None):
         return items
 
 
+def _project_of(reg, me):
+    for key, proj in reg.get("projects", {}).items():
+        if me in (proj.get("main_session"), proj.get("liaison_session")):
+            return key
+    unit = units.find_unit(reg, me)
+    return unit.project if unit else None
+
+
+def _reconcile(reg, me, terms) -> None:
+    """Settle the session's project's lost runs (runs.reconcile) before the inbox is read, so a
+    `failed` "runner died: …" filed now shows in this very prompt. Bounded by the hook budget less
+    RECONCILE_RESERVE_S: with no time left only `kill -0` and file writes run (no `ps`)."""
+    try:
+        key = _project_of(reg, me)
+        if key:
+            from . import runs
+            runs.reconcile(reg, key, budget_s=max(0.0, terms.remaining() - RECONCILE_RESERVE_S))
+    except Exception as exc:  # noqa: BLE001 - fail-open
+        log.log("hooks", f"report_inject: reconcile: {type(exc).__name__}: {exc}")
+
+
 def handle_prompt(payload, started=None) -> str:
     """Text to inject for a UserPromptSubmit event ('' for nothing).
 
@@ -228,6 +250,7 @@ def handle_prompt(payload, started=None) -> str:
     if not me:
         return ""
     units.touch_activity(me)
+    _reconcile(reg, me, terms)
     out = _standing_once(reg, payload, me)
     prompt = payload.get("prompt") or ""
     items = _jev(prompt, pending(me), terms.deadline)

@@ -1,22 +1,22 @@
 {
   "hooks": {
     "Stop": [
-      {"hooks": [{"type": "command", "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/dispatch_relay.py\""}]}
+      {"hooks": [{"type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}/hooks/run.sh\" dispatch_relay"}]}
     ],
     "UserPromptSubmit": [
-      {"hooks": [{"type": "command", "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/report_inject.py\""}]}
+      {"hooks": [{"type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}/hooks/run.sh\" report_inject"}]}
     ],
     "PreToolUse": [
       {"matcher": "Read|Bash|Grep|Edit|Write",
-       "hooks": [{"type": "command", "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/env_read_gate.py\""}]},
+       "hooks": [{"type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}/hooks/run.sh\" env_read_gate"}]},
       {"matcher": "Edit|Write|NotebookEdit|MultiEdit",
-       "hooks": [{"type": "command", "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/scope_gate.py\""}]}
+       "hooks": [{"type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}/hooks/run.sh\" scope_gate"}]}
     ],
     "SessionStart": [
-      {"hooks": [{"type": "command", "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/session_start.py\""}]}
+      {"hooks": [{"type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}/hooks/run.sh\" session_start"}]}
     ],
     "SessionEnd": [
-      {"hooks": [{"type": "command", "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/session_end.py\""}]}
+      {"hooks": [{"type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}/hooks/run.sh\" session_end"}]}
     ]
   }
 }

@@ -10,6 +10,7 @@ A worker files its completion (or block, question, stop) as one inbox pointer:
 The recipient must be a session the registry knows; the summary is masked (mask.redact).
 `done` from the Build division or a feature agent needs a canonical ledger row for HEAD with a
 verdict >= type-check-only (the Stop hook's gate; exit 3 otherwise).
+Under the runner (ORCHE_RUNNER set by `orche run`) it refuses with exit 2: the runner files the pointer.
 """
 import json
 import os
@@ -19,7 +20,7 @@ from pathlib import Path
 
 from . import dispatch, inbox, ledger, mask, registry, units, util
 
-EXIT_OK, EXIT_USER, EXIT_BLOCKED = 0, 1, 3
+EXIT_OK, EXIT_USER, EXIT_RUNNER, EXIT_BLOCKED = 0, 1, 2, 3
 MAX_LINES = 5
 TRUNCATED = "[…truncated]"
 ADHOC_STATUSES = ("external-request", "question", "info")
@@ -62,8 +63,25 @@ def unidentified_message(reg, cwd) -> str:
 def sender(reg, cwd):
     """(session, project key, default recipient) or None."""
     me = identified_session(reg, cwd)
-    if not me:
-        return None
+    return route(reg, me) if me else None
+
+
+def done_gate(reg, key, me, head) -> list:
+    """Missing ledger items that block `done` from `me` (empty: allowed).
+
+    Build division and feature agents need a canonical ledger row for `head` with a verdict >=
+    type-check-only (the Stop hook's gate); other senders pass. Shared with the runner.
+    """
+    if not dispatch.gated_sender(units.find_unit(reg, me)):
+        return []
+    return dispatch.ledger_missing(key, head or None, "type-check-only")[0]
+
+
+def route(reg, me):
+    """(session, project key, default recipient) for a known session `me`, else None.
+
+    Main and liaison report to Main; a division reports to Main; a feature reports to its division.
+    """
     for key, proj in reg.get("projects", {}).items():
         if me in (proj.get("main_session"), proj.get("liaison_session")):
             return me, key, proj.get("main_session")
@@ -100,6 +118,10 @@ def clip(summary: str) -> str:
 
 
 def cmd_report(args):
+    if os.environ.get("ORCHE_RUNNER"):
+        print("orche: report refused: this unit runs under `orche run`, which files your pointer from "
+              "your final message", file=sys.stderr)
+        return EXIT_RUNNER
     if args.status not in inbox.STATUSES:
         return _fail(f"status must be one of {'|'.join(inbox.STATUSES)}, got {args.status!r}")
     if args.unit and not dispatch.UNIT_ID.match(args.unit):
@@ -142,11 +164,10 @@ def cmd_report(args):
         default = brief.parent / "REPORT.md" if brief else None
         report = str(default) if default and default.is_file() else ""
     head = dispatch.git_head(cwd) or ""
-    if args.status == "done" and dispatch.gated_sender(units.find_unit(reg, me)):
-        missing, _row = dispatch.ledger_missing(key, head or None, "type-check-only")
-        if missing:
-            print(dispatch.GATE_PREFIX + "; ".join(missing) + dispatch.GATE_SUFFIX, file=sys.stderr)
-            return EXIT_BLOCKED
+    missing = done_gate(reg, key, me, head) if args.status == "done" else []
+    if missing:
+        print(dispatch.GATE_PREFIX + "; ".join(missing) + dispatch.GATE_SUFFIX, file=sys.stderr)
+        return EXIT_BLOCKED
     try:
         ptr = inbox.make(unit, me, to, args.status, report_path=report, head_sha=head,
                          ledger_row=ledger.row_for_sha(key, head) is not None,

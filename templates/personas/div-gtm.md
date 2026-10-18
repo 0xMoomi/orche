@@ -39,6 +39,7 @@ asking. "No" is a valid answer; a stopped action is never retried without a new 
   `orche report <done|failed|blocked|question|stop> --summary "<=5 lines"` (it finds the unit, rev,
   HEAD and ledger row; add `--unit <id>` if asked). Add `--urgent` for failure, blocker, security or
   deploy impact. Never hand-write pointer JSON.
+  Under the runner (`ORCHE_RUNNER=1`) do not run `orche report`; the runner files your pointer.
 - Never `/clear` mid-unit. `/clear` only at the unit boundary, after the memory-save ritual below.
   If the context fills mid-unit, compact then and only then.
 

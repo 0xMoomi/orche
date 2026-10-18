@@ -5,7 +5,7 @@ No orca calls here: `orche statusline` runs on every prompt render and must stay
 import datetime as _dt
 import json
 
-from . import paths, registry, units, util
+from . import paths, registry, runs, units, util
 
 ACTIVE, ASLEEP, ONBOARDING = "●", "○", "◐"
 SHORT = {"rnd": "R&D", "research": "RS", "build": "BUILD", "gtm": "GTM", "ops": "OPS"}
@@ -37,7 +37,8 @@ def session_owners(reg: dict) -> dict:
 
 
 def counts(reg: dict, key: str, now=None) -> dict:
-    """{awake, active_features, new, keys, unverified} for project `key`."""
+    """{awake, active_features, new, keys, unverified, running} for project `key` (running = live
+    `orche run` lock files)."""
     now = now or units.now()
     proj = reg["projects"][key]
     build = proj.get("divisions", {}).get("build", {})
@@ -60,16 +61,47 @@ def counts(reg: dict, key: str, now=None) -> dict:
         "new": new,
         "keys": keys,
         "unverified": unverified,
+        "running": runs.count(key),
     }
 
 
-def division_cells(proj: dict, active_features: int, labels=None) -> list:
-    """One cell per division in fixed order; a missing division renders as asleep."""
-    cells = []
-    for name in registry.DIVISIONS:
+def custom_cells(proj: dict) -> dict:
+    """{custom division: status-line name}, unique within the project and never a standard cell.
+
+    From the label's letters, upper case (the name's when the label has none): the first 3, else 4,
+    else 5 letters, whichever is still free, else the 3-letter form plus the first free digit from 2
+    (`Design` → DES, then `Designers` → DESI; a second `QA` → QA2). Cells are assigned in the order
+    the divisions were added, so an earlier division keeps its cell."""
+    taken, cells = set(SHORT.values()), {}
+    for name, spec in (proj.get("custom_divisions") or {}).items():
+        label = (spec or {}).get("label") if isinstance(spec, dict) else None
+        letters = "".join(c for c in (label or "") if c.isalpha()).upper() \
+            or "".join(c for c in name if c.isalpha()).upper()
+        cell = next((letters[:n] for n in (3, 4, 5) if letters[:n] not in taken), None)
+        digit = 2
+        while cell is None:
+            cell = f"{letters[:3]}{digit}" if f"{letters[:3]}{digit}" not in taken else None
+            digit += 1
+        taken.add(cell)
+        cells[name] = cell
+    return cells
+
+
+def short_label(proj: dict, name: str) -> str:
+    """Status-line name of a division: SHORT for a standard one, else its `custom_cells` entry."""
+    if name in SHORT:
+        return SHORT[name]
+    return custom_cells(proj).get(name) or name.upper()
+
+
+def division_cells(proj: dict, active_features: int, short=False) -> list:
+    """One cell per division of the project (`registry.divisions_of`); a custom division whose
+    record is missing renders as asleep. `short` uses the status-line names (`short_label`)."""
+    cells, names = [], {**custom_cells(proj), **SHORT} if short else {}
+    for name in registry.divisions_of(proj):
         div = proj.get("divisions", {}).get(name, {})
         glyph = {"active": ACTIVE, "onboarding": ONBOARDING}.get(div.get("status"), ASLEEP)
-        cell = (labels or {}).get(name, name) + glyph
+        cell = names.get(name, name) + glyph
         if name == "build" and active_features:
             cell += str(active_features)
         cells.append(cell)
@@ -77,10 +109,12 @@ def division_cells(proj: dict, active_features: int, labels=None) -> list:
 
 
 def segment(reg: dict, key: str, now=None) -> str:
-    """`R&D● RS○ BUILD●3 GTM● OPS○ · new1 · 🔑2 · unverified1` (zero trailing cells omitted)."""
+    """`R&D● RS○ BUILD●3 GTM● OPS○ · run2 · new1 · 🔑2 · unverified1` (zero trailing cells omitted)."""
     c = counts(reg, key, now)
-    parts = [" ".join(division_cells(reg["projects"][key], c["active_features"], SHORT))]
-    for label, n in (("new", c["new"]), ("🔑", c["keys"]), ("unverified", c["unverified"])):
+    cells = division_cells(reg["projects"][key], c["active_features"], short=True)
+    parts = [" ".join(cells)] if cells else []
+    for label, n in (("run", c["running"]), ("new", c["new"]), ("🔑", c["keys"]),
+                     ("unverified", c["unverified"])):
         if n:
             parts.append(f"{label}{n}")
     return " · ".join(parts)

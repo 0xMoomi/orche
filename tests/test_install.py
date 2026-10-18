@@ -18,8 +18,9 @@ from test_registry import load_cli
 
 REAL_RUNNER = shell.RUNNER
 SEGMENT = PLUGIN_ROOT / "templates" / "statusline-segment.sh"
-PLUGIN_CMDS = [f'python3 "{PLUGIN_ROOT}/hooks/{name}.py"' for name in
-               ("dispatch_relay", "report_inject", "env_read_gate", "scope_gate", "session_start", "session_end")]
+HOOK_NAMES = ("dispatch_relay", "report_inject", "env_read_gate", "scope_gate", "session_start", "session_end")
+PLUGIN_CMDS = [f'"{PLUGIN_ROOT}/hooks/run.sh" {name}' for name in HOOK_NAMES]
+LEGACY_CMDS = [f'python3 "{PLUGIN_ROOT}/hooks/{name}.py"' for name in HOOK_NAMES]  # before hooks/run.sh
 
 STATUSLINE = """#!/bin/bash
 input=$(cat)
@@ -108,6 +109,9 @@ class InstallCase(support.TempHomeCase):
         (c / "agents" / "deep-reasoner.md").symlink_to(c / "fable" / "agents" / "deep-reasoner.md")
         (self.h / ".codex" / "AGENTS.md.recovered").write_text("codex rules\n")
         self.c = c
+        # doctor probes `claude --version/--help`: a fake script, never the real binary.
+        self.claude = support.write_fake_claude(self.home / "fake-claude")
+        (self.home / "config.json").write_text(json.dumps({"claude_bin": str(self.claude)}))
         shell.RUNNER, self.calls = ok_runner({"status": {"running": True}})
         self.addCleanup(setattr, shell, "RUNNER", REAL_RUNNER)
 
@@ -225,6 +229,111 @@ class InstallTest(InstallCase):
         self.assertNotIn("/plugin install", out)
         self.assertIn("gstack careful hook not installed", out)
 
+    def legacy_install(self):
+        """Settings + install-state.json as a pre-run.sh `orche install --mode settings` left them."""
+        self.install("--mode", "settings")
+        data, state = self.read_settings(), self.state()
+        for entries in data["hooks"].values():
+            for entry in entries:
+                for hook in entry["hooks"]:
+                    if hook["command"] in PLUGIN_CMDS:
+                        hook["command"] = LEGACY_CMDS[PLUGIN_CMDS.index(hook["command"])]
+        for hook in state["added_hooks"]:
+            hook["command"] = LEGACY_CMDS[PLUGIN_CMDS.index(hook["command"])]
+        (self.c / "settings.json").write_text(json.dumps(data, indent=2) + "\n")
+        (self.home / "install-state.json").write_text(json.dumps(state))
+
+    def test_settings_install_replaces_legacy_python3_hooks(self):
+        self.legacy_install()
+        out = self.install("--mode", "settings")
+        cmds = self.commands(self.read_settings())
+        self.assertEqual([c for c in cmds if c in LEGACY_CMDS], [])
+        self.assertEqual([cmds.count(c) for c in PLUGIN_CMDS], [1] * 6)
+        self.assertEqual(len(cmds), 2 + 6)
+        self.assertIn(f"settings: replace (hook Stop {LEGACY_CMDS[0]} (now hooks/run.sh))", out)
+        self.assertEqual(sorted(h["command"] for h in self.state()["added_hooks"]), sorted(PLUGIN_CMDS))
+        self.assertEqual(self.orche("uninstall", "--home", str(self.h))[0], 0)
+        self.assertEqual(self.read_settings(), self.settings)
+
+    # -- R4: switching install modes never leaves two Stop hooks --------------------------------
+    def test_plugin_install_after_settings_install_removes_settings_hooks(self):
+        self.install("--mode", "settings")
+        backups = len(self.backups())
+        out = self.install()   # plugin mode (the default)
+        self.assertEqual(self.read_settings()["hooks"], self.settings["hooks"])
+        self.assertIn(f"settings: remove (hook Stop {PLUGIN_CMDS[0]} (plugin mode: the plugin registers "
+                      "the hooks))", out)
+        self.assertEqual(len(self.backups()), backups + 1)
+        self.assertEqual(self.state()["added_hooks"], [])
+        self.assertEqual(self.state()["mode"], "plugin")
+        self.assertIn(f"settings: ok {self.c / 'settings.json'} (unchanged)", self.install())
+        self.assertEqual(self.orche("uninstall", "--home", str(self.h))[0], 0)
+        self.assertEqual(self.read_settings(), self.settings)
+
+    def test_plugin_install_removes_legacy_python3_hooks_too(self):
+        self.legacy_install()
+        self.install()
+        cmds = self.commands(self.read_settings())
+        self.assertEqual([c for c in cmds if c in LEGACY_CMDS + PLUGIN_CMDS], [])
+        self.assertEqual(self.read_settings()["hooks"], self.settings["hooks"])
+        self.assertEqual(self.state()["added_hooks"], [])
+
+    def test_plugin_install_keeps_careful_hook(self):
+        self.careful_script()
+        self.install("--mode", "settings")
+        self.install()
+        cmds = self.commands(self.read_settings())
+        self.assertEqual([c for c in cmds if c in PLUGIN_CMDS], [])
+        self.assertEqual(len([c for c in cmds if "check-careful" in c]), 1)
+        self.assertEqual([h["event"] for h in self.state()["added_hooks"]], ["PreToolUse"])
+
+    def add_stop_hook_by_hand(self, command):
+        data = self.read_settings()
+        data["hooks"]["Stop"].append({"hooks": [{"type": "command", "command": command}]})
+        (self.c / "settings.json").write_text(json.dumps(data, indent=2) + "\n")
+
+    def test_settings_reinstall_with_both_shapes_keeps_the_record(self):
+        """Review I-1: the python3 shape added by hand is replaced; the run.sh record survives uninstall."""
+        self.careful_script()
+        self.install("--mode", "settings")
+        self.add_stop_hook_by_hand(LEGACY_CMDS[0])
+        self.install("--mode", "settings")
+        self.assertEqual(sorted(h["command"] for h in self.state()["added_hooks"] if "check-careful" not in h["command"]),
+                         sorted(PLUGIN_CMDS))
+        cmds = self.commands(self.read_settings())
+        self.assertEqual(([c for c in cmds if c in LEGACY_CMDS], cmds.count(PLUGIN_CMDS[0])), ([], 1))
+        self.assertEqual(self.orche("uninstall", "--home", str(self.h))[0], 0)
+        self.assertEqual(self.read_settings(), self.settings)
+
+    def test_legacy_record_with_both_shapes_is_rerecorded_in_run_sh_shape(self):
+        self.legacy_install()   # records the python3 shape
+        self.add_stop_hook_by_hand(PLUGIN_CMDS[0])
+        self.install("--mode", "settings")
+        self.assertEqual(sorted(h["command"] for h in self.state()["added_hooks"]), sorted(PLUGIN_CMDS))
+        self.assertEqual(self.orche("uninstall", "--home", str(self.h))[0], 0)
+        self.assertEqual(self.read_settings(), self.settings)
+
+    def test_settings_install_after_plugin_install_adds_hooks_once(self):
+        self.install()
+        self.assertEqual(self.read_settings()["hooks"], self.settings["hooks"])
+        self.install("--mode", "settings")
+        self.install("--mode", "settings")
+        cmds = self.commands(self.read_settings())
+        self.assertEqual([cmds.count(c) for c in PLUGIN_CMDS], [1] * 6)
+        self.assertEqual(len(cmds), 2 + 6)
+        self.assertEqual(sorted(h["command"] for h in self.state()["added_hooks"]), sorted(PLUGIN_CMDS))
+
+    def test_uninstall_removes_both_hook_shapes(self):
+        self.legacy_install()  # install-state.json from before run.sh still records the python3 shape
+        self.assertEqual(self.orche("uninstall", "--home", str(self.h))[0], 0)
+        self.assertEqual(self.read_settings(), self.settings)
+        self.install("--mode", "settings")  # recorded run.sh shape, settings hand-reverted to python3
+        data = self.read_settings()
+        data["hooks"]["Stop"][-1]["hooks"][0]["command"] = LEGACY_CMDS[0]
+        (self.c / "settings.json").write_text(json.dumps(data, indent=2) + "\n")
+        self.assertEqual(self.orche("uninstall", "--home", str(self.h))[0], 0)
+        self.assertEqual(self.read_settings(), self.settings)
+
     def test_careful_hook_only_when_script_exists_and_once(self):
         self.install()
         self.assertFalse(any("check-careful" in c for c in self.commands(self.read_settings())))
@@ -317,8 +426,10 @@ class InstallTest(InstallCase):
         user_cmd = PLUGIN_CMDS[0]  # the user registered dispatch_relay by hand, identical string
         self.settings["hooks"]["Stop"].append({"hooks": [{"type": "command", "command": user_cmd}]})
         (self.c / "settings.json").write_text(json.dumps(self.settings, indent=2) + "\n")
-        self.install()  # plugin mode adds none of the six
-        self.assertEqual(self.state()["added_hooks"], [])
+        # Settings mode finds it already registered and records only the other five.
+        # (Plugin mode would remove it: with the plugin enabled it would run twice; see R4 tests.)
+        self.install("--mode", "settings")
+        self.assertEqual(sorted(h["command"] for h in self.state()["added_hooks"]), sorted(PLUGIN_CMDS[1:]))
         self.assertEqual(self.orche("uninstall", "--home", str(self.h))[0], 0)
         self.assertEqual(self.read_settings(), self.settings)
 
@@ -467,7 +578,8 @@ class SegmentTest(InstallCase):
         script.write_text(STATUSLINE.rstrip("\n") + "\nexit 0\n\n" + blk)
         self.assertTrue(statusline.after_exit(script.read_text()))
         registry.save(registry.empty())
-        _, out, _ = self.orche("doctor", "--home", str(self.h))
+        with mock.patch.dict(os.environ, {"SHELL": str(self.home / "no-login-shell")}):  # never the real one
+            _, out, _ = self.orche("doctor", "--home", str(self.h))
         self.assertTrue(any(l.startswith("WARN\tstatusline\t") and "after an `exit`" in l
                             for l in out.splitlines()), out)
         self.install()  # re-install moves the block before the exit
@@ -485,25 +597,97 @@ class SegmentTest(InstallCase):
         self.assertEqual(self.run_sh(script, self.home).stdout, f"dir:{self.home.name}\n")
 
 
+LOGIN_SH = "/fake/login-sh"
+
+
 class DoctorTest(InstallCase):
+    def setUp(self):
+        super().setUp()
+        # `$SHELL -lc ...` answers (never the developer's real login shell): command -> stdout or None.
+        self.login = {"command -v python3 && python3 --version 2>&1": "/opt/homebrew/bin/python3\nPython 3.14.0\n",
+                      "command -v orche": f"{support.ROOT / 'bin' / 'orche'}\n"}
+        self.login_calls = []
+
     def doctor(self, missing=("age",)):
         real = doctor.shutil.which
         which = (lambda tool: None if tool in missing else real("python3") if tool == "python3" else real("sh"))
-        with mock.patch.object(doctor.shutil, "which", which):
-            return self.orche("doctor", "--home", str(self.h))
-
-    def test_old_python3_on_path_fails(self):
-        registry.save(registry.empty())
-        old = shell.RUNNER
+        inner = shell.RUNNER
 
         def runner(argv, *, timeout, input):
-            if argv[1:] == ["--version"]:
-                return shell.Result(0, "Python 3.9.6\n", "", argv)
-            return old(argv, timeout=timeout, input=input)
-        shell.RUNNER = runner
+            if argv[0] == LOGIN_SH and argv[1] == "-lc":
+                self.login_calls.append(argv)
+                out = self.login.get(argv[2])
+                return shell.Result(0 if out else 1, out or "", "", argv)
+            return inner(argv, timeout=timeout, input=input)
+        with mock.patch.object(doctor.shutil, "which", which), mock.patch.dict(os.environ, {"SHELL": LOGIN_SH}), \
+                mock.patch.object(shell, "RUNNER", runner):
+            return self.orche("doctor", "--home", str(self.h))
+
+    OLD_PY = ("/usr/bin/python3 is 3.9.6 (needs 3.11+): brew install python; "
+              "put /opt/homebrew/bin before /usr/bin in PATH")
+
+    def test_old_login_shell_python3_warns_while_the_finder_picks_one(self):
+        registry.save(registry.empty())
+        self.login["command -v python3 && python3 --version 2>&1"] = "/usr/bin/python3\nPython 3.9.6\n"
+        self.login[doctor.finder_command()] = "/opt/homebrew/bin/python3.14\n"
         code, out, _ = self.doctor()
+        self.assertEqual(code, 0, out)
+        self.assertIn(f"WARN\tpython3 (login shell)\t{self.OLD_PY} (launchers pick a 3.11+ interpreter themselves)",
+                      out.splitlines())
+        self.assertIn([LOGIN_SH, "-lc", "command -v python3 && python3 --version 2>&1"], self.login_calls)
+        self.assertIn([LOGIN_SH, "-lc", doctor.finder_command()], self.login_calls)
+
+    def test_old_login_shell_python3_fails_when_the_finder_finds_none(self):
+        registry.save(registry.empty())
+        self.login["command -v python3 && python3 --version 2>&1"] = "/usr/bin/python3\nPython 3.9.6\n"
+        code, out, _ = self.doctor()   # the finder command answers nothing
         self.assertEqual(code, 1)
-        self.assertTrue(any(l.startswith("FAIL\tpython3 on PATH\t") and "3.9" in l for l in out.splitlines()), out)
+        self.assertIn(f"FAIL\tpython3 (login shell)\t{self.OLD_PY}", out.splitlines())
+        self.login["command -v python3 && python3 --version 2>&1"] = None
+        _, out, _ = self.doctor()
+        self.assertIn(f"FAIL\tpython3 (login shell)\t{LOGIN_SH} -lc finds no python3 (needs 3.11+): brew install "
+                      "python; put /opt/homebrew/bin before /usr/bin in PATH", out.splitlines())
+
+    def test_finder_command_runs_the_shared_finder(self):
+        res = subprocess.run(["/bin/sh", "-c", doctor.finder_command()], capture_output=True, text=True,
+                             timeout=20)
+        self.assertEqual(res.returncode, 0, res.stderr)
+        exe = res.stdout.strip()
+        ver = subprocess.run([exe, "-c", "import sys; print(sys.version_info >= (3, 11))"],
+                             capture_output=True, text=True, timeout=20).stdout.strip()
+        self.assertEqual(ver, "True")
+        self.assertIn(str(support.ROOT / "lib" / "find_python.sh"), doctor.finder_command())
+
+    def test_login_shell_python3_ok_reports_path_and_version(self):
+        registry.save(registry.empty())
+        _, out, _ = self.doctor()
+        self.assertIn("OK\tpython3 (login shell)\t/opt/homebrew/bin/python3 3.14.0", out.splitlines())
+
+    def test_claude_binary_version_and_setting_sources(self):
+        registry.save(registry.empty())
+        _, out, _ = self.doctor()
+        self.assertIn(f"OK\tclaude\t{self.claude} 9.9.9 (Claude Code)", out.splitlines())
+        self.assertIn("OK\tclaude --setting-sources\tsupported", out.splitlines())
+        (self.claude.parent / "help.txt").write_text("Usage: claude [options]\n  -p\n")
+        code, out, _ = self.doctor()
+        self.assertEqual(code, 0, out)
+        self.assertIn("WARN\tclaude --setting-sources\tnot listed in claude --help; the runner needs it "
+                      "(update Claude Code or set config delivery: pane)", out.splitlines())
+        (self.home / "config.json").write_text(json.dumps({"claude_bin": "/nowhere/claude"}))
+        _, out, _ = self.doctor(missing=("age", "/nowhere/claude"))
+        self.assertIn("WARN\tclaude\t/nowhere/claude not found (config claude_bin); the runner cannot start units",
+                      out.splitlines())
+        self.assertFalse(any(l.startswith(("OK\tclaude --", "WARN\tclaude --")) for l in out.splitlines()))
+
+    def test_orche_missing_from_login_shell_warns_with_path_hint(self):
+        registry.save(registry.empty())
+        _, out, _ = self.doctor()
+        self.assertIn(f"OK\torche on PATH\t{support.ROOT / 'bin' / 'orche'}", out.splitlines())
+        self.login["command -v orche"] = None
+        code, out, _ = self.doctor()
+        self.assertEqual(code, 0, out)
+        self.assertIn(f"WARN\torche on PATH\t{LOGIN_SH} -lc cannot find orche; add to your shell profile: "
+                      f"export PATH=\"{support.ROOT / 'bin'}:$PATH\"", out.splitlines())
 
     def test_warn_for_missing_age_ok_for_valid_registry(self):
         registry.save(registry.empty())
@@ -543,8 +727,32 @@ class DoctorTest(InstallCase):
         data["enabledPlugins"]["orche@orche"] = True
         (self.c / "settings.json").write_text(json.dumps(data, indent=2) + "\n")
         _, out, _ = self.doctor()
-        self.assertIn("WARN\thooks\thooks registered twice (plugin + settings): remove one "
-                      "(orche uninstall or disable the plugin)", out.splitlines())
+        self.assertIn("WARN\thooks\thooks registered twice (plugin + 6 settings.json entries): run orche install "
+                      "(plugin mode removes the settings entries) or disable the plugin", out.splitlines())
+        self.install()   # R4: plugin mode removes them; doctor is quiet again
+        _, out, _ = self.doctor()
+        self.assertIn("OK\thooks\torche plugin enabled", out.splitlines())
+
+    def test_old_python3_hook_entries_with_enabled_plugin_warn(self):
+        registry.save(registry.empty())
+        data = json.loads(json.dumps(self.settings))
+        data["hooks"]["Stop"] = [{"hooks": [{"type": "command", "command": LEGACY_CMDS[0]}]}]
+        data.setdefault("enabledPlugins", {})["orche@orche"] = True
+        (self.c / "settings.json").write_text(json.dumps(data, indent=2) + "\n")
+        _, out, _ = self.doctor()
+        self.assertIn("WARN\thooks\thooks registered twice (plugin + 1 settings.json entries): run orche install "
+                      "(plugin mode removes the settings entries) or disable the plugin", out.splitlines())
+
+    def test_both_hook_shapes_in_settings_warn(self):
+        registry.save(registry.empty())
+        data = json.loads(json.dumps(self.settings))
+        data["hooks"]["Stop"] = [{"hooks": [{"type": "command", "command": LEGACY_CMDS[0]}]},
+                                 {"hooks": [{"type": "command", "command": PLUGIN_CMDS[0]}]}]
+        (self.c / "settings.json").write_text(json.dumps(data, indent=2) + "\n")
+        _, out, _ = self.doctor()
+        self.assertIn("WARN\thooks\tsettings.json holds both hook shapes (python3 .../hooks/<hook>.py and "
+                      "hooks/run.sh <hook>): run orche install --mode settings to replace the old ones",
+                      out.splitlines())
 
     def test_invalid_registry_fails_and_orca_down_warns(self):
         (self.home / "registry.json").write_text("{nope")
@@ -571,8 +779,8 @@ class ApplyAllDryRunTest(InstallCase):
         self.assertEqual(tree_digest(self.home), before)
         self.assertEqual([" ".join(c[1:3]) for c in calls], ["status --json", "repo list"])
         plans = [l for l in out.splitlines() if l.startswith("plan ")]
-        self.assertEqual(plans, ["plan Beta App (beta-app): orche init repo-beta --stage building --wake build",
-                                 "plan Gamma (gamma): orche init repo-gamma --stage building --wake build"])
+        self.assertEqual(plans, ["plan Beta App (beta-app): orche init repo-beta --stage building --divisions rnd,research,build,gtm,ops --wake build",
+                                 "plan Gamma (gamma): orche init repo-gamma --stage building --divisions rnd,research,build,gtm,ops --wake build"])
         self.assertIn("skip Acme Shop: already registered as acme-shop", out)
         self.assertIn("3 repo(s), 2 planned, 0 failed", out)
         self.assertIn("panes: 6 to open (main + liaison per repo, plus --wake)", out)

@@ -50,8 +50,9 @@ urgent, never the reverse.
 ## Why is Ops dormant?
 
 Ops handles monitoring, incidents, releases and backups, which only matter once real users
-exist. New projects start at stage `building`, and Ops cannot be woken while a project is in that
-stage (`orche init --wake ops` is refused). When you approve going live, run
+exist. The setup leaves Ops unchecked by default; check it in the `orche init` checklist (or add it later
+with `orche init <proj> --divisions <current>,ops`). New projects start at stage `building`, and Ops
+cannot be woken while a project is in that stage (`orche init --wake ops` is refused). When you approve going live, run
 `orche stage set <proj> public --yes`: it records the stage, wakes Ops and prints the Ops
 checklist. `orche stage set <proj> building --yes` goes back; Ops' files stay.
 

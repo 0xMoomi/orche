@@ -1,7 +1,14 @@
 rev: 1
+unit: <unit id>
+to: <session>   from: <sender session>
+worktree: <absolute path of the target's worktree>   branch: <branch>
+project root: <main checkout path>   (brief + REPORT.md live under project root/.orche/units/<unit>/)
+Work only inside `worktree`. SCOPE paths are relative to it.
 <!--
 Dispatch brief skeleton (one unit). Main writes it as a fenced ```dispatch block; the Stop hook
-relays it and stores it as .orche/units/<unit>/BRIEF.md with the `rev:` line on top.
+relays it and stores it as <project root>/.orche/units/<unit>/BRIEF.md with the `rev:` line and the
+header above on top (the hook writes the header; Main never does). STANDING.md and the persona
+line follow, then `## Brief <unit>` and the fields.
 Lines are `KEY<spaces>VALUE`; continue a value on lines indented by two or more spaces.
 All fields below are required except ROLLBACK (mandatory when the unit deploys).
 A correction is `AMEND <unit> rev N` + `SUPERSEDES rev N-1: <what>`; a halt is `STOP <unit>`.

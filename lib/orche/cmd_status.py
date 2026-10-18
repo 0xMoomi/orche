@@ -3,7 +3,7 @@ import json
 import os
 import sys
 
-from . import registry, statusline
+from . import registry, runs, statusline
 
 EXIT_OK, EXIT_NOT_FOUND = 0, 2
 
@@ -22,13 +22,13 @@ def status_row(reg, key, now=None) -> dict:
     c = statusline.counts(reg, key, now)
     limit = reg["limits"]["max_awake_sessions"]
     cells = statusline.division_cells(proj, c["active_features"])
-    line = (f"{key} stage={proj['stage']} awake={c['awake']}/{limit} divisions: {' '.join(cells)}"
-            f" · new:{c['new']} · keys:{c['keys']} · unverified:{c['unverified']}")
+    line = (f"{key} stage={proj['stage']} awake={c['awake']}/{limit} divisions: {' '.join(cells) or '-'}"
+            f" · new:{c['new']} · keys:{c['keys']} · unverified:{c['unverified']} · RUNNING {c['running']}")
     divisions = {name: proj.get("divisions", {}).get(name, {}).get("status", "dormant")
-                 for name in registry.DIVISIONS}
+                 for name in registry.divisions_of(proj)}
     return {"project": key, "stage": proj["stage"], "awake": c["awake"], "limit": limit,
             "divisions": divisions, "active_features": c["active_features"], "new": c["new"],
-            "keys": c["keys"], "unverified": c["unverified"], "line": line}
+            "keys": c["keys"], "unverified": c["unverified"], "running": c["running"], "line": line}
 
 
 def cmd_status(args):
@@ -41,6 +41,7 @@ def cmd_status(args):
         keys = [found[0]]
     else:
         keys = sorted(reg["projects"])
+    runs.reconcile_cli(reg, args, keys)      # a lost run is filed (and noted on stderr) before counting
     rows = [status_row(reg, key) for key in keys]
     if args.json:
         print(json.dumps(rows, indent=2, ensure_ascii=False))

@@ -202,6 +202,64 @@ def compute(root=None, days=30, now=None, prices=None) -> dict:
     }
 
 
+def runner_summary(roots, days=30, now=None) -> dict:
+    """Sum `orche run` records (`<root>/.orche/units/*/RUN.json`) whose `finished` is in the window.
+
+    {units, cost_usd, median_cost_usd, failures, by_status}; failures = status `failed`.
+    """
+    now = now or _dt.datetime.now(_dt.timezone.utc).astimezone()
+    cutoff = now - _dt.timedelta(days=days)
+    costs, statuses = [], defaultdict(int)
+    for root in roots:
+        for path in sorted(Path(root).glob(".orche/units/*/RUN.json")):
+            try:
+                rec = json.loads(path.read_text(encoding="utf-8"))
+                at = _dt.datetime.fromisoformat(str(rec.get("finished")))
+            except (OSError, ValueError, AttributeError):
+                continue
+            at = at if at.tzinfo else at.replace(tzinfo=_dt.timezone.utc)
+            if not cutoff <= at <= now:
+                continue
+            statuses[str(rec.get("status"))] += 1
+            cost_usd = rec.get("cost_usd")
+            costs.append(float(cost_usd) if isinstance(cost_usd, (int, float)) and not isinstance(cost_usd, bool)
+                         else 0.0)
+    ordered = sorted(costs)
+    mid = len(ordered) // 2
+    median = (ordered[mid] if len(ordered) % 2 else (ordered[mid - 1] + ordered[mid]) / 2) if ordered else 0.0
+    return {"units": len(costs), "cost_usd": round(sum(costs), 6), "median_cost_usd": round(median, 6),
+            "failures": statuses.get("failed", 0), "by_status": dict(sorted(statuses.items()))}
+
+
+def triage_summary(path, days=30, now=None) -> dict:
+    """Triage decisions (ORCHE_HOME/triage/samples.jsonl rows whose `at` is in the window).
+
+    main counts `main` and `tag` ([main]) rows; classifier_calls are rows with a backend; every
+    direct row is one Main turn saved (approximately: Main would have spent a dispatch turn)."""
+    now = now or _dt.datetime.now(_dt.timezone.utc).astimezone()
+    cutoff = now - _dt.timedelta(days=days)
+    counts, ms, model_ms = defaultdict(int), [], []
+    for row in _lines(Path(path)):
+        try:
+            at = _dt.datetime.fromisoformat(str(row.get("at")))
+        except ValueError:
+            continue
+        at = at if at.tzinfo else at.replace(tzinfo=_dt.timezone.utc)
+        if not cutoff <= at <= now:
+            continue
+        decision = str(row.get("decision"))
+        counts["main" if decision == "tag" else decision] += 1
+        if isinstance(row.get("ms"), int):
+            ms.append(row["ms"])
+        if row.get("backend") not in (None, "none") and isinstance(row.get("model_ms"), int):
+            model_ms.append(row["model_ms"])
+    seen = sum(counts.values())
+    return {"prompts": seen, "direct": counts["direct"], "main": counts["main"], "bypass": counts["bypass"],
+            "mean_ms": round(sum(ms) / len(ms)) if ms else 0, "classifier_calls": len(model_ms),
+            "mean_classifier_ms": round(sum(model_ms) / len(model_ms)) if model_ms else 0,
+            "main_turns_saved": counts["direct"]}
+
+
 def render(m: dict) -> list:
     lines = [f"window: last {m['days']} days, {m['files']['main']} main + "
              f"{m['files']['subagent']} subagent transcripts",
@@ -217,4 +275,15 @@ def render(m: dict) -> list:
               f"main wake-ups: user {m['wake']['user']}, notification {m['wake']['notification']}",
               f"routine messages: {rt['routine']}/{rt['messages']} ({rt['share']:.0%})",
               f"AskUserQuestion: {m['ask_user_question']}"]
+    tri = m.get("triage")
+    if tri is not None:
+        lines += ["Triage (Main prompts, triage/samples.jsonl):",
+                  f"  prompts {tri['prompts']}, direct {tri['direct']}, main {tri['main']}, bypass {tri['bypass']}, "
+                  f"mean latency {tri['mean_ms']} ms ({tri['classifier_calls']} classifier calls, mean "
+                  f"{tri['mean_classifier_ms']} ms), Main turns saved ≈ {tri['main_turns_saved']}"]
+    run = m.get("runner")
+    if run is not None:
+        lines += ["Runner (orche run, RUN.json):",
+                  f"  units {run['units']}, cost ${run['cost_usd']:.2f}, median ${run['median_cost_usd']:.2f}/unit, "
+                  f"failures {run['failures']}"]
     return lines

@@ -16,8 +16,9 @@ TRANSCRIPTS = support.FIXTURES / "transcripts"
 NOW = dt.datetime(2026, 10, 16, 0, 0, tzinfo=dt.timezone.utc)
 
 
-class MetricsTest(unittest.TestCase):
+class MetricsTest(support.TempHomeCase):
     def setUp(self):
+        super().setUp()   # the CLI reads the registry for the Runner section: a temp ORCHE_HOME
         tmp = tempfile.TemporaryDirectory()
         self.addCleanup(tmp.cleanup)
         self.root = Path(tmp.name) / "projects"
@@ -106,6 +107,41 @@ class MetricsTest(unittest.TestCase):
         self.assertEqual(code, 0)
         self.assertIn("main wake-ups: user 3, notification 1", out.getvalue())
         self.assertIn("AskUserQuestion: 1", out.getvalue())
+
+    def run_records(self, repo, now):
+        """Three RUN.json records in the window (one failed) and one older than 30 days."""
+        for i, (status, cost, age) in enumerate((("done", 0.2, 1), ("failed", 1.0, 2), ("info", 0.4, 3),
+                                                 ("done", 9.0, 40))):
+            folder = repo / ".orche" / "units" / f"acme-u-20261016-{i + 1}"
+            folder.mkdir(parents=True)
+            (folder / "RUN.json").write_text(json.dumps({
+                "status": status, "cost_usd": cost, "finished": (now - dt.timedelta(days=age)).isoformat()}))
+
+    def test_runner_summary_sums_run_records_in_the_window(self):
+        repo = self.root.parent / "acme"
+        self.run_records(repo, NOW)
+        self.assertEqual(metrics.runner_summary([repo], days=30, now=NOW),
+                         {"units": 3, "cost_usd": 1.6, "median_cost_usd": 0.4, "failures": 1,
+                          "by_status": {"done": 1, "failed": 1, "info": 1}})
+        self.assertEqual(metrics.runner_summary([repo / "nope"], days=30, now=NOW)["units"], 0)
+
+    def test_cli_runner_section_from_registered_projects(self):
+        from orche import registry
+        repo = self.root.parent / "acme"
+        self.run_records(repo, dt.datetime.now(dt.timezone.utc))
+        reg = registry.empty()
+        reg["projects"]["acme"] = json.loads((support.FIXTURES / "hooks" / "registry.json").read_text()
+                                             .replace("@ROOT@", str(self.root.parent)))["projects"]["acme"]
+        registry.save(reg)
+        cli, out = load_cli(), io.StringIO()
+        with redirect_stdout(out):
+            self.assertEqual(cli.main(["metrics", "--root", str(self.root), "--json"]), 0)
+        self.assertEqual(json.loads(out.getvalue())["runner"]["units"], 3)
+        out = io.StringIO()
+        with redirect_stdout(out):
+            cli.main(["metrics", "--root", str(self.root)])
+        self.assertEqual(out.getvalue().splitlines()[-2:], [
+            "Runner (orche run, RUN.json):", "  units 3, cost $1.60, median $0.40/unit, failures 1"])
 
     def test_missing_root_is_empty(self):
         m = metrics.compute(self.root / "nope", days=30, now=NOW)

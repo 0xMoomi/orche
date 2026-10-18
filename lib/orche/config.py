@@ -8,8 +8,20 @@ DEFAULTS = {
     "claude_bin": "claude",
     "notify": True,
     "lang": "en",
+    # How the Stop hook delivers a brief to a division/feature: `runner` spawns `orche run <unit>`
+    # (headless `claude -p`); `pane` nudges the unit's Orca pane.
+    "delivery": "runner",
+    # queue_wait_s: how long a run waits for a project slot or its target's lock, then "runner busy".
+    # log_keep_days: logs/runs/*.log older than this go at `orche run` start and `orche janitor run`.
+    "runner": {"model_mechanical": "claude-sonnet-5-5", "max_turns": 20, "max_parallel": 4,
+               "hard_in_pane": False, "queue_wait_s": 1800, "log_keep_days": 14},
     "jev": {"enabled": False, "base_url": "", "model": "jev-1.13.0", "timeout_s": 1.0,
             "api_key_env": "JEV_API_KEY"},
+    # Triage of a Main pane's prompts (lib/orche/triage.py): backend auto = Jev when enabled and
+    # configured, else claude-haiku (`claude -p`); max_latency_s bounds the Haiku call (Jev keeps
+    # jev.timeout_s); keep_prompts stores the masked prompt in triage/samples.jsonl.
+    "triage": {"enabled": False, "backend": "auto", "min_confidence": 0.9, "max_latency_s": 12,
+               "keep_prompts": False},
 }
 
 
