@@ -116,6 +116,19 @@ def _etime(text):
     return secs + total
 
 
+def _etime_start(now, elapsed):
+    """Epoch seconds a process started, from its `ps` etime, never earlier than the true start.
+
+    macOS `ps` prints etime as the difference of two WHOLE seconds, its own clock and the start
+    (`now.tv_sec - p_starttime.tv_sec`), so it can exceed the true elapsed time by up to 1 s: a
+    process started at x.9 and read at (x+1).1 shows 1 s. `now - etime` is then up to 1 s early.
+    The true start is before (the start's whole second) + 1 = ps's whole second - etime + 1, and
+    ps's whole second is at most that of `now` (taken after `ps` returned), so this is a start in
+    whole seconds never earlier than the true one, and at most about 1 s (plus the `ps` call)
+    later."""
+    return int(now) - elapsed + 1
+
+
 def _unique(pairs) -> dict:
     """{pid: value}; a pid listed twice is dropped (defensive: macOS `ps` escapes a line break as `\\012`)."""
     out, twice = {}, set()
@@ -148,7 +161,7 @@ def _table_ps(deadline):
             continue
         elapsed = _etime(parts[3])
         rows.append((pid, (ppid, pgid, parts[4] if len(parts) == 5 else "",
-                           None if elapsed is None else now - elapsed)))
+                           None if elapsed is None else _etime_start(now, elapsed))))
     lines = []
     for line in env_out.splitlines():
         parts = line.split(None, 1)
@@ -204,8 +217,8 @@ def _table_proc(deadline, root=PROC):
 
 def _walk_proc(root):
     """[Proc] from every /proc/<pid>, else None (unlistable). A start is the END of its clock tick
-    on a boot never earlier than the true one: like macOS's etime, never earlier than the process
-    really started (procs._is_claude compares it with the lock's started_ns)."""
+    on a boot never earlier than the true one: like macOS's etime (_etime_start), never earlier than
+    the process really started (procs._is_claude compares it with the lock's started_ns)."""
     try:
         names = [n for n in os.listdir(root) if n.isdigit()]
     except OSError:

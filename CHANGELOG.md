@@ -3,6 +3,36 @@
 All notable changes to ORCHE are listed here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow semantic versioning.
 
+## 0.3.2 — 2026-10-18
+
+### Added
+
+- **One-command install: `install.sh`.** `curl -fsSL
+  https://raw.githubusercontent.com/0xMoomi/orche/main/install.sh | bash` (or `bash install.sh`
+  from a clone, which then uses that clone) checks the OS (macOS; Linux with a WARN that Orca is
+  needed for panes; Windows refused) and the requirements (git, Python 3.11+ found like
+  `lib/find_python.sh`, `claude`, `orca`), clones or updates `~/orche` (`--dir`, `--ref`; a dirty
+  clone, another remote or a non-git folder is refused), adds `export PATH=... # orche` to the
+  login profile once (`--no-profile` prints it instead), runs `orche install` (the Jev question
+  read from `/dev/tty`, so it works through `curl | bash` too; without a terminal `--no-jev` and
+  one "Jev: skipped (no terminal)" line), adds the Claude Code plugin with `claude plugin
+  marketplace add` + `claude plugin install orche@orche` (or updates both on a re-run), falls back
+  to `--mode settings` when `claude` or `claude plugin install` is missing or the plugin step
+  fails, optionally runs `orche apply-all` (`--all-projects`), and ends with `orche doctor`'s
+  WARN/FAIL lines and a three-line summary. Re-running it updates. `--dry-run` writes nothing;
+  exit 1 for user/environment problems, 2 for unexpected failures. Tested under macOS's bash 3.2.
+- **`orche install --no-plugin-hint`**: plugin mode without the two `/plugin …` lines (`install.sh`
+  passes it because it runs those steps itself; settings mode and plain `orche install` unchanged).
+
+### Fixed
+
+- **A lost run's env-hidden claude started within a second of its lock is swept on macOS.**
+  macOS `ps` etime is `ps`'s whole second minus the start's whole second, so `now − etime` could
+  place a claude up to 1 s before the lock's `started_ns` and reconcile left it running (a flaky
+  `test_a_lost_hidden_claude_started_right_after_its_lock_is_still_that_runs_claude` on CI).
+  The start is now (the whole second after `ps` returned) − etime + 1 s: never earlier than the
+  true start, at most about 1 s later.
+
 ## 0.3.1 — 2026-10-18
 
 Jev onboarding: set Jev up once, or skip it and everything works without it.

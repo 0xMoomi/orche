@@ -160,6 +160,18 @@ class InstallTest(InstallCase):
             self.assertIn(expected, out)
         self.assertEqual(out.splitlines()[-1], MIGRATION_LINE)
 
+    def test_no_plugin_hint_drops_the_two_plugin_lines(self):
+        out = self.install("--no-jev")
+        self.assertIn(f"  /plugin marketplace add {PLUGIN_ROOT}", out)
+        self.assertIn("  /plugin install orche@orche", out)
+        out = self.install("--no-jev", "--no-plugin-hint")
+        self.assertNotIn("/plugin", out)
+        self.assertNotIn("Install the ORCHE hooks as a Claude Code plugin", out)
+        self.assertEqual(out.splitlines()[-1], MIGRATION_LINE)
+        code, out, err = self.orche("--json", "install", "--home", str(self.h), "--no-jev", "--no-plugin-hint")
+        self.assertEqual((code, err), (0, ""), out)
+        self.assertEqual(json.loads(out)["instructions"], [])
+
     def test_install_backs_up_merges_and_is_idempotent(self):
         out = self.install()
         self.assertEqual(out.splitlines()[-1], MIGRATION_LINE)
