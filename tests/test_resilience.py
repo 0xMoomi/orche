@@ -114,9 +114,10 @@ class EnvSweepTest(SweepCase):
         self.action(DETACHED)
         (self.fake / "sleep").write_text("30")
         self.reply("STATUS: done")
-        with mock.patch.object(runner, "timebox_seconds", return_value=0), mock.patch.object(runner, "GRACE_S", 1):
+        # 3 s: the timeout must come after the action wrote the grandchild's pid (a python start).
+        with mock.patch.object(runner, "timebox_seconds", return_value=0), mock.patch.object(runner, "GRACE_S", 3):
             self.assertEqual(self.orche("run", unit)[0], 1)
-        self.assertEqual(self.run_record(unit)["error"], "timeout after 1s")
+        self.assertEqual(self.run_record(unit)["error"], "timeout after 3s")
         self.assertTrue(self.gone(self.grandchild(timeout=1)))
         (self.fake / "grandchild").unlink()
         (self.fake / "sleep").unlink()                    # claude answers at once; the grandchild stays behind
@@ -689,12 +690,17 @@ class ReconcileTest(SweepCase):
         unit, waiting = self.brief(n=1), self.brief(n=2)
         holder = self.fake_run(unit)
         self.put_lock(unit,holder.pid)
-        killer = threading.Timer(0.5, lambda: (holder.kill(), holder.wait()))   # SIGKILL, reaped
-        killer.start()
+        polls = []
+
+        def cancel():       # asked after every attempt that found the target taken: the holder dies at the first
+            if not polls:
+                holder.kill()           # SIGKILL, reaped
+                holder.wait()
+            polls.append(True)
         with mock.patch.object(runs, "POLL_S", 0.05):
-            lock = runs.acquire("acme", waiting, {"to": "div-acme-build"}, 4, wait_s=10)
-        killer.join()
+            lock = runs.acquire("acme", waiting, {"to": "div-acme-build"}, 4, wait_s=10, cancel=cancel)
         runs.release(lock)
+        self.assertTrue(polls)                         # it waited: the death was met while waiting
         self.assertEqual([p["unit"] for p in self.from_target()], [unit])
         self.assertIn(f"run unit={unit} to=div-acme-build runner-reconciled pid={holder.pid}", self.events())
 

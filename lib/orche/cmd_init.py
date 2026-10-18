@@ -10,7 +10,9 @@ card symlink -> registry entry -> `.orche/project` marker (the project key, read
 line) -> one worktree/unit files/settings/persona per division (all
 `dormant` unless `--wake`; `ops` always dormant and gated by stage) -> `main-<proj>` and
 `liaison-<proj>` panes in the main checkout when missing -> the two weekly Orca automations
-(printed as dry-run lines unless `--automations`). The main checkout's
+(printed as dry-run lines unless `--automations`) -> the project intake (`orche intake`, unless
+`--no-intake`; a failure is one "intake skipped: …" line and Ctrl-C one "intake interrupted; …"
+line, never a failed init). The main checkout's
 `.claude/settings.local.json` is never written: Main and Liaison share that checkout.
 """
 import json
@@ -18,7 +20,7 @@ import os
 import sys
 from pathlib import Path
 
-from . import cmd_sleep_wake, config, orca, paths, registry, setup_flow, templates, units, util
+from . import cmd_sleep_wake, config, intake, mask, orca, paths, registry, setup_flow, templates, units, util
 from .hr import EXIT_BLOCKED, EXIT_NOT_FOUND, EXIT_OK, EXIT_USER, PLUGIN_ROOT, dry, fail, onboarding, out, \
     refresh_status_line, warn
 
@@ -43,6 +45,8 @@ def register(subparsers):
                    help="print the project's setup JSON (the defaults for an unregistered repo) and exit")
     p.add_argument("--wake", default="", help="comma-separated divisions to start now (default: none)")
     p.add_argument("--automations", action="store_true", help="create the Orca automations (default: print them)")
+    p.add_argument("--no-intake", action="store_true",
+                   help="skip the closing project intake (run it later with: orche intake <project>)")
     p.set_defaults(func=cmd_init)
 
 
@@ -281,6 +285,38 @@ def _conflict(reg, key, repo, root):
     return None
 
 
+def _intake(args, reg, key, root, names):
+    """The closing project intake: (line or None, data). It runs when `intake.enabled`, without
+    `--no-intake`, and when the stamp misses one of the project's division `names` (all of them
+    without a stamp: a re-run of init that only resumes changes nothing; one that adds a division
+    re-runs the whole intake: cheap, and the card stays consistent). Any failure is a skip line and
+    Ctrl-C (or a SIGTERM) only ends the intake — claude's process group is killed on the way out
+    (runner.execute) — so init still prints its summary, refreshes the status line and exits 0."""
+    cfg = config.load()
+    if args.no_intake or not intake.settings(cfg).get("enabled", True):
+        return None, {"status": "off"}
+    if not intake.missing_divisions(names, intake.read_stamp(root)):
+        return "intake: covered", {"status": "covered"}
+    if args.dry_run:
+        return f"would run: orche intake {key}", {"status": "dry-run"}
+    model = intake.settings(cfg).get("model") or "claude-sonnet-5-5"
+    print(f"intake {key}: sweeping {root} (headless, read-only, {model}; usually under a minute; "
+          "Ctrl-C skips it, `--no-intake` turns it off)…", file=sys.stderr, flush=True)
+    later = f"run `orche intake {key}` later"
+    try:
+        with intake.progress(model):
+            rec = intake.run(reg, key, cfg)
+    except (KeyboardInterrupt, intake.Interrupted):
+        print(file=sys.stderr)
+        return f"intake interrupted; {later}", {"status": "interrupted"}
+    except Exception as exc:  # noqa: BLE001 - init never fails because of its intake
+        why = str(exc) if isinstance(exc, intake.IntakeError) else f"{type(exc).__name__}: {exc}"
+        why = mask.redact(why)[0]
+        return f"intake skipped: {why}; {later}", {"status": "skipped", "reason": why}
+    return intake.summary_line(rec), {"status": "ran", **{k: rec[k] for k in ("head", "cost_usd", "duration_s",
+                                                                              "model", "divisions", "turns")}}
+
+
 def cmd_init(args):
     reg = registry.load()
     if args.print_setup:
@@ -404,6 +440,10 @@ def cmd_init(args):
     lines.append(f"panes: {', '.join(panes) if panes else 'main/liaison already open'}")
     lines.append(f"card: {proj['card']}")
     lines.append("automations: " + ("created" if live else "printed only (above); re-run with --automations"))
+    names = list(dict.fromkeys(registry.divisions_of(proj) + list(divisions)))   # a dry run saved none
+    intake_line, data["intake"] = _intake(args, reg, key, root, names)
+    if intake_line:
+        lines.append(intake_line)
     if not dry_run:
         refresh_status_line(reg, key)
     out(args, data, lines)

@@ -19,11 +19,37 @@ _jevkey.SECURITY = "/nonexistent/orche-test/security"
 _jev_setup.OSASCRIPT = "/nonexistent/orche-test/osascript"
 
 
+_NO_CLAUDE_DIR = None
+NO_CLAUDE = "#!/bin/sh\necho 'tests never run the real claude (support.NO_CLAUDE)' >&2\nexit 1\n"
+
+
+def no_claude_dir() -> str:
+    """A directory whose `claude` always fails. It goes first on PATH for the whole test process
+    (below), so code that falls back to the default `claude_bin` (e.g. the intake at the end of
+    `orche init`) can never start the developer's real Claude Code, whatever the test's base
+    class; tests that want a worker set config `claude_bin`."""
+    global _NO_CLAUDE_DIR
+    if _NO_CLAUDE_DIR is None:
+        import atexit
+        import shutil
+        _NO_CLAUDE_DIR = tempfile.mkdtemp(prefix="orche-no-claude-")
+        atexit.register(shutil.rmtree, _NO_CLAUDE_DIR, True)
+        stub = Path(_NO_CLAUDE_DIR) / "claude"
+        stub.write_text(NO_CLAUDE)
+        stub.chmod(0o755)
+    return _NO_CLAUDE_DIR
+
+
+os.environ["PATH"] = no_claude_dir() + os.pathsep + os.environ.get("PATH", "")
+
+
 class TempHomeCase(unittest.TestCase):
-    """Runs each test with ORCHE_HOME pointing at a fresh temporary directory."""
+    """Runs each test with ORCHE_HOME pointing at a fresh temporary directory (and PATH restored
+    afterwards, the failing `claude` of no_claude_dir still first)."""
 
     def setUp(self):
         super().setUp()
+        self._saved_path = os.environ.get("PATH", "")
         self._tmp = tempfile.TemporaryDirectory()
         self.home = Path(self._tmp.name)
         # An ORCHE pane exports ORCHE_SESSION / ORCA_TERMINAL_HANDLE (and maybe more): every test
@@ -47,6 +73,7 @@ class TempHomeCase(unittest.TestCase):
         for key in [k for k in os.environ if k.startswith(("ORCHE_", "ORCA_"))]:
             del os.environ[key]
         os.environ.update(self._saved_env)
+        os.environ["PATH"] = self._saved_path
         self._tmp.cleanup()
         super().tearDown()
 

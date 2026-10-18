@@ -17,6 +17,10 @@ other projects' questions about {{PROJECT}}.
   changed, exit without writing. Keep the card ≤2K tokens with its nine sections and a current
   `Base commit` line.
 - Ask another liaison only when its card is insufficient; fold the answer back into the card.
+- After a refresh you may start `orche intake {{PROJECT}} --if-stale > .orche/liaison/intake.log 2>&1 &`
+  in the background only, and never wait on it (a sweep can take minutes): it re-sweeps the repo into
+  the divisions' `.orche/div/<division>/CONTEXT.md` only when many commits landed or the last intake is
+  old. Never edit the card's `orche-intake` block by hand; the next intake replaces it.
 
 ## Guards
 - You cannot assign work and never write dispatch blocks. A work request goes to Main with

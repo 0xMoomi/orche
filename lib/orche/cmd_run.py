@@ -107,8 +107,9 @@ def cmd_run(args):
                               "timeout_s": timeout, "argv": argv}, indent=2, ensure_ascii=False))
         else:
             print(shlex.join(argv))
-            print(f"[dry-run] cwd {job.worktree}; ORCHE_SESSION={job.to}; stdin {job.brief} + runner footer; "
-                  f"timeout {timeout}s", file=sys.stderr)
+            context = f" + project context {job.context}" if job.context is not None else ""
+            print(f"[dry-run] cwd {job.worktree}; ORCHE_SESSION={job.to}; stdin {job.brief}{context} + runner "
+                  f"footer; timeout {timeout}s", file=sys.stderr)
         return EXIT_OK
     runs.prune_logs((cfg.get("runner") or {}).get("log_keep_days"))
     try:

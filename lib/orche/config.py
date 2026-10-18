@@ -22,6 +22,12 @@ DEFAULTS = {
     # jev.timeout_s); keep_prompts stores the masked prompt in triage/samples.jsonl.
     "triage": {"enabled": False, "backend": "auto", "min_confidence": 0.9, "max_latency_s": 12,
                "keep_prompts": False},
+    # Project intake (lib/orche/intake.py): a read-only `claude -p` sweep of the main checkout into
+    # .orche/div/<division>/CONTEXT.md (max_chars each) and PROJECT_CARD.md. enabled: `orche init`
+    # runs it at the end and `orche janitor run` refreshes a stamped project once HEAD moved
+    # refresh_commits commits or the stamp is refresh_days old (`orche intake` itself always runs).
+    "intake": {"enabled": True, "model": "claude-sonnet-5-5", "max_turns": 30, "timeout_s": 900,
+               "max_chars": 2000, "refresh_commits": 50, "refresh_days": 14},
 }
 
 

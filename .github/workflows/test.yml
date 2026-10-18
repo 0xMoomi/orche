@@ -8,6 +8,7 @@ on:
   pull_request:
     paths-ignore:
       - "docs/**"
+  workflow_dispatch:
 
 concurrency:
   group: test-${{ github.ref }}
@@ -18,12 +19,14 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest]
+        # Explicit images, not *-latest: ubuntu-latest moves to 26.04 from 2026-10-19 and
+        # macos-latest already points at macOS 26. Bump these deliberately.
+        os: [ubuntu-24.04, macos-15]
     runs-on: ${{ matrix.os }}
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.11"
       - name: Run tests

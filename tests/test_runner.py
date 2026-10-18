@@ -46,6 +46,17 @@ def alive(pid) -> bool:
     return True
 
 
+def write_script(path: Path, text: str) -> Path:
+    """An executable script, replaced atomically: a shell that is starting it reads either the
+    old file or the new one, never a truncated one (Path.write_text truncates first, and a
+    just-exec'd `/bin/sh` reading it then exits at once or fails on half a loop)."""
+    tmp = path.with_name(f".{path.name}.tmp")
+    tmp.write_text(text)
+    tmp.chmod(0o755)
+    os.replace(tmp, path)
+    return path
+
+
 class RunnerCase(HookCase):
     def setUp(self):
         super().setUp()
@@ -143,20 +154,24 @@ class RunnerCase(HookCase):
 
     def fake_run(self, *args):
         """A live process whose `ps` command line is `/bin/sh …/orche run <args…>`: a live run as
-        far as runs.is_run_process (and so reconcile) can tell."""
+        far as runs.is_run_process (and so reconcile) can tell. Returned once `ps` shows exactly
+        that (the pattern runs.is_run_process matches), never before."""
         folder = self.root / "launcher"
         folder.mkdir(exist_ok=True)
         script = folder / "orche"
-        script.write_text("#!/bin/sh\nwhile :; do sleep 1; done\n")
-        script.chmod(0o755)
+        if not script.exists():      # shared by every holder: never rewritten under a starting one
+            write_script(script, "#!/bin/sh\nwhile :; do sleep 1; done\n")
         proc = self.sleeper([str(script), "run", *args])
-        self.assertTrue(self.wait_for(lambda: f"run {' '.join(args)}" in subprocess.run(
-            ["ps", "-ww", "-o", "command=", "-p", str(proc.pid)], capture_output=True, text=True).stdout))
+        pattern = runs._run_command(args[-1])
+        self.assertTrue(self.wait_for(lambda: pattern.search(subprocess.run(
+            ["ps", "-ww", "-o", "command=", "-p", str(proc.pid)], capture_output=True, text=True).stdout)),
+            f"`ps` never showed {script} run {' '.join(args)} (pid {proc.pid})")
         return proc
 
     def busy_slots(self, n=4):
         """`n` live locks of other units, each held by a process `ps` shows as its `orche run`:
-        the project's run slots are full. Returns the holders."""
+        the project's run slots are full. Returns the holders once every one of them still is its
+        run (alive and verified as reconcile verifies it), so a run started next has to wait."""
         folder = self.home / "runs" / "acme"
         folder.mkdir(parents=True, exist_ok=True)
         holders = []
@@ -165,20 +180,43 @@ class RunnerCase(HookCase):
             holders.append(self.fake_run(unit))
             (folder / f"{unit}.lock").write_text(json.dumps(
                 {"pid": holders[-1].pid, "unit": unit, "to": f"div-other-{i}"}))
+        for i, holder in enumerate(holders):
+            self.assertIsNone(holder.poll(), f"busy-slot holder {i} exited: {holder.returncode}")
+            self.assertIs(runs.is_run_process(holder.pid, f"acme-other-20261018-{i + 10}"), True)
         return holders
 
-    def slow_git(self):
-        """A `git` wrapper (in self.git_env's PATH) that sleeps 1.5 s per call while the returned
-        flag file exists: it widens the runner's `starting` / `finishing` phases for a signal."""
-        folder = self.root / "slowgit"
+    def git_gate(self):
+        """A `git` wrapper (first on self.git_env's PATH). While the returned `gate` file exists,
+        each call appends its pid to `entered` and waits until the test removes `gate` (60 s at
+        most), then runs the real git. `entered` shows the moment the runner is inside a git call of
+        its `starting` (before claude) or `finishing` (after claude) phase; the test signals there
+        and then opens the gate. (dispatch.git_head gives git 2 s: the test opens the gate well
+        inside that.)"""
+        folder = self.root / "gitgate"
         folder.mkdir(exist_ok=True)
-        flag = folder / "slow"
-        script = folder / "git"
-        script.write_text(f"#!/bin/sh\nif [ -f {shlex.quote(str(flag))} ]; then sleep 1.5; fi\n"
-                          f"exec {shlex.quote(shutil.which('git'))} \"$@\"\n")
-        script.chmod(0o755)
+        gate, entered = folder / "closed", folder / "entered"
+        gate.unlink(missing_ok=True)
+        entered.unlink(missing_ok=True)
+        g, e = shlex.quote(str(gate)), shlex.quote(str(entered))
+        write_script(folder / "git", f"#!/bin/sh\nif [ -f {g} ]; then\n  echo $$ >> {e}\n  i=0\n"
+                                     f"  while [ -f {g} ] && [ $i -lt 1200 ]; do sleep 0.05; i=$((i + 1)); done\n"
+                                     f"fi\nexec {shlex.quote(shutil.which('git'))} \"$@\"\n")
         self.git_env = {**os.environ, "PATH": f"{folder}{os.pathsep}{os.environ.get('PATH', '')}"}
-        return flag
+        return gate, entered
+
+    def claude_sleep_pid(self):
+        """The pid of the fake claude's `sleep` once `ps` shows it exec'd, i.e. the fake has read
+        its `sleep` file (its `pid` file is written just before that read). Call after
+        claude_sleeping()."""
+        parent, found = (self.fake / "pid").read_text().strip(), []
+
+        def look():
+            out = subprocess.run(["ps", "-A", "-o", "pid=,ppid=,command="], capture_output=True, text=True).stdout
+            found[:] = [int(f[0]) for f in (line.split(None, 2) for line in out.splitlines())
+                        if len(f) == 3 and f[1] == parent and f[2].startswith("sleep ")]
+            return bool(found)
+        self.assertTrue(self.wait_for(look), f"no `sleep` child of the fake claude (pid {parent})")
+        return found[0]
 
     def reap(self, proc):
         if proc.poll() is None:
@@ -276,7 +314,8 @@ class DryRunArgvTest(RunnerCase):
         config_before = (self.home / "config.json").read_text()
         first = runner.claude_flags(config.load())
         self.assertEqual(first, {"bin": str(self.claude), "version": "9.9.9 (Claude Code)", "ok": True,
-                                 "system_prompt_file": True, "setting_sources": True, "tools": False})
+                                 "system_prompt_file": True, "setting_sources": True, "tools": False,
+                                 "restricted": False})
         self.assertEqual(json.loads((self.home / "runner" / "probe.json").read_text()), first)
         self.assertEqual((self.home / "config.json").read_text(), config_before)
         (self.fake / "help.txt").write_text(HELP_OLD)
@@ -288,12 +327,12 @@ class DryRunArgvTest(RunnerCase):
         (self.fake / "version").write_text("")
         self.assertEqual(runner.claude_flags(config.load())["version"], "")
         self.assertFalse((self.home / "runner" / "probe.json").exists())
-        # A probe cached before the `tools` key existed is redone (triage needs it).
+        # A probe cached before the `restricted` key existed is redone (intake needs it).
         (self.fake / "version").write_text("9.9.10 (Claude Code)\n")
-        (self.fake / "help.txt").write_text(support.HELP_FULL)
-        old = {k: v for k, v in again.items() if k != "tools"}
+        (self.fake / "help.txt").write_text(support.HELP_FULL + "  --restricted  Restricted mode\n")
+        old = {k: v for k, v in again.items() if k != "restricted"}
         (self.home / "runner" / "probe.json").write_text(json.dumps(old))
-        self.assertTrue(runner.claude_flags(config.load())["tools"])
+        self.assertTrue(runner.claude_flags(config.load())["restricted"])
 
     def test_timebox_parsing(self):
         cases = {"30m": 1800, "2h": 7200, "~45 min": 2700, "1.5 hours": 5400, "about an hour": 1800,
@@ -370,7 +409,8 @@ class RunTest(RunnerCase):
         self.assertTrue((self.home / "activity" / "div-acme-build").exists())
         self.assertEqual(json.loads((self.home / "runner" / "probe.json").read_text()),
                          {"bin": str(self.claude), "version": "9.9.9 (Claude Code)", "ok": True,
-                          "system_prompt_file": True, "setting_sources": True, "tools": True})
+                          "system_prompt_file": True, "setting_sources": True, "tools": True,
+                          "restricted": False})
         self.assertEqual(ptr["via"], "runner")
         self.assertEqual(list((self.home / "runs" / "acme").glob("*.lock")), [])
 
@@ -663,10 +703,17 @@ class RunnerFailureTest(RunnerCase):
         unit = self.brief()
         self.reply("STATUS: done")
         proc = self.spawn(unit)
+        out = self.root / f"{unit}.out"
         # The mutex file appears on the first acquire attempt: the handler is installed by then.
-        self.assertTrue(self.wait_for((self.home / "runs" / "acme" / ".mutex").exists))
+        self.assertTrue(self.wait_for((self.home / "runs" / "acme" / ".mutex").exists), out.read_text())
+        # Waiting, provably: no slot taken, all four holders still their runs (a gone holder frees
+        # a slot and the run would start claude instead: the 0.3.2 CI flake).
+        self.assertIsNone(self.lock(unit), out.read_text())
+        self.assertEqual([h.poll() for h in busy], [None] * 4)
+        self.assertIsNone(proc.poll(), out.read_text())
         proc.send_signal(signal.SIGTERM)
-        self.assertEqual(proc.wait(timeout=20), 1, (self.root / f"{unit}.out").read_text())
+        self.assertEqual(proc.wait(timeout=20), 1,
+                         f"{out.read_text()}holders alive: {[alive(h.pid) for h in busy]}")
         [ptr] = self.pointers("main-acme")
         self.assertEqual((ptr["status"], ptr["summary"]), ("failed", "run failed: runner terminated by SIGTERM"))
         self.assertEqual(self.run_record(unit)["stop_reason"], "error")
@@ -674,21 +721,23 @@ class RunnerFailureTest(RunnerCase):
         self.assertTrue(all(alive(holder.pid) for holder in busy))
 
     def test_sigterm_before_claude_starts_files_failed_or_stopped_before_start(self):
-        """Round 2: SIGTERM in the `starting` phase (slot taken, a slow `git` before claude): claude
-        never runs; with the STOP marker (runs.stop: a verified real run) "stopped by Main before start"."""
+        """Round 2: SIGTERM in the `starting` phase (slot taken, the runner held in its `git` before
+        claude): claude never runs; with the STOP marker (runs.stop: a verified real run) "stopped
+        by Main before start"."""
         for n, stop in ((1, False), (2, True)):
             unit = self.brief(n=n)
             self.reply("STATUS: done")
-            flag = self.slow_git()
-            flag.write_text("x")
+            gate, entered = self.git_gate()
+            gate.write_text("x")
             proc = self.spawn(unit, env=self.git_env)
-            self.assertTrue(self.wait_for(lambda: self.lock(unit) is not None), (self.root / f"{unit}.out").read_text())
+            out = self.root / f"{unit}.out"
+            self.assertTrue(self.wait_for(lambda: self.lock(unit) is not None and entered.exists()), out.read_text())
             if stop:
                 self.assertTrue(runs.stop("acme", unit))
             else:
                 proc.send_signal(signal.SIGTERM)
-            self.assertEqual(proc.wait(timeout=30), 0 if stop else 1, (self.root / f"{unit}.out").read_text())
-            flag.unlink()
+            gate.unlink()
+            self.assertEqual(proc.wait(timeout=30), 0 if stop else 1, out.read_text())
             [ptr] = [p for p in self.pointers("main-acme") if p["unit"] == unit]
             want = (("info", "stopped by Main before start") if stop else
                     ("failed", "run failed: runner terminated by SIGTERM"))
@@ -722,17 +771,19 @@ class RunnerFailureTest(RunnerCase):
             self.assertFalse(alive((self.fake / "pid").read_text().strip()))
 
     def test_sigterm_after_claude_finished_files_the_result_and_drops_a_late_stop(self):
-        """Round 2: STOP lands while the runner records a finished run (a slow `git` after claude):
-        the real result is filed, nothing else, the marker is removed (`runner-stop-late`)."""
+        """Round 2: STOP lands while the runner records a finished run (held in its `git` after
+        claude): the real result is filed, nothing else, the marker is removed (`runner-stop-late`)."""
         unit = self.brief()
-        flag = self.slow_git()
-        self.action(f"touch {shlex.quote(str(flag))}\n")
+        gate, entered = self.git_gate()
+        self.action(f"touch {shlex.quote(str(gate))}\n")     # claude closes the gate; it calls no git after
         self.reply("STATUS: blocked\nreal result")
         proc = self.spawn(unit, env=self.git_env)
-        self.assertTrue(self.wait_for(flag.exists), (self.root / f"{unit}.out").read_text())
-        time.sleep(0.3)
+        out = self.root / f"{unit}.out"
+        # A git call held at the gate is the runner's first after claude exited: `finishing`.
+        self.assertTrue(self.wait_for(entered.exists), out.read_text())
         self.assertTrue(runs.stop("acme", unit))          # the lock is live: marker + SIGTERM
-        self.assertEqual(proc.wait(timeout=30), 0, (self.root / f"{unit}.out").read_text())
+        gate.unlink()
+        self.assertEqual(proc.wait(timeout=30), 0, out.read_text())
         [ptr] = self.pointers("main-acme")
         self.assertEqual((ptr["status"], ptr["summary"]), ("blocked", "real result"))
         self.assertEqual(self.run_record(unit)["status"], "blocked")
@@ -1033,6 +1084,8 @@ class RelayRunnerTest(RunnerCase):
         first = self.spawn(unit)
         self.assertTrue(self.claude_sleeping(unit), (self.root / f"{unit}.out").read_text())
         old_claude = (self.fake / "pid").read_text().strip()
+        self.claude_sleep_pid()                   # rev 1's claude has read its `sleep` file
+        (self.fake / "sleep").unlink()            # so only the fresh run answers at once
         procs = []
 
         def popen(argv, **kw):
@@ -1040,7 +1093,6 @@ class RelayRunnerTest(RunnerCase):
             self.addCleanup(self.reap, procs[-1])
             return procs[-1]
         self.relay(body=f"AMEND {unit} rev 2\nSUPERSEDES rev 1: smaller\nGOAL      Smaller", popen=popen)
-        (self.fake / "sleep").unlink()            # the fresh run answers at once
         self.assertIn(f"kind=amend unit={unit} rev=2 to=div-acme-build by=main-acme delivery=runner-restarted",
                       self.events())
         self.assertEqual(self.feedback(), [f"relayed {unit} → div-acme-build rev 2 (runner-restarted)"])
@@ -1219,13 +1271,15 @@ class RoundTwoRunTest(RunnerCase):
         """I-A: a real live run + `orche run` of the same unit: the duplicate files `info` (via
         runner, exit 4, no RUN.json); the live run still files its own `blocked`."""
         unit = self.brief()
-        (self.fake / "sleep").write_text("2")
+        (self.fake / "sleep").write_text("30")
         self.reply("STATUS: blocked\nlive result")
         proc = self.spawn(unit)
         self.assertTrue(self.claude_sleeping(unit), (self.root / f"{unit}.out").read_text())
+        nap = self.claude_sleep_pid()
         code, _, err = self.orche("run", unit)
         self.assertEqual(code, 4, err)
         self.assertIn(f"{unit} is already running (pid {proc.pid}, started ", err)
+        os.kill(nap, signal.SIGTERM)          # only now does the live claude answer
         self.assertEqual(proc.wait(timeout=20), 0, (self.root / f"{unit}.out").read_text())
         got = sorted((p["status"], p["summary"].split(" (pid")[0], p["via"]) for p in self.pointers("main-acme"))
         self.assertEqual(got, [("blocked", "live result", "runner"),

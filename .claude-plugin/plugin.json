@@ -1,6 +1,6 @@
 {
   "name": "orche",
-  "version": "0.3.2",
+  "version": "0.3.3",
   "description": "Orchestration layer for Claude Code + Orca: divisions in worktrees, hook-relayed briefs, verification ledger, token-economy guardrails",
   "author": {
     "name": "0xmoomi"
