@@ -1,5 +1,13 @@
-"""Registry (ORCHE_HOME/registry.json, schema version 1). All reads/writes go through here."""
+"""Registry (ORCHE_HOME/registry.json, schema version 1). All reads/writes go through here.
+
+A project's divisions are the standard ones it onboarded (keys of `divisions` that are in
+DIVISIONS) plus its custom ones (`custom_divisions`: name -> {label, charter, model, effort});
+a custom division's runtime record (worktree, session, status) lives in `divisions` like a
+standard one. `divisions_of(proj)` is the one enumeration every command uses.
+"""
 import copy
+import re
+import unicodedata
 
 from . import paths, util
 
@@ -14,6 +22,15 @@ LIMIT_DEFAULTS = {
 }
 STAGES = ("building", "public")
 DIVISIONS = ("rnd", "research", "build", "gtm", "ops")
+STANDARD_LABELS = {"rnd": "R&D", "research": "Research", "build": "Build", "gtm": "GTM", "ops": "Ops"}
+# A slug: a-z first, then a-z/0-9, single hyphens between parts (no trailing or doubled `-`).
+CUSTOM_NAME = re.compile(r"^[a-z][a-z0-9]*(-[a-z0-9]+)*$")
+NAME_MIN, NAME_MAX = 2, 16
+RESERVED_NAMES = ("main", "liaison", "feat", "hr", "jev")
+CUSTOM_KEYS = ("label", "charter", "model", "effort")
+EFFORTS = ("low", "medium", "high", "xhigh", "max")
+LABEL_MAX, CHARTER_MAX = 24, 400
+CUSTOM_MODEL, CUSTOM_EFFORT = "claude-opus-5-5", "high"
 # `onboarding`: the worktree exists but onboarding has not finished (re-run init / feat new to resume).
 DIVISION_STATUSES = ("active", "dormant", "paused", "retired", "onboarding")
 FEATURE_STATUSES = ("active", "paused", "retired", "onboarding")
@@ -89,9 +106,75 @@ def _validate_feature(feat, where, errors):
         errors.append(f"{where}.scope: must be a non-empty list of globs")
 
 
-def _validate_division(name, div, where, errors):
-    if name not in DIVISIONS:
-        errors.append(f"{where}: unknown division {name!r} (allowed: {'|'.join(DIVISIONS)})")
+def custom_name_errors(name) -> list:
+    """Why `name` cannot be a custom division name (empty when it can)."""
+    if not isinstance(name, str) or not NAME_MIN <= len(name) <= NAME_MAX or not CUSTOM_NAME.match(name):
+        return [f"custom division name {name!r} must be a slug of {NAME_MIN}-{NAME_MAX} characters: a-z first, "
+                "then a-z or 0-9, single hyphens between parts"]
+    if name in DIVISIONS:
+        return [f"{name!r} is a standard division; check it in the list instead of adding it as custom"]
+    if name in RESERVED_NAMES:
+        return [f"{name!r} is reserved ({'|'.join(RESERVED_NAMES)})"]
+    return []
+
+
+def _has_control(text: str) -> bool:
+    """Control (line breaks, tabs, escapes) or format (bidi overrides, zero-width) characters."""
+    return any(unicodedata.category(c) in ("Cc", "Cf") for c in text)
+
+
+def label_errors(label) -> list:
+    """Why `label` cannot be a custom division's label (messages without a field prefix)."""
+    if not isinstance(label, str) or not label.strip() or len(label) > LABEL_MAX:
+        return [f"must be one line of 1-{LABEL_MAX} characters"]
+    if _has_control(label):
+        return ["must not contain line breaks or control characters"]
+    taken = {n.lower() for n in DIVISIONS} | {lab.lower() for lab in STANDARD_LABELS.values()}
+    if label.strip().lower() in taken:
+        return [f"{label.strip()!r} is a standard division's name or label; pick another"]
+    return []
+
+
+def charter_errors(charter) -> list:
+    """Why `charter` cannot be a custom division's charter (messages without a field prefix)."""
+    if not isinstance(charter, str) or not charter.strip() or "\n" in charter or len(charter) > CHARTER_MAX:
+        return [f"must be one paragraph of 1-{CHARTER_MAX} characters"]
+    if _has_control(charter):
+        return ["must not contain control characters"]
+    return []
+
+
+def model_errors(model) -> list:
+    """Why `model` cannot be a custom division's model id (messages without a field prefix)."""
+    if not isinstance(model, str) or not model or any(c.isspace() for c in model) or _has_control(model):
+        return ["must be a model id without spaces or control characters"]
+    return []
+
+
+def custom_spec_errors(spec, where="custom division") -> list:
+    """Schema errors of one stored custom division spec {label, charter, model, effort}."""
+    if not isinstance(spec, dict):
+        return [f"{where}: must be an object"]
+    errors = [f"{where}.{key}: unknown key (allowed: {'|'.join(CUSTOM_KEYS)})" for key in spec if key not in CUSTOM_KEYS]
+    errors += [f"{where}.label: {e}" for e in label_errors(spec.get("label"))]
+    errors += [f"{where}.charter: {e}" for e in charter_errors(spec.get("charter"))]
+    errors += [f"{where}.model: {e}" for e in model_errors(spec.get("model"))]
+    if spec.get("effort") not in EFFORTS:
+        errors.append(f"{where}.effort: must be one of {'|'.join(EFFORTS)}, got {spec.get('effort')!r}")
+    return errors
+
+
+def divisions_of(proj: dict) -> list:
+    """The project's divisions in onboarding order: its standard ones (catalogue order, the order
+    `orche init` onboards them), then its custom ones (in the order they were added)."""
+    divisions = proj.get("divisions") or {}
+    return [d for d in DIVISIONS if d in divisions] + list(proj.get("custom_divisions") or {})
+
+
+def _validate_division(name, div, where, errors, customs=()):
+    if name not in DIVISIONS and name not in customs:
+        errors.append(f"{where}: unknown division {name!r} (allowed: {'|'.join(DIVISIONS)} "
+                      "or a name in custom_divisions)")
         return
     if not isinstance(div, dict):
         errors.append(f"{where}: must be an object")
@@ -150,12 +233,19 @@ def _validate_project(key, proj, errors):
         errors.append(f"{where}.aliases: must be a list of strings")
     if "secrets" in proj:
         _validate_secrets(proj["secrets"], f"{where}.secrets", errors)
+    customs = proj.get("custom_divisions", {})
+    if not isinstance(customs, dict):
+        errors.append(f"{where}.custom_divisions: must be an object")
+        customs = {}
+    for name, spec in customs.items():
+        errors += [f"{where}.custom_divisions: {e}" for e in custom_name_errors(name)]
+        errors += custom_spec_errors(spec, f"{where}.custom_divisions.{name}")
     divisions = proj.get("divisions")
     if not isinstance(divisions, dict):
         errors.append(f"{where}.divisions: must be an object")
         return
     for name, div in divisions.items():
-        _validate_division(name, div, f"{where}.divisions.{name}", errors)
+        _validate_division(name, div, f"{where}.divisions.{name}", errors, customs)
 
 
 def validate(reg) -> list:
@@ -220,6 +310,23 @@ def append_event(reg: dict, **fields) -> dict:
         raise RegistryError(errors)
     reg.setdefault("events", []).append(copy.deepcopy(event))
     return event
+
+
+def session_owner(reg: dict, key: str, session: str):
+    """The other project that has `session`, or reserves it, else None. Session names are unique
+    registry-wide (units.find_unit resolves a name to one unit): another project holds every session
+    it has (main, liaison, divisions, features, retired ones too) and reserves `div-<other>-<d>` for
+    each standard division and each custom definition, onboarded or not."""
+    for other, proj in reg.get("projects", {}).items():
+        if other == key:
+            continue
+        held = {f"div-{other}-{d}" for d in (*DIVISIONS, *(proj.get("custom_divisions") or {}))}
+        held.update(s for s in (proj.get("main_session"), proj.get("liaison_session")) if s)
+        for div in (proj.get("divisions") or {}).values():
+            held.update(s for s in [div.get("session")] + [f.get("session") for f in div.get("features", [])] if s)
+        if session in held:
+            return other
+    return None
 
 
 def awake_sessions(reg: dict) -> list:

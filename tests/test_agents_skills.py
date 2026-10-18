@@ -17,7 +17,8 @@ EFFORTS = {"low", "medium", "high", "max", "{{EFFORT}}"}
 ALWAYS_PAUSE = ("force-push to a shared branch", "deploy", "data deletion", "customer messages",
                 "external publication", "payments")
 INJECT = re.compile(r"<!-- inject:start -->\n(.*?)\n<!-- inject:end -->", re.S)
-VARS = dict(PROJECT="acme", NAME="build", SESSION="div-acme-build", MODEL="claude-opus-5-5", EFFORT="high")
+VARS = dict(PROJECT="acme", NAME="build", SESSION="div-acme-build", MODEL="claude-opus-5-5", EFFORT="high",
+            LABEL="Design", CHARTER="Owns the visual system.")   # LABEL/CHARTER: div-custom.md only
 
 
 def frontmatter(text):
@@ -61,10 +62,10 @@ class AgentFilesTest(unittest.TestCase):
 
 
 class PersonaTemplatesTest(unittest.TestCase):
-    def test_eight_personas_with_placeholder_frontmatter(self):
+    def test_nine_personas_with_placeholder_frontmatter(self):
         names = sorted(p.name for p in PERSONAS.glob("*.md"))
         self.assertEqual(names, sorted(["main.md", "liaison.md", "div-rnd.md", "div-research.md", "div-build.md",
-                                        "div-gtm.md", "div-ops.md", "feature.md"]))
+                                        "div-gtm.md", "div-ops.md", "div-custom.md", "feature.md"]))
         for name in names:
             fm = frontmatter((PERSONAS / name).read_text())
             self.assertEqual(fm["name"], "liaison" if name == "liaison.md" else "{{SESSION}}", name)
@@ -101,6 +102,42 @@ class PersonaTemplatesTest(unittest.TestCase):
         main = templates.render((PERSONAS / "main.md").read_text(), **VARS)
         self.assertIn("Understood: source = <project>, output = <project>", main)
 
+    def test_division_and_feature_personas_tell_runner_workers_not_to_report(self):
+        """Runner round 2 (C): rendered through onboarding, as HR writes them."""
+        from orche.hr import onboarding
+        note = "Under the runner (`ORCHE_RUNNER=1`) do not run `orche report`; the runner files your pointer."
+        cases = [("division", n) for n in ("build", "research", "rnd", "ops", "gtm")] + [("feature", "checkout")]
+        for role, name in cases:
+            text, from_template = onboarding.persona_text(role, project="acme", name=name, session=f"x-{name}",
+                                                          model="claude-opus-5-5", effort="high")
+            self.assertTrue(from_template, name)
+            self.assertIn(note, text, name)
+        for path in (PERSONAS / "main.md", PERSONAS / "liaison.md"):
+            self.assertNotIn("ORCHE_RUNNER", path.read_text(), path.name)   # Main/liaison never run under it
+
+    def test_custom_division_persona_renders_charter_guards_and_runner_note(self):
+        from orche.hr import onboarding
+        charter = "Owns the visual system, reviews UI changes, keeps the brand kit current."
+        text, from_template = onboarding.persona_text("division", project="acme", name="design",
+                                                      session="div-acme-design", model="claude-opus-5-5",
+                                                      effort="max", custom={"label": "Design", "charter": charter})
+        self.assertTrue(from_template)
+        self.assertNotIn("{{", text)
+        fm = frontmatter(text)
+        self.assertEqual((fm["name"], fm["model"], fm["effort"], fm["memory"]),
+                         ("div-acme-design", "claude-opus-5-5", "max", "project"))
+        self.assertEqual(fm["description"], "design division of acme (custom; its charter is in the body).")
+        self.assertIn("# Design division (design) — acme", text)
+        self.assertIn(f"## Charter\n{charter}\n", text)
+        self.assertIn("## Guards\n- Stay inside the charter", text)
+        self.assertIn("Under the runner (`ORCHE_RUNNER=1`) do not run `orche report`; the runner files your pointer.",
+                      text)
+        for item in ALWAYS_PAUSE:
+            self.assertIn(item, text)
+        self.assertIn(".orche/div/design/", text)
+        # A custom division never picks up a standard template, even one named like it.
+        self.assertEqual(onboarding.persona_template("division", "build", custom=True).name, "div-custom.md")
+
     def test_onboarding_picks_the_division_template(self):
         from orche.hr import onboarding
         text, from_template = onboarding.persona_text("division", project="acme", name="build",
@@ -113,7 +150,30 @@ class PersonaTemplatesTest(unittest.TestCase):
 
 class SkillsTest(unittest.TestCase):
     def test_skills_have_frontmatter_and_a_short_inject_block(self):
-        self.assertEqual(sorted(p.name for p in SKILLS.iterdir() if p.is_dir()), ["orche", "orche-build", "orche-main"])
+        self.assertEqual(sorted(p.name for p in SKILLS.iterdir() if p.is_dir()),
+                         ["orche", "orche-apply", "orche-build", "orche-main"])
+        # orche-apply is a procedure skill, not a role card: frontmatter, no inject block, never apply-all.
+        apply_text = (SKILLS / "orche-apply" / "SKILL.md").read_text()
+        apply_fm = frontmatter(apply_text)
+        self.assertEqual(apply_fm["name"], "orche-apply")
+        self.assertTrue(apply_fm["description"].startswith("Apply ORCHE to one project on request. Use"))
+        self.assertEqual(INJECT.findall(apply_text), [])
+        self.assertIn("Do not run `orche apply-all`", apply_text)
+        self.assertIn("Do not commit the generated files", apply_text)
+        # Setup wave S3: the chat procedure goes through --print-setup, a setup file and a dry-run preview.
+        for part in ("`orche init --print-setup <name>`", "\"기본으로\" keeps it", "\"ops 빼고\"",
+                     "\"design 부서 추가:", "`orche --dry-run init <name> --setup-file <path>`",
+                     "`orche status <proj>`", "`orche depts <proj>`", "out of scope for `orche init`",
+                     # Setup fix round: status shows names (M8); `:` in a charter or model id needs the file.
+                     "its division names, custom ones included", "Only the status-line cell uses the label",
+                     "a charter\n  or model id containing `:` goes in the setup file"):
+            self.assertIn(part, apply_text)
+        self.assertNotIn("custom ones by label", apply_text)
+        # M9: the unit card (also given to custom divisions) names the project's divisions, not "five".
+        help_text = (SKILLS / "orche" / "SKILL.md").read_text()
+        self.assertIn("project's **divisions** (`orche depts`;", help_text)
+        self.assertIn("a custom division gets this card too", help_text)
+        self.assertNotIn("five\n**divisions**", help_text)
         for skill in ("orche", "orche-main", "orche-build"):
             text = (SKILLS / skill / "SKILL.md").read_text()
             fm = frontmatter(text)
@@ -127,6 +187,21 @@ class SkillsTest(unittest.TestCase):
             self.assertNotIn("stopped", text, skill)
             if skill != "orche-main":
                 self.assertIn("orche report <status>", blocks[0], skill)
+
+    def test_worker_card_pins_the_worktree(self):
+        block = INJECT.findall((SKILLS / "orche" / "SKILL.md").read_text())[0]
+        self.assertIn("Work inside your own worktree (BRIEF header `worktree:`); never `cd` into the main "
+                      "checkout or another unit's worktree.", block)
+
+    def test_main_card_says_what_to_skip_when_dispatching(self):
+        text = (SKILLS / "orche-main" / "SKILL.md").read_text()
+        block = INJECT.findall(text)[0]
+        for line in ("Write briefs from the request, PROJECT_CARD.md and unit STATUS files. Do not inspect the "
+                     "repo (no git/grep/tail/cat) and do not run VERIFY yourself; the worker does.",
+                     "TIER mechanical: brief ≤ 12 lines, one ACCEPT line, one VERIFY command, TIMEBOX ≤ 30m.",
+                     "`orche` is on PATH in this pane; state lives in ~/.claude/orche (ORCHE_HOME)."):
+            self.assertIn(line, block)
+        self.assertIn("## Dispatch effort\n\nTarget one API response per brief.", text)
 
     def test_rulebooks_cover_their_topics(self):
         main = (SKILLS / "orche-main" / "SKILL.md").read_text()
@@ -228,7 +303,9 @@ class FileTemplatesTest(unittest.TestCase):
 
     def test_brief_night_standing(self):
         brief = (support.ROOT / "templates" / "brief.md").read_text()
-        self.assertTrue(brief.startswith("rev: 1\n"))
+        self.assertTrue(brief.startswith("rev: 1\nunit: <unit id>\nto: <session>   from: <sender session>\n"
+                                         "worktree: <absolute path of the target's worktree>   branch: <branch>\n"))
+        self.assertIn("Work only inside `worktree`. SCOPE paths are relative to it.\n", brief)
         keys = re.findall(r"^([A-Z]+) {2,}", brief, re.M)
         self.assertEqual(keys, ["TO", "GOAL", "SCOPE", "CONTEXT", "ACCEPT", "VERIFY", "TIMEBOX", "FORBID",
                                 "REPORT", "TIER", "ROLLBACK"])

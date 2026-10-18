@@ -1,6 +1,11 @@
 """`orche init <orca-repo-name|path>` — register a project and onboard its divisions.
 
-Order: resolve the repo (`orca repo list`, read-only even under --dry-run) -> project templates +
+The divisions come from a setup (`setup_flow`): `--setup-file`, else `--divisions`/`--custom`/
+`--stage`/`--aliases`, else — on a terminal — the interactive checklist, else the setup defaults
+(every standard division but `ops`; a registered project keeps what it has). Re-running adds only
+divisions that are new; nothing is ever removed. `--print-setup` prints the setup JSON and exits.
+
+Order: resolve the repo (`orca repo list`, read-only even under --dry-run) -> setup -> project templates +
 card symlink -> registry entry -> `.orche/project` marker (the project key, read by the status
 line) -> one worktree/unit files/settings/persona per division (all
 `dormant` unless `--wake`; `ops` always dormant and gated by stage) -> `main-<proj>` and
@@ -8,21 +13,34 @@ line) -> one worktree/unit files/settings/persona per division (all
 (printed as dry-run lines unless `--automations`). The main checkout's
 `.claude/settings.local.json` is never written: Main and Liaison share that checkout.
 """
+import json
 import os
+import sys
 from pathlib import Path
 
-from . import cmd_sleep_wake, config, orca, paths, registry, templates, units, util
+from . import cmd_sleep_wake, config, orca, paths, registry, setup_flow, templates, units, util
 from .hr import EXIT_BLOCKED, EXIT_NOT_FOUND, EXIT_OK, EXIT_USER, PLUGIN_ROOT, dry, fail, onboarding, out, \
-    refresh_status_line
+    refresh_status_line, warn
+
+EXIT_INTERRUPTED = 130   # a setup given wrongly exits EXIT_USER (1), like argparse usage errors here
+SETUP_FLAGS = ("--divisions", "--custom", "--setup-file", "--stage", "--aliases", "--wake")
 
 
 def register(subparsers):
     p = subparsers.add_parser("init", help="register an Orca repo as a project and onboard its divisions")
-    p.add_argument("repo", help="Orca repo display name, id, or path")
-    p.add_argument("--stage", choices=registry.STAGES, default="building")
-    p.add_argument("--aliases", default="", help="comma-separated aliases")
-    p.add_argument("--divisions", default=",".join(registry.DIVISIONS),
-                   help="comma-separated divisions (default: all five)")
+    p.add_argument("repo", help="registry project key or alias, or Orca repo display name, id, or path")
+    p.add_argument("--stage", choices=registry.STAGES, default=None, help="default: building")
+    p.add_argument("--aliases", default=None, help="comma-separated aliases")
+    p.add_argument("--divisions", default=None,
+                   help="comma-separated standard divisions (default: all but ops; a registered project "
+                        "keeps its own)")
+    p.add_argument("--custom", action="append", default=[], metavar="NAME=LABEL:CHARTER[:MODEL[:EFFORT]]",
+                   help="add a custom division (repeatable; model default claude-opus-5-5, effort high)")
+    p.add_argument("--setup-file", default=None, metavar="JSON",
+                   help='{"divisions": [...], "custom": {name: {label, charter[, model, effort]}}, '
+                        '"stage": ..., "aliases": [...]}')
+    p.add_argument("--print-setup", action="store_true",
+                   help="print the project's setup JSON (the defaults for an unregistered repo) and exit")
     p.add_argument("--wake", default="", help="comma-separated divisions to start now (default: none)")
     p.add_argument("--automations", action="store_true", help="create the Orca automations (default: print them)")
     p.set_defaults(func=cmd_init)
@@ -32,18 +50,38 @@ def _csv(text) -> list:
     return [x.strip() for x in (text or "").split(",") if x.strip()]
 
 
-def _find_repo(needle):
+class RepoMissing(Exception):
+    """A registry project matched but its Orca repo is not in `orca repo list`."""
+
+
+def _find_repo(needle, reg):
+    """(Orca repo, registry key or None) for `needle`, else (None, None).
+
+    A registry project key or alias wins (matched to its Orca repo by id or path, and the project
+    keeps its registered key); then an Orca repo id, display name or path. A registry match whose
+    Orca repo is not listed raises RepoMissing(key) instead of falling through to the Orca names.
+    """
     result = orca.repo_list()
-    repos = result.get("repos", []) if isinstance(result, dict) else result or []
+    repos = [r for r in (result.get("repos", []) if isinstance(result, dict) else result or [])
+             if isinstance(r, dict)]
+    found = registry.project(reg, needle)
+    if found:
+        key, proj = found
+        proj_real = os.path.realpath(proj["path"]) if proj.get("path") else None
+        for repo in repos:
+            if (proj.get("repo_id") and repo.get("id") == proj["repo_id"]) or \
+                    (proj_real and repo.get("path") and os.path.realpath(repo["path"]) == proj_real):
+                return repo, key
+        # Never fall through to an Orca name match on the same word: another repo could be
+        # onboarded under this project's alias.
+        raise RepoMissing(key)
     want = needle.strip().lower()
     real = os.path.realpath(os.path.expanduser(needle))
     for repo in repos:
-        if not isinstance(repo, dict):
-            continue
         if want in (str(repo.get("id", "")).lower(), str(repo.get("displayName", "")).lower()) or \
                 (repo.get("path") and os.path.realpath(repo["path"]) == real):
-            return repo
-    return None
+            return repo, None
+    return None, None
 
 
 def _tilde(path: Path) -> str:
@@ -107,22 +145,121 @@ def _panes(key, proj, *, dry_run) -> list:
     return made
 
 
-def _validate(args, reg, key, stage, existing):
+def _is_tty() -> bool:
+    return bool(sys.stdin) and sys.stdin.isatty()
+
+
+def _interactive(args) -> bool:
+    """The checklist runs on a terminal, without --json and without --divisions/--custom/--setup-file."""
+    return args.divisions is None and not args.custom and not args.setup_file and not args.json and _is_tty()
+
+
+def _new_count(setup, existing) -> int:
+    have = (existing or {}).get("divisions", {})
+    return sum(1 for n in setup_flow.names(setup) if n not in have)
+
+
+def _summary(setup, existing, wake) -> str:
+    return setup_flow.summary(setup, new=_new_count(setup, existing), registered=bool(existing), wake=wake)
+
+
+def session_owner(reg, key, name):
+    """The other project holding or reserving division `name`'s session `div-<key>-<name>`, else None."""
+    return registry.session_owner(reg, key, f"div-{key}-{name}")
+
+
+def _setup(args, key, existing, reg):
+    """(setup, None) or (None, exit code). Interactive only on a terminal, without --json and
+    without any of --divisions/--custom/--setup-file. A registered project keeps every division,
+    custom definition, stage and aliases it has; init never removes or changes them."""
+    base = setup_flow.of_project(existing) if existing else setup_flow.defaults()
+    try:
+        if args.setup_file:
+            if args.divisions is not None or args.custom or args.stage or args.aliases is not None:
+                return None, fail(EXIT_USER, "--setup-file holds the whole setup; drop --divisions, --custom, "
+                                              "--stage and --aliases")
+            setup = setup_flow.from_data(setup_flow.read_file(args.setup_file), base)
+        else:
+            setup = setup_flow.from_flags(args.divisions, args.custom, base)
+            if args.stage:
+                setup["stage"] = args.stage
+            if args.aliases is not None:
+                setup["aliases"] = [a.lower() for a in _csv(args.aliases)]
+    except setup_flow.SetupError as exc:
+        return None, fail(EXIT_USER, str(exc))
+    if existing:
+        for name, spec in (existing.get("custom_divisions") or {}).items():
+            if setup["custom"].get(name) != spec:
+                return None, fail(EXIT_USER, f"custom division {name} already exists with another definition; "
+                                             "changing it is out of scope (edit the registry and its persona by hand)")
+        dropped = [d for d in base["divisions"] if d not in setup["divisions"]]
+        if dropped:
+            warn(f"{','.join(dropped)} stay(s) onboarded: init never removes a division "
+                 f"(sleep it: orche sleep div-{key}-<division>, or remove it by hand)")
+        if setup["stage"] != existing["stage"]:
+            warn(f"stage stays {existing['stage']} for registered project {key} "
+                 f"(change it with: orche stage set {key} {setup['stage']} --yes)")
+        if setup["aliases"] != base["aliases"]:
+            warn(f"aliases of registered project {key} are not changed by init")
+        setup = {**setup, "divisions": [d for d in registry.DIVISIONS
+                                        if d in setup["divisions"] or d in base["divisions"]],
+                 "stage": existing["stage"], "aliases": base["aliases"]}
+    if _interactive(args):
+        locked = setup_flow.names(base) if existing else []
+        checklist = setup_flow.Checklist(key, setup, locked, sys.stdin, sys.stdout, wake=_csv(args.wake),
+                                         session_owner=lambda name: session_owner(reg, key, name))
+        try:
+            setup = checklist.run(bool(existing), lambda s: _summary(s, existing, _csv(args.wake)))
+        except setup_flow.Aborted:
+            print("aborted; nothing written")
+            return None, EXIT_OK
+        except KeyboardInterrupt:
+            print("\naborted; nothing written")
+            return None, EXIT_INTERRUPTED
+    return setup, None
+
+
+def _print_setup(args, reg) -> int:
+    """`--print-setup`: a registered project's setup, else (the repo must exist in Orca) the defaults."""
+    found = registry.project(reg, args.repo)
+    if found:
+        setup = setup_flow.of_project(found[1])
+    else:
+        try:
+            repo, _ = _find_repo(args.repo, reg)
+        except orca.OrcaError as exc:
+            return fail(EXIT_USER, f"orca repo list failed: {exc}")
+        if repo is None:
+            return fail(EXIT_NOT_FOUND, f"no registry project or Orca repo matches {args.repo!r} "
+                                        "(see: orche projects, orca repo list)")
+        setup = setup_flow.defaults()
+    print(json.dumps(setup, indent=2, ensure_ascii=False))
+    return EXIT_OK
+
+
+def _validate(setup, wake_text, reg, key, stage, existing):
     """(divisions to onboard, of which to wake, skipped, skipped wakes) or (None, exit code).
 
     A division already onboarded (worktree, status not `onboarding`) is skipped; an
     `onboarding` one is resumed.
     """
-    divisions, wake = _csv(args.divisions), _csv(args.wake)
-    bad = [d for d in divisions + wake if d not in registry.DIVISIONS]
+    divisions, wake = setup_flow.names(setup), _csv(wake_text)
+    bad = [d for d in wake if d not in registry.DIVISIONS and d not in setup["custom"]]
     if bad:
-        return None, fail(EXIT_USER, f"unknown division(s): {','.join(bad)} (allowed: {','.join(registry.DIVISIONS)})")
+        return None, fail(EXIT_USER, f"unknown division(s): {','.join(bad)} (allowed: {','.join(registry.DIVISIONS)} "
+                                      "or a custom division)")
     missing = [d for d in wake if d not in divisions]
     if missing:
         return None, fail(EXIT_USER, f"--wake {','.join(missing)} is not in --divisions")
     skipped = [d for d in divisions if (existing.get(d) or {}).get("worktree")
                and existing[d].get("status") != "onboarding"]
     divisions = [d for d in divisions if d not in skipped]
+    for name in divisions:
+        owner = session_owner(reg, key, name)
+        if owner:
+            return None, fail(EXIT_USER, f"session div-{key}-{name} is taken by project {owner}; "
+                                         + ("pick another name" if name in setup["custom"]
+                                            else f"leave {name} out, or rename one of the projects"))
     wake_skipped = [d for d in wake if d in skipped]
     wake = [d for d in wake if d in divisions]
     if "ops" in wake and stage == "building":
@@ -146,13 +283,23 @@ def _conflict(reg, key, repo, root):
 
 def cmd_init(args):
     reg = registry.load()
+    if args.print_setup:
+        given = [f for f, v in zip(SETUP_FLAGS, (args.divisions is not None, args.custom, args.setup_file,
+                                                 args.stage, args.aliases is not None, args.wake)) if v]
+        if given:
+            return fail(EXIT_USER, f"--print-setup only prints; drop {', '.join(given)}")
+        return _print_setup(args, reg)
     try:
-        repo = _find_repo(args.repo)
+        repo, key = _find_repo(args.repo, reg)
     except orca.OrcaError as exc:
         return fail(EXIT_USER, f"orca repo list failed: {exc}")
+    except RepoMissing as exc:
+        return fail(EXIT_NOT_FOUND, f"{args.repo!r} is registered as {exc} but its Orca repo is not in "
+                                    "`orca repo list`")
     if repo is None:
-        return fail(EXIT_NOT_FOUND, f"no Orca repo matches {args.repo!r} (see: orca repo list)")
-    key = util.slugify(repo.get("displayName") or Path(repo["path"]).name)
+        return fail(EXIT_NOT_FOUND, f"no registry project or Orca repo matches {args.repo!r} "
+                                    "(see: orche projects, orca repo list)")
+    key = key or util.slugify(repo.get("displayName") or Path(repo["path"]).name)
     if not key:
         return fail(EXIT_USER, f"cannot derive a project key from {repo.get('displayName')!r}")
     root, dry_run = os.path.realpath(repo["path"]), args.dry_run
@@ -165,11 +312,17 @@ def cmd_init(args):
         return fail(EXIT_USER, f"project key {key} is taken by repo {existing.get('repo_id')} "
                                f"({existing.get('path')}), not {repo['id']} ({root}); rename the Orca repo "
                                "or remove the stale registry entry")
-    stage = existing["stage"] if existing else args.stage
-    checked, err = _validate(args, reg, key, stage, existing["divisions"] if existing else {})
+    interactive = _interactive(args)
+    setup, err = _setup(args, key, existing, reg)
+    if setup is None:
+        return err
+    stage = setup["stage"]
+    checked, err = _validate(setup, args.wake, reg, key, stage, existing["divisions"] if existing else {})
     if checked is None:
         return err
     divisions, wake, skipped, wake_skipped = checked
+    custom = setup["custom"]
+    summary = _summary(setup, existing, wake)   # before onboarding mutates `existing`
     if dry_run:
         dry(f"copy templates/project -> {root} (missing files only, *.tmpl skipped)")
     else:
@@ -181,11 +334,15 @@ def cmd_init(args):
         proj = existing
         if not dry_run:
             units.hr_log(f"init {key} resumed by {by} (skipping {','.join(skipped) or 'nothing'})")
+            # Only additions reach here (see _setup); an older entry without the field stays as it is.
+            if (proj.get("custom_divisions") or {}) != custom:
+                proj["custom_divisions"] = dict(custom)
+                registry.save(reg)
     else:
-        proj = {"repo_id": repo["id"], "path": root, "stage": stage,
-                "aliases": [a.lower() for a in _csv(args.aliases)],
+        proj = {"repo_id": repo["id"], "path": root, "stage": stage, "aliases": setup["aliases"],
                 "main_session": f"main-{key}", "liaison_session": f"liaison-{key}",
-                "card": _tilde(link), "standing": ".orche/STANDING.md", "divisions": {}}
+                "card": _tilde(link), "standing": ".orche/STANDING.md", "divisions": {},
+                "custom_divisions": dict(custom)}
         if not dry_run:
             reg["projects"][key] = proj
             registry.save(reg)
@@ -193,9 +350,10 @@ def cmd_init(args):
     try:
         write_project_marker(key, root, dry_run=dry_run)
         onboarding.exclude_settings(root, dry_run=dry_run)  # .orche/units/ never dirties the checkout
-        for name in (d for d in registry.DIVISIONS if d in divisions):
+        for name in divisions:   # standard ones in catalogue order, then custom ones
             session = f"div-{key}-{name}"
-            model, effort = onboarding.DIVISION_MODELS[name]
+            spec = custom.get(name)
+            model, effort = (spec["model"], spec["effort"]) if spec else onboarding.DIVISION_MODELS[name]
             base = {"session": session, "model": model, "effort": effort}
             if name == "ops":
                 base["gated_by_stage"] = True
@@ -209,7 +367,8 @@ def cmd_init(args):
             entry = onboarding.onboard(project=key, repo_root=root, repo_id=repo["id"], kind="div", name=name,
                                        session=session, worktree_name=f"div-{name}", branch=f"div/{name}",
                                        model=model, effort=effort, wake=name in wake, existing=resume,
-                                       on_created=provisional, dry_run=dry_run)
+                                       on_created=provisional, dry_run=dry_run,
+                                       custom={"label": spec["label"], "charter": spec["charter"]} if spec else None)
             if not dry_run:
                 proj["divisions"][name] = {**entry, **base}
                 registry.append_event(reg, type="create", project=key, unit=name, by=by)
@@ -230,12 +389,16 @@ def cmd_init(args):
             orca.automations("create", *argv, dry_run=not live)
     except orca.OrcaError as exc:
         return fail(EXIT_USER, f"automation create failed: {exc}")
-    statuses = {n: ("active" if n in wake else "dormant") for n in registry.DIVISIONS if n in divisions}
+    statuses = {n: ("active" if n in wake else "dormant") for n in divisions}
     data = {"project": key, "repo_id": repo["id"], "path": root, "stage": stage, "dry_run": dry_run,
-            "divisions": statuses, "skipped": skipped, "wake_skipped": wake_skipped, "panes": panes,
-            "automations": "created" if live else "printed", "card": proj["card"]}
+            "divisions": statuses, "custom": [n for n in divisions if n in custom], "skipped": skipped,
+            "wake_skipped": wake_skipped, "panes": panes, "automations": "created" if live else "printed",
+            "card": proj["card"], "summary": summary}
     lines = [f"{'would init' if dry_run else 'initialized'} {key} ({root}) stage={stage}"]
-    lines += [f"{n}: {s}" + (" (gated by stage)" if n == "ops" else "") for n, s in statuses.items()]
+    if not interactive:   # the checklist already showed it
+        lines.append(summary)
+    lines += [f"{n}: {s}" + (" (gated by stage)" if n == "ops" else " (custom)" if n in custom else "")
+              for n, s in statuses.items()]
     lines += [f"{n}: skipped (already onboarded)" for n in skipped]
     lines += [f"skipped --wake {n} (already onboarded; use `orche wake`)" for n in wake_skipped]
     lines.append(f"panes: {', '.join(panes) if panes else 'main/liaison already open'}")

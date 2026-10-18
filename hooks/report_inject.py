@@ -1,5 +1,10 @@
 #!/usr/bin/env python3
-"""UserPromptSubmit hook: drain the session's inbox at drain points (stdout is injected). Fail-open."""
+"""UserPromptSubmit hook: triage a Main prompt, then drain the session's inbox at drain points.
+
+Triage (lib/orche/triage.py, off unless `triage.enabled`) may route a simple prompt straight to a
+division and print `{"decision": "block", ...}` so Main spends no turn; otherwise the prompt reaches
+Main and the inbox text (plus any triage note) is printed and injected. Fail-open.
+"""
 import json
 import os
 import sys
@@ -20,8 +25,15 @@ def main():
         payload = json.load(sys.stdin)
         if not isinstance(payload, dict) or payload.get("agent_id"):
             return 0
+        from orche import triage
+        outcome = triage.handle(payload, STARTED)   # never raises
+        if outcome.block is not None:
+            print(json.dumps(outcome.block, ensure_ascii=False))
+            return 0
         from orche import inbox
-        text = inbox.handle_prompt(payload, STARTED)
+        # The hook budget runs from STARTED, less the time a classifier call was in flight.
+        text = inbox.handle_prompt(payload, STARTED + outcome.model_s)
+        text = "\n\n".join(t for t in (outcome.note, text) if t)
     except Exception as exc:  # noqa: BLE001 - fail-open
         try:
             from orche import log

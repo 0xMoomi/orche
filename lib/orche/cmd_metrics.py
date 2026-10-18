@@ -1,8 +1,10 @@
-"""`orche metrics [--days N] [--root PATH] [--prices FILE]` — token-economy metrics from transcripts."""
+"""`orche metrics [--days N] [--root PATH] [--prices FILE]` — token-economy metrics from transcripts,
+a Triage section from ORCHE_HOME/triage/samples.jsonl, and a Runner section summing the registered
+projects' `orche run` records (RUN.json)."""
 import json
 import sys
 
-from . import metrics
+from . import metrics, registry, runs, triage, units
 
 EXIT_OK, EXIT_USER = 0, 1
 
@@ -25,6 +27,14 @@ def cmd_metrics(args):
         print(f"orche: cannot read prices: {exc}", file=sys.stderr)
         return EXIT_USER
     result = metrics.compute(args.root, days=args.days, prices=prices)
+    try:
+        reg = registry.load()
+    except registry.RegistryError:
+        reg = registry.empty()
+    runs.reconcile_cli(reg, args)       # a lost run's RUN.json counts in the Runner section
+    roots = [units.project_root(reg, key) for key in sorted(reg["projects"])]
+    result["runner"] = metrics.runner_summary([r for r in roots if r], days=args.days)
+    result["triage"] = metrics.triage_summary(triage.samples_path(), days=args.days)
     if args.json:
         print(json.dumps(result, indent=2, ensure_ascii=False))
     else:

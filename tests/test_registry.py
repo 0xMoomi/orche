@@ -12,7 +12,7 @@ import support
 from orche import registry, util
 
 SAMPLE = json.loads((support.FIXTURES / "registry.sample.json").read_text())
-ORCHE_BIN = support.ROOT / "bin" / "orche"
+ORCHE_BIN = support.ROOT / "bin" / "orche.py"   # the Python entry point behind the bin/orche launcher
 
 
 def sample():
@@ -71,6 +71,75 @@ class ValidateTest(unittest.TestCase):
 
     def test_non_object(self):
         self.assertEqual(registry.validate([]), ["registry: must be an object"])
+
+
+DESIGN = {"label": "Design", "charter": "Owns the visual system.", "model": "claude-opus-5-5", "effort": "high"}
+
+
+def with_custom(reg, name="design", spec=None, record=True):
+    proj = reg["projects"]["acme-shop"]
+    proj["custom_divisions"] = {name: dict(spec or DESIGN)}
+    if record:
+        proj["divisions"][name] = {"status": "dormant", "worktree": f"repo-acme::/srv/orca/acme-shop-{name}",
+                                   "branch": f"div/{name}", "session": f"div-acme-shop-{name}",
+                                   "model": "claude-opus-5-5", "effort": "high",
+                                   "last_activity": "2026-10-16T09:00:00+09:00"}
+    return reg
+
+
+class CustomDivisionsTest(unittest.TestCase):
+    def test_custom_division_record_is_valid_and_divisions_of_orders_it_last(self):
+        reg = with_custom(sample())
+        self.assertEqual(registry.validate(reg), [])
+        self.assertEqual(registry.divisions_of(reg["projects"]["acme-shop"]), ["rnd", "build", "design"])
+        self.assertEqual(registry.divisions_of(sample()["projects"]["docs-site"]), [])
+        reg["projects"]["acme-shop"]["divisions"]["design"]["status"] = "active"
+        self.assertIn("div-acme-shop-design", registry.awake_sessions(reg))   # counts toward the awake limit
+
+    def test_project_without_the_field_is_valid(self):
+        reg = sample()
+        self.assertNotIn("custom_divisions", reg["projects"]["acme-shop"])
+        self.assertEqual(registry.validate(reg), [])
+
+    def test_division_record_needs_a_custom_definition(self):
+        reg = with_custom(sample())
+        del reg["projects"]["acme-shop"]["custom_divisions"]["design"]
+        self.assertTrue(any("unknown division 'design'" in e for e in registry.validate(reg)))
+
+    def test_bad_custom_definitions(self):
+        cases = {
+            "Design": ("custom_divisions: custom division name 'Design' must be a slug", DESIGN),
+            "d": ("must be a slug of 2-16", DESIGN),
+            "a-very-long-name-xx": ("must be a slug of 2-16", DESIGN),
+            "build": ("'build' is a standard division", DESIGN),
+            "hr": ("'hr' is reserved", DESIGN),
+            "design": ("design.label: must be one line of 1-24", {**DESIGN, "label": "x" * 25}),
+            "design2": ("design2.charter: must be one paragraph of 1-400", {**DESIGN, "charter": "x" * 401}),
+            "design3": ("design3.charter: must be one paragraph", {**DESIGN, "charter": "a\nb"}),
+            "design4": ("design4.effort: must be one of low|medium|high|xhigh|max", {**DESIGN, "effort": "huge"}),
+            "design5": ("design5.model: must be a model id without spaces", {**DESIGN, "model": "claude opus"}),
+            "design6": ("design6.color: unknown key", {**DESIGN, "color": "red"}),
+            "ab-": ("custom division name 'ab-' must be a slug", DESIGN),
+            "a--b": ("custom division name 'a--b' must be a slug", DESIGN),
+            "design7": ("design7.label: must not contain line breaks or control characters",
+                        {**DESIGN, "label": "De\x1b[31msign"}),
+            "design8": ("design8.charter: must not contain control characters", {**DESIGN, "charter": "a\x07b"}),
+            "design9": ("design9.label: 'Research' is a standard division's name or label", {**DESIGN, "label": "Research"}),
+            "design10": ("design10.model: must be a model id without spaces", {**DESIGN, "model": "claude\x00x"}),
+        }
+        for name, (needle, spec) in cases.items():
+            errors = registry.validate(with_custom(sample(), name, spec, record=False))
+            self.assertTrue(any(needle in e for e in errors), (name, errors))
+        for name in ("qa", "a1", "web-app", "a-b-c", "x" * 16, "d2-v3"):
+            self.assertEqual(registry.custom_name_errors(name), [], name)
+
+
+class CustomRoundTripTest(support.TempHomeCase):
+    def test_custom_round_trip_through_save_and_load(self):
+        reg = with_custom(sample())
+        registry.save(reg)
+        self.assertEqual(registry.load(), reg)
+        self.assertEqual(registry.load()["projects"]["acme-shop"]["custom_divisions"]["design"], DESIGN)
 
 
 class LookupAndEventsTest(unittest.TestCase):
@@ -142,7 +211,7 @@ class CliTest(support.TempHomeCase):
         return cp.returncode, cp.stdout, cp.stderr
 
     def test_version(self):
-        self.assertEqual(self.orche("version"), (0, "orche 0.1.0\n", ""))
+        self.assertEqual(self.orche("version"), (0, "orche 0.3.0\n", ""))
 
     def test_projects_json_empty_home(self):
         self.assertEqual(self.orche("projects", "--json"), (0, "[]\n", ""))

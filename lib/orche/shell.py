@@ -23,8 +23,11 @@ class ShellError(RuntimeError):
 
 
 def _subprocess_runner(argv, *, timeout, input):
+    # errors="replace": a non-UTF-8 byte in any output (a `ps` table listing a legacy file name or
+    # environment value) becomes U+FFFD instead of raising UnicodeDecodeError.
     try:
-        cp = subprocess.run(argv, input=input, capture_output=True, text=True, timeout=timeout)
+        cp = subprocess.run(argv, input=input, capture_output=True, text=True, errors="replace",
+                            timeout=timeout)
         return Result(cp.returncode, cp.stdout, cp.stderr, list(argv))
     except subprocess.TimeoutExpired:
         return Result(124, "", f"timeout after {timeout}s", list(argv))

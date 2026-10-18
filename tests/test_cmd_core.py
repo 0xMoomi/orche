@@ -4,6 +4,7 @@ import datetime as dt
 import io
 import json
 import os
+import subprocess
 import tempfile
 import time
 import unittest
@@ -65,16 +66,16 @@ class StatusTest(CoreCase):
         code, out, err = self.orche("status")
         self.assertEqual((code, err), (0, ""))
         self.assertEqual(out, (
-            "acme-shop stage=building awake=2/12 divisions: rnd○ research○ build●1 gtm○ ops○"
-            " · new:1 · keys:1 · unverified:1\n"
-            "docs-site stage=public awake=0/12 divisions: rnd○ research○ build○ gtm○ ops○"
-            " · new:0 · keys:1 · unverified:0\n"))
+            "acme-shop stage=building awake=2/12 divisions: rnd○ build●1"
+            " · new:1 · keys:1 · unverified:1 · RUNNING 0\n"
+            "docs-site stage=public awake=0/12 divisions: -"
+            " · new:0 · keys:1 · unverified:0 · RUNNING 0\n"))
 
     def test_status_without_counter_dirs(self):
         code, out, _ = self.orche("status", "shop")
         self.assertEqual(code, 0)
-        self.assertEqual(out, "acme-shop stage=building awake=2/12 divisions: rnd○ research○ build●1"
-                              " gtm○ ops○ · new:1 · keys:0 · unverified:0\n")
+        self.assertEqual(out, "acme-shop stage=building awake=2/12 divisions: rnd○ build●1"
+                              " · new:1 · keys:0 · unverified:0 · RUNNING 0\n")
 
     def test_status_json_and_unknown(self):
         code, out, _ = self.orche("--json", "status", "acme")
@@ -89,11 +90,11 @@ class DeptsTest(CoreCase):
         code, out, err = self.orche("depts")
         self.assertEqual((code, err), (0, ""))
         self.assertEqual(out.splitlines(), [
-            "PROJECT    UNIT            STATUS   SESSION                  BRANCH         LAST_ACTIVITY              IDLE",
-            "acme-shop  rnd             dormant  div-acme-shop-rnd        div/rnd        2026-10-01T09:00:00+09:00  15d",
-            "acme-shop  build           active   div-acme-shop-build      div/build      2026-10-15T18:30:00+09:00  0d",
-            "acme-shop  build/checkout  active   feat-acme-shop-checkout  feat/checkout  2026-10-15T18:00:00+09:00  0d",
-            "acme-shop  build/search    paused   feat-acme-shop-search    feat/search    2026-10-03T10:00:00+09:00  12d",
+            "PROJECT    UNIT            STATUS   SESSION                  BRANCH         LAST_ACTIVITY              IDLE  RUNNING",
+            "acme-shop  rnd             dormant  div-acme-shop-rnd        div/rnd        2026-10-01T09:00:00+09:00  15d   0",
+            "acme-shop  build           active   div-acme-shop-build      div/build      2026-10-15T18:30:00+09:00  0d    0",
+            "acme-shop  build/checkout  active   feat-acme-shop-checkout  feat/checkout  2026-10-15T18:00:00+09:00  0d    0",
+            "acme-shop  build/search    paused   feat-acme-shop-search    feat/search    2026-10-03T10:00:00+09:00  12d   0",
         ])
 
     def test_depts_project_without_divisions(self):
@@ -114,7 +115,7 @@ class StatuslineTest(CoreCase):
     def test_registered_path_writes_line(self):
         self.counters()
         code, out, err = self.orche("statusline", "--cwd", "/srv/orca/acme-shop/src/app")
-        line = "R&D○ RS○ BUILD●1 GTM○ OPS○ · new1 · 🔑1 · unverified1"
+        line = "R&D○ BUILD●1 · new1 · 🔑1 · unverified1"
         self.assertEqual((code, out, err), (0, line + "\n", ""))
         self.assertEqual((self.home / "status" / "acme-shop.line").read_text(), line + "\n")
 
@@ -125,11 +126,11 @@ class StatuslineTest(CoreCase):
             (Path(tmp) / ".orche" / "project").write_text("docs-site\n")
             (Path(tmp) / "sub").mkdir()
             code, out, _ = self.orche("statusline", "--cwd", str(Path(tmp) / "sub"))
-        self.assertEqual((code, out), (0, "R&D○ RS○ BUILD○ GTM○ OPS○ · 🔑1\n"))
+        self.assertEqual((code, out), (0, "🔑1\n"))
 
     def test_unit_worktree_resolves_project(self):
         out = self.orche("statusline", "--cwd", "/srv/orca/acme-shop-checkout")[1]
-        self.assertEqual(out, "R&D○ RS○ BUILD●1 GTM○ OPS○ · new1\n")
+        self.assertEqual(out, "R&D○ BUILD●1 · new1\n")
 
     def test_missing_registry_is_silent(self):
         (self.home / "registry.json").unlink()
@@ -140,6 +141,120 @@ class StatuslineTest(CoreCase):
         self.orche("statusline", "--cwd", "/srv/orca/acme-shop")
         self.assertLess(time.perf_counter() - start, 0.05)
         self.assertEqual(self.calls, [])
+
+
+class RunningVisibilityTest(CoreCase):
+    """Live `orche run` lock files (ORCHE_HOME/runs/<proj>/<unit>.lock) show in status, depts, statusline."""
+
+    def lock(self, unit, to, pid):
+        self.write(f"runs/acme-shop/{unit}.lock", {"pid": pid, "unit": unit, "to": to})
+
+    def fake_runner(self, argv, *, timeout, input):
+        if argv[0] == "ps":       # reconcile's pid check sees the real process table
+            return self._orig_runner(argv, timeout=timeout, input=input)
+        return super().fake_runner(argv, timeout=timeout, input=input)
+
+    def holder(self, unit):
+        """A live process `ps` shows as `orche run <unit>` (status/depts reconcile other pids away)."""
+        script = self.home / "launcher" / "orche"
+        script.parent.mkdir(exist_ok=True)
+        script.write_text("#!/bin/sh\nwhile :; do sleep 1; done\n")
+        script.chmod(0o755)
+        proc = subprocess.Popen([str(script), "run", unit])
+        self.addCleanup(lambda: (proc.kill(), proc.wait()))
+        deadline = time.monotonic() + 10
+        while f"run {unit}" not in subprocess.run(["ps", "-ww", "-o", "command=", "-p", str(proc.pid)],
+                                                  capture_output=True, text=True).stdout:
+            self.assertLess(time.monotonic(), deadline)
+            time.sleep(0.05)
+        return proc.pid
+
+    def setUp(self):
+        super().setUp()
+        dead = subprocess.Popen(["true"])
+        dead.wait()
+        self.lock("acme-shop-a-20261016-1", "div-acme-shop-build", self.holder("acme-shop-a-20261016-1"))
+        self.lock("acme-shop-b-20261016-2", "feat-acme-shop-checkout", self.holder("acme-shop-b-20261016-2"))
+        self.lock("acme-shop-c-20261016-3", "div-acme-shop-build", dead.pid)   # stale: not counted
+
+    def test_status_shows_running_per_project(self):
+        out = self.orche("status")[1].splitlines()
+        self.assertTrue(out[0].endswith(" · RUNNING 2"), out[0])
+        self.assertTrue(out[1].endswith(" · RUNNING 0"), out[1])
+        self.assertEqual(json.loads(self.orche("--json", "status", "acme")[1])[0]["running"], 2)
+
+    def test_depts_counts_runs_per_session(self):
+        rows = {r["unit"]: r["running"] for r in json.loads(self.orche("--json", "depts")[1])}
+        self.assertEqual(rows, {"rnd": 0, "build": 1, "build/checkout": 1, "build/search": 0})
+        self.assertTrue(self.orche("depts")[1].splitlines()[2].endswith("0d    1"))
+
+    def test_statusline_run_cell(self):
+        out = self.orche("statusline", "--cwd", "/srv/orca/acme-shop")[1]
+        self.assertEqual(out, "R&D○ BUILD●1 · run2 · new1\n")
+
+
+class CustomDivisionTest(CoreCase):
+    """A custom division (`design`, label "Design") shows in status, depts and the status line, and
+    sleeps/wakes like a standard one."""
+
+    def setUp(self):
+        super().setUp()
+        proj = self.reg["projects"]["acme-shop"]
+        proj["custom_divisions"] = {"design": {"label": "Design", "charter": "Owns the visual system.",
+                                               "model": "claude-opus-5-5", "effort": "high"}}
+        proj["divisions"]["design"] = {"status": "dormant", "worktree": "repo-acme::/srv/orca/acme-shop-design",
+                                       "branch": "div/design", "session": "div-acme-shop-design",
+                                       "model": "claude-opus-5-5", "effort": "high",
+                                       "last_activity": "2026-10-14T09:00:00+09:00"}
+        registry.save(self.reg)
+
+    def test_status_lists_the_custom_division_last(self):
+        line = self.orche("status", "acme")[1]
+        self.assertTrue(line.startswith("acme-shop stage=building awake=2/12 divisions: rnd○ build●1 design○ · "),
+                        line)
+        row = json.loads(self.orche("--json", "status", "acme")[1])[0]
+        self.assertEqual(row["divisions"], {"rnd": "dormant", "build": "active", "design": "dormant"})
+
+    def test_depts_lists_the_custom_division(self):
+        rows = json.loads(self.orche("--json", "depts", "acme")[1])
+        self.assertEqual([r["unit"] for r in rows], ["rnd", "build", "build/checkout", "build/search", "design"])
+        self.assertEqual((rows[-1]["session"], rows[-1]["branch"], rows[-1]["idle_days"]),
+                         ("div-acme-shop-design", "div/design", 2))
+
+    def test_statusline_cell_is_the_label_short_form(self):
+        self.assertEqual(self.orche("statusline", "--cwd", "/srv/orca/acme-shop-design")[1],
+                         "R&D○ BUILD●1 DES○ · new1\n")
+        from orche import statusline
+        proj = self.reg["projects"]["acme-shop"]
+        for label, cell in (("QA", "QA"), ("Brand & Docs", "BRA"), ("디자인 팀", "디자인"), ("--", "DES"),
+                            ("Opsy", "OPSY"), ("Builders", "BUI"), ("R2D2", "RD")):
+            proj["custom_divisions"]["design"]["label"] = label
+            self.assertEqual(statusline.short_label(proj, "design"), cell, label)
+
+    def test_statusline_cells_are_unique_and_never_a_standard_cell(self):
+        """M1: 3, then 4, then 5 letters, then the 3-letter form plus a digit; first added keeps its cell."""
+        from orche import statusline
+        spec = self.reg["projects"]["acme-shop"]["custom_divisions"]["design"]
+        labels = {"design": "Design", "designers": "Designers", "design2": "Designer", "design3": "Designers 2",
+                  "gtmx": "G.T.M.", "opsx": "Op's", "qa": "QA", "qa2": "Q&A"}
+        proj = {"custom_divisions": {n: {**spec, "label": lab} for n, lab in labels.items()}}
+        self.assertEqual(statusline.custom_cells(proj),
+                         {"design": "DES", "designers": "DESI", "design2": "DESIG", "design3": "DES2",
+                          "gtmx": "GTM2", "opsx": "OPS2", "qa": "QA", "qa2": "QA2"})
+        cells = list(statusline.custom_cells(proj).values())
+        self.assertEqual(len(cells), len(set(cells)))
+        self.assertFalse(set(cells) & set(statusline.SHORT.values()))
+
+    def test_wake_dry_run_opens_the_custom_division(self):
+        code, out, err = self.orche("--dry-run", "wake", "div-acme-shop-design")
+        self.assertEqual((code, out), (0, "would wake div-acme-shop-design (dry-run)\n"), err)
+        self.assertIn("--worktree id:repo-acme::/srv/orca/acme-shop-design --title div-acme-shop-design", err)
+        self.assertEqual(registry.load(), self.reg)
+
+    def test_hr_audit_reads_the_custom_division_files(self):
+        from orche.hr import audit
+        files = [str(p) for p in audit._decision_files(self.reg["projects"]["acme-shop"])]
+        self.assertIn("/srv/orca/acme-shop-design/.orche/div/design/DECISIONS.tsv", files)
 
 
 class HrTest(CoreCase):
@@ -224,7 +339,8 @@ class SleepWakeTest(CoreCase):
         code, out, err = self.orche("wake", "feat-acme-shop-search", "--dry-run")
         self.assertEqual((code, out), (0, "would wake feat-acme-shop-search (dry-run)\n"))
         self.assertEqual(err, "[dry-run] orca terminal create --worktree id:repo-acme::/srv/orca/acme-shop-search"
-                              " --title feat-acme-shop-search --command ORCHE_SESSION=feat-acme-shop-search claude --resume feat-acme-shop-search"
+                              f" --title feat-acme-shop-search --command PATH={support.ROOT / 'bin'}:$PATH"
+                              " ORCHE_SESSION=feat-acme-shop-search claude --resume feat-acme-shop-search"
                               " --json\n")
         self.assertEqual(registry.load(), self.reg)
 
@@ -232,10 +348,45 @@ class SleepWakeTest(CoreCase):
         code, out, _ = self.orche("wake", "feat-acme-shop-search")
         self.assertEqual((code, out), (0, "feat-acme-shop-search active\n"))
         self.assertEqual(self.calls[-1][:3], ["orca", "terminal", "create"])
-        self.assertIn("ORCHE_SESSION=feat-acme-shop-search claude --resume feat-acme-shop-search", self.calls[-1])
+        self.assertIn(f"PATH={support.ROOT / 'bin'}:$PATH ORCHE_SESSION=feat-acme-shop-search claude --resume "
+                      "feat-acme-shop-search", self.calls[-1])
         reg = registry.load()
         self.assertEqual(reg["projects"]["acme-shop"]["divisions"]["build"]["features"][1]["status"], "active")
         self.assertEqual((reg["events"][-1]["type"], reg["events"][-1]["unit"]), ("wake", "build/search"))
+
+    # -- R3: an active unit whose pane is gone ---------------------------------------------------
+    def test_wake_active_unit_without_pane_reopens_it(self):
+        self.reg["limits"]["max_awake_sessions"] = 1   # already counted as awake: the cap does not apply
+        registry.save(self.reg)
+        code, out, err = self.orche("wake", "div-acme-shop-build")
+        self.assertEqual((code, out, err), (0, "div-acme-shop-build pane reopened\n", ""))
+        self.assertEqual([c[1:3] for c in self.calls], [["terminal", "list"], ["terminal", "create"]])
+        create = self.calls[-1]
+        self.assertEqual(create[create.index("--worktree") + 1], f"id:repo-acme::{self.wt}")
+        self.assertEqual(create[create.index("--title") + 1], "div-acme-shop-build")
+        self.assertEqual(create[create.index("--command") + 1],
+                         f"PATH={support.ROOT / 'bin'}:$PATH ORCHE_SESSION=div-acme-shop-build "
+                         "claude --resume div-acme-shop-build")
+        reg = registry.load()
+        self.assertEqual(reg["projects"]["acme-shop"]["divisions"]["build"]["status"], "active")
+        self.assertEqual(reg["events"], self.reg["events"])
+        self.assertIn("reopen div-acme-shop-build pane by user", units.hr_log_path().read_text())
+        self.assertTrue((self.home / "activity" / "div-acme-shop-build").is_file())
+
+    def test_wake_active_unit_with_pane_stays_already_active(self):
+        self.terminals = [{"handle": "t-9", "title": "✳ div-acme-shop-build"}]
+        code, out, _ = self.orche("wake", "div-acme-shop-build")
+        self.assertEqual((code, out), (0, "div-acme-shop-build is already active\n"))
+        self.assertEqual([c[1:3] for c in self.calls], [["terminal", "list"]])
+        self.assertEqual(registry.load(), self.reg)
+        self.assertFalse(units.hr_log_path().exists())
+
+    def test_wake_active_unit_without_pane_dry_run(self):
+        code, out, err = self.orche("--dry-run", "wake", "div-acme-shop-build")
+        self.assertEqual((code, out), (0, "would reopen div-acme-shop-build pane (dry-run)\n"))
+        self.assertTrue(err.startswith("[dry-run] orca terminal create --worktree"), err)
+        self.assertEqual([c[1:3] for c in self.calls], [["terminal", "list"]])
+        self.assertEqual(registry.load(), self.reg)
 
     def test_wake_refuses_over_limit(self):
         self.reg["limits"]["max_awake_sessions"] = 2
@@ -288,6 +439,30 @@ class CardTest(CoreCase):
         self.assertEqual(out, str(Path.home() / ".claude/orche/cards/docs-site.md") + "\n")
         self.assertEqual(self.orche("card", "acme")[0], 2)
         self.assertEqual(self.orche("card", "nope")[0], 2)
+
+
+class PaneCommandTest(support.TempHomeCase):
+    """F3: every ORCHE pane command puts the plugin's bin/ on PATH next to ORCHE_SESSION."""
+
+    def test_pane_command_prefixes_plugin_bin(self):
+        from orche import cmd_sleep_wake
+        self.assertEqual(cmd_sleep_wake.pane_command("feat-acme-x", resume=True),
+                         f"PATH={support.ROOT / 'bin'}:$PATH ORCHE_SESSION=feat-acme-x claude --resume feat-acme-x")
+
+    def test_plugin_root_is_shell_quoted_and_path_left_unexpanded(self):
+        from unittest import mock
+        from orche import cmd_sleep_wake, paths
+        with mock.patch.object(paths, "PLUGIN_ROOT", Path("/opt/my plugins/orche")):
+            env = cmd_sleep_wake.session_env("main-acme")
+        self.assertEqual(env, "PATH='/opt/my plugins/orche/bin':$PATH ORCHE_SESSION=main-acme ")
+
+    def test_pane_shell_resolves_orche(self):
+        import subprocess
+        from orche import cmd_sleep_wake
+        res = subprocess.run(["/bin/sh", "-c", cmd_sleep_wake.session_env("main-acme")
+                              + "sh -c 'command -v orche; echo $ORCHE_SESSION'"],
+                             env={"PATH": "/usr/bin:/bin"}, capture_output=True, text=True, timeout=10)
+        self.assertEqual(res.stdout.split(), [str(support.ROOT / "bin" / "orche"), "main-acme"])
 
 
 if __name__ == "__main__":

@@ -31,3 +31,62 @@ class TempHomeCase(unittest.TestCase):
         os.environ.update(self._saved_env)
         self._tmp.cleanup()
         super().tearDown()
+
+
+ABSOLUTE_PYTHONS = "/opt/homebrew/bin/python3 /usr/local/bin/python3"
+
+
+def plugin_copy(dest: Path, *rels: str) -> Path:
+    """Copy plugin files (e.g. `hooks/run.sh`, `lib/find_python.sh`) under `dest`, keeping modes.
+
+    The interpreter finder's absolute candidates are pointed at /nowhere, so this machine's own
+    Homebrew python cannot satisfy a "no Python 3.11+ found" test.
+    """
+    for rel in rels:
+        src, out = ROOT / rel, dest / rel
+        text = src.read_text()
+        if rel == "lib/find_python.sh":
+            assert ABSOLUTE_PYTHONS in text, "finder candidates changed; update support.plugin_copy"
+            text = text.replace(ABSOLUTE_PYTHONS, "/nowhere/python3 /nowhere/local/python3")
+        out.parent.mkdir(parents=True, exist_ok=True)
+        out.write_text(text)
+        out.chmod(src.stat().st_mode & 0o777)
+    return dest
+
+
+# A fake `claude` for runner/doctor tests, selected through config `claude_bin` (never the real one).
+FAKE_CLAUDE = """#!/bin/sh
+d=$(dirname "$0")
+case "$1" in
+  --help) cat "$d/help.txt"; exit 0 ;;
+  --version) if [ -f "$d/version" ]; then cat "$d/version"; else echo "9.9.9 (Claude Code)"; fi; exit 0 ;;
+esac
+if [ -f "$d/ignore_term" ]; then trap '' TERM; fi
+cat > "$d/stdin.txt"
+printf '%s\\n' "$@" > "$d/argv.txt"
+printf '%s\\n' "$ORCHE_SESSION" > "$d/session.txt"
+pwd -P > "$d/cwd.txt"
+printf '%s\\n' "$PATH" > "$d/path.txt"
+if [ -f "$d/report_to" ]; then echo "worker wrote this" > "$(cat "$d/report_to")"; fi
+env > "$d/env.txt"
+if [ -f "$d/action.sh" ]; then sh "$d/action.sh"; fi
+if [ -f "$d/sleep" ]; then echo $$ > "$d/pid"; sleep "$(cat "$d/sleep")"; fi
+if [ -f "$d/reply.json" ]; then cat "$d/reply.json"; fi
+exit "$(cat "$d/exit" 2>/dev/null || echo 0)"
+"""
+HELP_FULL = ("Usage: claude [options]\n  --setting-sources <s>\n  --append-system-prompt-file <f>\n"
+             "  --disallowedTools, --disallowed-tools <tools...>\n  --tools <tools...>\n")
+HELP_OLD = "Usage: claude [options]\n  --setting-sources <s>\n  --append-system-prompt <p>\n"
+# claude 2.1.302: the file form only appears inside another option's description.
+HELP_BRACKET = ("Usage: claude [options]\n  --append-system-prompt <prompt>  Append a system prompt\n"
+                "  --bare  Minimal mode: ... --system-prompt[-file],\n"
+                "          --append-system-prompt[-file], --add-dir\n  --setting-sources <s>\n")
+
+
+def write_fake_claude(folder: Path, help_text=HELP_FULL) -> Path:
+    folder.mkdir(parents=True, exist_ok=True)
+    script = folder / "claude"
+    script.write_text(FAKE_CLAUDE)
+    script.chmod(0o755)
+    (folder / "help.txt").write_text(help_text)
+    return script

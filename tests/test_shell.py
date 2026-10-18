@@ -1,5 +1,7 @@
 import io
 import json
+import os
+import time
 import unittest
 from contextlib import redirect_stderr
 
@@ -133,7 +135,23 @@ class OrcaAdapterTest(ShellCase):
         self.assertEqual(orca.nudge("div-acme-build", "[orche] inbox: u rev 1"), {"accepted": True})
         self.assertEqual(self.fake.calls[1]["argv"],
                          ["orca", "terminal", "send", "--terminal", "term_1",
-                          "--text", "[orche] inbox: u rev 1", "--enter", "--json"])
+                          "--text", "[orche] inbox: u rev 1", "--enter", "--wait-submit", "1", "--json"])
+
+    def test_hook_budget_defaults_to_three_seconds(self):
+        self.assertEqual(orca.DEFAULT_HOOK_BUDGET_S, 3.0)
+        os.environ.pop("ORCHE_HOOK_BUDGET_S", None)
+        self.assertAlmostEqual(orca.hook_deadline(100.0), 103.0)
+        os.environ["ORCHE_HOOK_BUDGET_S"] = "0.5"
+        self.assertAlmostEqual(orca.hook_deadline(100.0), 100.5)
+        os.environ["ORCHE_HOOK_BUDGET_S"] = "junk"
+        self.assertAlmostEqual(orca.hook_deadline(100.0), 103.0)
+
+    def test_hook_send_waits_one_second_for_submit(self):
+        self.queue(ok({"accepted": True}))
+        orca.Terminals(time.monotonic() + 3).send({"handle": "term_1"}, "hi")
+        self.assertEqual(self.fake.calls[0]["argv"],
+                         ["orca", "terminal", "send", "--terminal", "term_1", "--text", "hi",
+                          "--enter", "--wait-submit", "1", "--json"])
 
     def test_nudge_without_pane_returns_none(self):
         self.queue(ok({"terminals": []}))

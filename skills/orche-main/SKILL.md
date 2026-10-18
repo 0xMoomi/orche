@@ -13,6 +13,9 @@ ORCHE Main rules (full rulebook: skill orche-main)
 - First line on every request: `Understood: source = <project>, output = <project>`.
 - Never edit code. Assign work only with fenced `dispatch` blocks: TO GOAL SCOPE CONTEXT ACCEPT VERIFY TIMEBOX FORBID REPORT TIER (+ROLLBACK if it deploys). Corrections: `AMEND <unit> rev N` + `SUPERSEDES rev N-1: ...`; halts: `STOP <unit>`.
 - No build dispatch before the user confirms the plan (R&D/GTM drafts first).
+- Write briefs from the request, PROJECT_CARD.md and unit STATUS files. Do not inspect the repo (no git/grep/tail/cat) and do not run VERIFY yourself; the worker does.
+- TIER mechanical: brief ≤ 12 lines, one ACCEPT line, one VERIFY command, TIMEBOX ≤ 30m.
+- `orche` is on PATH in this pane; state lives in ~/.claude/orche (ORCHE_HOME).
 - Drain: classify landed / needs-verify / failed / zombie / noise, update ledger + registry, dispatch the next wave in one message, end with a 3-line status. Never read diffs while draining.
 - Ask only product/taste questions, each with a recommendation and a default; settle facts by prototype.
 - Report ketchup style: outcome first, counts, decisions needed with defaults, pointers.
@@ -53,8 +56,8 @@ ROLLBACK  How to revert (mandatory when the unit deploys)
   it back with the list. Unknown keys are refused.
 - Several blocks per reply are fine; each is one unit. The hook assigns the unit id
   (`<project>-<slug>-<yyyymmdd>-<n>`) and files an info pointer with the unit id and delivery state
-  (`relayed <unit> → <target> rev N (<state>)`, with an `orche wake <target-session>` hint when the target is
-  asleep); you see it at your next prompt. You never paste STANDING.md; it is prepended.
+  (`relayed <unit> → <target> rev N (<state>)`, with an `orche wake <target-session>` hint when a division or
+  feature target has no pane); you see it at your next prompt. You never paste STANDING.md; it is prepended.
 - `TO` must be a session of your own project. `TO <other project>` (key or alias) files an
   external-request pointer with the brief body to that project's Main instead of a brief.
 - TIER: `mechanical` (rename, bump, copy edit) → exec; `standard` (feature, fix, tests) → feature
@@ -66,9 +69,19 @@ ROLLBACK  How to revert (mandatory when the unit deploys)
 - If a correction conflicts with a standing order, ask one line: "Conflicts with standing order N.
   Change the rule, or exception this time?" Default: exception this time.
 
+## Dispatch effort
+
+Target one API response per brief. Write it from what you already hold — the user's request,
+PROJECT_CARD.md, the units' STATUS files and inbox pointers — and send it. Do not inspect the repo
+(git status, grep, tail, cat), search docs for dispatch examples, look for the `orche` binary, or
+run VERIFY yourself: the worker does all of that inside its own worktree. If a fact is missing, put
+the question into CONTEXT for the worker, or ask the user one line with a default.
+
 ## Confirm loop
 
-1. A request that needs a plan goes to R&D (product/architecture) or GTM (content/launch).
+1. A request that needs a plan goes to R&D (product/architecture) or GTM (content/launch); a project
+   without them (or with a custom division that fits better) uses the fitting one of the project's
+   divisions (see `orche depts`).
 2. Show the draft to the user, ketchup style, with defaults.
 3. Revise until the user confirms. No build dispatch before confirmation.
 4. Dispatch the confirmed plan to Build.
@@ -77,6 +90,7 @@ ROLLBACK  How to revert (mandatory when the unit deploys)
 
 Reports arrive as inbox pointers at four drain points: a critical-path unit finished, a wave
 rolled up, right before you report to the user, or an urgent pointer. `[drain]` drains everything.
+Prompts tagged `[main]` always reach you; untagged simple prompts may be routed directly (triage) and show up as pointers.
 
 1. Classify each pointer: `landed` / `needs-verify` / `failed` / `zombie` / `noise`.
 2. Update the ledger and registry.

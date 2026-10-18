@@ -2,14 +2,16 @@
 
 sleep: HANDOFF.md must be fresh (< 30 min) -> close the pane -> status `paused` -> event.
 wake:  respect `limits.max_awake_sessions` -> open a pane running `claude --resume <session>`
-       (`claude --name <session>` for a never-started dormant unit) -> status `active` -> event. Both honor --dry-run (orca argv printed, nothing mutated).
+       (`claude --name <session>` for a never-started dormant unit) -> status `active` -> event.
+       An `active` unit with no pane titled with its session gets its pane reopened (`--resume`);
+       with a pane it stays "already active". Both honor --dry-run (orca argv printed, nothing mutated).
 """
 import json
 import shlex
 import sys
 import time
 
-from . import config, orca, registry, statusline, units, util
+from . import config, orca, paths, registry, statusline, units, util
 
 EXIT_OK, EXIT_USER, EXIT_NOT_FOUND, EXIT_BLOCKED = 0, 1, 2, 3
 
@@ -104,26 +106,64 @@ def sleep_unit(reg, unit, *, dry_run=False, require_handoff=True) -> tuple:
 
 
 def session_env(session) -> str:
-    """`ORCHE_SESSION=<session> ` prefix so hooks know the pane's role without guessing from cwd."""
-    return f"ORCHE_SESSION={shlex.quote(session)} "
+    """`PATH=<plugin>/bin:$PATH ORCHE_SESSION=<session> ` prefix for every ORCHE pane command.
+
+    ORCHE_SESSION lets hooks know the pane's role without guessing from cwd; the PATH entry puts
+    `orche` on the pane's PATH (`$PATH` stays unexpanded: the pane's shell expands it).
+    """
+    return f"PATH={shlex.quote(str(paths.PLUGIN_ROOT / 'bin'))}:$PATH ORCHE_SESSION={shlex.quote(session)} "
 
 
 def pane_command(session, *, resume) -> str:
     """`claude --resume <session>` for a paused unit, `claude --name <session>` for a fresh start.
 
-    Prefixed with `ORCHE_SESSION=<session> `."""
+    Prefixed with `session_env(session)`."""
     flag = "--resume" if resume else "--name"
     return f"{session_env(session)}{config.load().get('claude_bin', 'claude')} {flag} {session}"
+
+
+def _create_argv(unit, *, resume) -> tuple:
+    command = pane_command(unit.session, resume=resume)
+    return ("--worktree", f"id:{unit.entry['worktree']}", "--title", unit.session, "--command", command)
+
+
+def reopen_pane(unit, *, dry_run=False) -> tuple:
+    """An `active` unit: keep "already active" while a pane carries its title, else reopen one.
+
+    A closed pane would otherwise leave the unit stuck (sleep wants a fresh HANDOFF.md, wake said
+    "already active"). The pane resumes the session; the status stays `active`, so the awake
+    limit and stage gate do not apply. The pane lookup is read-only and also runs under --dry-run.
+    """
+    try:
+        term = orca.find_terminal_by_title(unit.session)
+    except orca.OrcaError as exc:
+        raise Blocked(EXIT_USER, f"could not list panes for {unit.session}: {exc}") from None
+    if term is not None:
+        return ({"unit": unit.session, "status": "active", "changed": False},
+                f"{unit.session} is already active")
+    argv = _create_argv(unit, resume=True)
+    if dry_run:
+        result = orca.terminal("create", *argv, dry_run=True)
+        return ({"unit": unit.session, "dry_run": True, "argv": result["argv"]},
+                f"would reopen {unit.session} pane (dry-run)")
+    try:
+        orca.terminal("create", *argv)
+    except orca.OrcaError as exc:
+        raise Blocked(EXIT_USER, f"could not reopen a pane for {unit.session}: {exc}") from None
+    units.touch_activity(unit.session)
+    units.hr_log(f"reopen {unit.session} pane by {units.actor()}")
+    return ({"unit": unit.session, "status": "active", "changed": False, "pane_reopened": True},
+            f"{unit.session} pane reopened")
 
 
 def wake_unit(reg, unit, *, dry_run=False) -> tuple:
     """Open a pane for the unit and mark it active. Returns (data, line); raises Blocked.
 
     A `paused` unit resumes its session; a `dormant` one (never started) starts a named session.
+    An `active` unit whose pane is gone gets its pane reopened (see `reopen_pane`).
     """
     if unit.entry.get("status") == "active":
-        return ({"unit": unit.session, "status": "active", "changed": False},
-                f"{unit.session} is already active")
+        return reopen_pane(unit, dry_run=dry_run)
     if unit.entry.get("status") == "onboarding":
         raise Blocked(EXIT_BLOCKED, onboarding_message(unit))
     stage = reg["projects"][unit.project].get("stage")
@@ -138,8 +178,7 @@ def wake_unit(reg, unit, *, dry_run=False) -> tuple:
         parent_status = reg["projects"][unit.project]["divisions"][parent].get("status")
         if parent_status != "active":
             print(f"orche: warning: parent division {parent} is {parent_status}", file=sys.stderr)
-    command = pane_command(unit.session, resume=unit.entry.get("status") != "dormant")
-    argv = ("--worktree", f"id:{unit.entry['worktree']}", "--title", unit.session, "--command", command)
+    argv = _create_argv(unit, resume=unit.entry.get("status") != "dormant")
     if dry_run:
         result = orca.terminal("create", *argv, dry_run=True)
         return ({"unit": unit.session, "dry_run": True, "argv": result["argv"]},

@@ -33,8 +33,8 @@ output clean: no stray prints or warnings.
 
 ## Adding a command
 
-1. Create `lib/orche/cmd_<name>.py` with `register(subparsers)`; `bin/orche` discovers it by
-   file name, so no other file changes.
+1. Create `lib/orche/cmd_<name>.py` with `register(subparsers)`; `bin/orche.py` (started by the
+   `bin/orche` sh launcher) discovers it by file name, so no other file changes.
 2. Do **not** declare `--json` or `--dry-run` in your subparser. The root parser owns them and
    sets `args.json` / `args.dry_run`; a subparser default would silently overwrite the root value.
 3. Mutating commands honor `args.dry_run` (print the actions, change nothing). Human output is

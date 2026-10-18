@@ -25,8 +25,8 @@ my-app                                   (Orca repo)
 | Feature card / pane | worktree `feat-<feature>`, pane `feat-<proj>-<feature>` | child worktree of Build, branch `feat/<feature>` |
 
 Pane titles equal Claude Code session names. ORCHE starts each pane with
-`ORCHE_SESSION=<session> claude --name <session>` (or `--resume <session>` on wake), so hooks
-know the pane's role. `orche init` creates the division worktrees; `orche feat new` creates
+`PATH=<plugin>/bin:$PATH ORCHE_SESSION=<session> claude --name <session>` (or `--resume <session>`
+on wake), so hooks know the pane's role and `orche` is on the pane's PATH. `orche init` creates the division worktrees; `orche feat new` creates
 feature worktrees.
 
 ## Lineage
@@ -60,6 +60,7 @@ R&D● RS○ BUILD●3 GTM● OPS○ · new1 · 🔑2 · unverified1
 |---|---|
 | `●` / `○` / `◐` | division active / asleep (dormant, paused, retired) / onboarding |
 | `BUILD●N` | N active feature agents |
+| `DES○` | a custom division: the first three letters of its label (four or five, then a digit, when that cell is taken; one cell per division the project has) |
 | `newN` | feature agents created in the last 24 hours |
 | `🔑N` | pending secret requests |
 | `unverifiedN` | `done` reports without a ledger row |

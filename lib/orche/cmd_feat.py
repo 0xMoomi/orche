@@ -1,25 +1,31 @@
 """`orche feat new|sleep|wake|retire <proj> <name>` — feature-agent lifecycle under the build division.
 
-new:    frozen? -> limits (hr/limits.py; the global cap freezes) -> scope overlap (warn, or exit 3
+new:    session `feat-<proj>-<name>` free registry-wide (registry.session_owner; else exit 1) ->
+        frozen? -> limits (hr/limits.py; the global cap freezes) -> scope overlap (warn, or exit 3
         with --strict) -> awake limit -> child worktree of the build worktree -> unit files,
         settings, persona -> pane -> registry entry + `create` event -> notify, hr-log,
         status line, Orca unread dot. A provisional `onboarding` entry is saved as soon as the
         worktree exists; re-running `feat new` resumes it without a second worktree.
 sleep/wake: the `orche sleep|wake` flow (cmd_sleep_wake).
-retire: refuses an onboarding entry, a dirty worktree, a HANDOFF.md without `final:`, the main
-        checkout, or an open pane titled with the session; lists git-ignored files the removal
-        destroys; needs --yes. copy the unit memory files to the archive dir -> tag `archive/feat-<name>-<yyyymmdd>`
-        -> `orca worktree rm` -> archive the unit's transcripts -> GRAVEYARD row -> status
-        `retired` + event + hr-log.
+retire: refuses an onboarding entry, uncommitted work (anything in `git status` except untracked
+        ORCHE-owned files), a HANDOFF.md without `final:`, the main checkout, or an open pane
+        titled with the session; lists git-ignored files the removal destroys; needs --yes.
+        copy the unit memory files (+ other ORCHE-owned untracked files under `_worktree/`) to the
+        archive dir -> tag `archive/feat-<name>-<yyyymmdd>` -> delete the ORCHE-owned untracked
+        files from the worktree -> `orca worktree rm` -> archive the unit's transcripts ->
+        GRAVEYARD row -> status `retired` + event + hr-log. A re-run reuses byte-identical kept
+        files and a tag that already points at the branch head.
 """
+import filecmp
 import shlex
 import shutil
 import sys
+from pathlib import Path
 
 from . import cmd_hr, cmd_sleep_wake, janitor, orca, registry, shell, units, util
 from .hr import EXIT_BLOCKED, EXIT_NOT_FOUND, EXIT_OK, EXIT_USER, dry, fail, limits, onboarding, out, \
     refresh_status_line, warn
-from .janitor import archive, discover, graveyard, rules
+from .janitor import archive, discover, graveyard
 
 FINAL_LINES = 20
 
@@ -73,6 +79,9 @@ def _check_new(args, reg, key, proj, by):
         return fail(EXIT_NOT_FOUND, f"{key} has no build division (run orche init first)")
     if util.slugify(args.name) != args.name:
         return fail(EXIT_USER, f"feature name must be lowercase [a-z0-9-]: {args.name!r}")
+    owner = registry.session_owner(reg, key, _session(key, args.name))
+    if owner:
+        return fail(EXIT_USER, f"session {_session(key, args.name)} is taken by project {owner}; pick another name")
     if any(f["name"] == args.name and f["status"] not in ("retired", "onboarding")
            for f in build.get("features", [])):
         return fail(EXIT_USER, f"feature {args.name} already exists in {key}")
@@ -183,27 +192,80 @@ def has_final(handoff) -> bool:
     return any(line.strip().lower().startswith("final:") for line in head)
 
 
-def _onboarding_file(rel, unit) -> bool:
-    """Files `feat new` writes into the worktree (ignored by the dirty check while untracked)."""
-    unit_dir = f".orche/{unit.kind}/{unit.name}/"
-    return rel.startswith(unit_dir) or rel in (f".claude/agents/{unit.session}.md", onboarding.EXCLUDE_LINE)
+WORKTREE_COPY = "_worktree"   # ORCHE files outside the unit dir, kept under <kept>/_worktree/<rel>
 
 
-def _retire_problem(unit, proj):
+def orche_owned(rel, unit) -> bool:
+    """Paths ORCHE itself writes into a unit worktree (expected to be untracked at retirement)."""
+    return (rel == ".orche" or rel.startswith(".orche/") or rel == f".claude/agents/{unit.session}.md"
+            or rel == onboarding.EXCLUDE_LINE or rel.startswith(".claude/agent-memory/"))
+
+
+def _retire_problem(unit, proj, kept):
+    """(problem, owned): a refusal text or None, and the ORCHE-owned untracked paths of the worktree.
+
+    Untracked ORCHE-owned paths are expected (they are kept, then cleared before `worktree rm`);
+    anything else — including a tracked ORCHE file with uncommitted changes — is uncommitted work.
+    """
     wt = str(unit.worktree_path)
     if not wt or units.is_within(proj["path"], wt) or discover.real(wt) == discover.real(proj["path"]):
-        return f"{unit.session}'s worktree is the project's main checkout; refusing to remove it"
-    if not has_final(unit.handoff):
-        return f"HANDOFF.md has no 'final:' line in its first {FINAL_LINES} lines: {unit.handoff}"
+        return f"{unit.session}'s worktree is the project's main checkout; refusing to remove it", []
     res = shell.run(["git", "-C", wt, "status", "--porcelain", "--untracked-files=all"], timeout=60)
     if not res.ok:
-        return f"cannot read git status of {wt}"
+        return f"cannot read git status of {wt}", []
     lines = [ln for ln in res.out.splitlines() if ln.strip()]
-    dirty = [ln for ln in lines if not rules.is_record_file(discover.porcelain_path(ln))
-             and not (ln.startswith("??") and _onboarding_file(discover.porcelain_path(ln), unit))]
-    if dirty:
-        return f"{wt} has {len(dirty)} uncommitted change(s); commit or discard them first"
-    return None
+    owned = [discover.porcelain_path(ln) for ln in lines
+             if ln.startswith("??") and orche_owned(discover.porcelain_path(ln), unit)]
+    foreign = [discover.porcelain_path(ln) for ln in lines
+               if not (ln.startswith("??") and orche_owned(discover.porcelain_path(ln), unit))]
+    if foreign:
+        listed = ", ".join(foreign[:10]) + (" …" if len(foreign) > 10 else "")
+        return (f"worktree has uncommitted work: {listed}; commit or stash it "
+                f"(or `orche report stop`) before retiring"), owned
+    # A re-run after a failed `worktree rm` finds the unit files already cleared: the kept HANDOFF counts.
+    handoff = unit.handoff if unit.handoff.exists() else kept / "HANDOFF.md"
+    if not has_final(handoff):
+        return f"HANDOFF.md has no 'final:' line in its first {FINAL_LINES} lines: {unit.handoff}", owned
+    return None, owned
+
+
+def _keep_sources(unit, wt, owned) -> dict:
+    """{path inside kept: source file} — the unit dir as is, other ORCHE-owned files under _worktree/."""
+    unit_dir = unit.handoff.parent
+    sources = {}
+    if unit_dir.is_dir():
+        sources.update({p.relative_to(unit_dir): p for p in sorted(unit_dir.rglob("*")) if p.is_file()})
+    prefix = f".orche/{unit.kind}/{unit.name}/"
+    for rel in owned:
+        if not rel.startswith(prefix) and (Path(wt) / rel).is_file():
+            sources[Path(WORKTREE_COPY) / rel] = Path(wt) / rel
+    return sources
+
+
+def _kept_matches(kept, sources) -> bool:
+    """True when every unit-dir file already sits byte-identical in `kept` (a re-run of a retirement)."""
+    return all((kept / rel).is_file() and filecmp.cmp(src, kept / rel, shallow=False)
+               for rel, src in sources.items() if rel.parts[0] != WORKTREE_COPY)
+
+
+def _clear_owned(wt, owned) -> None:
+    """Delete the ORCHE-owned untracked files (already kept) and the directories they leave empty."""
+    root = Path(wt)
+    for rel in owned:
+        path = root / rel
+        if path.is_file() or path.is_symlink():
+            path.unlink()
+        parent = path.parent
+        while parent != root and units.is_within(parent, root) and parent.is_dir() and not any(parent.iterdir()):
+            parent.rmdir()
+            parent = parent.parent
+
+
+def _tag_at_head(wt, tag, branch) -> bool:
+    """True when `tag` already exists and points at the branch head (a re-run may reuse it)."""
+    have = shell.run(["git", "-C", wt, "rev-parse", "-q", "--verify", f"refs/tags/{tag}^{{commit}}"], timeout=30)
+    head = shell.run(["git", "-C", wt, "rev-parse", "-q", "--verify", f"{branch}^{{commit}}"], timeout=30)
+    return have.ok and head.ok and have.out.strip() == head.out.strip() != ""
 
 
 def _transcripts(unit, proj):
@@ -253,7 +315,9 @@ def cmd_retire(args):
     if unit.entry["status"] == "onboarding":
         return fail(EXIT_BLOCKED, f"{unit.session} is still onboarding; finish it with "
                                   f"`orche feat new {key} {args.name}` (or remove the entry) before retiring")
-    problem = _retire_problem(unit, proj)
+    tag = f"archive/feat-{args.name}-{units.now().strftime('%Y%m%d')}"
+    unit_dir, kept = unit.handoff.parent, archive.unit_dir(unit.session) / "unit-files" / tag
+    problem, owned = _retire_problem(unit, proj, kept)
     if problem:
         return fail(EXIT_BLOCKED, problem)
     if args.dry_run:
@@ -264,11 +328,11 @@ def cmd_retire(args):
     if not args.yes and not args.dry_run:
         return fail(EXIT_USER, f"retiring {unit.session} removes its worktree; re-run with --yes")
     wt, branch = str(unit.worktree_path), unit.entry["branch"]
-    tag = f"archive/feat-{args.name}-{units.now().strftime('%Y%m%d')}"
     tag_argv = ["git", "-C", wt, "tag", tag, branch]
     claude_root, files = _transcripts(unit, proj)
-    unit_dir, kept = unit.handoff.parent, archive.unit_dir(unit.session) / "unit-files" / tag
-    if kept.is_dir() and any(kept.iterdir()):
+    sources = _keep_sources(unit, wt, owned)
+    reuse = kept.is_dir() and any(kept.iterdir())
+    if reuse and not _kept_matches(kept, sources):
         return fail(EXIT_USER, f"{kept} already holds the unit files of an earlier retirement of {unit.session} "
                                f"(tag {tag}); refusing to overwrite it; retry tomorrow or move it aside")
     doomed = _ignored_files(wt)
@@ -276,9 +340,14 @@ def cmd_retire(args):
         line = (f"{len(doomed)} git-ignored file(s) will be destroyed by worktree rm: "
                 + ", ".join(doomed[:10]) + (" …" if len(doomed) > 10 else ""))
         (dry if args.dry_run else warn)(line)
+    extra = sum(1 for rel in sources if rel.parts[0] == WORKTREE_COPY)
     if args.dry_run:
-        dry(f"copy {unit_dir} -> {kept}")
-        dry(shlex.join(tag_argv))
+        dry(f"reuse {kept} (same unit files)" if reuse else f"copy {unit_dir} -> {kept}")
+        if extra and not reuse:
+            dry(f"copy {extra} other ORCHE file(s) -> {kept / WORKTREE_COPY}")
+        dry(f"reuse tag {tag} (points at {branch})" if _tag_at_head(wt, tag, branch) else shlex.join(tag_argv))
+        if owned:
+            dry(f"delete {len(owned)} ORCHE-owned untracked file(s) from {wt}")
         orca.worktree("rm", "--worktree", f"id:{unit.entry['worktree']}", dry_run=True)
         dry(f"archive {len(files)} transcript file(s) of {unit.session}" if files
             else f"no transcripts found for {unit.session}")
@@ -286,18 +355,33 @@ def cmd_retire(args):
         out(args, {"feature": args.name, "dry_run": True, "tag": tag, "transcripts": len(files)},
             f"would retire {unit.session} (dry-run)")
         return EXIT_OK
-    try:
-        shutil.copytree(unit_dir, kept, dirs_exist_ok=True)  # an empty leftover dir is reused
+    try:  # an empty leftover dir is reused; on a re-run only the other ORCHE files are (re)copied
+        for rel, src in sources.items():
+            if not reuse or rel.parts[0] == WORKTREE_COPY:
+                (kept / rel).parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(src, kept / rel)
     except (OSError, shutil.Error) as exc:
         return fail(EXIT_USER, f"could not keep the unit files of {unit.session} in {kept}: {exc}; nothing removed")
-    print(f"orche: unit files of {unit.session} kept in {kept}", file=sys.stderr)
-    res = shell.run(tag_argv, timeout=30)
-    if not res.ok:
-        return fail(EXIT_USER, f"git tag {tag} failed: {res.err.strip()}")
+    if reuse:
+        print(f"orche: unit files of {unit.session} already kept in {kept}; reusing them", file=sys.stderr)
+    else:
+        print(f"orche: unit files of {unit.session} kept in {kept}", file=sys.stderr)
+    if _tag_at_head(wt, tag, branch):
+        print(f"orche: tag {tag} already points at {branch}; reusing it", file=sys.stderr)
+    else:
+        res = shell.run(tag_argv, timeout=30)
+        if not res.ok:
+            return fail(EXIT_USER, f"git tag {tag} failed: {res.err.strip()}")
+    try:
+        _clear_owned(wt, owned)
+    except OSError as exc:
+        return fail(EXIT_USER, f"could not clear ORCHE files from {wt}: {exc} (tag {tag} and unit files in "
+                               f"{kept} kept; nothing else removed)")
     try:
         orca.worktree("rm", "--worktree", f"id:{unit.entry['worktree']}")
     except orca.OrcaError as exc:
-        return fail(EXIT_USER, f"orca worktree rm failed: {exc} (tag {tag} kept)")
+        return fail(EXIT_USER, f"orca worktree rm failed: {exc} (tag {tag} and unit files in {kept} kept; "
+                               f"re-run `orche feat retire {key} {args.name} --yes` once it can be removed)")
     by, now, archived = units.actor(), units.now(), None
     if files:
         def record(m):

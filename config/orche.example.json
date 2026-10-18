@@ -3,11 +3,27 @@
   "claude_bin": "claude",
   "notify": true,
   "lang": "en",
+  "delivery": "runner",
+  "runner": {
+    "model_mechanical": "claude-sonnet-5-5",
+    "max_turns": 20,
+    "max_parallel": 4,
+    "hard_in_pane": false,
+    "queue_wait_s": 1800,
+    "log_keep_days": 14
+  },
   "jev": {
     "enabled": false,
     "base_url": "",
     "model": "jev-1.13.0",
     "timeout_s": 1.0,
     "api_key_env": "JEV_API_KEY"
+  },
+  "triage": {
+    "enabled": false,
+    "backend": "auto",
+    "min_confidence": 0.9,
+    "max_latency_s": 12,
+    "keep_prompts": false
   }
 }

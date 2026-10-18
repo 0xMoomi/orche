@@ -2,13 +2,16 @@
 
 Also the Stop-hook completion gate and overnight predicate (dispatch_relay.py stays thin).
 """
+import hashlib
 import os
 import re
+import subprocess
+import sys
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from . import inbox, ledger, log, mask, orca, paths, registry, shell, transcript, units, util
+from . import config, inbox, ledger, log, mask, orca, paths, registry, runs, shell, transcript, units, util
 
 REQUIRED = ("TO", "GOAL", "SCOPE", "CONTEXT", "ACCEPT", "VERIFY", "TIMEBOX", "FORBID", "REPORT", "TIER")
 BRIEF_KEYS = REQUIRED + ("ROLLBACK",)
@@ -91,7 +94,7 @@ def resolve_target(reg: dict, to: str, here_project=None):
     to = (to or "").strip()
     if to in units.all_sessions(reg):
         return to
-    if here_project and to in registry.DIVISIONS:
+    if here_project and to in registry.divisions_of(reg["projects"].get(here_project, {})):
         div = reg["projects"][here_project].get("divisions", {}).get(to)
         if div and div.get("session"):
             return div["session"]
@@ -156,12 +159,46 @@ def current_rev(repo, unit: str) -> int:
     return max(revs or [0])
 
 
-def render_brief(unit, rev, standing, to, fields, supersedes=None, note="") -> str:
+@dataclass
+class Where:
+    """Where the target works: its own worktree + branch, and the project root holding the brief."""
+    frm: str
+    worktree: str
+    branch: str
+    root: str
+
+
+MAIN_CHECKOUT = " (main checkout)"
+
+
+def where(reg, to, frm, proj, timeout=0.5) -> Where:
+    """A unit target works in its registered worktree; Main works in the main checkout.
+
+    A unit with no recorded worktree is shown as the project root, marked `(main checkout)`, never `.`.
+    `timeout` bounds the `git branch` call for the main checkout; at or below 0 it is skipped (`-`).
+    """
+    root = str(units.project_root(reg, proj) or "")
+    unit = units.find_unit(reg, to)
+    if unit is not None and units.worktree_path(unit.entry.get("worktree", "")):
+        return Where(frm, str(unit.worktree_path), unit.entry.get("branch") or "-", root)
+    recorded = unit.entry.get("branch") if unit is not None else None
+    res = (shell.run(["git", "-C", root, "branch", "--show-current"], timeout=timeout)
+           if root and timeout > 0 and not recorded else None)
+    branch = recorded or (res.out.strip() if res is not None and res.ok else "") or "-"
+    return Where(frm, root + (MAIN_CHECKOUT if unit is not None else ""), branch, root)
+
+
+def render_brief(unit, rev, standing, to, fields, at, supersedes=None, note="") -> str:
     lines = [f"rev: {rev}"]
     if supersedes:
         lines.append(f"supersedes: rev {supersedes}")
         if note:
             lines.append(f"supersedes-note: {note}")
+    lines += [f"unit: {unit}",
+              f"to: {to}   from: {at.frm}",
+              f"worktree: {at.worktree}   branch: {at.branch}",
+              f"project root: {at.root}   (brief + REPORT.md live under project root/.orche/units/{unit}/)",
+              "Work only inside `worktree`. SCOPE paths are relative to it."]
     lines += ["", standing.rstrip(), "", f"persona: .claude/agents/{to}.md", "", f"## Brief {unit}"]
     for key in BRIEF_KEYS:
         if key in fields:
@@ -241,6 +278,9 @@ def _external_project(reg, to, sender_proj):
 def plan_blocks(reg, bodies, here_project, sender_proj=None) -> list:
     """Parse + resolve every block first so nothing is written when any block is refused.
 
+    `bodies` are block texts or already-built `Block`s (triage builds its brief as a Block, so a
+    prompt line starting with `#` is never read as a comment).
+
     Targets must belong to the sender's project (R-XPROJ): `TO <other project key|alias>` becomes
     an external-request pointer to that project's Main; any other cross-project target is refused.
     """
@@ -248,7 +288,7 @@ def plan_blocks(reg, bodies, here_project, sender_proj=None) -> list:
     home = sender_proj or here_project
     for body in bodies:
         try:
-            block = parse_block(body)
+            block = body if isinstance(body, Block) else parse_block(body)
             if block.kind == "brief":
                 ext = _external_project(reg, block.fields["TO"], sender_proj)
                 if ext:
@@ -285,12 +325,89 @@ def plan_blocks(reg, bodies, here_project, sender_proj=None) -> list:
     return plans
 
 
-def _deliver(reg, plan, rev, status, summary, frm, terms):
-    """Pointer always; nudge only while the hook budget lasts (one terminal list per run)."""
+def run_argv(unit) -> list:
+    """`orche run <unit>` under this very interpreter (the 3.11+ running the hook): no launcher
+    has to find Python again after the spawn, so a run never dies there without a pointer."""
+    return [sys.executable, str(paths.PLUGIN_ROOT / "bin" / "orche.py"), "run", unit]
+
+
+def spawn_run(unit) -> None:
+    """Start `orche run <unit>` detached (own session, output to logs/runs/<unit>.log); never waits.
+
+    ORCHE_RUN_SINCE (now, ns) dates the request: a STOP marker written after it stops the run even
+    if it lands before the new process got going; an AMEND's marker, written before, never does.
+    The plugin `bin` leads PATH; ORCHE_RUN_ID (set when the hook itself runs inside a run's worker)
+    is dropped, so that run's end-of-run sweep never takes this new run with it."""
+    out = paths.orche_home() / "logs" / "runs" / f"{unit}.log"
+    out.parent.mkdir(parents=True, exist_ok=True)
+    env = {k: v for k, v in os.environ.items() if k != "ORCHE_RUN_ID"}
+    env["ORCHE_RUN_SINCE"] = str(time.time_ns())
+    env["PATH"] = f"{paths.PLUGIN_ROOT / 'bin'}{os.pathsep}{env.get('PATH', '')}"
+    with open(out, "ab") as fh:
+        subprocess.Popen(run_argv(unit), stdin=subprocess.DEVNULL, stdout=fh, stderr=subprocess.STDOUT,
+                         start_new_session=True, close_fds=True, env=env)
+
+
+def runner_wanted(reg, plan, cfg) -> bool:
+    """A brief, AMEND or STOP for a division/feature goes through the runner unless `delivery: pane`
+    (or a hard TIER with `runner.hard_in_pane`). Main/liaison targets keep the pane: a human reads them."""
+    if cfg.get("delivery", "runner") != "runner":
+        return False
+    if units.find_unit(reg, plan.to) is None:
+        return False
+    tier = plan.block.fields.get("TIER", "")
+    if not tier and plan.block.kind != "brief":
+        tier = read_brief_fields(plan.repo, plan.unit).get("TIER", "")
+    hard = tier.strip() == "hard"
+    return not (hard and (cfg.get("runner") or {}).get("hard_in_pane"))
+
+
+RUNNER_NOT_LIVE = " (no live run)"
+
+
+def _run_delivery(plan, terms) -> str:
+    """Runner delivery, never waiting: a brief starts `orche run`; STOP writes the stop marker and
+    stops a live run (runs.stop: the marker, which the run polls every 2 s, plus SIGTERM for a
+    `ps`-verified pid; the runner files `info` "stopped by Main"; a run still
+    waiting for a slot gives up, "… before start") — `runner-stop-requested` either way, with
+    " (no live run)" when nothing was running; AMEND stops a live run and starts a fresh one for
+    the new rev (it waits for the stopped run's slot). The `ps` pid check inside runs.stop gets at
+    most what is left of the hook budget."""
+    kind = plan.block.kind
+    if kind == "stop":
+        live = runs.stop(plan.proj, plan.unit, timeout=terms.remaining())
+        return "runner-stop-requested" + ("" if live else RUNNER_NOT_LIVE)
+    restarted = kind == "amend" and runs.stop(plan.proj, plan.unit, timeout=terms.remaining())
+    spawn_run(plan.unit)
+    return "runner-restarted" if restarted else "runner-started"
+
+
+def _deliver(reg, plan, rev, status, summary, frm, terms, cfg=None, by=None):
+    """Pointer always; then the runner (spawned, never awaited) or a pane nudge while the hook budget
+    lasts (one terminal list per run). A failed runner delivery falls back to the nudge.
+    `by` names who relayed in the events line (default the sender; triage passes `triage`)."""
     brief = unit_dir(plan.repo, plan.unit) / "BRIEF.md"
     inbox.write(inbox.make(plan.unit, frm, plan.to, status, report_path=str(brief), brief_rev=rev,
                            summary=summary))
     units.touch_activity(plan.to)
+    prefix = ""
+    by = by or frm
+    if runner_wanted(reg, plan, cfg if cfg is not None else config.load()):
+        try:
+            state = _run_delivery(plan, terms)
+            log.log("events", f"dispatch kind={plan.block.kind} unit={plan.unit} rev={rev} to={plan.to} "
+                              f"by={by} delivery={state}")
+            return state
+        except Exception as exc:  # noqa: BLE001 - fall back to the pane nudge
+            log.log("hooks", f"dispatch: runner delivery for {plan.unit} failed: {exc}")
+            prefix = "runner-failed → "
+    state = _nudge(reg, plan, rev, terms)
+    log.log("events", f"dispatch kind={plan.block.kind} unit={plan.unit} rev={rev} to={plan.to} "
+                      f"by={by} delivery={prefix}{state}")
+    return prefix + state
+
+
+def _nudge(reg, plan, rev, terms):
     term = orca.match_title(terms.list(), plan.to) if terms.remaining() > 0 else None
     if terms.remaining() <= 0:
         state = "budget-exceeded"
@@ -303,19 +420,33 @@ def _deliver(reg, plan, rev, status, summary, frm, terms):
         except Exception as exc:  # noqa: BLE001 - delivery is best-effort; brief + pointer are on disk
             state = "budget-exceeded" if terms.remaining() <= 0 else "nudge-failed"
             log.log("hooks", f"dispatch: nudge {plan.to} failed: {exc}")
-    log.log("events", f"dispatch kind={plan.block.kind} unit={plan.unit} rev={rev} to={plan.to} "
-                      f"by={frm} delivery={state}")
     return state
 
 
-def _feedback(frm, unit, to, rev, state):
-    """One non-urgent `info` pointer to the sender: unit id + delivery state (seen at its next prompt)."""
-    summary = f"relayed {unit} → {to} rev {rev} ({state})"
-    if state == "needs-wake":
+def _feedback(reg, frm, unit, to, rev, state, kind=None, by=None):
+    """One non-urgent `info` pointer to the sender: unit id + delivery state (seen at its next prompt).
+
+    Nothing opens a pane for a division/feature target, so the sender is told to wake it (pane
+    delivery) or to re-run it with `orche run` (a failed runner delivery); runner states never
+    mention `orche wake`. A brief triage routed from a prompt reads "routed <unit> → <to> (<state>)".
+    """
+    summary = (f"routed {unit} → {to} ({state})" if by == "triage"
+               else f"relayed {unit} → {to} rev {rev} ({state})")
+    pane_state = state.rsplit("→ ", 1)[-1]   # after a failed runner spawn: the nudge outcome
+    if state.startswith("runner-failed") and kind == "stop":
+        summary += " — the STOP pointer is filed; check `orche status` for a live run"
+    elif state.startswith("runner-failed"):
+        summary += f" — runner did not start: run `orche run {unit}`"
+    elif state == "runner-stop-requested" + RUNNER_NOT_LIVE:
+        summary += (" — already finished (or still queued: a queued run will not start); "
+                    "the STOP pointer is filed")
+    elif pane_state in ("wake-requested", "needs-wake") and units.find_unit(reg, to) is not None:
+        summary += f" — target has no pane: run `orche wake {to}`"
+    elif pane_state == "needs-wake":
         summary += f" — target is asleep: run `orche wake {to}`"
-    try:
+    try:        # best-effort: after a started runner nothing may turn the relay into an error
         inbox.write(inbox.make(unit, "orche", frm, "info", brief_rev=rev, summary=summary))
-    except ValueError as exc:
+    except (ValueError, OSError) as exc:
         log.log("hooks", f"dispatch: cannot file feedback for {frm!r}: {exc}")
 
 
@@ -357,25 +488,33 @@ def check_sender(reg, frm, identified=True) -> None:
                       "(ORCHE panes set it automatically)")
     role = sender_role(reg, frm)
     if role not in ("main", "division"):
-        raise Refusal(f"only Main or a division may dispatch; {frm} is a {role} session")
+        article = "an" if role[0] in "aeiou" else "a"
+        raise Refusal(f"only Main or a division may dispatch; {frm} is {article} {role} session")
 
 
 def relay(reg, bodies, here_project, frm, deadline=None, identified=True) -> list:
     """Write briefs + pointers and nudge targets. Returns the unit ids. Raises Refusal."""
+    return [d["unit"] for d in relay_detail(reg, bodies, here_project, frm, deadline, identified)]
+
+
+def relay_detail(reg, bodies, here_project, frm, deadline=None, identified=True, by=None) -> list:
+    """relay(), returning `{"unit", "to", "state"}` per block. `by` (e.g. `triage`) is who relayed:
+    it names the events line's `by=` and words the sender's feedback pointer."""
     check_sender(reg, frm, identified)
     sender_proj = project_of_session(reg, frm)
     plans = plan_blocks(reg, bodies, here_project, sender_proj)
     terms = orca.Terminals(deadline if deadline is not None else orca.hook_deadline())
+    cfg = config.load()
     done = []
     for plan in plans:
         block = plan.block
         if plan.external:
             state = _external(reg, plan, frm, sender_proj)
-            _feedback(frm, plan.unit, plan.to, 0, state)
+            _feedback(reg, frm, plan.unit, plan.to, 0, state)
         elif block.kind == "stop":
             rev = current_rev(plan.repo, plan.unit) or 1
-            state = _deliver(reg, plan, rev, "stop", block.note or "STOP requested", frm, terms)
-            _feedback(frm, plan.unit, plan.to, rev, state)
+            state = _deliver(reg, plan, rev, "stop", block.note or "STOP requested", frm, terms, cfg, by)
+            _feedback(reg, frm, plan.unit, plan.to, rev, state, kind="stop", by=by)
         else:
             standing = standing_text(reg, plan.proj)
             if block.kind == "brief":
@@ -388,12 +527,13 @@ def relay(reg, bodies, here_project, frm, deadline=None, identified=True) -> lis
                 rev, supersedes = prev + 1, prev or None
                 fields = {**read_brief_fields(plan.repo, plan.unit), **block.fields, "TO": plan.to}
             fields["TO"] = plan.to
+            at = where(reg, plan.to, frm, plan.proj, timeout=min(0.5, terms.remaining()))
             write_brief(plan.repo, plan.unit, rev,
-                        render_brief(plan.unit, rev, standing, plan.to, fields, supersedes, block.note))
+                        render_brief(plan.unit, rev, standing, plan.to, fields, at, supersedes, block.note))
             goal = mask.redact(fields.get("GOAL", "").split("\n")[0])[0]
-            state = _deliver(reg, plan, rev, "info", goal, frm, terms)
-            _feedback(frm, plan.unit, plan.to, rev, state)
-        done.append(plan.unit)
+            state = _deliver(reg, plan, rev, "info", goal, frm, terms, cfg, by)
+            _feedback(reg, frm, plan.unit, plan.to, rev, state, by=by)
+        done.append({"unit": plan.unit, "to": plan.to, "state": state})
     return done
 
 
@@ -486,12 +626,26 @@ def _refusal_to_self(me, message):
         log.log("hooks", f"dispatch: cannot park refusal for {me!r}: {exc}")
 
 
+def final_text(payload: dict):
+    """(msg_id, text) of the turn's final assistant message.
+
+    Claude Code writes the transcript asynchronously, so a Stop hook can see a lagging file; the
+    hook input's `last_assistant_message` is authoritative. The transcript is parsed only when the
+    field is absent (older Claude Code).
+    """
+    if "last_assistant_message" in payload:
+        text = payload.get("last_assistant_message")
+        return None, text if isinstance(text, str) else ""
+    tpath = payload.get("transcript_path")
+    return transcript.last_assistant(tpath) if tpath else (None, "")
+
+
 def handle_stop(payload: dict, started=None):
     """(exit_code, stderr_message) for the Stop hook."""
     deadline = orca.hook_deadline(started)
     cwd = payload.get("cwd") or os.getcwd()
     tpath = payload.get("transcript_path")
-    msg_id, text = transcript.last_assistant(tpath) if tpath else (None, "")
+    msg_id, text = final_text(payload)
     reg = registry.load()
     env = os.environ.get("ORCHE_SESSION")
     me = env or units.session_from_cwd(reg, cwd) or "unknown"
@@ -503,15 +657,16 @@ def handle_stop(payload: dict, started=None):
     bodies = find_blocks(text)
     if bodies:
         marker = _relayed_marker(payload.get("session_id"))
-        seen = (util.read_json(marker, default={}) or {}).get("msg_id")
-        if msg_id is None or msg_id != seen:
+        seen = util.read_json(marker, default={}) or {}
+        text_hash = hashlib.sha256(text.encode("utf-8")).hexdigest()[:16]
+        if not (seen.get("text_hash") == text_hash or (msg_id is not None and seen.get("msg_id") == msg_id)):
             try:
                 relay(reg, bodies, units.project_from_cwd(reg, cwd), me, deadline, identified=identified)
             except Refusal as exc:
                 if not payload.get("stop_hook_active"):
                     return 2, str(exc)
                 _refusal_to_self(me, str(exc))
-            util.write_json(marker, {"msg_id": msg_id, "at": util.now_iso()})
+            util.write_json(marker, {"text_hash": text_hash, "msg_id": msg_id, "at": util.now_iso()})
     if payload.get("stop_hook_active"):
         return 0, ""
     missing = completion_gate(text, reg, cwd, tpath, me, deadline)

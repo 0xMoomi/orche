@@ -97,7 +97,8 @@ def run(args) -> int:
             budget = limit - len(registry.awake_sessions(registry.load()))
         woken = wake if len(wake) <= budget else []
         note = "" if woken == wake else f"--wake {','.join(wake)} dropped (awake limit {limit})"
-        argv = ["init", repo["id"], "--stage", args.stage] + (["--wake", ",".join(woken)] if woken else [])
+        argv = ["init", repo["id"], "--stage", args.stage, "--divisions", ",".join(registry.DIVISIONS)] \
+            + (["--wake", ",".join(woken)] if woken else [])   # the standard set, never the setup screen
         row = {"repo": name, "key": key, "argv": ["orche", *argv], "note": note, "pane_count": 2 + len(woken)}
         if args.dry_run:
             budget -= len(woken)

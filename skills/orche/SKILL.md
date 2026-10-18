@@ -5,13 +5,16 @@ description: ORCHE help. Use when the user asks how to work with ORCHE: its comm
 
 # ORCHE
 
-ORCHE runs a company-style agent organization for each project: one **Main** that decides, five
-**divisions** (R&D, Research, Build, GTM, Ops), **feature agents** under Build, a **Liaison** for
-other projects, and one global **HR**. Work moves as briefs, reports and ledger rows, not chat.
+ORCHE runs a company-style agent organization for each project: one **Main** that decides, the
+project's **divisions** (`orche depts`; standard: R&D, Research, Build, GTM, Ops, plus any custom ones
+the project defines — a custom division gets this card too), **feature agents** under Build, a
+**Liaison** for other projects, and one global **HR**. Work moves as briefs, reports and ledger rows,
+not chat.
 
 <!-- inject:start -->
 ORCHE unit rules (full help: /orche)
 - Your work is `.orche/units/<unit>/BRIEF.md` (first line `rev: N`). The brief is the contract: stay in SCOPE, meet ACCEPT, run VERIFY yourself.
+- Work inside your own worktree (BRIEF header `worktree:`); never `cd` into the main checkout or another unit's worktree.
 - A newer rev supersedes the old one: check at checkpoints (new file, after tests, before done), log receipt with `orche decide`, revert conflicting work. `STOP <unit>` = safe boundary, `wip:` commit, HANDOFF.md, `orche report stop`.
 - Always-pause (user approval every time): force-push to a shared branch, deploy, data deletion, customer messages, external publication, payments. Never merge, rebase or retarget a PR unless the brief allows it.
 - Report: details go in `.orche/units/<unit>/REPORT.md` (≤200 words, outcome first, commands actually run, deviations, `memory-save:` line). Your FINAL MESSAGE carries the `STATUS: done|blocked|failed|stop` line (the Stop gate reads it there). Then `orche report <status> --summary "..."` (one pointer; `--urgent` for failure, blocker, security, deploy impact). Never hand-write pointer JSON.
@@ -32,6 +35,7 @@ ORCHE unit rules (full help: /orche)
 | `orche sleep <unit>` / `orche wake <unit>` | Close a pane and pause / resume a session |
 | `orche decide ...` | Append a row to the unit's DECISIONS.tsv |
 | `orche report <status> --summary "..."` | File a unit's completion/blocker as one inbox pointer (to Main; features to Build) |
+| `orche run <unit>` | Run (or re-run by hand) one unit headless with `claude -p` in its worktree; the Stop hook starts new units this way. `--dry-run` prints the argv |
 | `orche stage set <proj> building\|public --yes` | Project stage (public needs user approval) |
 | `orche hr correct <proj> --text "..."` | Add a numbered standing order |
 | `orche metrics`, `orche janitor report` | Usage metrics; last cleanup report |
