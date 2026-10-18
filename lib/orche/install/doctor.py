@@ -1,13 +1,14 @@
 """`orche doctor`: one OK/WARN/FAIL line per check. FAIL only for python < 3.11 (this interpreter,
-or no 3.11+ the launchers' finder can pick in a login shell), an invalid registry, or an unwritable
-ORCHE_HOME."""
+or no 3.11+ the launchers' finder can pick in a login shell), an invalid registry or an unwritable
+ORCHE_HOME. Jev is optional and fails open, so its row is WARN at worst (not configured, disabled,
+or a failed last probe)."""
 import os
 import re
 import shlex
 import shutil
 import sys
 
-from .. import config, orca, paths, procs, registry, runner, runs, shell
+from .. import config, jev_setup, orca, paths, procs, registry, runner, runs, shell
 from . import careful, settings, statusline
 
 TOOLS = ("gcloud", "gh", "vercel", "age", "zstd")
@@ -185,6 +186,7 @@ def checks(ctx) -> list:
     for tool in TOOLS:
         found = shutil.which(tool)
         add("OK" if found else "WARN", f"tool {tool}", found or "not found on PATH")
+    add(*jev_setup.doctor_row())
     level, detail = _orche_home()
     add(level, "orche_home", detail)
     for row in disk_checks():

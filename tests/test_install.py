@@ -701,9 +701,11 @@ class DoctorTest(InstallCase):
         self.assertTrue(any(l.startswith("WARN\thooks\t") for l in lines))
         self.assertTrue(any(l.startswith("WARN\tcleanupPeriodDays\t") for l in lines))
         self.assertTrue(all(l.split("\t")[0] in ("OK", "WARN", "FAIL") for l in lines))
+        self.assertIn("WARN\tjev\tnot configured (Haiku fallback)", lines)  # Jev is optional
         self.install("--mode", "settings", "--yes")
         code, out, _ = self.doctor(missing=())
-        self.assertEqual([l for l in out.splitlines() if not l.startswith("OK\t")], [])
+        self.assertEqual([l for l in out.splitlines() if not l.startswith("OK\t")],
+                         ["WARN\tjev\tnot configured (Haiku fallback)"])
 
     def test_author_specific_files_skipped_when_absent(self):
         registry.save(registry.empty())

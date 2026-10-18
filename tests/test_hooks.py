@@ -927,11 +927,13 @@ class RunShTest(support.TempHomeCase):
         path = folder / name
         path.write_text("#!/bin/sh\n"
                         f'if [ "$1" = "-c" ]; then exit {0 if ok else 1}; fi\n'
-                        f'echo "{marker or name} ran $1"; cat\n')
+                        f'echo "{marker or name} ran $1"; exec /bin/cat\n')
         path.chmod(0o755)
 
     def run_sh(self, script, bin_dir, hook="session_end"):
-        env = {"PATH": f"{bin_dir}:/bin", "ORCHE_HOME": str(self.home), "HOME": str(self.home)}
+        """PATH is `bin_dir` alone: on Linux /bin is /usr/bin and holds the system's python3.x, and
+        the launcher must log without any PATH tool (it calls /bin/date and /bin/mkdir)."""
+        env = {"PATH": str(bin_dir), "ORCHE_HOME": str(self.home), "HOME": str(self.home)}
         return subprocess.run([str(script), hook], input='{"x": 1}', env=env, capture_output=True, text=True,
                               timeout=20)
 

@@ -10,6 +10,14 @@ FIXTURES = Path(__file__).resolve().parent / "fixtures"
 if str(ROOT / "lib") not in sys.path:
     sys.path.insert(0, str(ROOT / "lib"))
 
+# Process-wide default for every test module (TempHomeCase re-applies it per test): the Jev key
+# store never touches the real keychain and no real dialog opens.
+from orche import jev_setup as _jev_setup, jevkey as _jevkey  # noqa: E402
+
+_jevkey.PLATFORM = "linux"
+_jevkey.SECURITY = "/nonexistent/orche-test/security"
+_jev_setup.OSASCRIPT = "/nonexistent/orche-test/osascript"
+
 
 class TempHomeCase(unittest.TestCase):
     """Runs each test with ORCHE_HOME pointing at a fresh temporary directory."""
@@ -24,8 +32,18 @@ class TempHomeCase(unittest.TestCase):
         for key in self._saved_env:
             del os.environ[key]
         os.environ["ORCHE_HOME"] = str(self.home)
+        # The Jev key store must never reach the developer's real keychain nor pop a real dialog:
+        # every test starts on the file backend (under this temp ORCHE_HOME) with no `security`
+        # or `osascript`; keychain/dialog tests put fakes on PATH and switch these seams back.
+        from orche import jev_setup, jevkey
+        self._jev_seams = (jevkey.PLATFORM, jevkey.SECURITY, jev_setup.OSASCRIPT)
+        jevkey.PLATFORM = "linux"
+        jevkey.SECURITY = str(self.home / "no-such-security")
+        jev_setup.OSASCRIPT = str(self.home / "no-such-osascript")
 
     def tearDown(self):
+        from orche import jev_setup, jevkey
+        jevkey.PLATFORM, jevkey.SECURITY, jev_setup.OSASCRIPT = self._jev_seams
         for key in [k for k in os.environ if k.startswith(("ORCHE_", "ORCA_"))]:
             del os.environ[key]
         os.environ.update(self._saved_env)

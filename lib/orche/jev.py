@@ -1,34 +1,45 @@
 """Jev gate client: typed decisions (Choice / Score / Noul) for routing and urgency, never code.
 
-Wire shapes (SPEC §7.1) — VERIFY AGAINST docs.typesafe.ai BEFORE FIRST LIVE USE. They are encoded
-only here, in the `WIRE` constants and `_question` / `_parse` below:
+Wire shapes (SPEC §7.1), checked 2026-10-18 against docs.typesafe.ai/api (direct) and
+vercel.com/docs/ai-gateway/sdks-and-apis/typesafe (gateway). They are encoded only here, in the
+`WIRE` constants and `_wire_question` / `_parse` below:
 
-- model pinned `jev-1.13.0` (config `jev.model`).
-- direct: `POST {base_url}/v1/systemone`, header `Authorization: Bearer <key>`,
-  body `{"model": "<model>", "state": "<masked text>", "questions": [...]}`.
-- Vercel AI Gateway (`base_url` contains `ai-gateway`): same path and body, model named
-  `typesafe-ai/<model>`.
-- questions: `{"type": "choice", "id", "question", "options": [...]}`,
-  `{"type": "score", "id", "question", "min": 1, "max": 5}`, `{"type": "noul", "id", "question"}`.
-- response: `{"answers": [{"id", "value", "confidence": 0.0-1.0}]}`. A Noul value is read as a
-  probability: a number in [0, 1] as is, a boolean as `confidence` (true) / `1 - confidence` (false).
-- limits: 64K chars per request, 32K per question; `state` is truncated with a `[truncated]` marker.
+- direct: `POST https://api.typesafe.ai/v1/systemone`, model pinned `jev-1.13.0` (config `jev.model`;
+  versioned ids are accepted besides the `jev-latest` alias).
+- Vercel AI Gateway (`base_url` contains `ai-gateway`, i.e. `https://ai-gateway.vercel.sh/typesafe`):
+  same path, body and answers ("This API implements the TypeSafe request and response shapes"),
+  model `typesafe-ai/<jev.model>` = `typesafe-ai/jev`.
+- header `Authorization: Bearer <key>`; body `{"model", "state": "<masked text>", "questions": {id: q}}`
+  with q = `{"type": "noul", "instructions"}`, `{"type": "choice", "instructions", "criteria":
+  {option: null}}` or `{"type": "score", "instructions", "criteria": [level labels, low to high]}`.
+- response `{"model", "answers": {id: answer}, "usage"}`: noul `{"type", "noul": 0-1}` (no
+  confidence: ORCHE uses max(p, 1 - p)); choice `{"type", "choice", "probabilities", "confidence"}`;
+  score `{"type", "score": 0-based level, "legend", "probabilities", "confidence"}` (ORCHE reports
+  `min + score`, so a 1-5 question still answers 1-5).
+- limits (documented in tokens: 64k per request, 32k per question) are enforced here in chars, which
+  is stricter; `state` is truncated with a `[truncated]` marker.
 
 Adoption rules (SPEC §7.3): every string sent has code/diffs/blobs replaced (`strip_code`) and is
 passed WHOLE through `mask.redact` before any cut; 1 s wall-clock timeout bounded by the caller's deadline;
 fail-open — any error returns None and writes one latency line to `logs/jev.log`
 (`ms=<int> q=<n> ok|timeout|error:<Type>`), never the payload. Nothing here raises.
+The key comes from `jevkey.resolve`: the env var first, then the keychain (macOS) or
+ORCHE_HOME/secrets/jev.key. It is sent only to an https `base_url`, as an unredirected header,
+and a 3xx is an error (never followed). A Choice answer naming an option that was not asked is dropped.
 """
 import json
-import os
 import re
 import threading
 import time
 import urllib.error
 import urllib.request
 
-from . import config, log, mask
+from . import config, jevkey, log, mask
 
+GATEWAY_BASE_URL = "https://ai-gateway.vercel.sh/typesafe"
+DIRECT_BASE_URL = "https://api.typesafe.ai"
+KINDS = {"gateway": (GATEWAY_BASE_URL, "jev"), "direct": (DIRECT_BASE_URL, "jev-1.13.0")}
+PROBE_TIMEOUT_S = 10.0  # a first call pays the TLS handshake; the 1 s hook budget does not apply
 WIRE = {
     "path": "/v1/systemone",
     "gateway_marker": "ai-gateway",
@@ -49,6 +60,11 @@ ACT = 0.9
 CONFIRM = 0.6
 
 ROUTINE_KINDS = ("status", "resume-nudge", "confirm", "revision", "new request")
+# Score rubrics (TypeSafe Score `criteria`, low to high); answers come back as 1-5.
+URGENCY_LEVELS = ("1: can wait for days", "2: this week", "3: today", "4: within the hour", "5: right now")
+COMPLEXITY_LEVELS = ("1: trivial, fully specified edit", "2: small contained change",
+                     "3: moderate change across a few files", "4: needs design or root-cause work",
+                     "5: large cross-cutting work")
 TIERS = ("mechanical", "standard", "hard")  # mirrors dispatch.TIERS
 OTHER = "other"
 
@@ -124,12 +140,13 @@ def _cut(text: str, limit: int) -> str:
     return text[:max(0, limit - len(marker) - 1)] + "\n" + marker
 
 
-def _question(q: dict) -> dict:
-    """Masked, length-limited copy of a question dict."""
-    out = {k: v for k, v in q.items() if k in ("type", "id", "min", "max")}
-    out["question"] = _cut(_redact(q.get("question", "")), WIRE["max_question_chars"])
-    if "options" in q:
-        out["options"] = [_redact(o) for o in q["options"]]
+def _wire_question(q: dict) -> dict:
+    """The masked, length-limited wire form of a question built by `choice` / `score` / `noul`."""
+    out = {"type": q["type"], "instructions": _cut(_redact(q.get("question", "")), WIRE["max_question_chars"])}
+    if q["type"] == "choice":
+        out["criteria"] = {_redact(o): None for o in q["options"]}
+    elif q["type"] == "score":
+        out["criteria"] = [_redact(label) for label in q["labels"]]
     return out
 
 
@@ -137,8 +154,12 @@ def choice(qid, question, options):
     return {"type": "choice", "id": qid, "question": question, "options": list(options)}
 
 
-def score(qid, question, lo=1, hi=5):
-    return {"type": "score", "id": qid, "question": question, "min": lo, "max": hi}
+def score(qid, question, lo=1, hi=5, labels=None):
+    """A score over levels lo..hi; `labels` (one per level, low to high) default to the numbers."""
+    labels = list(labels) if labels else [str(i) for i in range(lo, hi + 1)]
+    if len(labels) != hi - lo + 1:
+        raise ValueError("one label per level")
+    return {"type": "score", "id": qid, "question": question, "min": lo, "max": hi, "labels": labels}
 
 
 def noul(qid, question):
@@ -151,8 +172,29 @@ def _is_timeout(exc) -> bool:
     return isinstance(exc, urllib.error.URLError) and isinstance(getattr(exc, "reason", None), TimeoutError)
 
 
+def secure_url(base_url) -> bool:
+    """Only https endpoints get the key (config `jev.base_url`)."""
+    return str(base_url or "").lower().startswith("https://")
+
+
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    """A 3xx is an error, never followed: urllib would resend the request headers (the key) to the
+    redirect target. The HTTPError carries only the status; `ask` masks what it reports."""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        raise urllib.error.HTTPError(req.full_url, code, f"redirect refused ({code})", headers, fp)
+
+
+def build_opener(*handlers):
+    """The urllib opener used for Jev calls: redirects refused (`handlers` are for tests)."""
+    return urllib.request.build_opener(*handlers, _NoRedirect)
+
+
+_URLLIB = build_opener()
+
+
 def _default_opener(request, timeout):
-    return urllib.request.urlopen(request, timeout=timeout)  # noqa: S310 - https endpoint from config
+    return _URLLIB.open(request, timeout=timeout)  # https only (`secure_url`), redirects refused
 
 
 def _read(resp):
@@ -172,37 +214,84 @@ def _read(resp):
             close()
 
 
-def _parse(body: bytes, ids):
+def _number(x, lo=None, hi=None):
+    if isinstance(x, bool) or not isinstance(x, (int, float)):
+        return None
+    if (lo is not None and x < lo) or (hi is not None and x > hi):
+        return None
+    return float(x)
+
+
+def _answer(q, a):
+    """(value, confidence) of one wire answer to question `q`, or None when unusable."""
+    if not isinstance(a, dict) or a.get("type") != q["type"]:
+        return None
+    if q["type"] == "noul":
+        p = _number(a.get("noul"), 0.0, 1.0)
+        return None if p is None else (p, max(p, 1.0 - p))
+    c = _number(a.get("confidence"), 0.0, 1.0)
+    if c is None:
+        return None
+    if q["type"] == "choice":
+        return (a["choice"], c) if a.get("choice") in q["options"] else None  # asked options only
+    s = _number(a.get("score"), 0.0, float(q["max"] - q["min"]))
+    return None if s is None else (q["min"] + s, c)
+
+
+def _parse(body: bytes, questions):
     """{id: {"value", "confidence", "band"}} for answers to asked questions; ValueError if malformed."""
     data = json.loads(body.decode("utf-8"))
     answers = data.get("answers") if isinstance(data, dict) else None
-    if not isinstance(answers, list):
-        raise ValueError("no answers list")
+    if not isinstance(answers, dict):
+        raise ValueError("no answers map")
     out = {}
-    for a in answers:
-        if not isinstance(a, dict) or a.get("id") not in ids:
-            continue
-        c = a.get("confidence")
-        if isinstance(c, bool) or not isinstance(c, (int, float)) or not 0.0 <= c <= 1.0:
-            continue
-        out[a["id"]] = {"value": a.get("value"), "confidence": float(c), "band": band(c)}
+    for q in questions:
+        got = _answer(q, answers.get(q.get("id")))
+        if got is not None:
+            out[q["id"]] = {"value": got[0], "confidence": got[1], "band": band(got[1])}
     if not out:
         raise ValueError("no usable answers")
     return out
 
 
+def _error_message(raw) -> str:
+    """The `message` of a JSON error body (TypeSafe and the gateway use that field), else ""."""
+    try:
+        data = json.loads(raw.decode("utf-8", "replace") if isinstance(raw, (bytes, bytearray)) else raw)
+    except (ValueError, AttributeError):
+        return ""
+    msg = data.get("message") if isinstance(data, dict) else None
+    if not msg and isinstance(data, dict) and isinstance(data.get("error"), dict):
+        msg = data["error"].get("message")
+    return " ".join(str(msg).split())[:200] if msg else ""
+
+
 class JevClient:
     def __init__(self, base_url, api_key_env=DEFAULT_KEY_ENV, model=DEFAULT_MODEL,
-                 timeout_s=DEFAULT_TIMEOUT_S, opener=None):
+                 timeout_s=DEFAULT_TIMEOUT_S, opener=None, api_key=None):
         self.base_url = (base_url or "").rstrip("/")
         self.api_key_env = api_key_env or DEFAULT_KEY_ENV
         self.model = model or DEFAULT_MODEL
         self.timeout_s = float(timeout_s or DEFAULT_TIMEOUT_S)
         self.opener = opener or _default_opener
+        self._key = api_key
+        self.key_source = "given" if api_key else None
+        self.last_error = ""  # masked detail of the last failed call (HTTP error message), for probes
+        self.outcome = ""     # the last call's log outcome: ok | timeout | error:<Type>|HTTP<status>
 
     @property
     def gateway(self) -> bool:
         return WIRE["gateway_marker"] in self.base_url
+
+    @property
+    def kind(self) -> str:
+        return "gateway" if self.gateway else "direct"
+
+    def key(self):
+        """The API key (env, then the key store), resolved once per client."""
+        if self._key is None:
+            self._key, self.key_source = jevkey.resolve(self.api_key_env)
+        return self._key
 
     @property
     def url(self) -> str:
@@ -213,11 +302,11 @@ class JevClient:
         return (WIRE["gateway_model_prefix"] + self.model) if self.gateway else self.model
 
     def configured(self) -> bool:
-        return bool(self.base_url) and bool(os.environ.get(self.api_key_env))
+        return secure_url(self.base_url) and bool(self.key())
 
     def body(self, state, questions) -> dict:
         """The masked, size-limited request body (public for tests and dry runs)."""
-        qs = [_question(q) for q in questions]
+        qs = {str(q["id"]): _wire_question(q) for q in questions}
         head = {"model": self.wire_model, "state": "", "questions": qs}
         room = WIRE["max_request_chars"] - len(json.dumps(head, ensure_ascii=False))
         state = _redact(state or "")
@@ -244,8 +333,13 @@ class JevClient:
         started = time.monotonic()
         n = len(questions or ())
         outcome = "ok"
+        self.last_error = ""
+        key = None
         try:
-            key = os.environ.get(self.api_key_env)
+            if self.base_url and not secure_url(self.base_url):
+                outcome = "error:NotHttps"  # checked before the key is even resolved
+                return None
+            key = self.key() if self.base_url else None
             if not self.base_url or not key:
                 outcome = "error:NotConfigured"
                 return None
@@ -256,13 +350,16 @@ class JevClient:
             if timeout <= MIN_TIMEOUT_S:
                 outcome = "timeout"
                 return None
-            req = urllib.request.Request(self.url, data=data, method="POST", headers={
-                "Authorization": f"Bearer {key}", "Content-Type": "application/json"})
+            req = urllib.request.Request(self.url, data=data, method="POST",
+                                         headers={"Content-Type": "application/json"})
+            req.add_unredirected_header("Authorization", f"Bearer {key}")
             box = {}
 
             def work():
                 try:
                     box["resp"] = _read(self.opener(req, timeout))
+                except urllib.error.HTTPError as exc:  # urlopen raises on 4xx/5xx; keep status and body
+                    box["resp"] = _read(exc)
                 except BaseException as exc:  # noqa: BLE001 - handed to the caller thread
                     box["exc"] = exc
 
@@ -280,31 +377,64 @@ class JevClient:
             status, raw = box["resp"]
             if status != 200:
                 outcome = f"error:HTTP{status}"
+                self.last_error = jevkey.scrub(_error_message(raw), key)
                 return None
-            return _parse(raw, {q.get("id") for q in questions})
+            return _parse(raw, questions)
         except Exception as exc:  # noqa: BLE001 - fail-open by contract
             outcome = "timeout" if _is_timeout(exc) else f"error:{type(exc).__name__}"
             return None
         finally:
+            self.outcome = outcome
             ms = int((time.monotonic() - started) * 1000)
             log.log("jev", f"ms={ms} q={n} {outcome}")
 
 
 # ---- configured client -----------------------------------------------------
 
+def client_from(cfg, opener=None):
+    """JevClient for a `jev` config section (no enabled/key checks)."""
+    return JevClient(cfg.get("base_url", ""), cfg.get("api_key_env") or DEFAULT_KEY_ENV,
+                     cfg.get("model") or DEFAULT_MODEL, cfg.get("timeout_s") or DEFAULT_TIMEOUT_S,
+                     opener=opener or OPENER)
+
+
 def client(require_enabled=True):
-    """JevClient from config, or None when disabled (if required), no base_url, or no key in env."""
+    """JevClient from config, or None when disabled (if required), no base_url, or no key
+    (env var, keychain or key file)."""
     try:
         cfg = config.load().get("jev") or {}
         if require_enabled and not cfg.get("enabled"):
             return None
-        c = JevClient(cfg.get("base_url", ""), cfg.get("api_key_env") or DEFAULT_KEY_ENV,
-                      cfg.get("model") or DEFAULT_MODEL, cfg.get("timeout_s") or DEFAULT_TIMEOUT_S,
-                      opener=OPENER)
+        c = client_from(cfg)
         return c if c.configured() else None
     except Exception as exc:  # noqa: BLE001
         log.log("jev", f"ms=0 q=0 error:{type(exc).__name__}")
         return None
+
+
+PROBE_STATE = "ORCHE setup check: a short connection test with no user data."
+
+
+def probe(c):
+    """One tiny Choice question through `c` with PROBE_TIMEOUT_S: {"ok", "ms", "kind", "error"}.
+
+    `error` is masked (key replaced, then `mask.redact`) and names the HTTP status or exception type.
+    """
+    c.timeout_s = max(c.timeout_s, PROBE_TIMEOUT_S)
+    started = time.monotonic()
+    answers = c.ask(PROBE_STATE, [choice("probe", "Is this a connection test?", ["yes", "no"])])
+    ms = int((time.monotonic() - started) * 1000)
+    if answers and "probe" in answers:
+        return {"ok": True, "ms": ms, "kind": c.kind, "error": ""}
+    outcome = getattr(c, "outcome", "error")
+    if outcome in ("ok", "error:ValueError", "error:JSONDecodeError"):  # 200 but no usable answer
+        outcome = "error:unexpected response shape"
+    elif outcome == "error:NotConfigured":
+        outcome = "error:no base_url or no API key"
+    elif outcome == "error:NotHttps":
+        outcome = "error:jev.base_url must be https"
+    detail = outcome.removeprefix("error:") + (f": {c.last_error}" if c.last_error else "")
+    return {"ok": False, "ms": ms, "kind": c.kind, "error": jevkey.scrub(detail, c._key)}
 
 
 def _ask(state, questions, deadline=None):
@@ -318,12 +448,7 @@ def prob(answer):
     """Noul answer -> probability in [0, 1], or None."""
     if not isinstance(answer, dict):
         return None
-    value = answer.get("value")
-    if isinstance(value, bool):
-        return answer["confidence"] if value else 1.0 - answer["confidence"]
-    if isinstance(value, (int, float)) and 0.0 <= value <= 1.0:
-        return float(value)
-    return None
+    return _number(answer.get("value"), 0.0, 1.0)
 
 
 def _min_conf(answers):
@@ -353,7 +478,7 @@ def routine_questions():
 def intake_questions(units=()):
     qs = [noul("needs_plan", "Does this request need a written plan before work starts?"),
           noul("irreversible", "Would carrying out this request be hard to reverse?"),
-          score("urgency", "How urgent is this request?", 1, 5)]
+          score("urgency", "How urgent is this request?", 1, 5, URGENCY_LEVELS)]
     if units:
         qs.insert(0, choice("target", "Which unit should handle this request?", list(units) + [OTHER]))
     return qs
@@ -414,7 +539,7 @@ def classify_pointers(pointers, *, deadline=None):
 def suggest_tier(brief_text, *, deadline=None):
     """{"tier": mechanical|standard|hard, "confidence"} or None."""
     try:
-        a = _ask(brief_text, [score("complexity", "How complex is this task?", 1, 5),
+        a = _ask(brief_text, [score("complexity", "How complex is this task?", 1, 5, COMPLEXITY_LEVELS),
                               noul("needs_design", "Does this task need design work or root-cause analysis?")],
                  deadline)
         if not a or "complexity" not in a:

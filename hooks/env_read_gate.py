@@ -1,7 +1,10 @@
 #!/usr/bin/env python3
-"""PreToolUse gate: deny direct reads of secrets (.env files, env dumps, secret managers).
+"""PreToolUse gate: deny direct reads of secrets (.env files, env dumps, secret managers) and of the
+stored Jev key (keychain value lookups, ORCHE_HOME/secrets/jev.key, orche's key API, keys fed to
+orche's stdin flags; the rules and their known gaps are in `lib/orche/jevgate.py`).
 
-Denies only on a positive match; prints nothing otherwise (no auto-allow). Internal error -> allow + log.
+Denies only on a positive match; prints nothing otherwise (no auto-allow). Internal error -> allow +
+log, except that the Jev rules refuse a command they cannot finish checking ("too complex").
 """
 import json
 import os
@@ -15,6 +18,8 @@ from orche import pyguard  # noqa: E402  (before any other orche module)
 # This gate is self-contained stdlib code that also runs on old interpreters, so an old Python
 # is logged but the gate keeps denying positive matches (stronger than allowing everything).
 pyguard.check_hook("env_read_gate")
+
+from orche import jevgate  # noqa: E402  (stdlib only, old-interpreter safe like this file)
 
 REASON = "[orche] secrets are read by 'orche secret run', not by agents. Use 'orche secret ls' for names."
 ENV_FILE = re.compile(r"^\.env(\..+)?$", re.IGNORECASE)
@@ -31,6 +36,7 @@ BASH_DENY = (
     re.compile(r"gcloud\s+secrets\s+versions\s+access"),
     re.compile(r"\b(?i:echo|printf)\b[^|;&]*" + SECRET_VAR),
 )
+JEV_REASON = jevgate.REASON
 # `env` at a command position (`vercel env pull` is not one).
 ENV_CMD = re.compile(r"(?:^|[|;&(]|&&|\|\|)\s*env(?![\w.-])(?P<rest>[^|;&)\n]*)", re.MULTILINE)
 
@@ -66,6 +72,11 @@ def _secret_name(name, pattern):
     return bool(pattern.match(name)) and name.lower() != ".env.example"
 
 
+def jev_denied(tool, tool_input):
+    """True when the call would read the stored Jev key or hand one to orche (or cannot be checked)."""
+    return jevgate.reason(tool, tool_input) is not None
+
+
 def denied(tool, tool_input):
     if tool in ("Read", "Edit", "Write"):
         return _secret_name(tool_input.get("file_path"), ENV_FILE)
@@ -82,7 +93,9 @@ def main():
         payload = json.load(sys.stdin)
         if not isinstance(payload, dict) or os.environ.get("ORCHE_KEYMASTER") == "1":
             return 0
-        if not denied(payload.get("tool_name"), payload.get("tool_input") or {}):
+        tool, tool_input = payload.get("tool_name"), payload.get("tool_input") or {}
+        reason = jevgate.reason(tool, tool_input) or (REASON if denied(tool, tool_input) else None)
+        if reason is None:
             return 0
     except Exception as exc:  # noqa: BLE001 - gates allow on internal error
         try:
@@ -92,7 +105,7 @@ def main():
             pass
         return 0
     print(json.dumps({"hookSpecificOutput": {"hookEventName": "PreToolUse", "permissionDecision": "deny",
-                                             "permissionDecisionReason": REASON}}))
+                                             "permissionDecisionReason": reason}}))
     return 0
 
 

@@ -20,6 +20,8 @@ from test_runner import REAL_POPEN, RunnerCase, alive
 LIB = str(support.ROOT / "lib")
 REAL_SHELL = shell.RUNNER
 SLEEP = ("-c", "import time; time.sleep(60)")
+# Linux: a process whose environment the kernel hides from its own user (PR_SET_DUMPABLE = 4).
+HIDE_ENV = "import ctypes, time; ctypes.CDLL(None).prctl(4, 0, 0, 0, 0); time.sleep(60)"
 
 
 def rid(unit="acme-x-20261018-1"):
@@ -228,7 +230,7 @@ class EnvSweepTest(SweepCase):
         """The /proc walk (Linux): exact environ entry, ppid/pgrp/starttime from stat even with
         `)` in comm, the environment of another user's process unreadable (None)."""
         root = Path(tempfile.mkdtemp(dir=self.root))
-        (root / "stat").write_text("cpu 1 2 3\nbtime 1000\n")
+        (root / "uptime").write_text("5000.25 1234.00\n")
         rows = {101: (1, 101, b"A=1\0ORCHE_RUN_ID=u@1\0"), 102: (101, 101, b"B=2\0"),
                 103: (1, 103, b"ORCHE_RUN_ID=u@10\0"), 104: (1, 104, b""), 105: (1, 105, None)}
         for pid, (ppid, pgid, env) in rows.items():
@@ -246,7 +248,30 @@ class EnvSweepTest(SweepCase):
                           (103, 1, 103, False, "sleep 60"), (104, 1, 104, False, "sleep 60"),
                           (105, 1, 105, False, "sleep 60")])
         self.assertEqual((table[3].env, table[4].env), ((), None))
-        self.assertEqual(table[0].start, 1000 + 10100 / tick)
+        # boot from /proc/uptime (10 ms steps, not btime's whole seconds); a start is its tick's end
+        self.assertAlmostEqual(table[0].start, time.time() - 5000.25 + 10101 / tick, delta=1)
+        (root / "uptime").unlink()
+        self.assertIsNone(procs._table_proc(time.monotonic() + 2.0, root=root)[0].start)
+
+    def test_a_blocked_proc_walk_keeps_the_ps_rules(self):
+        """The /proc walk (Linux) obeys the rules of one `ps`: a walk that blocks (a /proc read of a
+        process stuck in the kernel) is NoTime under a deadline shorter than PS_TIMEOUT_S, a real
+        failure (None) at the full PS_TIMEOUT_S, and never outlasts either; no time to start: NoTime."""
+        release = threading.Event()
+        self.addCleanup(release.set)
+        with mock.patch.object(procs, "_walk_proc", lambda root: release.wait(30)), \
+                mock.patch.object(procs, "PS_TIMEOUT_S", 0.3):
+            started = time.monotonic()
+            with self.assertRaises(procs.NoTime):
+                procs._table_proc(time.monotonic() + 0.2)
+            self.assertLess(time.monotonic() - started, 0.5)
+            started = time.monotonic()
+            self.assertIsNone(procs._table_proc(time.monotonic() + 5.0))
+            self.assertLess(time.monotonic() - started, 0.8)
+            with self.assertRaises(procs.NoTime):
+                procs._table_proc(time.monotonic())
+        with mock.patch.object(procs, "_walk_proc", lambda root: 1 / 0):     # a walk that raises: no table
+            self.assertIsNone(procs._table_proc(time.monotonic() + 2.0))
 
     def test_the_hook_spawn_never_hands_its_run_id_to_a_new_run(self):
         seen = []
@@ -280,7 +305,29 @@ class ReconcileTest(SweepCase):
         return sorted(p.name for p in self.folder().glob("*.lock"))
 
     def reconcile(self, budget_s=10.0):
-        return runs.reconcile(runs.registry.load(), "acme", budget_s=budget_s)
+        shown = getattr(self, "sip_off", set())
+        if not shown:
+            return runs.reconcile(runs.registry.load(), "acme", budget_s=budget_s)
+        with mock.patch.object(shell, "RUNNER", self.sip_ps(shown)):
+            return runs.reconcile(runs.registry.load(), "acme", budget_s=budget_s)
+
+    @staticmethod
+    def sip_ps(pids):
+        """The real `ps`, except that `ps -axwwE` shows only the arguments of `pids` (Apple binaries
+        whose environment macOS shows because SIP is off, as on GitHub's runners): what SIP hides."""
+        def run(argv, *, timeout, input):
+            res = REAL_SHELL(argv, timeout=timeout, input=input)
+            if list(argv) != procs.ENV_PS or not res.ok:
+                return res
+            lines = []
+            for line in res.out.splitlines():
+                pid = line.split(None, 1)[0] if line.strip() else ""
+                if pid.isdigit() and int(pid) in pids:
+                    line = pid + " " + REAL_SHELL(["ps", "-ww", "-o", "command=", "-p", pid], timeout=timeout,
+                                                  input=None).out.strip()
+                lines.append(line)
+            return shell.Result(res.code, "\n".join(lines) + "\n", res.err, res.argv)
+        return run
 
     def from_target(self):
         return [p for p in self.pointers("main-acme") if p["from"] == "div-acme-build"]
@@ -445,11 +492,43 @@ class ReconcileTest(SweepCase):
         self.assertIn("cannot read the process table", detail)
 
     def hidden_claude(self, mcp_path):
-        """An env-hidden stand-in for a runner claude (an Apple /bin/sh, its own group) whose
-        command line carries `--mcp-config <mcp_path>`."""
-        return self.execd(self.child(["/bin/sh", "-c", "while :; do sleep 1; done", "claude",
-                                      "--mcp-config", str(mcp_path)], start_new_session=True),
-                          needle="mcp-config")
+        """An env-hidden stand-in for a runner claude (its own group) whose command line carries
+        `--mcp-config <mcp_path>`: macOS an Apple /bin/sh (`ps -E` hides its environment; with SIP
+        off it does not, and reconcile() hides it through sip_ps), Linux a non-dumpable process
+        (prctl PR_SET_DUMPABLE 0: /proc/<pid>/environ refuses)."""
+        if not procs._linux():
+            proc = self.execd(self.child(["/bin/sh", "-c", "while :; do sleep 1; done", "claude",
+                                          "--mcp-config", str(mcp_path)], start_new_session=True),
+                              needle="mcp-config")
+            if "PATH=" in subprocess.run(["ps", "-wwE", "-o", "command=", "-p", str(proc.pid)],
+                                         capture_output=True, text=True, errors="replace").stdout:
+                self.sip_off = getattr(self, "sip_off", set()) | {proc.pid}     # SIP off: hide it as SIP would
+            return proc
+        proc = self.execd(self.child([sys.executable, "-c", HIDE_ENV, "claude", "--mcp-config", str(mcp_path)],
+                                     start_new_session=True), needle="mcp-config")
+
+        def hidden():
+            try:
+                (procs.PROC / str(proc.pid) / "environ").read_bytes()
+            except PermissionError:
+                return True
+            return False
+        if not self.wait_for(hidden, timeout=10):
+            self.skipTest("this user reads every environment (root / CAP_SYS_PTRACE): none is hidden")
+        return proc
+
+    def test_a_lost_hidden_claude_started_right_after_its_lock_is_still_that_runs_claude(self):
+        """A start time is never read early (macOS: etime; Linux: /proc/uptime and the end of the
+        starttime tick, not btime's whole seconds), so a hidden claude started just after the lock's
+        `started_ns` passes `started at or after` and is killed."""
+        unit = self.brief()
+        run = rid(unit)
+        since = time.time_ns()
+        claude = self.hidden_claude(runs.mcp_config_path(run))
+        self.put_lock(unit, self.dead_pid(), run_id=run, child_pid=claude.pid, pgid=claude.pid, started_ns=since)
+        [act] = self.reconcile()
+        self.assertIn(claude.pid, act["killed"])
+        self.assertIsNotNone(claude.wait(timeout=5))
 
     def test_a_lost_runs_claude_is_only_killed_when_it_is_that_runs_claude(self):
         """I-2, m-2: the lock's child_pid now belongs to another program. A readable environment
@@ -663,21 +742,33 @@ class ReconcileTest(SweepCase):
         script.chmod(0o755)
         return f"{folder}{os.pathsep}{os.environ.get('PATH', '')}"
 
-    def timed_hook(self, path):
+    def timed_hook(self, path, **env):
         started = time.monotonic()
-        res = self.run_hook("report_inject.py", self.payload("prompt.json"), ORCHE_SESSION="main-acme", PATH=path)
+        res = self.run_hook("report_inject.py", self.payload("prompt.json"), ORCHE_SESSION="main-acme", PATH=path,
+                            **env)
         return time.monotonic() - started, res
 
+    def hung_proc_walk(self):
+        """The hook's environment for a /proc walk that blocks (Linux's table, its hung `ps`): a
+        sitecustomize on PYTHONPATH that patches procs._walk_proc before the hook runs."""
+        folder = self.root / "hungproc"
+        folder.mkdir(exist_ok=True)
+        (folder / "sitecustomize.py").write_text(
+            f"import sys, time\nsys.path.insert(0, {LIB!r})\nfrom orche import procs\n"
+            "procs._walk_proc = lambda root: time.sleep(30)\n")
+        return {"PYTHONPATH": str(folder)}
+
     def test_a_hung_ps_never_stretches_the_prompt_hook(self):
-        """M-1: every `ps` hangs. A live lock (unverifiable: left alone) and a dead one (filed,
-        its sweep pending): the hook still answers within its 3 s and shows the lost run."""
+        """M-1: every `ps` hangs (Linux: and the /proc walk blocks). A live lock (unverifiable: left
+        alone) and a dead one (filed, its sweep pending): the hook still answers within its 3 s and
+        shows the lost run."""
         unit, other = self.brief(n=1), self.brief(n=2)
         live = self.fake_run(other)
         self.put_lock(other, live.pid, to="div-other")
         pid = self.dead_pid()
         run = rid(unit)
         self.put_lock(unit, pid, run_id=run)
-        took, res = self.timed_hook(self.fake_ps("exec sleep 30"))
+        took, res = self.timed_hook(self.fake_ps("exec sleep 30"), **(self.hung_proc_walk() if procs._linux() else {}))
         self.assertLess(took, 3.0)
         self.assertEqual(res.returncode, 0, res.stderr)
         self.assertIn(f"  summary: runner died: {unit} (pid {pid}, started ", res.stdout)

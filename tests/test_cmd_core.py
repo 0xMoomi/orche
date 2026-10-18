@@ -86,6 +86,15 @@ class StatusTest(CoreCase):
 
 
 class DeptsTest(CoreCase):
+    def setUp(self):
+        super().setUp()
+        # LAST_ACTIVITY is shown in local time (units.now: "Current local time"); the golden is KST.
+        self.addCleanup(time.tzset)
+        self.addCleanup(lambda old=os.environ.get("TZ"): os.environ.pop("TZ", None) if old is None
+                        else os.environ.__setitem__("TZ", old))
+        os.environ["TZ"] = "KST-9"
+        time.tzset()
+
     def test_depts_golden(self):
         code, out, err = self.orche("depts")
         self.assertEqual((code, err), (0, ""))
@@ -96,6 +105,11 @@ class DeptsTest(CoreCase):
             "acme-shop  build/checkout  active   feat-acme-shop-checkout  feat/checkout  2026-10-15T18:00:00+09:00  0d    0",
             "acme-shop  build/search    paused   feat-acme-shop-search    feat/search    2026-10-03T10:00:00+09:00  12d   0",
         ])
+
+    def test_depts_shows_last_activity_in_the_local_zone(self):
+        os.environ["TZ"] = "UTC0"
+        time.tzset()
+        self.assertIn("2026-10-01T00:00:00+00:00", self.orche("depts")[1].splitlines()[1])
 
     def test_depts_project_without_divisions(self):
         self.assertEqual(self.orche("depts", "docs-site")[:2], (0, "no divisions\n"))

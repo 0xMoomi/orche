@@ -515,16 +515,18 @@ class ClassifierTest(TriageCase):
 
         def opener(req, timeout):
             sent.append((json.loads(req.data), timeout))
-            return json.dumps({"answers": [{"id": "route", "value": "direct", "confidence": 0.97},
-                                           {"id": "division", "value": "build", "confidence": 0.93},
-                                           {"id": "tier", "value": "mechanical", "confidence": 0.91}]}).encode()
+            return json.dumps({"model": "jev-1.13.0", "answers": {
+                "route": {"type": "choice", "choice": "direct", "probabilities": {}, "confidence": 0.97},
+                "division": {"type": "choice", "choice": "build", "probabilities": {}, "confidence": 0.93},
+                "tier": {"type": "choice", "choice": "mechanical", "probabilities": {}, "confidence": 0.91}}}).encode()
         with mock.patch.dict(os.environ, {"JEV_API_KEY": "k"}), mock.patch.object(jev, "OPENER", opener):
             result, name, _s, _c = triage.classify(f"Add {SECRET} to README.md", ["rnd", "build"], self.cfg())
         self.assertEqual(name, "jev")
         self.assertEqual((result["route"], result["division"], result["tier"], result["confidence"]),
                          ("direct", "build", "mechanical", 0.91))
         [(body, timeout)] = sent
-        self.assertEqual([q["id"] for q in body["questions"]], ["route", "division", "tier"])
+        self.assertEqual(list(body["questions"]), ["route", "division", "tier"])
+        self.assertEqual(body["questions"]["tier"]["criteria"], {t: None for t in triage.TIERS})
         self.assertNotIn(SECRET, body["state"])
         self.assertLessEqual(timeout, 1.0)
 

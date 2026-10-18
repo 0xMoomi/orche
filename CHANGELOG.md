@@ -3,6 +3,58 @@
 All notable changes to ORCHE are listed here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow semantic versioning.
 
+## 0.3.1 — 2026-10-18
+
+Jev onboarding: set Jev up once, or skip it and everything works without it.
+
+### Added
+
+- **First-run Jev question.** `orche install` in a terminal asks once for an optional Jev key
+  (Enter skips; on macOS a native hidden-answer dialog, else a hidden terminal prompt) and the key
+  type (Vercel AI Gateway, the default, or TypeSafe direct), sends one tiny probe, and only when it
+  answers stores the key and turns Jev on ("Jev on (gateway, 0.4 s)"). A failed probe or key store
+  changes nothing (no key stored, config.json byte-for-byte as before) and never fails the
+  install; Ctrl-D or Ctrl-C at the prompt skips Jev like Enter. Without a terminal nothing is
+  asked and stdin is never read. `--no-jev` skips the question; `--jev-key-stdin --jev-kind
+  gateway|direct` configures without prompts (`--jev-kind` alone answers the key-type question).
+- **`orche jev setup`, `orche jev probe`, `orche jev key set|rm|status`.** The key lives in the
+  macOS keychain (service `orche`, account `JEV_API_KEY`; written over stdin, never in argv) or,
+  elsewhere, `~/.claude/orche/secrets/jev.key` (0600). The Jev client resolves the env var
+  `JEV_API_KEY` first, then the stored key. `key status` says only where the key is. `key set`
+  reads stdin only with `--stdin`; with no dialog and no terminal it refuses ("no terminal: use
+  the dialog, or --stdin from a trusted script"). The key is sent only to an `https` endpoint and
+  a redirect is an error, never followed. `orche uninstall` keeps the key and says how to delete it.
+- **`orche doctor` `jev` row**: OK with the kind and key source, otherwise WARN, never FAIL (Jev is
+  optional): not configured (Haiku fallback), disabled, or "last probe failed <masked reason>;
+  ORCHE works without Jev; run `orche jev probe`" (no network call). `orche jev disable` forgets
+  the failed probe.
+- **Env-read gate** (`lib/orche/jevgate.py`): agents may not read a keychain value (`security
+  find-generic-password|find-internet-password` with `-w`/`-g`, `dump-keychain -d`, `security -i`,
+  also behind wrappers such as `timeout`, `/usr/bin/time`, `sudo`, `env -i`, `stdbuf`, `xargs` and
+  inside `bash -c`, `eval`, `$( )`), name the key file (the ORCHE_HOME path anywhere in the text,
+  normalised; `secrets/jev.key` as a command word or redirect), read anything in the secrets
+  folder (`cat`, `head`, `cp`, `< file`, …), search ORCHE_HOME or the secrets folder, run inline
+  interpreter code (`python -c`, heredocs, `node -e`, `perl -e`, `osascript -e`, piped code) that
+  names the key file, shells out to `security … -w` or calls orche's key API, or hand a key to
+  `orche` through `--stdin`, `--key-stdin` or `--jev-key-stdin`. Commit messages, search patterns
+  and Python comment lines that only mention these pass. A command too nested to check is refused.
+  ORCHE never prints or logs the key; the gate refuses agents' normal read paths, but it is not a
+  sandbox: inline interpreter code is checked as text, a script file that reads the key is not,
+  and the keychain's access control and the OS remain the boundary.
+- **Setup rollback**: if config.json cannot be written after the key was stored, config.json is put
+  back and the previous key restored (or the new one removed); the message says which key is
+  stored if that fails. A config.json that is not valid JSON or not UTF-8 skips Jev with one line
+  ("config.json unreadable (…): Jev skipped, nothing changed; …"): install exit 0, `jev setup` exit 1.
+
+### Fixed
+
+- **Jev wire shapes** now follow the vendor documentation (docs.typesafe.ai/api and Vercel AI
+  Gateway's TypeSafe-compatible API): questions are a map keyed by id with `instructions` and
+  `criteria`; answers are a map with `noul`, `choice` + `confidence`, or `score` (0-based) +
+  `confidence`. The earlier list-based shapes were never called live and would have been
+  rejected. Gateway requests go to `https://ai-gateway.vercel.sh/typesafe/v1/systemone` with
+  model `typesafe-ai/jev`.
+
 ## 0.3.0 — 2026-10-18
 
 Setup: choose and customise divisions. Triage: simple Main prompts go straight to a division.

@@ -13,19 +13,23 @@ table, listed twice, or whose prefix does not match is no environment match. Lin
 
 A process carrying the tag counts, and so do its descendants and the members of a group it leads:
 macOS hides the environment of Apple platform binaries (/bin/sh, /bin/sleep, …) from `ps -E`, and
-those are still found through a tagged parent or group leader. A lost run's claude (reconcile) is a
-further root only when it is that run's claude beyond doubt (see _is_claude).
+Linux the environment of another user's or a non-dumpable process; those are still found through a
+tagged parent or group leader. A lost run's claude (reconcile) is a further root only when it is
+that run's claude beyond doubt (see _is_claude).
 
 sweep() kills them: SIGTERM, SIGKILL after `wait_s`. Never this process or its parent. No table
 -> nothing is signalled: None when the table is unreadable (a `ps` failed, or timed out with its
 full PS_TIMEOUT_S), NoTime raised when the caller's deadline cut the read short (a `ps` that could
 not start, or timed out under a shorter timeout): "no time", never "ps broken" (runs.py counts
-only the first toward SWEEP_TRIES).
+only the first toward SWEEP_TRIES). The Linux /proc walk keeps the same rules as one `ps`: it runs
+in a daemon thread joined for at most PS_TIMEOUT_S (or what the deadline leaves), so a /proc read
+that blocks (a process stuck in the kernel holding its memory lock) never stretches the caller.
 """
 import os
 import re
 import signal
 import sys
+import threading
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -162,35 +166,57 @@ def _table_ps(deadline):
     return out
 
 
-def _boot_time(root):
+def _boot(root):
+    """Epoch seconds of boot from /proc/uptime (10 ms steps; `btime` in /proc/stat is cut to whole
+    seconds, which could put a start up to 1 s early), else None. Read uptime first, the clock
+    after: never earlier than the true boot."""
     try:
-        for line in (root / "stat").read_text().splitlines():
-            if line.startswith("btime "):
-                return int(line.split()[1])
+        up = float((root / "uptime").read_text().split()[0])
     except (OSError, ValueError, IndexError):
-        pass
-    return None
+        return None
+    return time.time() - up
 
 
 def _table_proc(deadline, root=PROC):
     """[Proc] from /proc (Linux), else None (unlistable, or the walk outlasted a full
-    PS_TIMEOUT_S); NoTime when it ran out of a shorter deadline."""
-    had = _budget(deadline)
+    PS_TIMEOUT_S); NoTime when the deadline left no time to start it or its shorter timeout ran out
+    (the same rules as _ps)."""
+    left = _budget(deadline)
+    if left <= 0:
+        raise NoTime
+    timeout = min(PS_TIMEOUT_S, left)
+    box = []
+
+    def walk():
+        try:
+            box.append(_walk_proc(root))
+        except Exception:  # noqa: BLE001 - a walk that breaks is no table, like a failed `ps`
+            box.append(None)
+    walker = threading.Thread(target=walk, daemon=True)
+    walker.start()
+    walker.join(timeout)
+    if walker.is_alive():
+        if timeout < PS_TIMEOUT_S:
+            raise NoTime
+        return None
+    return box[0]
+
+
+def _walk_proc(root):
+    """[Proc] from every /proc/<pid>, else None (unlistable). A start is the END of its clock tick
+    on a boot never earlier than the true one: like macOS's etime, never earlier than the process
+    really started (procs._is_claude compares it with the lock's started_ns)."""
     try:
         names = [n for n in os.listdir(root) if n.isdigit()]
     except OSError:
         return None
-    boot = _boot_time(root)
+    boot = _boot(root)
     try:
         tick = os.sysconf("SC_CLK_TCK")
     except (ValueError, OSError):
         tick = 100
     rows = []
     for name in names:
-        if _budget(deadline) <= 0:
-            if had < PS_TIMEOUT_S:
-                raise NoTime
-            return None
         try:
             stat = (root / name / "stat").read_text()
             fields = stat[stat.rindex(")") + 2:].split()   # after `(comm)`: state ppid pgrp …
@@ -198,7 +224,7 @@ def _table_proc(deadline, root=PROC):
         except (OSError, ValueError, IndexError):
             continue
         try:
-            start = boot + int(fields[19]) / tick if boot is not None else None
+            start = boot + (int(fields[19]) + 1) / tick if boot is not None else None
         except (ValueError, IndexError):
             start = None
         try:
@@ -240,7 +266,8 @@ def _started_s(claude):
 
 
 def _is_claude(proc, claude) -> bool:
-    """A lost run's claude whose environment cannot be read (an Apple platform binary): only when
+    """A lost run's claude whose environment cannot be read (an Apple platform binary; Linux: a
+    non-dumpable process): only when
     ALL hold: it is the lock's `child_pid`, still in the lock's `pgid`, its command line carries
     that run's own `--mcp-config …/runner/mcp/<run_id>.json` (runner.claude_marker) as a whole
     token, and it started at or after the lock's `started_ns`. A readable environment decides by

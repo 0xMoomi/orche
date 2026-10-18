@@ -6,11 +6,15 @@ install patches only: `~/.claude/settings.json`, `~/.claude/statusline-command.s
 (`--yes`). Every changed file is first copied to `<file>.bak-<ts>`; `--dry-run` prints the plan
 and writes nothing. `--home PATH` targets another home (tests); ORCHE_HOME then defaults to
 `PATH/.claude/orche` unless set.
+
+The first install on a terminal also asks once for an optional Jev key (`jev_setup`); `--no-jev`
+skips it, `--jev-key-stdin [--jev-kind gateway|direct]` configures it without prompts. A missing
+or failing Jev never fails the install.
 """
 import os
 from pathlib import Path
 
-from . import paths, util
+from . import jev_setup, paths, util
 from .hr import EXIT_OK, EXIT_USER, out
 from .install import MIGRATION_LINE, Ctx, backup, agents, apply_all, codex, doctor, fable, settings, statusline
 
@@ -24,6 +28,12 @@ def register(subparsers):
     p.add_argument("--mode", choices=("plugin", "settings"), default="plugin",
                    help="plugin: print /plugin install steps (default); settings: register hooks in settings.json")
     p.add_argument("--yes", action="store_true", help="also move ~/.codex/AGENTS.md.recovered into place")
+    p.add_argument("--no-jev", action="store_true", help="do not ask for a Jev key (add one later: orche jev setup)")
+    p.add_argument("--jev-key-stdin", action="store_true", help="read a Jev key from stdin, no prompts")
+    p.add_argument("--jev-kind", choices=("gateway", "direct"), default=None,
+                   help="gateway (Vercel AI Gateway, default) or direct (api.typesafe.ai); with "
+                        "--jev-key-stdin, or instead of the key-type question")
+    p.add_argument("--no-dialog", action="store_true", help="Jev key at a hidden terminal prompt, not the macOS dialog")
     p.set_defaults(func=cmd_install)
     p = subparsers.add_parser("uninstall", help="remove ORCHE blocks, hook entries and agent symlinks")
     p.add_argument("--home", help="home directory (default: $HOME)")
@@ -131,9 +141,41 @@ def _orche_home(ctx) -> None:
     ctx.note("orche_home", "create", home, f"dirs {','.join(missing)}")
 
 
+def _jev_step(args, state, new_state):
+    """The optional Jev key, asked once (first interactive install); None when nothing was done.
+
+    `--no-jev` skips, `--jev-key-stdin [--jev-kind]` configures without prompts; on a terminal the
+    question is asked unless an earlier install asked it or Jev is already set up. Never fails the
+    install: ORCHE works without Jev."""
+    if args.dry_run:
+        return None
+    if args.no_jev:
+        return {"status": "skipped", "lines": ["jev: skipped (--no-jev); add later with `orche jev setup`"]}
+    if args.jev_key_stdin:
+        problem = jev_setup.config_problem()
+        if problem:
+            return {"status": "skipped", "error": problem, "lines": [jev_setup.unreadable_line(problem)]}
+        key = jev_setup.stdin_line()
+        if not key:
+            return {"status": "off", "error": "no key on stdin", "lines": ["jev: no key on stdin; Jev stays off"]}
+        return jev_setup.configure(key, args.jev_kind or "gateway")
+    # No terminal (and no --jev-key-stdin): skipped without a word, stdin is never read.
+    if args.json or state.get("jev_asked") or not jev_setup.interactive():
+        return None
+    if jev_setup.configured():
+        new_state["jev_asked"] = True
+        return None
+    problem = jev_setup.config_problem()
+    if problem:  # not asked, and asked again on the next install once the file is fixed
+        return {"status": "skipped", "error": problem, "lines": [jev_setup.unreadable_line(problem)]}
+    new_state["jev_asked"] = True
+    return jev_setup.prompt_flow(dialog=not args.no_dialog, kind=args.jev_kind)
+
+
 def cmd_install(args):
     ctx = _ctx(args, yes=args.yes)
     state = _state_or_error(ctx, "install", "install refused, settings.json not touched")
+    jev_result = None
     if state is not None:
         new_state = {**state, "plugin_root": str(ctx.plugin_root), "mode": args.mode}
         try:
@@ -145,6 +187,7 @@ def cmd_install(args):
                                         ("runner.md", lambda: agents.flip_runner(ctx)),
                                         ("fable.md", lambda: fable.install(ctx)),
                                         ("AGENTS.md", lambda: codex.install(ctx))])
+            jev_result = _jev_step(args, state, new_state)
         finally:
             _save_state(ctx, new_state)
     instructions = []
@@ -153,9 +196,12 @@ def cmd_install(args):
                         f"  /plugin marketplace add {ctx.plugin_root}",
                         "  /plugin install orche@orche"]
     lines = ([f"dry run: nothing written (home {ctx.home})"] if ctx.dry_run else []) + ctx.lines()
-    lines += instructions + [MIGRATION_LINE]
-    out(args, {"home": str(ctx.home), "dry_run": ctx.dry_run, "mode": args.mode, "actions": ctx.actions,
-               "instructions": instructions, "errors": ctx.errors, "migration": MIGRATION_LINE}, lines)
+    lines += (jev_result or {}).get("lines", []) + instructions + [MIGRATION_LINE]
+    data = {"home": str(ctx.home), "dry_run": ctx.dry_run, "mode": args.mode, "actions": ctx.actions,
+            "instructions": instructions, "errors": ctx.errors, "migration": MIGRATION_LINE}
+    if jev_result is not None:
+        data["jev"] = {k: v for k, v in jev_result.items() if k != "lines"}
+    out(args, data, lines)
     return EXIT_USER if ctx.errors else EXIT_OK
 
 
@@ -173,6 +219,7 @@ def cmd_uninstall(args):
             _save_state(ctx, state)
     lines = ([f"dry run: nothing written (home {ctx.home})"] if ctx.dry_run else []) + ctx.lines()
     lines.append(f"kept: backups (*.bak-*) and ORCHE_HOME {paths.orche_home()}")
+    lines.append("kept: a stored Jev key (keychain or ORCHE_HOME/secrets); delete it with `orche jev key rm`")
     out(args, {"home": str(ctx.home), "dry_run": ctx.dry_run, "actions": ctx.actions, "errors": ctx.errors}, lines)
     return EXIT_USER if ctx.errors else EXIT_OK
 

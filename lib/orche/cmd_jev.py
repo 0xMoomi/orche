@@ -13,7 +13,7 @@ import sys
 import time
 from pathlib import Path
 
-from . import config, jev, mask, metrics, paths, registry, units, util
+from . import config, jev, jev_setup, jevkey, mask, metrics, paths, registry, units, util
 from .janitor import discover
 
 EXIT_OK, EXIT_USER = 0, 1
@@ -139,8 +139,9 @@ def _answer(placement, a):
         p = jev.prob(a.get(key))
         if p is not None:
             ans[key] = p >= 0.5
-    if "urgency" in a:
-        ans["urgency"] = a["urgency"].get("value")
+    if "urgency" in a:  # a Score lands between levels; labels are whole levels
+        value = a["urgency"].get("value")
+        ans["urgency"] = round(value) if isinstance(value, (int, float)) and not isinstance(value, bool) else value
     return ans, min(v["confidence"] for v in a.values())
 
 
@@ -282,8 +283,9 @@ def cmd_label(args):
 def cmd_run(args):
     c = jev.client(require_enabled=False)  # offline eval runs before the hooks are enabled
     if c is None:
-        print("orche: Jev is unconfigured — set jev.base_url in config.json and export the key named by "
-              "jev.api_key_env (default JEV_API_KEY)", file=sys.stderr)
+        print("orche: Jev is unconfigured — run `orche jev setup` (or set jev.base_url and store the key "
+              "with `orche jev key set`; the env var named by jev.api_key_env, default JEV_API_KEY, "
+              "also works)", file=sys.stderr)
         return EXIT_USER
     samples = _read_jsonl(eval_dir() / "samples.jsonl")
     if not samples:
@@ -327,17 +329,142 @@ def _set_enabled(args, value):
     raw["jev"]["enabled"] = value
     if not args.dry_run:
         config.save(raw)
+        if not value:
+            jev_setup.forget_record()  # disabled: doctor shows "disabled", not an old failed probe
     word = "true" if value else "false"
     lines = [f"{'would set' if args.dry_run else 'set'} jev.enabled={word}"]
     if value and jev.client() is None and not args.dry_run:
-        lines.append("note: Jev is unconfigured (jev.base_url or the API key env var is missing); calls stay off")
+        lines.append("note: Jev is unconfigured (no jev.base_url or no key; run `orche jev setup`); calls stay off")
     _emit(args, {"enabled": value, "dry_run": bool(args.dry_run)}, lines)
     return EXIT_OK
 
 
+# ---- setup, probe, key -----------------------------------------------------
+
+def _stdin_key():
+    return jev_setup.stdin_line()
+
+
+def _flow_out(args, res):
+    data = {k: v for k, v in res.items() if k != "lines"}
+    _emit(args, data, res["lines"])
+    return EXIT_OK if res["status"] in ("on", "skipped") else EXIT_USER
+
+
+def cmd_setup(args):
+    if args.dry_run:
+        _emit(args, {"dry_run": True}, ["would ask for a Jev key, store it, probe once and enable Jev on success"])
+        return EXIT_OK
+    problem = jev_setup.config_problem()
+    if problem:  # before any question or stdin read
+        print(jev_setup.unreadable_line(problem), file=sys.stderr)
+        return EXIT_USER
+    if args.key_stdin:
+        key = _stdin_key()
+        if not key:
+            print("orche: no key on stdin", file=sys.stderr)
+            return EXIT_USER
+        return _flow_out(args, jev_setup.configure(key, args.kind or "gateway"))
+    if not jev_setup.interactive():  # a pipe is never read without --key-stdin: skip, nothing changed
+        res = jev_setup.skipped()
+        res["lines"] = ["Jev setup skipped: no terminal (use --key-stdin [--kind gateway|direct] from a "
+                        "trusted script)", *res["lines"]]
+        return _flow_out(args, res)
+    return _flow_out(args, jev_setup.prompt_flow(dialog=not args.no_dialog, kind=args.kind))
+
+
+def cmd_probe(args):
+    if args.dry_run:
+        _emit(args, {"dry_run": True}, ["would send one Choice question to the configured Jev endpoint"])
+        return EXIT_OK
+    res = jev_setup.probe_configured()
+    if not res["configured"]:
+        _emit(args, res, [f"jev {jev_setup.NOT_CONFIGURED}: run `orche jev setup`"])
+        return EXIT_USER
+    if res["ok"]:
+        lines = [f"Jev answered ({res['kind']}, {res['ms'] / 1000:.1f} s, key: {res['key']})"]
+        if not res["enabled"]:
+            lines.append("Jev is off: turn it on with `orche jev enable`")
+        _emit(args, res, lines)
+        return EXIT_OK
+    _emit(args, res, [f"Jev probe failed: {res['error']}", jev_setup.OFF_LINE if not res["enabled"] else
+                      "Jev stays enabled; its calls fail open (triage falls back to Haiku)"])
+    return EXIT_USER
+
+
+def _key_error(exc):
+    print(f"orche: {exc}", file=sys.stderr)
+    return EXIT_USER
+
+
+def cmd_key_set(args):
+    if args.dry_run:
+        _emit(args, {"dry_run": True, "backend": jevkey.backend()},
+              [f"would store the Jev key in the {jevkey.backend()}"])
+        return EXIT_OK
+    try:
+        key = _stdin_key() if args.stdin else jev_setup.read_key("Jev API key: ", dialog=not args.no_dialog)
+    except jev_setup.NoTerminal:
+        print(f"orche: {jev_setup.NO_TERMINAL}", file=sys.stderr)
+        return EXIT_USER
+    if not key:
+        print("orche: no key stored", file=sys.stderr)
+        return EXIT_USER
+    try:
+        backend = jevkey.set_key(key)
+    except jevkey.KeyStoreError as exc:
+        return _key_error(jevkey.scrub(str(exc), key))
+    jev_setup.forget_record()
+    _emit(args, {"stored": True, "backend": backend}, [jev_setup.stored_line(backend)])
+    return EXIT_OK
+
+
+def cmd_key_rm(args):
+    if args.dry_run:
+        _emit(args, {"dry_run": True, "backend": jevkey.backend()},
+              [f"would remove the Jev key from the {jevkey.backend()}"])
+        return EXIT_OK
+    try:
+        removed = jevkey.remove()
+    except jevkey.KeyStoreError as exc:
+        return _key_error(exc)
+    jev_setup.forget_record()
+    _emit(args, {"removed": removed, "backend": jevkey.backend()},
+          [f"Jev key removed from the {jevkey.backend()}" if removed else f"no Jev key in the {jevkey.backend()}"])
+    return EXIT_OK
+
+
+def cmd_key_status(args):
+    env_name = config.load()["jev"].get("api_key_env") or jev.DEFAULT_KEY_ENV
+    src, err = jevkey.source(env_name)
+    data = {"source": src, "backend": jevkey.backend(), "env": env_name, "error": err}
+    if err:
+        _emit(args, data, [f"Jev key: unknown ({err})"])
+        return EXIT_USER
+    _emit(args, data, [f"Jev key: {src}" if src else f"Jev key: none (set one with `orche jev key set`)"])
+    return EXIT_OK
+
+
 def register(subparsers):
-    p = subparsers.add_parser("jev", help="Jev typed-decision gate: enable/disable and offline evaluation")
+    p = subparsers.add_parser("jev", help="Jev typed-decision gate: setup, key, probe, enable/disable, "
+                                          "offline evaluation")
     sub = p.add_subparsers(dest="jev_command", metavar="<jev-command>")
+    st = sub.add_parser("setup", help="ask for a Jev key, store it, probe once, enable Jev on success")
+    st.add_argument("--key-stdin", action="store_true", help="read the key from stdin instead of prompting")
+    st.add_argument("--kind", choices=tuple(jev.KINDS), default=None,
+                    help="gateway (Vercel AI Gateway, default) or direct (api.typesafe.ai)")
+    st.add_argument("--no-dialog", action="store_true", help="hidden terminal prompt instead of the macOS dialog")
+    st.set_defaults(func=cmd_setup)
+    sub.add_parser("probe", help="one tiny live call to the configured Jev endpoint").set_defaults(func=cmd_probe)
+    kp = sub.add_parser("key", help="store, remove or locate the Jev API key (never prints it)")
+    ksub = kp.add_subparsers(dest="key_command", metavar="<key-command>")
+    ks = ksub.add_parser("set", help="store the key (macOS keychain, else ORCHE_HOME/secrets/jev.key)")
+    ks.add_argument("--stdin", action="store_true", help="read the key from stdin (scripts) instead of a prompt")
+    ks.add_argument("--no-dialog", action="store_true", help="hidden terminal prompt instead of the macOS dialog")
+    ks.set_defaults(func=cmd_key_set)
+    ksub.add_parser("rm", help="remove the stored key").set_defaults(func=cmd_key_rm)
+    ksub.add_parser("status", help="where the key comes from: env, keychain, file or none").set_defaults(
+        func=cmd_key_status)
     sub.add_parser("enable", help="set jev.enabled=true in config").set_defaults(func=lambda a: _set_enabled(a, True))
     sub.add_parser("disable", help="set jev.enabled=false in config").set_defaults(
         func=lambda a: _set_enabled(a, False))
