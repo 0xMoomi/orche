@@ -1,115 +1,201 @@
 # ORCHE
 
-ORCHE runs a small company of Claude Code sessions inside Orca, the desktop
-multi-agent manager. Each project gets one **Main** (decides, never codes), a
-**Liaison** (answers other projects), and five long-lived **divisions** (R&D, Research, Build, GTM,
-Ops), each in its own git worktree; Build owns per-feature **feature agents**.
-Main assigns work with structured `dispatch` blocks; hooks, not model turns, deliver them.
-Workers report with a small inbox pointer, and Main reads those in batches.
-A unit is done only when a verification-ledger row exists for its commit.
-Memory lives in files, so sessions `/clear` at unit boundaries instead of growing.
-Status costs zero tokens: a status line, the Orca sidebar and the `orche` CLI.
-Why: in practice most token spend is a big orchestrator context re-read on every wake-up.
+## What ORCHE is
 
-ORCHE is a Claude Code **plugin** (agents, skills, hooks) with a companion CLI, `orche`.
-It is neither a CLAUDE.md snippet nor a single skill.
+ORCHE runs a small company of Claude Code sessions inside Orca, the desktop multi-agent manager.
+Each project gets one **Main** (decides, never codes), a **Liaison** (answers other projects), and
+long-lived **divisions** (R&D, Research, Build, GTM, Ops), each in its own git worktree; Build owns
+per-feature **feature agents**. ORCHE is a Claude Code **plugin** (agents, skills, hooks) with a
+companion CLI, `orche`; it is neither a CLAUDE.md snippet nor a single skill. To run it you need
+Claude Code, Orca with its `orca` CLI, Python 3.11+, git, and macOS (the pure-Python parts also run
+on Linux).
+
+The steps below take you from nothing to a first working request: check the requirements, install,
+apply ORCHE to one project, send a first request. Jev is optional and comes after.
 
 ## Requirements
 
-- macOS (the pure-Python parts also run on Linux), Python 3.11+ (standard library only), git
-- Claude Code, and Orca with its `orca` CLI on `PATH`
-- Optional: `gh` (GitHub secrets), `gcloud` (GCP Secret Manager), `vercel`, `age` (secret sharing)
+ORCHE does not install any of these for you. Check each one in a terminal:
+
+| Need | Check | Success looks like |
+|---|---|---|
+| macOS (the pure-Python parts also run on Linux) | `uname -s` | `Darwin` |
+| Claude Code | `claude --version` | a version line, e.g. `2.1.302 (Claude Code)` |
+| Orca, the desktop multi-agent manager, with its `orca` CLI on `PATH` | `command -v orca` | a path to `orca` |
+| Python 3.11+ (standard library only) | `python3 --version` | `Python 3.11` or newer (see [Troubleshooting](#troubleshooting) if it says 3.9) |
+| git | `git --version` | any recent version |
+
+Optional tools: `gh` (GitHub secrets), `gcloud` (GCP Secret Manager), `vercel`, `age` (secret
+sharing). ORCHE works without them; `orche doctor` lists each one as OK or WARN.
 
 ## Install
 
-```sh
-git clone https://github.com/0xmoomi/orche ~/orche
-export PATH="$HOME/orche/bin:$PATH"     # add to your shell profile
+### Step 1. Clone the repository
 
-orche --dry-run install                 # show what would change; writes nothing
-orche install                           # patch user settings, status line, agent symlinks
+```sh
+git clone https://github.com/0xMoomi/orche ~/orche
 ```
 
-Then, inside Claude Code, install the hooks, agents and skills as a plugin (`orche install`
-prints these two lines with your clone's path):
+Success: a folder `~/orche` with `bin/orche` in it. The rest of this guide assumes `~/orche`; if you
+clone somewhere else, change the paths below to match.
+
+### Step 2. Put `orche` on your PATH
+
+For this terminal:
+
+```sh
+export PATH="$HOME/orche/bin:$PATH"
+orche version
+```
+
+Success: `orche 0.3.1` (or the version you cloned).
+
+To make it permanent, add the same line to your login profile. ORCHE's panes and `orche doctor` use a
+login shell (`$SHELL -lc`), and a zsh login shell does not read `~/.zshrc`, so use:
+
+```sh
+# zsh (the macOS default)
+echo 'export PATH="$HOME/orche/bin:$PATH"' >> ~/.zprofile
+# bash
+echo 'export PATH="$HOME/orche/bin:$PATH"' >> ~/.bash_profile
+```
+
+`bin/orche` picks the first Python 3.11+ it finds by itself, so this works even when your plain
+`python3` is older.
+
+### Step 3. Preview the install
+
+```sh
+orche --dry-run install
+```
+
+This writes nothing. It prints one line per change it would make, then the two plugin lines for
+step 5. On a fresh machine it looks like this (your paths differ):
+
+```
+dry run: nothing written (home /Users/you)
+orche_home: would create /Users/you/.claude/orche (dirs logs,status,inbox,cards,secrets,briefs,jev-eval,archive,trash)
+settings: would set (cleanupPeriodDays (absent) -> 3650)
+settings: would set (env.CLAUDE_AUTOCOMPACT_PCT_OVERRIDE (absent) -> 50)
+agents: would symlink /Users/you/.claude/agents/hr.md (-> /Users/you/orche/agents/hr.md)
+...
+Install the ORCHE hooks as a Claude Code plugin (inside Claude Code):
+  /plugin marketplace add /Users/you/orche
+  /plugin install orche@orche
+```
+
+### Step 4. Install
+
+```sh
+orche install
+```
+
+What it changes:
+
+- creates `~/.claude/orche` (ORCHE's own state: registry, inbox, ledger, logs);
+- patches `~/.claude/settings.json` (for example `cleanupPeriodDays` 3650);
+- adds an ORCHE block to your status-line script (`~/.claude/statusline-command.sh`) when you have one;
+- symlinks ORCHE's agents into `~/.claude/agents/`;
+- also patches two operator-specific files when they are present (`~/.claude/fable/*` and
+  `~/.codex/AGENTS.md`) and skips them when they are absent. `orche install --dry-run` previews every
+  change, these included.
+
+`orche install` backs up every file before changing it (`<file>.bak-<ts>`) and records the original
+values in `~/.claude/orche/install-state.json`; `orche uninstall` restores them.
+
+The first `orche install` in a terminal also asks once for an optional Jev key:
+
+```
+Jev API key (optional, Enter to skip):
+```
+
+Press Enter to skip it. ORCHE works fully without Jev, and you can add it later
+([Jev (optional)](#jev-optional)). Install prints "Jev skipped" and finishes normally.
+
+Success: the output ends with the two `/plugin` lines and no `error` line (exit code 0).
+
+### Step 5. Install the plugin inside Claude Code
+
+Start Claude Code (`claude`) and type the two lines `orche install` printed. With the clone in
+`~/orche`:
 
 ```
 /plugin marketplace add ~/orche
 /plugin install orche@orche
 ```
 
-(`/plugin marketplace add https://github.com/0xmoomi/orche` works too; the CLI still needs the clone.)
+This installs the hooks, agents and skills. (`/plugin marketplace add https://github.com/0xMoomi/orche`
+works too; the CLI still needs the clone.)
 
-`orche doctor` checks the result (one OK/WARN/FAIL line each), including whether a login shell
-finds `orche` and a Python 3.11+ `python3` (macOS's `/usr/bin/python3` is 3.9: `brew install python`
-and put `/opt/homebrew/bin` before `/usr/bin` in `PATH`; an old `python3` is only a WARN while the
-launchers can still pick a 3.11+ themselves, and a FAIL when they cannot). `orche install` backs up every
-file before changing it (`<file>.bak-<ts>`) and records the original values in
-`~/.claude/orche/install-state.json`; `orche uninstall` restores them. Use
-`orche install --mode settings` instead of the plugin if you want the hooks registered directly
-in `~/.claude/settings.json`; a later plain `orche install` (plugin mode) takes those entries out again,
-so the hooks never run twice. `orche install` also patches two operator-specific files when they
-are present (`~/.claude/fable/*` and `~/.codex/AGENTS.md`) and skips them when they are absent;
-`orche install --dry-run` previews every change, these included.
+### Step 6. Check with `orche doctor`
 
-### Jev (optional)
+```sh
+orche doctor
+```
 
-ORCHE works fully without Jev. Jev is a small typed-decision model (yes/no, pick one, score) from
-TypeSafe that ORCHE can use for quick routing questions. With Jev, triage's classifier answers in
-about 1 s instead of about 3 s with Haiku, and those calls no longer use your Claude subscription's
-Haiku. Without it, triage uses Haiku and the other Jev checks are skipped.
+It prints one `OK`, `WARN` or `FAIL` line per check and exits 1 only when a line says `FAIL`. It also
+checks whether a login shell finds `orche` and a Python 3.11+ `python3`. A healthy install looks
+like this (your paths, versions and tools differ):
 
-The first `orche install` in a terminal asks once:
+```
+OK	python	3.13.1
+OK	python3 (login shell)	/opt/homebrew/bin/python3 3.13.1
+OK	orche on PATH	/Users/you/orche/bin/orche
+OK	orca	orca status answered
+OK	claude	/Users/you/.local/bin/claude 2.1.302 (Claude Code)
+OK	claude --setting-sources	supported
+OK	tool gh	/opt/homebrew/bin/gh
+WARN	tool age	not found on PATH
+WARN	jev	not configured (Haiku fallback)
+OK	orche_home	ORCHE_HOME /Users/you/.claude/orche
+OK	registry	valid (0 project(s))
+OK	hooks	orche plugin enabled
+OK	statusline	ORCHE block present in /Users/you/.claude/statusline-command.sh
+OK	cleanupPeriodDays	3650
+OK	codex AGENTS.md	skipped (not present)
+...
+```
 
-1. **"Jev API key (optional, Enter to skip)"**. On macOS a small ORCHE dialog with a hidden field
-   opens (the default); type or paste the key and press Save. Over SSH, or without a desktop
-   session, a hidden terminal prompt is used instead (`--no-dialog` forces it). Cancel, an empty
-   field, Ctrl-D or Ctrl-C skips Jev: install prints "Jev skipped — ORCHE works without it …" and
-   finishes normally. Without a terminal (a script, a pipe) nothing is asked and nothing is read
-   from stdin.
-2. **"Key type: 1) Vercel AI Gateway (default) 2) TypeSafe direct"**. Press Enter for an AI
-   Gateway key (`https://ai-gateway.vercel.sh/typesafe`, model `typesafe-ai/jev`) or `2` for a
-   key from console.typesafe.ai (`https://api.typesafe.ai`, model `jev-1.13.0`).
-3. ORCHE sends **one** tiny test question with the key (well under $0.01). Only if it answers
-   does ORCHE store the key and turn Jev on: "Jev on (gateway, 0.4 s)". If it fails, you see the
-   error (with the key hidden) and nothing is changed: no key is stored, your config stays as it
-   was, and ORCHE keeps working without Jev.
+These WARN lines are normal on a fresh install:
 
-Where the key lives: on macOS only in your login keychain (service `orche`, account
-`JEV_API_KEY`); on Linux in `~/.claude/orche/secrets/jev.key` (readable only by you). ORCHE never
-prints or logs the key: it is not written to your shell profile, logs, events or `--json` output,
-and it is sent only to an `https` endpoint (a redirect is treated as an error, never followed).
-ORCHE's env-read gate refuses an agent's normal ways to read or pass it: the environment, a
-keychain value lookup (`security find-generic-password … -w`, also behind `timeout`, `sudo`,
-`bash -c` and the like), the key file (its full path anywhere in a command, any read of the
-secrets folder, and inline `python -c`/`node -e`/heredoc code that names it or calls orche's key
-API) and the stdin flags (`--stdin`, `--key-stdin`, `--jev-key-stdin`). A command too nested to
-check is refused too. The gate is a guard against accidents, not a sandbox: inline interpreter
-code is checked as text, but a script file that reads the key is not, and a determined program
-running as you can still reach the key, so the keychain's own access control and your operating
-system remain the boundary. An exported `JEV_API_KEY` variable
-still works and takes precedence. `orche uninstall` keeps the stored key; `orche jev key rm`
-deletes it.
+- `jev	not configured (Haiku fallback)`: you skipped Jev. ORCHE works without it.
+- `tool <name>	not found on PATH`: an optional tool you do not have.
+- `statusline	ORCHE block missing …`: you have no status-line script (see Troubleshooting).
 
-| Command | What it does |
-|---|---|
-| `orche jev setup` | the same questions later (or `--key-stdin --kind gateway\|direct` in scripts) |
-| `orche jev probe` | one live test call with the stored key; prints the time or the (masked) error |
-| `orche jev key set` | replace the key (dialog on macOS, else a hidden prompt; `--no-dialog`; `--stdin` only from a trusted script — without it a pipe is refused: "no terminal: use the dialog, or --stdin from a trusted script") |
-| `orche jev key status` | says only where the key comes from: `env`, `keychain`, `file` or `none` |
-| `orche jev key rm` | delete the stored key |
-| `orche jev enable` / `disable` | turn Jev on or off without touching the key (`disable` also forgets the last failed probe) |
+These need a fix:
 
-Non-interactive installs: `orche install --no-jev` never asks; `orche install --jev-key-stdin
---jev-kind gateway` reads the key from stdin. `orche doctor` shows a `jev` row: `OK jev gateway
-(key: keychain)`, or a WARN — never a FAIL, because ORCHE works without Jev: `not configured
-(Haiku fallback)`, `disabled (…)`, or
-``last probe failed <masked reason>; ORCHE works without Jev; run `orche jev probe` ``.
+- `orche on PATH`: the PATH line is not in your login profile (step 2).
+- `orca	orca status failed …`: Orca is not running, or `orca` is not on `PATH`.
+- `hooks	plugin not enabled …`: step 5 is not done yet.
+
+### Troubleshooting
+
+- **Python 3.9 on macOS.** macOS's `/usr/bin/python3` is 3.9. Install a newer one with
+  `brew install python` and put `/opt/homebrew/bin` before `/usr/bin` in `PATH`. An old `python3` is
+  only a WARN while the launchers can still pick a 3.11+ themselves, and a FAIL when they cannot.
+- **No status line.** If install prints `statusline: skip … (not found; point statusLine at a script,
+  then re-run orche install)`, set a `statusLine` script in Claude Code first, then run
+  `orche install` again.
+- **Hooks without the plugin.** Use `orche install --mode settings` instead of the plugin if you want
+  the hooks registered directly in `~/.claude/settings.json`. A later plain `orche install` (plugin
+  mode) takes those entries out again, so the hooks never run twice.
+- **Undo the install.** `orche uninstall` restores the backed-up values (see
+  [Uninstall](#uninstall-and-leaving-orche)).
 
 ## Apply ORCHE to a project
 
 ORCHE joins one project at a time, when you name it (`orche apply-all` exists but is not the way to
-start). `orche init <project>` on a terminal asks which divisions the project gets:
+start). The project must be a git repository that Orca already knows. You can name it by its Orca
+display name, repo id or path.
+
+### Step 1. Run `orche init`
+
+```sh
+orche --dry-run init my-app   # optional: the same checklist, then the plan; writes nothing
+orche init my-app
+```
+
+On a terminal it asks which divisions the project gets:
 
 ```
 Divisions for my-app  (type numbers to toggle, a to add a custom division, Enter to continue)
@@ -134,6 +220,28 @@ Aliases (comma-separated) []: my,app
 Summary: build, gtm, design(custom) · stage building · 3 worktrees · panes main + liaison
 Apply? [Y/n]
 ```
+
+For a first try, press Enter at every prompt to take the defaults. Success: the output starts with
+`initialized my-app (…) stage=building`, lists each division as `dormant`, and ends with
+`panes: main-my-app, liaison-my-app`.
+
+### What gets created
+
+For that project only:
+
+1. Files in the project's main checkout: `.orche/project`, `PROJECT_CARD.md`, `AGENTS.md`,
+   `.agents/`, `.claude/agents/div-<proj>-*.md`. They stay untracked (`.orche/units/` and
+   `.claude/settings.local.json` go into `.git/info/exclude`). Nothing is committed; you decide
+   whether they belong in the repo.
+2. One Orca worktree per chosen division (`div-<division>`) with its charter, status and handoff
+   files. Every division starts dormant (no pane, no cost).
+3. Two Orca panes in the main checkout: `main-<proj>` (you talk here) and `liaison-<proj>` (answers
+   other projects' questions, keeps `PROJECT_CARD.md` fresh). No division pane opens unless you pass
+   `--wake`.
+4. An entry in `~/.claude/orche/registry.json`. Two weekly Orca automations are printed, not
+   created, unless you pass `--automations`.
+
+### Choices and options
 
 - **Defaults.** Every standard division except `ops` is checked; nothing is woken. Enter at every
   prompt takes them. `n` at `Apply?` (or Ctrl-D) stops with exit 0 and writes nothing.
@@ -172,7 +280,8 @@ Apply? [Y/n]
   contains `:` (e.g. a Bedrock model id) goes in the file. A setup given wrongly (an unknown key, a
   wrong type or value) stops with one `orche:` line and exit 1 (a user error; 2 means "not found");
   `--print-setup` only prints and refuses
-  any other setup flag.
+  any other setup flag. Other flags: `--stage building|public`, `--aliases a,b`, `--wake build,gtm`
+  (start those divisions now), `--automations` (create the weekly Orca automations).
 - **Adding later.** Re-run `orche init <project>` with more divisions or custom ones (on a terminal,
   the checklist marks what the project has as `(onboarded)`). Only the new divisions get worktrees and
   files; existing worktrees, files and registry entries are left untouched.
@@ -180,75 +289,194 @@ Apply? [Y/n]
   changes a registered project's stage or aliases. Sleep a division you no longer want
   (`orche sleep div-<proj>-<division>`) or remove it by hand; the stage changes with `orche stage set`.
 
+### In chat instead
+
 In Claude Code, `/orche-apply <project>` walks through the same choices in chat and applies them with
 `--setup-file` after a dry-run preview.
 
-## Five-minute quick start
+### Check it
 
-1. Onboard a repository that Orca already knows (display name, id or path). On a terminal this
-   first shows the division checklist (see [Apply ORCHE to a project](#apply-orche-to-a-project));
-   it then creates one worktree per chosen division, opens `main-<proj>` and `liaison-<proj>` panes
-   in the main checkout, and starts Build and GTM; the other divisions stay `dormant` (no pane, no
-   cost):
+```sh
+orche status my-app   # one line: stage, awake count, divisions (○ = dormant), counters
+orche depts my-app    # divisions and feature agents with status, session, branch, idle days
+```
 
-   ```sh
-   orche init my-app --wake build,gtm
-   orche depts my-app        # divisions and feature agents with status, session, branch, idle days
-   orche status              # one line per project
-   ```
+## First request
 
-2. Talk to `main-my-app` in plain language. Main echoes what it understood, gets a plan
-   confirmed, and ends its reply with a dispatch block. The Stop hook writes the brief to
-   `.orche/units/<unit>/BRIEF.md` and starts the unit; Main spends no turn on delivery:
+### Step 1. Open the Main pane
 
-   ````
-   ```dispatch
-   TO        div-my-app-build
-   GOAL      Add a date filter to the history API
-   SCOPE     src/api/history/**, tests/api/** ; branch div/build
-   CONTEXT   Request from GTM plan rev 2; current handler is src/api/history/list.ts
-   ACCEPT    GET /history?from=&to= filters by created_at
-     invalid dates return 400
-   VERIFY    scripts/verify/api.sh
-   TIMEBOX   2h; on overrun report partial result and stop
-   FORBID    merge, rebase, force-push, edits outside SCOPE
-   REPORT    status, branch, head SHA, PR, verdict, commands run, memory-save
-   TIER      standard
-   ```
-   ````
+In Orca, open the tab `main-my-app` (in the project's main checkout).
 
-3. The hook runs the unit; watch `orche status` (`RUNNING n`) or the status line (`run2`).
-   `orche run <unit>` starts a headless `claude -p` worker in the target's worktree with the
-   brief as its prompt; the worker runs VERIFY, ends with `STATUS: done|blocked|failed`, and the
-   runner files one pointer to Main (a feature reports to Build) plus `RUN.json` and `REPORT.md`
-   next to the brief (the worker itself never runs `orche report` under the runner). A worker
-   never records its own verdict (writer ≠ judge). From Build or a feature agent (the targets
-   `orche report done` gates) the pointer is `done` only when the final `STATUS: done` comes
-   with a new commit made during the run, a clean worktree, and a ledger row for that commit;
-   otherwise it arrives as `info` "unverified: STATUS: done (no commit)", "(uncommitted
-   changes)" or "(no ledger row for <sha>)" — a committed unit stays `info` "(no ledger row
-   for <sha>)" until a verifier records the row, and Main decides. Writer ≠ judge is enforced when the row is
-   recorded: `orche ledger record` refuses a `--verifier` equal to the producer (`--producer`,
-   else the recording session's `ORCHE_SESSION`); the runner only checks that a row exists and
-   does not re-check who recorded it. From any other target (Research, R&D, GTM, Ops, Main) a
-   final `STATUS: done` files `done`, as `orche report done` would. Among runner runs there is
-   one run per target at a time, so "a new commit made during the run" is this unit's; a pane
-   worker (`delivery: pane`, `runner.hard_in_pane`) or a person working in that worktree is not
-   counted.
+### Step 2. Ask in plain language
 
-   ```sh
-   # in the reviewer's session (here a verification feature agent), not the producer's
-   orche ledger record --pr 42 --sha <head-sha> --verdict unit-test-verified \
-     --evidence logs/verify-api.txt --verifier feat-my-app-review
-   orche run my-app-add-a-date-filter-20261018-1   # re-run a unit by hand (--dry-run prints the argv)
-   # pane mode only (delivery: pane): the worker files its own pointer
-   orche report done --summary "date filter added; tests pass"
-   ```
+Type a small, concrete request, for example:
 
-4. Main sees urgent pointers at its next turn and the rest at a drain point. Type `[drain]` to
-   get everything now plus a three-line status.
+```
+Add a date filter to the history API.
+```
+
+Main's first line echoes what it understood:
+
+```
+Understood: source = my-app, output = my-app
+```
+
+Main gets a plan confirmed with you, then ends its reply with a dispatch block. The Stop hook writes
+the brief to `.orche/units/<unit>/BRIEF.md` and starts the unit; Main spends no turn on delivery:
+
+````
+```dispatch
+TO        div-my-app-build
+GOAL      Add a date filter to the history API
+SCOPE     src/api/history/**, tests/api/** ; branch div/build
+CONTEXT   Request from GTM plan rev 2; current handler is src/api/history/list.ts
+ACCEPT    GET /history?from=&to= filters by created_at
+  invalid dates return 400
+VERIFY    scripts/verify/api.sh
+TIMEBOX   2h; on overrun report partial result and stop
+FORBID    merge, rebase, force-push, edits outside SCOPE
+REPORT    status, branch, head SHA, PR, verdict, commands run, memory-save
+TIER      standard
+```
+````
+
+### Step 3. Watch it run
+
+The unit runs as a headless worker in the division's worktree; no division pane is needed. Watch
+`orche status` (`RUNNING n`) or the status line (`run2`):
+
+```sh
+orche status
+orche depts my-app
+```
+
+### Step 4. Read the result
+
+Main sees urgent pointers at its next turn and the rest at a drain point. Type `[drain]` in the Main
+pane to get everything now plus a three-line status.
+
+Success: the result of your unit appears in Main's reply. See [How units run](#how-units-run) for
+when a unit counts as done.
 
 Every command takes `--json`; commands that change state take `--dry-run` (`orche --help`).
+
+## Jev (optional)
+
+ORCHE works fully without Jev. Jev is a small typed-decision model (yes/no, pick one, score) from
+TypeSafe that ORCHE can use for quick routing questions. With Jev, triage's classifier answers in
+about 1 s instead of about 3 s with Haiku, and those calls no longer use your Claude subscription's
+Haiku. Without it, triage uses Haiku and the other Jev checks are skipped.
+
+### Step 1. Start the setup
+
+The first `orche install` in a terminal asks these questions once. To answer them later, run:
+
+```sh
+orche jev setup
+```
+
+### Step 2. Enter the key
+
+**"Jev API key (optional, Enter to skip)"**. On macOS a small ORCHE dialog with a hidden field
+opens (the default); type or paste the key and press Save. Over SSH, or without a desktop session, a
+hidden terminal prompt is used instead (`--no-dialog` forces it). Cancel, an empty field, Ctrl-D or
+Ctrl-C skips Jev: install prints "Jev skipped — ORCHE works without it …" and finishes normally.
+Without a terminal (a script, a pipe) nothing is asked and nothing is read from stdin.
+
+### Step 3. Pick the key type
+
+**"Key type: 1) Vercel AI Gateway (default) 2) TypeSafe direct"**. Press Enter for an AI Gateway key
+(`https://ai-gateway.vercel.sh/typesafe`, model `typesafe-ai/jev`) or `2` for a key from
+console.typesafe.ai (`https://api.typesafe.ai`, model `jev-1.13.0`).
+
+### Step 4. One test call
+
+ORCHE sends **one** tiny test question with the key (well under $0.01). Only if it answers does ORCHE
+store the key and turn Jev on:
+
+```
+Jev on (gateway, 0.4 s)
+```
+
+If it fails, you see the error (with the key hidden) and nothing is changed: no key is stored, your
+config stays as it was, and ORCHE keeps working without Jev.
+
+### Step 5. Verify
+
+```sh
+orche jev key status   # where the key comes from: env, keychain, file or none
+orche doctor           # the jev row: OK jev gateway (key: keychain)
+```
+
+`orche doctor`'s `jev` row is `OK jev gateway (key: keychain)` or a WARN, never a FAIL, because ORCHE
+works without Jev: `not configured (Haiku fallback)`, `disabled (…)`, or
+``last probe failed <masked reason>; ORCHE works without Jev; run `orche jev probe` ``.
+
+### Step 6. Triage (your choice)
+
+Jev speeds up triage, but triage stays off until you turn it on with `orche triage enable` (see
+[Triage](#triage)). Everything works without Jev and without triage.
+
+### Where the key lives and how it is protected
+
+Where the key lives: on macOS only in your login keychain (service `orche`, account
+`JEV_API_KEY`); on Linux in `~/.claude/orche/secrets/jev.key` (readable only by you). ORCHE never
+prints or logs the key: it is not written to your shell profile, logs, events or `--json` output,
+and it is sent only to an `https` endpoint (a redirect is treated as an error, never followed).
+ORCHE's env-read gate refuses an agent's normal ways to read or pass it: the environment, a
+keychain value lookup (`security find-generic-password … -w`, also behind `timeout`, `sudo`,
+`bash -c` and the like), the key file (its full path anywhere in a command, any read of the
+secrets folder, and inline `python -c`/`node -e`/heredoc code that names it or calls orche's key
+API) and the stdin flags (`--stdin`, `--key-stdin`, `--jev-key-stdin`). A command too nested to
+check is refused too. The gate is a guard against accidents, not a sandbox: inline interpreter
+code is checked as text, but a script file that reads the key is not, and a determined program
+running as you can still reach the key, so the keychain's own access control and your operating
+system remain the boundary. An exported `JEV_API_KEY` variable
+still works and takes precedence. `orche uninstall` keeps the stored key; `orche jev key rm`
+deletes it.
+
+### Jev commands
+
+| Command | What it does |
+|---|---|
+| `orche jev setup` | the same questions later (or `--key-stdin --kind gateway\|direct` in scripts) |
+| `orche jev probe` | one live test call with the stored key; prints the time or the (masked) error |
+| `orche jev key set` | replace the key (dialog on macOS, else a hidden prompt; `--no-dialog`; `--stdin` only from a trusted script — without it a pipe is refused: "no terminal: use the dialog, or --stdin from a trusted script") |
+| `orche jev key status` | says only where the key comes from: `env`, `keychain`, `file` or `none` |
+| `orche jev key rm` | delete the stored key |
+| `orche jev enable` / `disable` | turn Jev on or off without touching the key (`disable` also forgets the last failed probe) |
+
+Non-interactive installs: `orche install --no-jev` never asks; `orche install --jev-key-stdin
+--jev-kind gateway` reads the key from stdin.
+
+## Uninstall and leaving ORCHE
+
+### Leave one project
+
+You decide this; never a hook or an agent does it.
+
+1. Retire the project's feature agents: `orche feat retire … --yes`.
+2. Remove the division worktrees with `orca worktree rm`.
+3. Delete the project's ORCHE files from the main checkout (`.orche/`, `PROJECT_CARD.md`,
+   `AGENTS.md`, `.agents/`, `.claude/agents/div-<proj>-*.md`) and its entry in
+   `~/.claude/orche/registry.json`.
+
+To stop a single division instead, sleep it: `orche sleep div-<proj>-<division>`.
+
+### Remove ORCHE from this machine
+
+```sh
+orche --dry-run uninstall   # preview; writes nothing
+orche uninstall
+```
+
+`orche uninstall` removes ORCHE's block from your status-line script (and from `~/.claude/fable/*`
+when present), removes ORCHE's hook entries from `~/.claude/settings.json` and restores the original
+values recorded in `install-state.json`, and removes the agent symlinks. It keeps the backups (`*.bak-*`), ORCHE_HOME
+(`~/.claude/orche`) and a stored Jev key; it prints how to delete the key (`orche jev key rm`).
+
+Then, inside Claude Code, remove the plugin with `/plugin` (uninstall `orche@orche`). Finally delete
+the clone (`~/orche`) and the PATH line from your login profile.
 
 ## How units run
 
@@ -362,6 +590,35 @@ is reused in the up-to-2-seconds between reading the process table and the SIGKI
 signalled (theoretical); (e) the macOS environment-value match, the nested-run rule and the
 title-renaming programs above.
 
+### When a unit counts as done
+
+`orche run <unit>` starts a headless `claude -p` worker in the target's worktree with the
+brief as its prompt; the worker runs VERIFY, ends with `STATUS: done|blocked|failed`, and the
+runner files one pointer to Main (a feature reports to Build) plus `RUN.json` and `REPORT.md`
+next to the brief (the worker itself never runs `orche report` under the runner). A worker
+never records its own verdict (writer ≠ judge). From Build or a feature agent (the targets
+`orche report done` gates) the pointer is `done` only when the final `STATUS: done` comes
+with a new commit made during the run, a clean worktree, and a ledger row for that commit;
+otherwise it arrives as `info` "unverified: STATUS: done (no commit)", "(uncommitted
+changes)" or "(no ledger row for <sha>)" — a committed unit stays `info` "(no ledger row
+for <sha>)" until a verifier records the row, and Main decides. Writer ≠ judge is enforced when the row is
+recorded: `orche ledger record` refuses a `--verifier` equal to the producer (`--producer`,
+else the recording session's `ORCHE_SESSION`); the runner only checks that a row exists and
+does not re-check who recorded it. From any other target (Research, R&D, GTM, Ops, Main) a
+final `STATUS: done` files `done`, as `orche report done` would. Among runner runs there is
+one run per target at a time, so "a new commit made during the run" is this unit's; a pane
+worker (`delivery: pane`, `runner.hard_in_pane`) or a person working in that worktree is not
+counted.
+
+```sh
+# in the reviewer's session (here a verification feature agent), not the producer's
+orche ledger record --pr 42 --sha <head-sha> --verdict unit-test-verified \
+  --evidence logs/verify-api.txt --verifier feat-my-app-review
+orche run my-app-add-a-date-filter-20261018-1   # re-run a unit by hand (--dry-run prints the argv)
+# pane mode only (delivery: pane): the worker files its own pointer
+orche report done --summary "date filter added; tests pass"
+```
+
 ### Triage
 
 Off by default (`orche triage enable` turns it on). With it on, a prompt typed into a Main pane
@@ -430,6 +687,13 @@ metrics` has a Triage section. Config: `triage.enabled`, `triage.backend` (`auto
 Triage needs `delivery: runner`, and only Main sessions are triaged.
 
 ## The organization
+
+Main assigns work with structured `dispatch` blocks; hooks, not model turns, deliver them.
+Workers report with a small inbox pointer, and Main reads those in batches.
+A unit is done only when a verification-ledger row exists for its commit.
+Memory lives in files, so sessions `/clear` at unit boundaries instead of growing.
+Status costs zero tokens: a status line, the Orca sidebar and the `orche` CLI.
+Why: in practice most token spend is a big orchestrator context re-read on every wake-up.
 
 ```
 User ──(talks to Main; may open any panel)──▶ Main (per project)
