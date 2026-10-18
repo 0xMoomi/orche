@@ -28,9 +28,68 @@ ORCHE does not install any of these for you. Check each one in a terminal:
 Optional tools: `gh` (GitHub secrets), `gcloud` (GCP Secret Manager), `vercel`, `age` (secret
 sharing). ORCHE works without them; `orche doctor` lists each one as OK or WARN.
 
+**Platforms.** macOS is supported. Linux: the CLI, the runner and the hooks are tested in CI on
+ubuntu, but Orca (a macOS app) is still required for panes and `orche init`. Windows is not
+supported: Orca is a macOS app and the CLI relies on POSIX process control (`ps`, process groups,
+signals) and the macOS keychain; WSL2 is unverified.
+
 ## Install
 
-### Step 1. Clone the repository
+### One command
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/0xMoomi/orche/main/install.sh | bash
+```
+
+What it does, in order:
+
+- checks the OS (macOS; Linux with a warning that Orca is needed for panes; Windows stops here) and
+  the requirements: git and a Python 3.11+ (it stops with an install hint when one is missing),
+  `claude` and `orca` (it warns and goes on without them);
+- clones ORCHE into `~/orche`, or updates that clone when it is already there (`git fetch`, then a
+  fast-forward); a clone with uncommitted changes, a clone of another repository, or a folder that is
+  not a clone stops the script with what to do;
+- adds `export PATH="$HOME/orche/bin:$PATH"  # orche` to your login profile once (`~/.zprofile` for
+  zsh, `~/.bash_profile` or `~/.profile` for bash; for other shells it prints the line);
+- runs `orche install`, which asks once for the optional Jev key (Enter skips). Through the pipe
+  above the answers are read from your terminal (`/dev/tty`); with no terminal, or with `--no-jev`
+  or `--yes`, the question is skipped and you can add Jev later with `orche jev setup`;
+- installs the Claude Code plugin for you (`claude plugin marketplace add ~/orche` and
+  `claude plugin install orche@orche`, or updates both on a re-run); without `claude`, or with a
+  `claude` that has no `plugin install`, it registers the hooks in `~/.claude/settings.json` instead
+  (`orche install --mode settings`) and says so;
+- runs `orche doctor`, shows its WARN and FAIL lines, and ends with three lines: the installed
+  version, "open a new terminal (or `source ~/.zprofile`)", and the next step, `orche init <project>`
+  (or `/orche-apply <project>` in Claude Code).
+
+Re-run it any time to update: a second run pulls the new version and updates the plugin; everything
+else that is already in place stays as it is.
+
+Flags (after `bash -s --` when piping, e.g. `curl -fsSL … | bash -s -- --dry-run`):
+
+| Flag | Effect |
+|---|---|
+| `--dry-run` | print every step, write nothing |
+| `--dir PATH` | install somewhere other than `~/orche` |
+| `--ref REF` | a branch or tag other than `main` |
+| `--mode settings` | hooks in `~/.claude/settings.json` instead of the plugin |
+| `--no-jev` | do not ask for a Jev key |
+| `--yes` | ask nothing (implies `--no-jev`) |
+| `--no-profile` | leave your login profile alone and print the PATH line |
+| `--all-projects` | afterwards, apply ORCHE to every Orca repo at once (`orche apply-all`) |
+
+Applying ORCHE is per project: run `orche init <project>` for each project you want (see
+[Apply ORCHE to a project](#apply-orche-to-a-project)). `--all-projects` onboards every Orca repo
+that is not registered yet in one go; it is off by default.
+
+From a clone, `bash install.sh` does the same with that clone (it does not pull; update it with
+`git pull`).
+
+Or step by step:
+
+### Step by step (what the script does)
+
+#### Step 1. Clone the repository
 
 ```sh
 git clone https://github.com/0xMoomi/orche ~/orche
@@ -39,7 +98,7 @@ git clone https://github.com/0xMoomi/orche ~/orche
 Success: a folder `~/orche` with `bin/orche` in it. The rest of this guide assumes `~/orche`; if you
 clone somewhere else, change the paths below to match.
 
-### Step 2. Put `orche` on your PATH
+#### Step 2. Put `orche` on your PATH
 
 For this terminal:
 
@@ -63,7 +122,7 @@ echo 'export PATH="$HOME/orche/bin:$PATH"' >> ~/.bash_profile
 `bin/orche` picks the first Python 3.11+ it finds by itself, so this works even when your plain
 `python3` is older.
 
-### Step 3. Preview the install
+#### Step 3. Preview the install
 
 ```sh
 orche --dry-run install
@@ -84,7 +143,7 @@ Install the ORCHE hooks as a Claude Code plugin (inside Claude Code):
   /plugin install orche@orche
 ```
 
-### Step 4. Install
+#### Step 4. Install
 
 ```sh
 orche install
@@ -114,7 +173,7 @@ Press Enter to skip it. ORCHE works fully without Jev, and you can add it later
 
 Success: the output ends with the two `/plugin` lines and no `error` line (exit code 0).
 
-### Step 5. Install the plugin inside Claude Code
+#### Step 5. Install the plugin inside Claude Code
 
 Start Claude Code (`claude`) and type the two lines `orche install` printed. With the clone in
 `~/orche`:
@@ -127,7 +186,7 @@ Start Claude Code (`claude`) and type the two lines `orche install` printed. Wit
 This installs the hooks, agents and skills. (`/plugin marketplace add https://github.com/0xMoomi/orche`
 works too; the CLI still needs the clone.)
 
-### Step 6. Check with `orche doctor`
+#### Step 6. Check with `orche doctor`
 
 ```sh
 orche doctor
@@ -164,9 +223,9 @@ These WARN lines are normal on a fresh install:
 
 These need a fix:
 
-- `orche on PATH`: the PATH line is not in your login profile (step 2).
+- `orche on PATH`: the PATH line is not in your login profile (step 2, or re-run the one-command installer).
 - `orca	orca status failed …`: Orca is not running, or `orca` is not on `PATH`.
-- `hooks	plugin not enabled …`: step 5 is not done yet.
+- `hooks	plugin not enabled …`: step 5 is not done yet (or re-run the one-command installer).
 
 ### Troubleshooting
 

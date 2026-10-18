@@ -34,6 +34,8 @@ def register(subparsers):
                    help="gateway (Vercel AI Gateway, default) or direct (api.typesafe.ai); with "
                         "--jev-key-stdin, or instead of the key-type question")
     p.add_argument("--no-dialog", action="store_true", help="Jev key at a hidden terminal prompt, not the macOS dialog")
+    p.add_argument("--no-plugin-hint", action="store_true",
+                   help="plugin mode: do not print the two /plugin lines (install.sh runs those steps itself)")
     p.set_defaults(func=cmd_install)
     p = subparsers.add_parser("uninstall", help="remove ORCHE blocks, hook entries and agent symlinks")
     p.add_argument("--home", help="home directory (default: $HOME)")
@@ -191,7 +193,7 @@ def cmd_install(args):
         finally:
             _save_state(ctx, new_state)
     instructions = []
-    if args.mode == "plugin":
+    if args.mode == "plugin" and not args.no_plugin_hint:
         instructions = ["Install the ORCHE hooks as a Claude Code plugin (inside Claude Code):",
                         f"  /plugin marketplace add {ctx.plugin_root}",
                         "  /plugin install orche@orche"]

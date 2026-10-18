@@ -201,6 +201,31 @@ class EnvSweepTest(SweepCase):
         self.assertEqual((procs._etime("1-02:03:04"), procs._etime("03:04"), procs._etime("x")),
                          (93784, 184, None))
 
+    def test_a_start_from_etime_is_never_early(self):
+        """macOS `ps` etime is its own whole second minus the start's whole second: a process
+        started at 100.9 and read at 101.1 shows `00:01`. Its start reads 101 (never before 100.9;
+        `now - etime` gave 100.1, so a hidden claude started just after its lock's `started_ns`
+        failed `started at or after`), and is at most 1 s late."""
+        def fake(argv, *, timeout, input):
+            out = "301 1 301 00:01 claude --mcp-config m.json\n" if list(argv) == procs.ARGS_PS else "301 claude --mcp-config m.json\n"
+            return shell.Result(0, out, "", list(argv))
+        with mock.patch.object(shell, "RUNNER", fake), mock.patch.object(procs, "_linux", return_value=False), \
+                mock.patch.object(procs.time, "time", return_value=101.1):
+            [proc] = procs.table()
+        self.assertEqual(proc.start, 101)
+        claude = {"pid": 301, "pgid": 301, "marker": "--mcp-config m.json", "started_ns": 100_850_000_000}
+        self.assertTrue(procs._is_claude(proc, claude))
+        self.assertFalse(procs._is_claude(proc, {**claude, "started_ns": 101_000_000_001}))
+        for start in (100.0, 100.001, 100.5, 100.999):
+            for read in (start, start + 0.001, 100.999, 101.0, 101.001, 101.5, 101.999, 102.0, 3700.25):
+                if read < start:
+                    continue
+                etime = int(read) - int(start)                       # what macOS `ps` prints
+                for now in (read, read + 0.3, read + 1.7):           # `now` is taken after `ps` returned
+                    got = procs._etime_start(now, etime)
+                    self.assertGreaterEqual(got, start, (start, read, now))
+                    self.assertLessEqual(got, start + 1 + (int(now) - int(read)), (start, read, now))
+
     def test_a_table_with_bytes_that_are_not_utf8_still_sweeps(self):
         """C-1: non-UTF-8 bytes in another process's arguments and environment never stop a sweep."""
         run = rid()
@@ -518,7 +543,8 @@ class ReconcileTest(SweepCase):
         return proc
 
     def test_a_lost_hidden_claude_started_right_after_its_lock_is_still_that_runs_claude(self):
-        """A start time is never read early (macOS: etime; Linux: /proc/uptime and the end of the
+        """A start time is never read early (macOS: etime counted from ps's whole second, see
+        test_a_start_from_etime_is_never_early; Linux: /proc/uptime and the end of the
         starttime tick, not btime's whole seconds), so a hidden claude started just after the lock's
         `started_ns` passes `started at or after` and is killed."""
         unit = self.brief()
