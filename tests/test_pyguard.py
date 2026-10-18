@@ -76,7 +76,7 @@ class LauncherTest(support.TempHomeCase):
 
     def test_launcher_skips_old_python3_and_runs_under_312(self):
         res = self.run_cli(support.ROOT / "bin" / "orche", self.path_dir(with_312=True))
-        self.assertEqual((res.returncode, res.stdout, res.stderr), (0, "orche 0.3.0\n", ""))
+        self.assertEqual((res.returncode, res.stdout, res.stderr), (0, "orche 0.3.1\n", ""))
 
     def test_launcher_without_suitable_python_is_loud(self):
         plugin = support.plugin_copy(self.home / "plugin", "bin/orche", "bin/orche.py", "lib/find_python.sh")

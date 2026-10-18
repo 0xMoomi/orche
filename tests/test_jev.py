@@ -65,18 +65,33 @@ class FakeOpener:
             raise self.exc
         if self.raw is not None:
             return FakeResponse(self.status, self.raw)
-        answers = self.reply(body["questions"]) if self.reply else []
-        return FakeResponse(self.status, json.dumps({"answers": answers}).encode())
+        answers = self.reply(body["questions"]) if self.reply else {}
+        return FakeResponse(self.status, json.dumps({"model": "jev-1.13.0", "answers": answers,
+                                                     "usage": {"input_tokens": 1, "output_tokens": 1}}).encode())
+
+
+def wire_answer(q, value, confidence=0.95):
+    """A TypeSafe answer (docs.typesafe.ai/api, "Answer types") to wire question `q`."""
+    if q["type"] == "noul":
+        return {"type": "noul", "noul": value}
+    if q["type"] == "choice":
+        return {"type": "choice", "choice": value, "confidence": confidence,
+                "probabilities": {k: (1.0 if k == value else 0.0) for k in q["criteria"]}}
+    legend = {str(i): label for i, label in enumerate(q["criteria"])}
+    return {"type": "score", "score": value, "legend": legend, "confidence": confidence,
+            "probabilities": {k: (1.0 if int(k) == round(value) else 0.0) for k in legend}}
 
 
 def answer_all(value_for, confidence=0.95):
+    """reply(questions map) -> answers map; `value_for(wire question)` gives noul p, choice key or
+    0-based score."""
     def reply(questions):
-        return [{"id": q["id"], "value": value_for(q), "confidence": confidence} for q in questions]
+        return {qid: wire_answer(q, value_for(q), confidence) for qid, q in questions.items()}
     return reply
 
 
 def default_value(q):
-    return {"noul": 0.97, "score": 2, "choice": q.get("options", ["x"])[0]}[q["type"]]
+    return {"noul": 0.97, "score": 1, "choice": next(iter(q.get("criteria") or {"x": None}))}[q["type"]]
 
 
 class JevCase(support.TempHomeCase):
@@ -126,17 +141,31 @@ class ClientTest(JevCase):
         self.assertTrue(lines[3].endswith("error:OSError"))
 
     def test_well_formed_response_parsed_with_bands(self):
-        def reply(_qs):
-            return [{"id": "a", "value": True, "confidence": 0.95},
-                    {"id": "b", "value": "status", "confidence": 0.7},
-                    {"id": "c", "value": 3, "confidence": 0.2},
-                    {"id": "zz", "value": 1, "confidence": 0.99}]
+        def reply(qs):
+            return {"a": {"type": "noul", "noul": 0.05},
+                    "b": wire_answer(qs["b"], "status", 0.7),
+                    "c": wire_answer(qs["c"], 2.0, 0.2),
+                    "zz": {"type": "noul", "noul": 0.99}}
         qs = [jev.noul("a", "q"), jev.choice("b", "q", ["status", "confirm"]), jev.score("c", "q")]
         got = self.client(FakeOpener(reply)).ask("s", qs)
-        self.assertEqual(got, {"a": {"value": True, "confidence": 0.95, "band": "act"},
+        self.assertEqual(got, {"a": {"value": 0.05, "confidence": 0.95, "band": "act"},
                                "b": {"value": "status", "confidence": 0.7, "band": "confirm"},
-                               "c": {"value": 3, "confidence": 0.2, "band": "defer"}})
+                               "c": {"value": 3.0, "confidence": 0.2, "band": "defer"}})
         self.assertTrue(self.log_lines()[0].endswith("q=3 ok"))
+
+    def test_unusable_answers_are_dropped(self):
+        def reply(qs):
+            return {"a": {"type": "choice", "noul": 0.9},                # wrong type
+                    "b": {"type": "choice", "choice": "status"},          # no confidence
+                    "c": wire_answer(qs["c"], 4.5, 0.9),                  # beyond the last level (0-4)
+                    "d": {"type": "noul", "noul": 1.5},                   # not a probability
+                    "e": {"type": "noul", "noul": 0.5}}
+        qs = [jev.noul("a", "q"), jev.choice("b", "q", ["status"]), jev.score("c", "q"),
+              jev.noul("d", "q"), jev.noul("e", "q")]
+        self.assertEqual(self.client(FakeOpener(reply)).ask("s", qs),
+                         {"e": {"value": 0.5, "confidence": 0.5, "band": "defer"}})
+        self.assertIsNone(self.client(FakeOpener(raw=b'{"answers": [{"id": "e", "value": 1}]}')).ask(
+            "s", [jev.noul("e", "q")]))  # the old list shape is not accepted
 
     def test_bands(self):
         self.assertEqual([jev.band(c) for c in (0.95, 0.9, 0.89, 0.6, 0.59, None)],
@@ -163,15 +192,60 @@ class ClientTest(JevCase):
         self.assertEqual(req["headers"]["Authorization"], "Bearer test-key")
         self.assertEqual(set(req["body"]), {"model", "state", "questions"})
         gw = FakeOpener(answer_all(default_value))
-        self.client(gw, base_url="https://ai-gateway.vercel.sh").ask("s", [jev.noul("a", "q")])
-        self.assertEqual(gw.requests[0]["url"], "https://ai-gateway.vercel.sh/v1/systemone")
-        self.assertEqual(gw.requests[0]["body"]["model"], "typesafe-ai/jev-1.13.0")
+        self.client(gw, base_url=jev.GATEWAY_BASE_URL, model="jev").ask("s", [jev.noul("a", "q")])
+        self.assertEqual(gw.requests[0]["url"], "https://ai-gateway.vercel.sh/typesafe/v1/systemone")
+        self.assertEqual(gw.requests[0]["body"]["model"], "typesafe-ai/jev")
+        self.assertEqual(jev.KINDS, {"gateway": ("https://ai-gateway.vercel.sh/typesafe", "jev"),
+                                     "direct": ("https://api.typesafe.ai", "jev-1.13.0")})
 
     def test_question_shapes(self):
-        self.assertEqual(jev.score("s", "q"), {"type": "score", "id": "s", "question": "q", "min": 1, "max": 5})
+        self.assertEqual(jev.score("s", "q"), {"type": "score", "id": "s", "question": "q", "min": 1, "max": 5,
+                                               "labels": ["1", "2", "3", "4", "5"]})
         self.assertEqual(jev.noul("n", "q"), {"type": "noul", "id": "n", "question": "q"})
         self.assertEqual(jev.choice("c", "q", ("x", "y")),
                          {"type": "choice", "id": "c", "question": "q", "options": ["x", "y"]})
+        with self.assertRaises(ValueError):
+            jev.score("s", "q", 1, 3, ["low", "high"])
+
+    def test_wire_body_matches_documented_request(self):
+        """docs.typesafe.ai/api "Example request" shapes: questions is a map keyed by id with
+        type + instructions (+ criteria: option map for choice, ordered level list for score)."""
+        opener = FakeOpener(answer_all(default_value))
+        self.client(opener).ask("Help! My payouts have been failing for 3 days.", [
+            jev.noul("is_urgent", "Does this convey urgency?"),
+            jev.choice("department", "Which team should handle this?", ["billing", "technical", "sales"]),
+            jev.score("frustration", "How frustrated is the customer?", 0, 2, ["Calm", "Frustrated", "Very angry"])])
+        self.assertEqual(opener.requests[0]["body"], {
+            "model": "jev-1.13.0",
+            "state": "Help! My payouts have been failing for 3 days.",
+            "questions": {
+                "is_urgent": {"type": "noul", "instructions": "Does this convey urgency?"},
+                "department": {"type": "choice", "instructions": "Which team should handle this?",
+                               "criteria": {"billing": None, "technical": None, "sales": None}},
+                "frustration": {"type": "score", "instructions": "How frustrated is the customer?",
+                                "criteria": ["Calm", "Frustrated", "Very angry"]}}})
+
+    def test_documented_responses_parse(self):
+        """Fixture bodies copied from docs.typesafe.ai/api ("Example response" per answer type) and
+        from vercel.com/docs/ai-gateway/sdks-and-apis/typesafe (gateway answer + provider_metadata)."""
+        direct = (b'{"model": "jev-1.13.0", "answers": {'
+                  b'"is_urgent": {"type": "noul", "noul": 0.95},'
+                  b'"department": {"type": "choice", "choice": "billing", "probabilities": '
+                  b'{"billing": 0.88, "technical": 0.12, "sales": 0.0}, "confidence": 0.81},'
+                  b'"frustration": {"type": "score", "score": 1.05, "legend": {"0": "Calm", "1": "Frustrated", '
+                  b'"2": "Very angry"}, "probabilities": {"0": 0.0, "1": 0.95, "2": 0.05}, "confidence": 0.92}},'
+                  b'"usage": {"input_tokens": 296, "output_tokens": 20}}')
+        qs = [jev.noul("is_urgent", "q"), jev.choice("department", "q", ["billing", "technical", "sales"]),
+              jev.score("frustration", "q", 0, 2, ["Calm", "Frustrated", "Very angry"])]
+        got = self.client(FakeOpener(raw=direct)).ask("s", qs)
+        self.assertEqual(got["is_urgent"]["value"], 0.95)
+        self.assertEqual(got["department"], {"value": "billing", "confidence": 0.81, "band": "confirm"})
+        self.assertEqual(got["frustration"], {"value": 1.05, "confidence": 0.92, "band": "act"})
+        gateway = (b'{"model": "typesafe-ai/jev", "answers": {"refund": { "type": "noul", "noul": 0.98 }},'
+                   b'"usage": { "input_tokens": 275, "output_tokens": 20 }, "provider_metadata": {"gateway": '
+                   b'{"routing": {"originalModelId": "typesafe-ai/jev"}, "cost": "0.00001155"}}}')
+        c = self.client(FakeOpener(raw=gateway), base_url=jev.GATEWAY_BASE_URL, model="jev")
+        self.assertEqual(c.ask("s", [jev.noul("refund", "q")])["refund"]["value"], 0.98)
 
     def test_state_and_question_truncation(self):
         opener = FakeOpener(answer_all(default_value))
@@ -179,8 +253,8 @@ class ClientTest(JevCase):
         req = opener.requests[0]
         self.assertLessEqual(len(req["raw"]), jev.WIRE["max_request_chars"])
         self.assertTrue(req["body"]["state"].endswith("[truncated]"))
-        self.assertLessEqual(len(req["body"]["questions"][0]["question"]), jev.WIRE["max_question_chars"])
-        self.assertTrue(req["body"]["questions"][0]["question"].endswith("[truncated]"))
+        self.assertLessEqual(len(req["body"]["questions"]["a"]["instructions"]), jev.WIRE["max_question_chars"])
+        self.assertTrue(req["body"]["questions"]["a"]["instructions"].endswith("[truncated]"))
         self.client(opener).ask('"q\\' * 40_000, [jev.noul("a", "q")])  # escapes double in JSON
         self.assertLessEqual(len(opener.requests[1]["raw"]), jev.WIRE["max_request_chars"])
         self.assertTrue(opener.requests[1]["body"]["state"].endswith("[truncated]"))
@@ -306,10 +380,14 @@ class HelpersTest(JevCase):
 
     def test_suggest_tier_mapping(self):
         self.configure()
-        jev.OPENER = FakeOpener(answer_all(lambda q: 1 if q["type"] == "score" else 0.1))
+        jev.OPENER = FakeOpener(answer_all(lambda q: 0 if q["type"] == "score" else 0.1))  # level 1
         self.assertEqual(jev.suggest_tier("b")["tier"], "mechanical")
-        jev.OPENER = FakeOpener(answer_all(lambda q: 3 if q["type"] == "score" else 0.1))
+        jev.OPENER = FakeOpener(answer_all(lambda q: 2 if q["type"] == "score" else 0.1))  # level 3
         self.assertEqual(jev.suggest_tier("b")["tier"], "standard")
+        jev.OPENER = FakeOpener(answer_all(lambda q: 3 if q["type"] == "score" else 0.1))  # level 4
+        self.assertEqual(jev.suggest_tier("b")["tier"], "hard")
+        body = jev.OPENER.requests[0]["body"]["questions"]["complexity"]
+        self.assertEqual(body["criteria"], list(jev.COMPLEXITY_LEVELS))
 
 
 def ptr(unit, status="done", urgent=False):
@@ -319,11 +397,7 @@ def ptr(unit, status="done", urgent=False):
 class InboxGateTest(JevCase):
     def scores(self, mapping):
         def reply(qs):
-            out = []
-            for q in qs:
-                i = int(q["id"].split(".")[1])
-                out.append({"id": q["id"], "value": mapping[i], "confidence": 0.9})
-            return out
+            return {qid: {"type": "noul", "noul": mapping[int(qid.split(".")[1])]} for qid in qs}
         jev.OPENER = FakeOpener(reply)
         return jev.OPENER
 

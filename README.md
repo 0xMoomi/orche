@@ -52,6 +52,60 @@ so the hooks never run twice. `orche install` also patches two operator-specific
 are present (`~/.claude/fable/*` and `~/.codex/AGENTS.md`) and skips them when they are absent;
 `orche install --dry-run` previews every change, these included.
 
+### Jev (optional)
+
+ORCHE works fully without Jev. Jev is a small typed-decision model (yes/no, pick one, score) from
+TypeSafe that ORCHE can use for quick routing questions. With Jev, triage's classifier answers in
+about 1 s instead of about 3 s with Haiku, and those calls no longer use your Claude subscription's
+Haiku. Without it, triage uses Haiku and the other Jev checks are skipped.
+
+The first `orche install` in a terminal asks once:
+
+1. **"Jev API key (optional, Enter to skip)"**. On macOS a small ORCHE dialog with a hidden field
+   opens (the default); type or paste the key and press Save. Over SSH, or without a desktop
+   session, a hidden terminal prompt is used instead (`--no-dialog` forces it). Cancel, an empty
+   field, Ctrl-D or Ctrl-C skips Jev: install prints "Jev skipped — ORCHE works without it …" and
+   finishes normally. Without a terminal (a script, a pipe) nothing is asked and nothing is read
+   from stdin.
+2. **"Key type: 1) Vercel AI Gateway (default) 2) TypeSafe direct"**. Press Enter for an AI
+   Gateway key (`https://ai-gateway.vercel.sh/typesafe`, model `typesafe-ai/jev`) or `2` for a
+   key from console.typesafe.ai (`https://api.typesafe.ai`, model `jev-1.13.0`).
+3. ORCHE sends **one** tiny test question with the key (well under $0.01). Only if it answers
+   does ORCHE store the key and turn Jev on: "Jev on (gateway, 0.4 s)". If it fails, you see the
+   error (with the key hidden) and nothing is changed: no key is stored, your config stays as it
+   was, and ORCHE keeps working without Jev.
+
+Where the key lives: on macOS only in your login keychain (service `orche`, account
+`JEV_API_KEY`); on Linux in `~/.claude/orche/secrets/jev.key` (readable only by you). ORCHE never
+prints or logs the key: it is not written to your shell profile, logs, events or `--json` output,
+and it is sent only to an `https` endpoint (a redirect is treated as an error, never followed).
+ORCHE's env-read gate refuses an agent's normal ways to read or pass it: the environment, a
+keychain value lookup (`security find-generic-password … -w`, also behind `timeout`, `sudo`,
+`bash -c` and the like), the key file (its full path anywhere in a command, any read of the
+secrets folder, and inline `python -c`/`node -e`/heredoc code that names it or calls orche's key
+API) and the stdin flags (`--stdin`, `--key-stdin`, `--jev-key-stdin`). A command too nested to
+check is refused too. The gate is a guard against accidents, not a sandbox: inline interpreter
+code is checked as text, but a script file that reads the key is not, and a determined program
+running as you can still reach the key, so the keychain's own access control and your operating
+system remain the boundary. An exported `JEV_API_KEY` variable
+still works and takes precedence. `orche uninstall` keeps the stored key; `orche jev key rm`
+deletes it.
+
+| Command | What it does |
+|---|---|
+| `orche jev setup` | the same questions later (or `--key-stdin --kind gateway\|direct` in scripts) |
+| `orche jev probe` | one live test call with the stored key; prints the time or the (masked) error |
+| `orche jev key set` | replace the key (dialog on macOS, else a hidden prompt; `--no-dialog`; `--stdin` only from a trusted script — without it a pipe is refused: "no terminal: use the dialog, or --stdin from a trusted script") |
+| `orche jev key status` | says only where the key comes from: `env`, `keychain`, `file` or `none` |
+| `orche jev key rm` | delete the stored key |
+| `orche jev enable` / `disable` | turn Jev on or off without touching the key (`disable` also forgets the last failed probe) |
+
+Non-interactive installs: `orche install --no-jev` never asks; `orche install --jev-key-stdin
+--jev-kind gateway` reads the key from stdin. `orche doctor` shows a `jev` row: `OK jev gateway
+(key: keychain)`, or a WARN — never a FAIL, because ORCHE works without Jev: `not configured
+(Haiku fallback)`, `disabled (…)`, or
+``last probe failed <masked reason>; ORCHE works without Jev; run `orche jev probe` ``.
+
 ## Apply ORCHE to a project
 
 ORCHE joins one project at a time, when you name it (`orche apply-all` exists but is not the way to

@@ -39,7 +39,7 @@ _BREAKS = str.maketrans({"\t": " ", "\n": " ", "\r": " "})
 
 def secrets_dir() -> Path:
     path = paths.orche_home() / "secrets"
-    path.mkdir(parents=True, exist_ok=True)
+    path.mkdir(mode=0o700, parents=True, exist_ok=True)  # owner only (applies when created)
     return path
 
 
