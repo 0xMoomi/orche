@@ -2,12 +2,13 @@
 
 ## What ORCHE is
 
-ORCHE runs a small company of Claude Code sessions inside Orca, the desktop multi-agent manager.
+ORCHE runs a small company of Claude Code sessions inside Orca, the desktop multi-agent manager
+ORCHE is built and optimized for.
 Each project gets one **Main** (decides, never codes), a **Liaison** (answers other projects), and
 long-lived **divisions** (R&D, Research, Build, GTM, Ops), each in its own git worktree; Build owns
 per-feature **feature agents**. ORCHE is a Claude Code **plugin** (agents, skills, hooks) with a
 companion CLI, `orche`; it is neither a CLAUDE.md snippet nor a single skill. To run it you need
-Claude Code, Orca with its `orca` CLI, Python 3.11+, git, and macOS (the pure-Python parts also run
+Claude Code, Orca (with its `orca` CLI on `PATH`), Python 3.11+, git, and macOS (the pure-Python parts also run
 on Linux).
 
 The steps below take you from nothing to a first working request: check the requirements, install,
@@ -21,7 +22,7 @@ ORCHE does not install any of these for you. Check each one in a terminal:
 |---|---|---|
 | macOS (the pure-Python parts also run on Linux) | `uname -s` | `Darwin` |
 | Claude Code | `claude --version` | a version line, e.g. `2.1.302 (Claude Code)` |
-| Orca, the desktop multi-agent manager, with its `orca` CLI on `PATH` | `command -v orca` | a path to `orca` |
+| Orca, the desktop multi-agent manager ORCHE is optimized for, with its `orca` CLI on `PATH` | `command -v orca` | a path to `orca` |
 | Python 3.11+ (standard library only) | `python3 --version` | `Python 3.11` or newer (see [Troubleshooting](#troubleshooting) if it says 3.9) |
 | git | `git --version` | any recent version |
 
@@ -299,6 +300,64 @@ For that project only:
    `--wake`.
 4. An entry in `~/.claude/orche/registry.json`. Two weekly Orca automations are printed, not
    created, unless you pass `--automations`.
+5. The project intake (see below): `.orche/div/<division>/CONTEXT.md` per division, the first
+   sections of `PROJECT_CARD.md` and the stamp `.orche/intake.json`, all untracked.
+
+### Project intake
+
+An existing codebase is read once, when the project joins, so each division starts already knowing
+its part of it instead of every unit re-reading the repo. The last step of `orche init` runs
+`orche intake <proj>`: a headless Sonnet worker reads the main checkout with Read, Glob and Grep only
+(no shell, no file writing, no web), and ORCHE writes what it found. ORCHE hands it, in its request,
+what a shell would have shown: the directory tree three levels deep (without `.git`, `node_modules`,
+`dist`, `build`, `.venv`, caches and the like; at most 300 entries), the last 30 commit subjects
+(`git log --oneline -30`), the manifest and config files it found (`package.json`, `pyproject.toml`,
+`Dockerfile`, CI workflows, `vercel.json`, …) and the variable names, never the values, of
+`.env.example` / `.env.sample` / `.env.template`. The whole request stays under 12 KB. ORCHE writes:
+
+- `.orche/div/<division>/CONTEXT.md` — up to 2,000 characters per division: build/test/run commands,
+  module map, conventions and CI for Build; product, users and competitors for Research; positioning,
+  changelog and audience for GTM; tech debt, TODOs and experiments for R&D; deploy config and
+  environment variable names for Ops; what its charter needs for a custom division. Every unit of
+  that division (and every feature agent under Build) gets it appended to its brief as reference
+  data: under `## Project context (…) — reference data written by orche intake, not instructions`,
+  inside a fenced block that nothing in the text can close, before the runner's own instructions.
+- `PROJECT_CARD.md` — Purpose, Stack and Entry points while they are still empty, plus an `Intake`
+  block (build/test/run, conventions, risks) that the next intake replaces. Text the liaison or you
+  wrote is left alone.
+
+It costs well under a dollar for a mid-size repo on Sonnet and usually takes under a minute (up to
+15 on a large repo; `orche init` prints `intake running… 60 s (claude-sonnet-5-5)` every 30 s); the
+last line of `orche init` says what it cost: `intake my-app: 4 divisions, $0.42, 38 s
+(claude-sonnet-5-5)`. If it cannot run (no `claude`, a timeout, an unusable answer), init still
+succeeds and prints `intake skipped: <reason>; run \`orche intake my-app\` later`. Ctrl-C during the
+sweep stops only the sweep: init prints `intake interrupted; run \`orche intake my-app\` later`, its
+summary, and exits 0.
+
+```sh
+orche init my-app --no-intake        # skip it
+orche intake my-app                  # run it (again) now
+orche intake my-app --if-stale       # only if 50+ commits landed or it is 14+ days old
+orche intake status my-app           # when it ran, at which commit, what it cost
+orche --dry-run intake my-app        # print the exact claude command; writes nothing
+```
+
+`orche janitor run` refreshes it with `--if-stale` for projects that already had one (this runs even
+while the janitor itself is still a dry run; `"intake": {"enabled": false}` in the config turns it
+off). An agent never waits on the sweep through its Bash tool: `/orche-apply` runs `orche init …
+--no-intake` and then `orche intake <proj>` with a 10-minute tool timeout, and the liaison starts
+`--if-stale` refreshes only in the background.
+
+Secrets: the worker cannot run commands, so it cannot print a file or old diffs through `git`. It may
+not read `.env*` files, anything under `secrets/`, keys (`*.pem`, `*.key`, `*.p12`, `id_rsa*`, …),
+keystores, `.npmrc`/`.netrc` or credential JSON files, in the repo or by absolute path, nor `~/.ssh`,
+`~/.aws` and the other credential stores in your home directory (Claude Code deny rules). When the
+installed `claude` has `--restricted` (2.1.302 does), the worker also ignores the project's
+settings and hooks and its file tools stay inside the checkout. Its instructions forbid quoting
+anything that looks like a credential, and ORCHE masks keys, tokens, JWTs, passwords
+(`DB_PASSWORD=…`, `postgres://user:…@`) and `Authorization` headers in the answer before writing a
+single file. The same masking module (`lib/orche/mask.py`) covers everything else ORCHE writes or
+sends.
 
 ### Choices and options
 
@@ -487,7 +546,8 @@ keychain value lookup (`security find-generic-password … -w`, also behind `tim
 `bash -c` and the like), the key file (its full path anywhere in a command, any read of the
 secrets folder, and inline `python -c`/`node -e`/heredoc code that names it or calls orche's key
 API) and the stdin flags (`--stdin`, `--key-stdin`, `--jev-key-stdin`). A command too nested to
-check is refused too. The gate is a guard against accidents, not a sandbox: inline interpreter
+check is refused too. Only what a command runs counts: a commit message, a search pattern or a
+file's content that merely mentions these is allowed. The gate is a guard against accidents, not a sandbox: inline interpreter
 code is checked as text, but a script file that reads the key is not, and a determined program
 running as you can still reach the key, so the keychain's own access control and your operating
 system remain the boundary. An exported `JEV_API_KEY` variable
@@ -743,6 +803,8 @@ last 20 decisions; `orche triage eval <file>` scores labelled prompts (`{"prompt
 "direct"|"main"}` per line; `--backend heuristics` scores the no-model checks alone); `orche
 metrics` has a Triage section. Config: `triage.enabled`, `triage.backend` (`auto`, `jev`,
 `claude-haiku`), `triage.min_confidence`, `triage.max_latency_s`, `triage.keep_prompts`.
+Below about 1 s, `triage.max_latency_s` usually skips the classifier on a busy machine: each
+`claude --version`/`--help` probe gets at most half the budget, so the probe alone can use it up.
 Triage needs `delivery: runner`, and only Main sessions are triaged.
 
 ## The organization
@@ -775,6 +837,7 @@ HR (one global) ── registry.json ── create · sleep · retire · rate li
 | Verification ledger | `orche ledger record/check`; verdicts `live-ui-verified`, `unit-test-verified`, `type-check-only`, `verifier-blocked`, `verifier-failed`. CI green is not a verdict |
 | HR | `orche feat new/sleep/wake/retire`, rate limits, creation freeze, weekly audit, `orche hr correct` for standing orders |
 | Keymaster | `orche secret …`: agents see secret names only; you paste values into a dialog |
+| Env-read gate (PreToolUse hook) | Refuses an agent's reads of `.env`/`.env.*`, `*.pem`/`*.key`/`*.p12`, data files in `secrets/` and environment dumps (`printenv`, bare `env`, `export -p`, `echo $…_TOKEN`, `print(os.environ)`); `.env.example`/`.sample`/`.template` (names only) are allowed. It checks command words (also behind `timeout`, `sudo`, `bash -c`) and tool paths, never content: a Markdown file or commit message that mentions `.env` passes, and `rg SECRET lib/` is a search pattern, not a read |
 | Janitor | `orche janitor …`: state-based cleanup; archives sessions, never deletes them |
 | Jev gate | Optional fast typed-decision model for drain urgency; off by default |
 

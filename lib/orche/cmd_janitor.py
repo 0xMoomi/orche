@@ -2,7 +2,13 @@
 
 `run` stays a dry run until `ORCHE_HOME/janitor.enabled` exists; `--dry-run` always forces one.
 Unless `--dry-run`, `run` first reconciles lost runner runs and prunes `logs/runs/*.log` older than
-`runner.log_keep_days` (ORCHE's own state, so not gated on `janitor.enabled`).
+`runner.log_keep_days` (ORCHE's own state, so not gated on `janitor.enabled`), and afterwards
+refreshes the intake of every project that has one (`orche intake <proj> --if-stale`; a failure is a
+line in the output, not a failed run). That refresh is deliberately not gated on `janitor.enabled`
+either, although it is a paid model call that rewrites the intake block of the user's
+PROJECT_CARD.md and the division CONTEXT.md files: the user opted in per project by running the
+first intake (a `--no-intake` project has no stamp and is never swept), and `intake.enabled: false`
+turns the refresh off.
 Logic lives in `orche.janitor`; this module only parses arguments and prints.
 """
 import json
@@ -11,7 +17,7 @@ import sys
 from pathlib import Path
 from xml.sax.saxutils import escape
 
-from . import config, janitor, log, paths, registry, runs, shell, templates, util
+from . import config, intake, janitor, log, paths, registry, runs, shell, templates, util
 from .janitor import archive, trash
 
 EXIT_OK, EXIT_USER, EXIT_NOT_FOUND, EXIT_BLOCKED = 0, 1, 2, 3
@@ -64,7 +70,12 @@ def cmd_run(args):
     cands = res["candidates"]
     data = {**{k: v for k, v in res.items() if k not in ("candidates", "text")},
             "candidates": [c.to_dict() for c in cands]}
-    _out(args, data, [res["text"].rstrip("\n")])
+    lines = [res["text"].rstrip("\n")]
+    if not args.dry_run:      # refresh stamped projects' intake (never a reason for a failed run)
+        refreshed = intake.refresh_all(registry.load(), config.load())
+        data["intake"] = refreshed
+        lines += [r["line"] for r in refreshed]
+    _out(args, data, lines)
     return EXIT_USER if any(c.error for c in cands) else EXIT_OK
 
 

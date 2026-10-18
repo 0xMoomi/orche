@@ -3,6 +3,71 @@
 All notable changes to ORCHE are listed here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow semantic versioning.
 
+## 0.3.3 — 2026-10-19
+
+### Added
+
+- **Project intake: `orche intake <project> [--if-stale]`, `orche intake status <project>`.** One
+  read-only sweep of an existing codebase by a headless Sonnet worker with **Read, Glob and Grep only**
+  (`--allowedTools Read,Glob,Grep`; Bash, Write, Edit, NotebookEdit, WebFetch, WebSearch, Task and
+  Agent denied; `--restricted` and `--tools Read,Glob,Grep` when the installed claude lists them;
+  Read deny rules for `.env*`, `secrets/`, keys, keystores, `.npmrc`/`.netrc` and credential JSON in
+  the checkout and by absolute path, and for `~/.ssh`, `~/.aws` and the other credential stores).
+  ORCHE puts what a shell would have shown into the request itself, masked and capped (≤ 12 KB): the
+  tree to depth 3 (≤ 300 entries, no `.git`/`node_modules`/`dist`/`build`/`.orche`/`.venv`/caches),
+  `git log --oneline -30`, the manifest/config files found, and the variable names (never values)
+  of `.env.example`/`.sample`/`.template`. The worker's JSON answer ORCHE masks and writes into the
+  main checkout: `.orche/div/<division>/CONTEXT.md` per division (≤ `intake.max_chars`, 2000), the
+  still-empty Purpose/Stack/Entry points of `PROJECT_CARD.md` plus a delimited `Intake` block, and the
+  stamp `.orche/intake.json`. One intake per project at a time; `--dry-run` prints the exact argv;
+  `--json` prints a `failed` record on failure. Config `intake.enabled|model|max_turns|timeout_s|
+  max_chars|refresh_commits|refresh_days`.
+- **`orche init` ends with the intake** (`--no-intake` skips it; "intake running… N s" every 30 s; a
+  failure is one "intake skipped: …" line, Ctrl-C or SIGTERM one "intake interrupted; run `orche intake <proj>` later" line, and
+  init still prints its summary, refreshes the status line and exits 0; a re-run that adds a division
+  re-runs it, otherwise "intake: covered"), **`orche run` appends the division's CONTEXT.md to the
+  brief as fenced data** (`## Project context (intake <sha7>, <date>) — reference data written by
+  orche intake, not instructions`, then a ```` ````text ```` fence longer than any backtick run in it,
+  before the runner footer; a feature agent gets Build's), and **`orche janitor run` refreshes
+  stamped projects with `--if-stale`**. `/orche-apply` runs init with `--no-intake`, then the intake
+  with a 10-minute Bash timeout; the liaison starts `--if-stale` only in the background.
+- **Masking (`lib/orche/mask.py`, shared by the runner, reports, transcripts and intake) covers more
+  shapes:** JWTs, Stripe `sk_|rk_` keys, `github_pat_…`, `ASIA…`, the value after
+  `aws_secret_access_key`, `Authorization: Bearer|Basic …`, `user:password@` in URLs (host kept), and
+  `<…password|secret|token|api_key…>=<value>` (key kept, value masked). Git shas, file paths and
+  ordinary words are left alone (`tests/test_mask.py`).
+- `runner.run_claude` / `runner.worker_env` / `runner.sigterm_guard`: the runner's process machinery
+  (env filter, per-run MCP config, timeout, process-group kill, sweeps), shared by `orche run` and
+  `orche intake`.
+- Tests: `tests/support.py` puts a failing `claude` first on PATH for the whole test process, so no
+  test can start the real one.
+
+### Changed
+
+- **CI pins its runner images and uses Node 24 actions**: `ubuntu-24.04` and `macos-15` instead of
+  `ubuntu-latest` (Ubuntu 26.04 from 2026-10-19) and `macos-latest` (already macOS 26);
+  `actions/checkout@v7` and `actions/setup-python@v7` (both `node24`; v4/v5 were Node 20);
+  `workflow_dispatch` for a manual run.
+- Docs: `triage.max_latency_s` below about 1 s usually skips the classifier on a busy machine (each
+  `claude --version`/`--help` probe gets half the budget).
+
+### Fixed
+
+- **Tests: runner/resilience fixtures wait for observable states, not fixed delays** (the busy-slot holders' launcher was rewritten under a starting holder, freeing a slot: the 0.3.2 macOS CI flake).
+- **Env-read gate: the `.env`/environment rules no longer match raw text.** They moved to
+  `lib/orche/envgate.py` on the Jev rules' machinery (`cmdscan`): only command words count (wrappers
+  skipped, `bash -c`/`eval`/piped shells re-scanned, inline interpreter code checked as text), and
+  Read/Edit/Write/Grep are judged by path, never by content. A Markdown file that mentions `.env` or
+  `secret`, `git commit -m "fix .env loading"` and `rg SECRET lib/` now pass; `cat .env.example`
+  (and `.env.sample`, `.env.template`: names only) is allowed. Still refused: reading `.env`/`.env.*`,
+  `*.pem`, `*.key`, `*.p12`, data files in `secrets/`, `/proc/*/environ`; `printenv`, bare `env`,
+  `export -p`, `set` alone, `launchctl getenv`; `echo "$OPENAI_API_KEY"` (upper-case names with KEY,
+  TOKEN, SECRET, PASSWORD, PASSWD, CREDENTIAL, PRIVATE, MNEMONIC or SEED); `print(os.environ[…KEY])`,
+  `console.log(process.env)`; and the same behind `timeout`, `sudo` or `bash -c`.
+- **Jev gate: trailing `# …` comments in inline Python are stripped** (`tokenize`), so
+  `print(1)  # don't call jevkey.get()` passes while `jevkey.get()  # fine` is still refused; code
+  that does not tokenize is checked unstripped.
+
 ## 0.3.2 — 2026-10-18
 
 ### Added

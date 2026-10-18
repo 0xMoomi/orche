@@ -423,28 +423,39 @@ class ClassifierTest(TriageCase):
             os.rmdir(path)
 
     def test_timeout_kills_the_classifier_process_group(self):
-        """M3: a wrapper's child (here a background sleep) dies with it; nothing is left behind."""
-        self.enable(max_latency_s=0.5)
+        """M3: a wrapper's child (here a background sleep) dies with it; nothing is left behind.
+
+        The latency must leave room for the probe: each `--version`/`--help` call gets half of it,
+        and at 0.5 s a 0.25 s cap failed the probe in about 1 run in 6, so no classifier ever ran."""
+        latency = 2.0
+        self.enable(max_latency_s=latency)
         self.write_reply(haiku_reply(DIRECT))
         (self.fake / "action.sh").write_text(f'sleep 30 &\necho $! > "{self.fake}/child"\n')
         (self.fake / "sleep").write_text("30")
         started = time.monotonic()
         self.assertIsNone(triage.classify("Add a line to README.md", ["build"], self.cfg())[0])
-        self.assertLess(time.monotonic() - started, 3.0)
+        self.assertLess(time.monotonic() - started, latency + 2.5)
+        self.assertIn("triage: claude-haiku timed out after", self.hooks_log())   # the classifier ran, and was cut
         pids = [(self.fake / "pid").read_text().strip(), (self.fake / "child").read_text().strip()]
-        deadline = time.monotonic() + 2
+        deadline = time.monotonic() + 10
         while time.monotonic() < deadline and any(alive(p) for p in pids):
             time.sleep(0.05)
         self.assertEqual([p for p in pids if alive(p)], [])
         self.assertFalse(os.path.exists((self.fake / "cwd.txt").read_text().strip()))
 
+    def hooks_log(self):
+        path = self.home / "logs" / "hooks.log"
+        return path.read_text() if path.exists() else ""
+
     def test_haiku_timeout_and_failure_go_to_main(self):
-        self.enable(max_latency_s=0.5)
+        latency = 2.0           # room for the probe (see test_timeout_kills_the_classifier_process_group)
+        self.enable(max_latency_s=latency)
         self.write_reply(haiku_reply(DIRECT))
         (self.fake / "sleep").write_text("5")
         started = time.monotonic()
         self.assertIsNone(triage.classify("Add a line to README.md", ["build"], self.cfg())[0])
-        self.assertLess(time.monotonic() - started, 3.0)
+        self.assertLess(time.monotonic() - started, latency + 2.5)
+        self.assertIn("triage: claude-haiku timed out after", self.hooks_log())
         (self.fake / "sleep").unlink()
         self.write_reply(haiku_reply(DIRECT), code=1)
         self.assertIsNone(triage.classify("Add a line to README.md", ["build"], self.cfg())[0])

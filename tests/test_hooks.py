@@ -749,6 +749,80 @@ class EnvReadGateTest(HookCase):
         for command in allow:
             self.assertEqual(self.gate("Bash", {"command": command}), "silent", command)
 
+    def test_content_messages_and_patterns_pass(self):
+        """0.3.3: the env rules look at command words and tool paths, never at mentions."""
+        self.assertEqual(self.gate("Write", {"file_path": str(self.repo / "docs" / "x.md"),
+                                             "content": "Never read .env and secret files.\n"}), "silent")
+        self.assertEqual(self.gate("Edit", {"file_path": "docs/x.md", "old_string": "a",
+                                            "new_string": "printenv, .env and $OPENAI_API_KEY"}), "silent")
+        for command in ('git commit -m "fix .env loading"', "rg SECRET lib/", "cat .env.example",
+                        "cat .env.sample", "cat .env.template", "cat > docs/x.md <<'EOF'\n.env and secret\nEOF",
+                        "git commit -F msg.txt  # mentions printenv"):
+            self.assertEqual(self.gate("Bash", {"command": command}), "silent", command)
+
+    def test_reads_and_dumps_still_refused(self):
+        for command in ("cat .env", "cat ./config/.env.local", "printenv", "env", "export -p",
+                        'echo "$OPENAI_API_KEY"', "python3 -c \"import os; print(os.environ['OPENAI_API_KEY'])\"",
+                        "node -e \"console.log(process.env)\"", "bash -c 'cat .env'", "timeout 5 printenv"):
+            self.assertEqual(self.gate("Bash", {"command": command}), "deny", command)
+        self.assertEqual(self.gate("Read", {"file_path": ".env"}), "deny")
+        self.assertEqual(self.gate("Grep", {"pattern": "KEY", "path": ".env"}), "deny")
+
+    def test_rules_in_process(self):
+        from orche import envgate
+
+        def bash(command):
+            return envgate.reason("Bash", {"command": command})
+
+        deny = ["set", "declare -p", "typeset -x", "sudo -u root env", "launchctl getenv FOO", "launchctl export",
+                "cat /proc/self/environ", "strings /proc/*/environ", "cat secrets/prod.json", "cat id_rsa.pem",
+                "base64 tls.key", "cat cert.P12", "cat .e*", "cat $'\\x2eenv'", "cat -- .env", "less < .env",
+                "dd if=.env", "while read l; do :; done < .env", "xargs cat < .env", "echo $(cat .env)",
+                "echo 'cat .env' | sh", "bash <<EOF\ncat .env\nEOF", "eval 'printenv'", "rg -g '.env*' KEY",
+                "grep --include=.env.local -r KEY .", "grep -r KEY secrets/", "git grep KEY -- .env",
+                "perl -e 'print %ENV'", "ruby -e 'p ENV'", "php -r 'print_r(getenv());'",
+                "awk 'BEGIN{for(k in ENVIRON) print k}'", "python3 -c \"print(dict(os.environ))\"",
+                "python3 -c \"open('.env').read()\"", "python3 -c \"import os; os.system('cat .env')\"",
+                "node -e \"require('child_process').execSync('printenv')\"",
+                "python3 - <<'EOF'\nimport os\nprint(os.getenv('GITHUB_TOKEN'))  # ok\nEOF"]
+        allow = ["cp .env.example .env", "echo .env >> .gitignore", "export FOO=1", "set -e", "ls *.py", "cat *",
+                 "cat lib/orche/secrets/__init__.md", "grep -rn secret README.md", "git log --grep '.env'",
+                 "rg foo -g '*.py' secrets/", "python3 -c \"import os; print(os.environ.get('HOME'))\"",
+                 "python3 -c \"import subprocess, os; subprocess.run(['ls'], env=os.environ)\"",
+                 "python3 -c \"from os import environ\"", "python3 -c \"print('set up done')\"",
+                 "python3 -c \"print(1)  # os.environ['OPENAI_API_KEY']\"",
+                 "node -e \"console.log(process.env.HOME)\"", "curl -H \"Authorization: Bearer $GITHUB_TOKEN\" x",
+                 "python3 -m unittest discover -s tests -p 'test_*.py'"]
+        for command in deny:
+            self.assertEqual(bash(command), envgate.REASON, command)
+        for command in allow:
+            self.assertIsNone(bash(command), command)
+        nested = "printenv"
+        for _ in range(6):
+            nested = "bash -c " + json.dumps(nested)
+        self.assertEqual(bash(nested), envgate.TOO_COMPLEX)
+        tools = [("Read", {"file_path": "/r/secrets/prod.json"}, True), ("Read", {"file_path": "/r/a.pem"}, True),
+                 ("Read", {"file_path": "/r/lib/orche/secrets/store.py"}, False),
+                 ("Read", {"file_path": "/r/.env.example"}, False), ("Write", {"file_path": "/r/.env"}, True),
+                 ("Grep", {"pattern": "x", "path": "/r/secrets"}, True),
+                 ("Grep", {"pattern": "x", "path": "/r/secrets", "type": "py"}, False),
+                 ("Grep", {"pattern": "x", "path": "/r/secrets", "glob": "*.py"}, False),
+                 ("Grep", {"pattern": "x", "glob": "*.pem"}, True), ("Grep", {"pattern": "x", "glob": "*"}, False),
+                 ("Glob", {"pattern": "**/.env*"}, False)]
+        for tool, tool_input, want in tools:
+            self.assertEqual(envgate.reason(tool, tool_input) is not None, want, (tool, tool_input))
+
+    def test_hook_time_on_a_2kb_command(self):
+        from orche import envgate, jevgate
+        command = ("cat > docs/notes.md <<'EOF'\n" + "Read .env.example; never cat .env or printenv. " * 41
+                   + "\nEOF\ngit add docs/notes.md && git commit -m \"docs: .env and secret notes\"")
+        self.assertTrue(2000 <= len(command) <= 2200, len(command))
+        start = time.perf_counter()
+        for _ in range(20):
+            self.assertIsNone(envgate.reason("Bash", {"command": command}))
+            self.assertIsNone(jevgate.reason("Bash", {"command": command}))
+        self.assertLess((time.perf_counter() - start) / 20, 0.05)  # measured ~1 ms; generous for CI
+
 
 class ScopeGateTest(HookCase):
     def gate(self, file_path, cwd="acme-checkout"):

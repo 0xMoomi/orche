@@ -1017,6 +1017,17 @@ class GateRound2Test(support.TempHomeCase):
             "python3 - <<'EOF'\n# don't call jevkey.get() here\nprint(1)\nEOF",  # a comment line is stripped
             "node -e 'console.log(1)'")
 
+    def test_trailing_python_comments_stripped(self):
+        self.assert_allowed(
+            "python3 -c \"print(1)  # don't call jevkey.get()\"",
+            "python3 - <<'EOF'\nimport os\nx = 1  # never os.environ['JEV_API_KEY']\nprint(x)\nEOF")
+        self.assert_denied(
+            "python3 -c \"jevkey.get()  # fine\"",
+            "python3 -c \"print('# not a comment', jevkey.get())\"",  # a # inside a string is not a comment
+            "python3 -c \"jevkey.get(  # unbalanced: does not tokenize, so nothing is stripped\"")
+        self.assertEqual(jevgate.strip_python_comments("a = 1  # c\r\nb = '#x'\n"), "a = 1  \r\nb = '#x'\n")
+        self.assertEqual(jevgate.strip_python_comments("f(  # c"), "f(  # c")
+
     def test_shell_strings_rescanned_as_commands(self):
         self.assert_denied(f"echo '{S}' | bash", f'bash -c "{S}"', f"eval '{S}'", f"exec {S}", f"command {S}",
                            f"watch -n1 {S}", f"script -c '{S}' /dev/null", f"flock -c '{S}' /tmp/l",

@@ -25,7 +25,8 @@ Bash, in this order:
    - orche's stdin key flags (`--stdin`, `--key-stdin`, `--jev-key-stdin`, argparse prefixes);
    - inline interpreter code (python, perl, ruby, node, php, osascript, awk: `-c`/`-e`/`-E`/`-r`/
      `-l`/`--eval`/`-p`, awk's program, a heredoc or here-string, or text piped in) matching the
-     TEXT rules in `code_denied` (Python `#` comment lines stripped first);
+     TEXT rules in `code_denied` (Python comments, whole-line and trailing, stripped first with
+     `tokenize`; code that does not tokenize is checked unstripped);
    - shells (`sh -c`, `bash -c`, a heredoc or text piped into a shell, `eval`, `watch`, `script
      -c`, `flock -c`, `env -S`) have their string re-scanned as a command.
 4. Fail closed: nesting past the scanner's or this module's depth, a RecursionError or any other
@@ -39,8 +40,10 @@ component (`secre*/jev.key`); `tar`/`cp -r`/`find -exec` on the directory; flags
 Stdlib only and free of new syntax (the hook also runs on old interpreters).
 """
 import fnmatch
+import io
 import os
 import re
+import tokenize
 
 from . import cmdscan
 
@@ -182,11 +185,28 @@ def under_secrets(word, cwd="") -> bool:
 
 # ---- inline interpreter code ------------------------------------------------------------------
 
+def strip_python_comments(code):
+    """`code` without its Python comments (whole-line and trailing `# …`), found by `tokenize`, so a
+    `#` inside a string stays. Code that does not tokenize comes back unchanged (nothing stripped)."""
+    try:
+        comments = [tok.start for tok in tokenize.generate_tokens(io.StringIO(code).readline)
+                    if tok.type == tokenize.COMMENT]
+    except Exception:  # noqa: BLE001 - TokenError, IndentationError, …: check the text as it is
+        return code
+    if not comments:
+        return code
+    lines = code.split("\n")  # the rows tokenize counted (StringIO.readline splits at "\n" only)
+    for row, col in comments:
+        line = lines[row - 1]
+        lines[row - 1] = line[:col] + ("\r" if line.endswith("\r") else "")
+    return "\n".join(lines)
+
+
 def code_denied(code, python=False) -> bool:
     """TEXT rules for interpreter code: the key path, `security` value lookups, orche's key API,
     the key's env var next to an env or keychain lookup."""
     if python:
-        code = "\n".join(line for line in code.splitlines() if not line.lstrip().startswith("#"))
+        code = strip_python_comments(code)
     for t in _norm_text(code):
         if REL_KEY.search(t) or ("secrets" in t and KEY_NAME in t):
             return True

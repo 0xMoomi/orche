@@ -23,6 +23,13 @@ user names it. `orche apply-all` is never used: some repos are dormant and some 
    other projects' questions, keeps PROJECT_CARD.md fresh). No division pane opens unless `--wake`.
 4. A registry entry in `~/.claude/orche/registry.json` and two weekly Orca automations (printed, not
    created, unless `--automations`).
+5. The project intake, last: a headless, read-only Sonnet sweep of the existing codebase (`orche intake
+   <project>`; the worker has Read/Glob/Grep only, no shell) that writes `.orche/div/<division>/CONTEXT.md`
+   per division (what that division needs to know; appended to its units' briefs as fenced reference
+   data), the empty sections of `PROJECT_CARD.md` and `.orche/intake.json`. Usually well under a dollar
+   and a minute, up to 15 minutes on a large repo; its line shows the cost. If it fails, init still
+   succeeds and says `intake skipped: …`. Skip it with `--no-intake`; re-run it any time with
+   `orche intake <project>` (`--if-stale` only when 50+ commits or 14+ days passed).
 
 Units run headless through the runner (`orche run`), so no division pane is needed for work to happen;
 results arrive as pointers in Main's inbox.
@@ -60,9 +67,14 @@ In chat there is no terminal, so the setup goes through a JSON file. (A user at 
    "stage": "building", "aliases": ["dw"]}`.
 4. Preview: `orche --dry-run init <name> --setup-file <path>`. Show the user its `Summary:` line (divisions,
    stage, worktree count, panes) and the files, worktrees and panes it would create. Wait for a yes.
-5. Apply: the same command without `--dry-run`. Verify with `orche status <proj>` (the project appears with
-   its division names, custom ones included, `○` = dormant) and `orche depts <proj>` (one row per division,
-   also by name). Only the status-line cell uses the label (`Design` → `DES○`).
+5. Apply in two steps, so no Bash call waits on the intake under the default 2-minute tool timeout:
+   - `orche init <name> --setup-file <path> --no-intake` (the same command as the preview, without
+     `--dry-run`, plus `--no-intake`). Verify with `orche status <proj>` (the project appears with
+     its division names, custom ones included, `○` = dormant) and `orche depts <proj>` (one row per
+     division, also by name). Only the status-line cell uses the label (`Design` → `DES○`).
+   - `orche intake <proj>` with the Bash tool's `timeout` raised to 600000 ms (10 minutes; the sweep
+     prints nothing until it ends). Tell the user its one-line result, e.g. `intake <proj>: 4 divisions,
+     $0.42, 38 s (claude-sonnet-5-5)`, or the failure line and that `orche intake <proj>` can be re-run.
 6. Hand over in three lines: where the Main pane is (Orca tab `main-<proj>`), that the first request goes
    there in plain language (Main echoes `Understood: source = <proj>, output = <proj>` and ends with a
    dispatch block), and that `[drain]` shows finished work.
