@@ -11,9 +11,10 @@ vercel.com/docs/ai-gateway/sdks-and-apis/typesafe (gateway). They are encoded on
   model `typesafe-ai/<jev.model>` = `typesafe-ai/jev`.
 - header `Authorization: Bearer <key>`; body `{"model", "state": "<masked text>", "questions": {id: q}}`
   with q = `{"type": "noul", "instructions"}`, `{"type": "choice", "instructions", "criteria":
-  {option: null}}` or `{"type": "score", "instructions", "criteria": [level labels, low to high]}`.
+  {option: description or null}}` (descriptions masked like the instructions) or `{"type": "score", "instructions", "criteria": [level labels, low to high]}`.
 - response `{"model", "answers": {id: answer}, "usage"}`: noul `{"type", "noul": 0-1}` (no
-  confidence: ORCHE uses max(p, 1 - p)); choice `{"type", "choice", "probabilities", "confidence"}`;
+  confidence: ORCHE uses max(p, 1 - p)); choice `{"type", "choice", "probabilities", "confidence"}`
+  (ORCHE keeps `probabilities` for the asked options, as floats in [0, 1]);
   score `{"type", "score": 0-based level, "legend", "probabilities", "confidence"}` (ORCHE reports
   `min + score`, so a 1-5 question still answers 1-5).
 - limits (documented in tokens: 64k per request, 32k per question) are enforced here in chars, which
@@ -28,6 +29,7 @@ ORCHE_HOME/secrets/jev.key. It is sent only to an https `base_url`, as an unredi
 and a 3xx is an error (never followed). A Choice answer naming an option that was not asked is dropped.
 """
 import json
+import math
 import re
 import threading
 import time
@@ -144,14 +146,19 @@ def _wire_question(q: dict) -> dict:
     """The masked, length-limited wire form of a question built by `choice` / `score` / `noul`."""
     out = {"type": q["type"], "instructions": _cut(_redact(q.get("question", "")), WIRE["max_question_chars"])}
     if q["type"] == "choice":
-        out["criteria"] = {_redact(o): None for o in q["options"]}
+        descriptions = q["descriptions"]
+        out["criteria"] = {_redact(o): (_cut(_redact(descriptions[o]), WIRE["max_question_chars"])
+                                        if descriptions.get(o) else None) for o in q["options"]}
     elif q["type"] == "score":
         out["criteria"] = [_redact(label) for label in q["labels"]]
     return out
 
 
 def choice(qid, question, options):
-    return {"type": "choice", "id": qid, "question": question, "options": list(options)}
+    """`options`: a list of names, or a dict {name: description} (descriptions go to `criteria`)."""
+    descriptions = dict(options) if isinstance(options, dict) else {}
+    return {"type": "choice", "id": qid, "question": question, "options": list(options),
+            "descriptions": descriptions}
 
 
 def score(qid, question, lo=1, hi=5, labels=None):
@@ -215,31 +222,47 @@ def _read(resp):
 
 
 def _number(x, lo=None, hi=None):
-    if isinstance(x, bool) or not isinstance(x, (int, float)):
+    if isinstance(x, bool) or not isinstance(x, (int, float)) or not math.isfinite(x):
         return None
     if (lo is not None and x < lo) or (hi is not None and x > hi):
         return None
     return float(x)
 
 
+def _probabilities(q, a):
+    """A Choice answer's `probabilities` for the asked options, as floats in [0, 1] (others dropped)."""
+    probs = a.get("probabilities")
+    if not isinstance(probs, dict):
+        return {}
+    out = {}
+    for o in q["options"]:
+        p = _number(probs.get(o), 0.0, 1.0)
+        if p is not None:
+            out[o] = p
+    return out
+
+
 def _answer(q, a):
-    """(value, confidence) of one wire answer to question `q`, or None when unusable."""
+    """(value, confidence, probabilities dict or None) of one wire answer to question `q`, or None."""
     if not isinstance(a, dict) or a.get("type") != q["type"]:
         return None
     if q["type"] == "noul":
         p = _number(a.get("noul"), 0.0, 1.0)
-        return None if p is None else (p, max(p, 1.0 - p))
+        return None if p is None else (p, max(p, 1.0 - p), None)
     c = _number(a.get("confidence"), 0.0, 1.0)
     if c is None:
         return None
     if q["type"] == "choice":
-        return (a["choice"], c) if a.get("choice") in q["options"] else None  # asked options only
+        if a.get("choice") not in q["options"]:
+            return None  # asked options only
+        return a["choice"], c, _probabilities(q, a)
     s = _number(a.get("score"), 0.0, float(q["max"] - q["min"]))
-    return None if s is None else (q["min"] + s, c)
+    return None if s is None else (q["min"] + s, c, None)
 
 
 def _parse(body: bytes, questions):
-    """{id: {"value", "confidence", "band"}} for answers to asked questions; ValueError if malformed."""
+    """{id: {"value", "confidence", "band"}} for answers to asked questions (a Choice entry also has
+    "probabilities" when the answer carried usable ones); ValueError if malformed."""
     data = json.loads(body.decode("utf-8"))
     answers = data.get("answers") if isinstance(data, dict) else None
     if not isinstance(answers, dict):
@@ -249,6 +272,8 @@ def _parse(body: bytes, questions):
         got = _answer(q, answers.get(q.get("id")))
         if got is not None:
             out[q["id"]] = {"value": got[0], "confidence": got[1], "band": band(got[1])}
+            if got[2]:
+                out[q["id"]]["probabilities"] = got[2]
     if not out:
         raise ValueError("no usable answers")
     return out

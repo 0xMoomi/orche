@@ -791,7 +791,10 @@ the prompt to Main unchanged):
    home folder, so no CLAUDE.md is loaded (about 960 input tokens per call, about $0.0003), with
    the runner's filtered environment; on timeout its whole process group is killed. The prompt
    goes direct only when the route is `direct`, the confidence is at least
-   `triage.min_confidence` (0.9) and the TIER is not `hard`.
+   `triage.min_confidence` (0.8) and the TIER is not `hard`. With Jev, the confidence is Jev's
+   probability for the route it chose; the division and TIER answers do not lower it. Every
+   option is described to Jev: divisions and tiers are described with the Haiku prompt's words;
+   the route with a short paraphrase.
 5. **Action.** ORCHE writes the brief. GOAL is the classifier's goal, else the prompt itself
    when it has at most 300 characters, else a 200-character excerpt marked "(excerpt; the full
    prompt is quoted in CONTEXT)". Whenever GOAL is not the prompt word for word, CONTEXT ("routed
@@ -837,7 +840,7 @@ scores the no-model checks alone) and records the summary per backend in
 file still exists. With triage enabled on Jev and no Jev eval on file, `orche triage status`,
 `orche triage enable` and `orche status` print a warning: run an eval first. `orche status`
 prints one triage line while triage is enabled. `orche metrics` has a Triage section. Config: `triage.enabled`, `triage.backend` (`auto`, `jev`,
-`claude-haiku`), `triage.min_confidence`, `triage.max_latency_s`, `triage.keep_prompts`.
+`claude-haiku`), `triage.min_confidence` (default 0.8), `triage.max_latency_s`, `triage.keep_prompts`.
 Below about 1 s, `triage.max_latency_s` usually skips the classifier on a busy machine: each
 `claude --version`/`--help` probe gets at most half the budget, so the probe alone can use it up.
 Triage needs `delivery: runner`, and only Main sessions are triaged.

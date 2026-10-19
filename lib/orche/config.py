@@ -20,7 +20,7 @@ DEFAULTS = {
     # Triage of a Main pane's prompts (lib/orche/triage.py): backend auto = Jev when enabled and
     # configured, else claude-haiku (`claude -p`); max_latency_s bounds the Haiku call (Jev keeps
     # jev.timeout_s); keep_prompts stores the masked prompt in triage/samples.jsonl.
-    "triage": {"enabled": False, "backend": "auto", "min_confidence": 0.9, "max_latency_s": 12,
+    "triage": {"enabled": False, "backend": "auto", "min_confidence": 0.8, "max_latency_s": 12,
                "keep_prompts": False},
     # Project intake (lib/orche/intake.py): a read-only `claude -p` sweep of the main checkout into
     # .orche/div/<division>/CONTEXT.md (max_chars each) and PROJECT_CARD.md. enabled: `orche init`

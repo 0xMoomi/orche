@@ -3,6 +3,39 @@
 All notable changes to ORCHE are listed here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow semantic versioning.
 
+## 0.3.5 — 2026-10-19
+
+### Fixed
+
+- **Jev triage routes simple prompts again.** `triage.classify_jev` reported the lowest confidence
+  of its route, division and TIER answers, and the division question was asked with bare names, so
+  its low confidence (p50 0.52) kept almost every simple prompt in Main. The confidence is now Jev's
+  probability for the route it chose (else the route answer's confidence); the division and TIER
+  answers never lower it. Every option is described to Jev (`criteria` descriptions; the division
+  and TIER words come from `triage.DIVISION_HINTS` and `triage.TIER_HINTS`, shared with the Haiku
+  prompt, whose words are identical to 0.3.4's while its line breaks differ), and `jev` keeps a
+  Choice answer's `probabilities` for the asked options (a NaN or infinite number is dropped).
+  Divisions now come out build 39 / ops 6 instead of rnd 23 of 46. Live run on 84 labelled prompts
+  (2026-10-19; 46 reach the classifier), gate at 0.9: before, recall 0.00–0.05; after, precision
+  0.968, recall 0.79 (one false direct: "Fix the flaky test in tests/test_sync.py").
+
+### Changed
+
+- **`triage.min_confidence` defaults to 0.8** (was 0.9). Sweep on the same 84 prompts: P ≥ 0.95
+  precision 1.0, recall 0.71; ≥ 0.9 0.968 / 0.79; ≥ 0.8 0.972 / 0.92; ≥ 0.7 0.974 / 0.97; from 0.9
+  down the one false direct is the same prompt (the flaky-test fix). Haiku on the same set, with
+  the 0.3.4 prompt and the word-identical 0.3.5 one alike: precision 1.0, recall 0.28–0.31 at 0.9
+  and 0.59–0.64 at 0.8.
+
+### Verified
+
+- **Real prompts.** On 546 masked real Main prompts (120 days, one machine), the heuristics passed 2
+  to the classifier and Jev routed none (no false directs). Asking Jev on every prompt without the
+  heuristics was rejected (precision 0.63 at P ≥ 0.8), as was a Jev-answered status check (placement
+  ②: 2 of 8 flagged prompts were status questions).
+- **Jev latency.** 600 real prompts: p50 0.45 s, p95 0.76 s, 3 timeouts at the 2 s limit, each
+  failing open to Main.
+
 ## 0.3.4 — 2026-10-19
 
 ### Added

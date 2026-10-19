@@ -130,14 +130,22 @@ _STATUS_LINE = re.compile(r"^\W*STATUS:", re.IGNORECASE)
 _BARE_FENCE = re.compile(r"^(?:`{3,}|~{3,})$")
 _FENCED_JSON = re.compile(r"```(?:json)?\s*(\{.*?\})\s*```", re.DOTALL)
 
+# One description per division, shared by the Haiku prompt and the Jev division question.
+DIVISION_HINTS = {"build": "code and doc changes", "research": "reading and reporting",
+                  "rnd": "experiments and prototypes", "gtm": "marketing copy",
+                  "ops": "operations and configuration"}
+ROUTE_HINTS = {"direct": "one worker division can do it now with no planning",
+               "main": "needs planning, design, judgement, a conversation, several steps across areas, "
+                       "or is risky or irreversible"}
+TIER_HINTS = {"mechanical": "a small, fully specified edit", "standard": "a contained change needing some care",
+              "hard": "design or root-cause work"}
+
 SYSTEM_PROMPT = """You are the triage classifier of a software project's orchestrator. Decide whether a
 user's request can go straight to ONE worker division with no planning (route "direct"), or needs the
 main orchestrator session (route "main": planning, design, judgement, a conversation, several steps
 across areas, unclear intent, anything risky or irreversible).
-Divisions: {divisions}. build = code and doc changes; research = reading and reporting; rnd =
-experiments and prototypes; gtm = marketing copy; ops = operations and configuration.
-Tier: mechanical = a small, fully specified edit; standard = a contained change needing some care;
-hard = design or root-cause work.
+Divisions: {divisions}. """ + "; ".join(f"{k} = {v}" for k, v in DIVISION_HINTS.items()) + """.
+Tier: """ + "; ".join(f"{k} = {v}" for k, v in TIER_HINTS.items()) + """.
 Reply with ONE JSON object and nothing else, no prose, no code fence:
 {{"route": "main"|"direct", "division": one of the divisions, "tier": "mechanical"|"standard"|"hard",
 "confidence": a number 0..1 for the route, "goal": one sentence, "accept": how to tell it is done,
@@ -522,15 +530,18 @@ def _kill_group(proc):
 def classify_jev(client, prompt, divisions, deadline):
     from . import jev
     qs = [jev.choice("route", "Can this request go straight to one worker division with no planning "
-                              "(direct), or does it need the main orchestrator session (main)?", list(ROUTES)),
-          jev.choice("division", "Which division should do it?", list(divisions)),
-          jev.choice("tier", "How hard is it? mechanical = a small fully specified edit; standard = a "
-                             "contained change; hard = design or root-cause work.", list(TIERS))]
+                              "(direct), or does it need the main orchestrator session (main)?", ROUTE_HINTS),
+          jev.choice("division", "Which division should do it?",
+                     {d: DIVISION_HINTS.get(d, d) for d in divisions}),
+          jev.choice("tier", "How hard is it?", TIER_HINTS)]
     a = client.ask(prompt, qs, deadline=deadline)
     if not a or "route" not in a or "tier" not in a:
         return None
-    data = {"route": a["route"]["value"], "division": (a.get("division") or {}).get("value"),
-            "tier": a["tier"]["value"], "confidence": min(v["confidence"] for v in a.values())}
+    # Gate on the route answer alone: Jev's probability for the route it chose, else its confidence.
+    route = a["route"]
+    confidence = route.get("probabilities", {}).get(route["value"], route["confidence"])
+    data = {"route": route["value"], "division": (a.get("division") or {}).get("value"),
+            "tier": a["tier"]["value"], "confidence": confidence}
     return normalize(data, divisions)
 
 

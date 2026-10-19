@@ -149,7 +149,8 @@ class ClientTest(JevCase):
         qs = [jev.noul("a", "q"), jev.choice("b", "q", ["status", "confirm"]), jev.score("c", "q")]
         got = self.client(FakeOpener(reply)).ask("s", qs)
         self.assertEqual(got, {"a": {"value": 0.05, "confidence": 0.95, "band": "act"},
-                               "b": {"value": "status", "confidence": 0.7, "band": "confirm"},
+                               "b": {"value": "status", "confidence": 0.7, "band": "confirm",
+                                     "probabilities": {"status": 1.0, "confirm": 0.0}},
                                "c": {"value": 3.0, "confidence": 0.2, "band": "defer"}})
         self.assertTrue(self.log_lines()[0].endswith("q=3 ok"))
 
@@ -203,9 +204,56 @@ class ClientTest(JevCase):
                                                "labels": ["1", "2", "3", "4", "5"]})
         self.assertEqual(jev.noul("n", "q"), {"type": "noul", "id": "n", "question": "q"})
         self.assertEqual(jev.choice("c", "q", ("x", "y")),
-                         {"type": "choice", "id": "c", "question": "q", "options": ["x", "y"]})
+                         {"type": "choice", "id": "c", "question": "q", "options": ["x", "y"],
+                          "descriptions": {}})
+        self.assertEqual(jev.choice("c", "q", {"x": "the x one", "y": "the y one"}),
+                         {"type": "choice", "id": "c", "question": "q", "options": ["x", "y"],
+                          "descriptions": {"x": "the x one", "y": "the y one"}})
         with self.assertRaises(ValueError):
             jev.score("s", "q", 1, 3, ["low", "high"])
+
+    def test_choice_descriptions_become_masked_criteria(self):
+        c = self.client(FakeOpener(answer_all(default_value)))
+        body = c.body("s", [jev.choice("d", "which?", {"build": "code and doc changes", "ops": "",
+                                                      "leak": f"key {CANARY_KEY} here"})])
+        criteria = body["questions"]["d"]["criteria"]
+        self.assertEqual(list(criteria), ["build", "ops", "leak"])
+        self.assertEqual((criteria["build"], criteria["ops"]), ("code and doc changes", None))
+        self.assertNotIn(CANARY_KEY, criteria["leak"])
+        self.assertEqual(c.body("s", [jev.choice("d", "which?", ["a", "b"])])["questions"]["d"]["criteria"],
+                         {"a": None, "b": None})
+
+    def test_choice_probabilities_kept_for_asked_options_only(self):
+        q = jev.choice("k", "which?", ["yes", "no", "maybe"])
+
+        def parsed(probs):
+            body = json.dumps({"answers": {"k": {"type": "choice", "choice": "yes", "confidence": 0.8,
+                                                 "probabilities": probs}}}).encode()
+            return jev._parse(body, [q])["k"]
+        self.assertEqual(parsed({"yes": 0.9, "no": 0.1, "other": 0.5})["probabilities"], {"yes": 0.9, "no": 0.1})
+        self.assertNotIn("probabilities", parsed({"yes": "0.9", "no": True, "maybe": -0.1}))
+        self.assertNotIn("probabilities", parsed([0.9, 0.1]))
+        self.assertNotIn("probabilities", parsed({}))
+        self.assertEqual(parsed({"yes": 1, "no": None})["probabilities"], {"yes": 1.0})
+        self.assertEqual(parsed({"yes": 0.9}), {"value": "yes", "confidence": 0.8, "band": "confirm",
+                                                "probabilities": {"yes": 0.9}})
+
+    def test_choice_probability_nan_is_dropped(self):
+        q = jev.choice("k", "which?", ["yes", "no"])
+        body = (b'{"answers": {"k": {"type": "choice", "choice": "yes", "confidence": 0.8,'
+                b' "probabilities": {"yes": NaN, "no": 0.1}}}}')
+        self.assertEqual(jev._parse(body, [q])["k"]["probabilities"], {"no": 0.1})
+
+    def test_long_choice_description_is_cut_with_the_marker(self):
+        c = self.client(FakeOpener(answer_all(default_value)))
+        limit = jev.WIRE["max_question_chars"]
+        long = " ".join(f"Step {i}: describe the division in plain words." for i in range(limit // 40))
+        self.assertGreater(len(long), limit)
+        body = c.body("s", [jev.choice("d", "which?", {"a": long, "b": "short"})])
+        cut = body["questions"]["d"]["criteria"]["a"]
+        self.assertLessEqual(len(cut), limit)
+        self.assertTrue(cut.endswith(jev.WIRE["truncated_marker"]))
+        self.assertEqual(body["questions"]["d"]["criteria"]["b"], "short")
 
     def test_wire_body_matches_documented_request(self):
         """docs.typesafe.ai/api "Example request" shapes: questions is a map keyed by id with
@@ -239,7 +287,8 @@ class ClientTest(JevCase):
               jev.score("frustration", "q", 0, 2, ["Calm", "Frustrated", "Very angry"])]
         got = self.client(FakeOpener(raw=direct)).ask("s", qs)
         self.assertEqual(got["is_urgent"]["value"], 0.95)
-        self.assertEqual(got["department"], {"value": "billing", "confidence": 0.81, "band": "confirm"})
+        self.assertEqual(got["department"], {"value": "billing", "confidence": 0.81, "band": "confirm",
+                                             "probabilities": {"billing": 0.88, "technical": 0.12, "sales": 0.0}})
         self.assertEqual(got["frustration"], {"value": 1.05, "confidence": 0.92, "band": "act"})
         gateway = (b'{"model": "typesafe-ai/jev", "answers": {"refund": { "type": "noul", "noul": 0.98 }},'
                    b'"usage": { "input_tokens": 275, "output_tokens": 20 }, "provider_metadata": {"gateway": '
