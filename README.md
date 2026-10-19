@@ -1,5 +1,48 @@
 # ORCHE
 
+## Quick start (copy and paste)
+
+Three commands. You need a Mac with Claude Code, Orca, git and Python 3.11+; the installer checks
+them and tells you what is missing. Open Terminal and paste one command at a time.
+
+**1. Install ORCHE** (run the same line again later to update):
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/0xMoomi/orche/main/install.sh | bash
+```
+
+It asks one optional question (a Jev key; press Enter to skip). When it finishes, open a new
+Terminal window so the `orche` command is found.
+
+**2. Put ORCHE on one project** (a git repository that Orca already shows; its name or its path):
+
+```sh
+orche init ~/path/to/your/project
+```
+
+Press Enter at every question to take the defaults. This creates the project's divisions, two Orca
+panes (`main-<project>` and `liaison-<project>`), and reads the codebase once so each division knows
+it (about $0.1–0.3).
+
+**3. Check:**
+
+```sh
+orche doctor
+```
+
+Every line should say OK or WARN, never FAIL.
+
+**Then use it.** In Orca, open the `main-<project>` tab and ask in plain language, for example
+`Add a date filter to the history API.` Main plans, confirms with you, hands the work to a division,
+and the result comes back in the same tab. Type `[drain]` any time to read everything that is
+waiting.
+
+Optional, later: `orche jev setup` (faster routing of simple requests) and `orche triage enable`
+(simple requests go straight to a division without a Main turn).
+
+Something failed? See [Troubleshooting](#troubleshooting). Everything below explains each step in
+detail.
+
 ## What ORCHE is
 
 ORCHE runs a small company of Claude Code sessions inside Orca, the desktop multi-agent manager
@@ -111,7 +154,7 @@ export PATH="$HOME/orche/bin:$PATH"
 orche version
 ```
 
-Success: `orche 0.3.1` (or the version you cloned).
+Success: `orche 0.3.5` (or the version you cloned).
 
 To make it permanent, add the same line to your login profile. ORCHE's panes and `orche doctor` use a
 login shell (`$SHELL -lc`), and a zsh login shell does not read `~/.zshrc`, so use:
