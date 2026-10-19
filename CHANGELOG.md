@@ -47,14 +47,13 @@ All notable changes to ORCHE are listed here. The format follows
 
 ### Changed
 
-- **Triage heuristics: verb forms, Korean question endings.** A Korean verbal noun (수정, 추가, 삭제, …)
-  is an instruction only with a verb ending (수정해줘, 추가하자, 정리 부탁해) or as the prompt's last
-  word ("오타 수정"), so "README.md 수정 이력 좀 봐줘" no longer reaches the classifier; native verbs
-  need an imperative or propositive ending (바꿔줘, 고치자, 바꾸세요). A Korean question ending without
-  `?` (…니, …냐, …나(요), …까(요), …는가, …는지, …래(요), 어때, 뭐야) is a question and never a
-  candidate. English takes more verbs (delete, replace, move, implement, bump, set, …) and lead-ins
-  (just, kindly, let's, I need you to); the negation guard also covers 지 마(세요)/지 말고 and "no need
-  to".
+- **Triage heuristics: verb forms, Korean question endings.** A Korean verbal noun ("edit",
+  "add", "delete", …) is an instruction only with a verb ending or as the prompt's last word, so a
+  prompt that uses it as a plain noun ("show me the edit history of README.md") no longer reaches
+  the classifier; native verbs need an imperative or propositive ending. A Korean question ending
+  without `?` is a question and never a candidate. English takes more verbs (delete, replace, move,
+  implement, bump, set, …) and lead-ins (just, kindly, let's, I need you to); the negation guard
+  also covers the Korean "don't" forms and "no need to".
 - **Triage brief: bounded GOAL, the whole prompt in CONTEXT.** GOAL is the classifier's goal, else the
   prompt when it has at most 300 characters, else a 200-character excerpt marked "(excerpt; the full
   prompt is quoted in CONTEXT)". Whenever GOAL is not the prompt verbatim, CONTEXT quotes every prompt
@@ -297,8 +296,8 @@ Setup: choose and customise divisions. Triage: simple Main prompts go straight t
 - **Triage of Main prompts** (off by default; `orche triage enable`). The Main pane's prompt hook
   decides whether a prompt needs orchestration before Main spends a turn: tags (`[main]`,
   `[direct]`, `[build]`, `[research]`, `[rnd]`, `[gtm]`, `[ops]`; the whole first token),
-  bypasses (short prompts, an acknowledgement or continuation word first such as "응", "그걸로",
-  "yes", "go ahead", questions, replies to a question Main asked — Main's trailing ```` ```dispatch ````
+  bypasses (short prompts, an acknowledgement or continuation word first such as "yes", "go
+  ahead" or their Korean equivalents, questions, replies to a question Main asked — Main's trailing ```` ```dispatch ````
   block and `STATUS:` lines are ignored), heuristics (an instruction naming a file or identifier,
   with no negation) and, for candidates only, a classifier (Jev, or `claude -p` with Haiku, no
   tools, from a fresh temp dir outside `$HOME` so no CLAUDE.md loads — about 960 input tokens and
