@@ -651,13 +651,77 @@ class ClassifierTest(TriageCase):
         with mock.patch.dict(os.environ, {"JEV_API_KEY": "k"}), mock.patch.object(jev, "OPENER", opener):
             result, name, _s, _c = triage.classify(f"Add {SECRET} to README.md", ["rnd", "build"], self.cfg())
         self.assertEqual(name, "jev")
+        # No probabilities: the route answer's own confidence; division and tier never lower it.
         self.assertEqual((result["route"], result["division"], result["tier"], result["confidence"]),
-                         ("direct", "build", "mechanical", 0.91))
+                         ("direct", "build", "mechanical", 0.97))
         [(body, timeout)] = sent
         self.assertEqual(list(body["questions"]), ["route", "division", "tier"])
-        self.assertEqual(body["questions"]["tier"]["criteria"], {t: None for t in triage.TIERS})
+        self.assertEqual(body["questions"]["tier"]["criteria"], triage.TIER_HINTS)
+        self.assertEqual(body["questions"]["route"]["criteria"], triage.ROUTE_HINTS)
+        self.assertEqual(body["questions"]["division"]["criteria"],
+                         {"rnd": "experiments and prototypes", "build": "code and doc changes"})
         self.assertNotIn(SECRET, body["state"])
         self.assertLessEqual(timeout, 1.0)
+
+
+    def jev_answers(self, route_probs, divisions=("rnd", "build"), choice="direct", route=None):
+        cfg = self.enable(backend="jev")
+        cfg["jev"] = {"base_url": "https://jev.test"}
+        self.config(cfg)
+        sent = []
+        if route is None:
+            route = {"type": "choice", "choice": choice, "confidence": 0.86}
+            if route_probs is not None:
+                route["probabilities"] = route_probs
+
+        def opener(req, timeout):
+            sent.append(json.loads(req.data))
+            return json.dumps({"model": "jev-1.13.0", "answers": {
+                "route": route,
+                "division": {"type": "choice", "choice": "build", "confidence": 0.2},
+                "tier": {"type": "choice", "choice": "mechanical", "confidence": 0.4}}}).encode()
+        with mock.patch.dict(os.environ, {"JEV_API_KEY": "k"}), mock.patch.object(jev, "OPENER", opener):
+            result = triage.classify("Add a line to README.md", list(divisions), self.cfg())[0]
+        return result, sent[0]
+
+    def test_jev_confidence_is_the_route_probability_of_direct(self):
+        result, body = self.jev_answers({"direct": 0.93, "main": 0.07})
+        self.assertEqual((result["division"], result["confidence"]), ("build", 0.93))
+        self.assertTrue(triage.direct_ok(result, 0.9))
+        self.assertIn("code and doc changes", json.dumps(body["questions"]["division"]))
+
+    def test_jev_confidence_falls_back_to_the_route_confidence(self):
+        result, _body = self.jev_answers(None)
+        self.assertEqual(result["confidence"], 0.86)
+        self.assertFalse(triage.direct_ok(result, 0.9))
+
+    def test_jev_confidence_is_the_probability_of_the_chosen_route(self):
+        result, _body = self.jev_answers({"direct": 0.03, "main": 0.97}, choice="main")
+        self.assertEqual((result["route"], result["confidence"]), ("main", 0.97))
+        self.assertFalse(triage.direct_ok(result, 0.8))
+
+    def test_jev_probabilities_without_the_chosen_route_fall_back(self):
+        result, _body = self.jev_answers({"main": 0.2})
+        self.assertEqual(result["confidence"], 0.86)
+
+    def test_jev_garbage_route_probability_falls_back(self):
+        for bad in ("0.99", 1.5):
+            result, _body = self.jev_answers({"direct": bad, "main": 0.1})
+            self.assertEqual(result["confidence"], 0.86, bad)
+
+    def test_jev_without_a_usable_route_answer_goes_to_main(self):
+        for route in ({"type": "choice", "choice": "maybe", "confidence": 0.99},
+                      {"type": "choice", "choice": "direct"}, "direct"):
+            result, _body = self.jev_answers(None, route=route)
+            self.assertIsNone(result, route)
+
+    def test_jev_custom_division_described_by_its_name(self):
+        _result, body = self.jev_answers(None, divisions=("build", "legal"))
+        self.assertEqual(body["questions"]["division"]["criteria"]["legal"], "legal")
+
+    def test_system_prompt_carries_every_division_hint(self):
+        for name, hint in triage.DIVISION_HINTS.items():
+            self.assertIn(f"{name} = {hint}", triage.SYSTEM_PROMPT)
 
 
 class DecisionRuleTest(TriageCase):
@@ -672,7 +736,7 @@ class DecisionRuleTest(TriageCase):
 
     def test_min_confidence_comes_from_config(self):
         prompt = "Add an install section to README.md"
-        self.assertEqual(self.decide(prompt, stub(dict(DIRECT, confidence=0.8))).decision, "main")
+        self.assertEqual(self.decide(prompt, stub(dict(DIRECT, confidence=0.79))).decision, "main")
         self.enable(min_confidence=0.75)
         d = self.decide(prompt, stub(dict(DIRECT, confidence=0.8)))
         self.assertEqual((d.decision, d.stage, d.confidence), ("direct", 4, 0.8))
@@ -930,13 +994,13 @@ class HookTest(TriageCase):
 
 class ConfigDefaultsTest(support.TempHomeCase):
     def test_triage_defaults(self):
-        self.assertEqual(config.load()["triage"], {"enabled": False, "backend": "auto", "min_confidence": 0.9,
+        self.assertEqual(config.load()["triage"], {"enabled": False, "backend": "auto", "min_confidence": 0.8,
                                                    "max_latency_s": 12, "keep_prompts": False})
         self.assertEqual(config.load()["jev"]["timeout_s"], 1.0)      # Jev keeps its own 1 s
         cfg = config.load()
-        self.assertEqual((triage.min_confidence(cfg), triage.max_latency(cfg)), (0.9, 12.0))
+        self.assertEqual((triage.min_confidence(cfg), triage.max_latency(cfg)), (0.8, 12.0))
         cfg["triage"].update(min_confidence="high", max_latency_s=-1)    # bad values fall back
-        self.assertEqual((triage.min_confidence(cfg), triage.max_latency(cfg)), (0.9, 12.0))
+        self.assertEqual((triage.min_confidence(cfg), triage.max_latency(cfg)), (0.8, 12.0))
 
 
 LABELLED = [("Add an install section to README.md", "direct"), ("docs/a.md 오타 수정해줘", "direct"),

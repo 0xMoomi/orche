@@ -834,7 +834,7 @@ class SmallFixesTest(OnboardingCase):
 
     def test_choice_outside_the_asked_options_dropped(self):  # M7
         q = jev.choice("k", "which?", ["yes", "no"])
-        self.assertEqual(jev._answer(q, {"type": "choice", "choice": "yes", "confidence": 0.9}), ("yes", 0.9))
+        self.assertEqual(jev._answer(q, {"type": "choice", "choice": "yes", "confidence": 0.9}), ("yes", 0.9, {}))
         self.assertIsNone(jev._answer(q, {"type": "choice", "choice": "maybe", "confidence": 0.9}))
 
     def test_install_kind_flag_answers_the_kind_question(self):  # M5
