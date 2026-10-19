@@ -1,6 +1,6 @@
 ---
 name: orche-apply
-description: Apply ORCHE to one project on request. Use when the user names a project and asks to put it under ORCHE ("X에 ORCHE 적용해줘", "/orche-apply X"), to choose or customise its divisions (including a custom division of their own), to add a division to an already-registered project, or asks what applying ORCHE to a project does. Never apply to every repo at once.
+description: Apply ORCHE to one project on request. Use when the user names a project and asks to put it under ORCHE ("put X under ORCHE", "/orche-apply X"), to choose or customise its divisions (including a custom division of their own), to add a division to an already-registered project, or asks what applying ORCHE to a project does. Never apply to every repo at once.
 ---
 
 # Apply ORCHE to one project
@@ -52,9 +52,9 @@ In chat there is no terminal, so the setup goes through a JSON file. (A user at 
     [x] gtm       GTM — launch, content, growth
     [ ] ops       Ops — deploy and operate (dormant until stage public)
    Stage: building · Aliases: (none)
-   기본으로 할까요? 빼거나 넣을 부서, 추가할 부서가 있으면 알려주세요.
+   Use the defaults? Tell me which divisions to drop or add, or a new one to create.
    ```
-   Map the answer: "기본으로" keeps it; "ops 빼고" / "ops 넣어서" / "research 빼고" toggles; "design 부서 추가:
+   Map the answer: "defaults" keeps it; "without ops" / "with ops" / "without research" toggles; "add a design division:
    <what it does>" adds a custom division — name = a slug (2-16 chars, a-z first, then a-z or 0-9 with
    single hyphens between parts; not a standard name, not main|liaison|feat|hr|jev; its session
    `div-<proj>-<name>` must not belong to another project), label ≤ 24 chars and not a standard

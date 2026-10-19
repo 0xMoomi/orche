@@ -189,8 +189,8 @@ class SkillsTest(unittest.TestCase):
         self.assertIn("Do not run `orche apply-all`", apply_text)
         self.assertIn("Do not commit the generated files", apply_text)
         # Setup wave S3: the chat procedure goes through --print-setup, a setup file and a dry-run preview.
-        for part in ("`orche init --print-setup <name>`", "\"기본으로\" keeps it", "\"ops 빼고\"",
-                     "\"design 부서 추가:", "`orche --dry-run init <name> --setup-file <path>`",
+        for part in ("`orche init --print-setup <name>`", "\"defaults\" keeps it", "\"without ops\"",
+                     "\"add a design division:", "`orche --dry-run init <name> --setup-file <path>`",
                      "`orche status <proj>`", "`orche depts <proj>`", "out of scope for `orche init`",
                      # Setup fix round: status shows names (M8); `:` in a charter or model id needs the file.
                      "its division names, custom ones included", "Only the status-line cell uses the label",

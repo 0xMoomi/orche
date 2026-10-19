@@ -26,7 +26,6 @@ def block(plugin_root) -> str:
         "## ORCHE",
         "",
         "ORCHE rules supersede the routing table above where they conflict.",
-        "ORCHE 규칙(원칙 문서와 dispatch 문법)이 위 라우팅 표와 충돌하면 ORCHE 규칙이 우선합니다.",
         "",
         f"- Principles: `{principles}` (system principles P1-P6 and the ten working principles).",
         "- Hand work to a unit with a fenced block tagged `dispatch` at the end of the final reply:",
