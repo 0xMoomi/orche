@@ -1,6 +1,29 @@
 # ORCHE
 
-## Quick start (copy and paste)
+A small company of Claude Code sessions for each of your projects, run inside Orca: one Main that decides, long-lived divisions that do the work in their own git worktrees, and a CLI that keeps the books.
+
+## Install: paste one message into Claude Code
+
+Open Claude Code on your Mac (any folder) and paste this whole block as one message. The agent installs ORCHE, checks it, and puts it on the project you name. Nothing else to type.
+
+```text
+Install ORCHE on this Mac and set it up on one of my projects. Do exactly these steps in order. Stop at the first failure and show me the error text; do not try workarounds, do not use sudo, do not store or print any API key, and do not change settings beyond what these commands change.
+
+1. Run: curl -fsSL https://raw.githubusercontent.com/0xMoomi/orche/main/install.sh | bash -s -- --yes
+2. Run: export PATH="$HOME/orche/bin:$PATH" && orche doctor
+   Every line must be OK or WARN. If any line says FAIL, show it to me and stop.
+3. Ask me for the folder of the project to set up (a git repository that already appears in Orca). Then run: export PATH="$HOME/orche/bin:$PATH" && orche init <that folder>
+   Without a terminal it takes the defaults and asks nothing. If it says the repository is not known to Orca, tell me to add the folder in Orca first, then stop.
+4. Run: export PATH="$HOME/orche/bin:$PATH" && orche status
+5. Report in five lines: the version (orche version); whether the Claude Code plugin was installed or the hooks went into settings.json; the two Orca panes that were created (main-<project> and liaison-<project>); that I should restart Claude Code once so the plugin loads; and the one next step: open the main-<project> tab in Orca and type a request in plain language.
+```
+
+The installer checks the requirements for you (macOS, git, Python 3.11+, Claude Code, Orca) and stops with a hint when one is missing. This prompt skips Jev (optional, faster routing of simple requests); add it any time with `orche jev setup`. Run the same prompt again later to update.
+
+Everything else is below, folded. Click a heading to open it.
+
+<details>
+<summary><b>Prefer typing it yourself? Three commands</b></summary>
 
 Three commands. You need a Mac with Claude Code, Orca, git and Python 3.11+; the installer checks
 them and tells you what is missing. Open Terminal and paste one command at a time.
@@ -43,6 +66,11 @@ Optional, later: `orche jev setup` (faster routing of simple requests) and `orch
 Something failed? See [Troubleshooting](#troubleshooting). Everything below explains each step in
 detail.
 
+</details>
+
+<details>
+<summary><b>What ORCHE is</b></summary>
+
 ## What ORCHE is
 
 ORCHE runs a small company of Claude Code sessions inside Orca, the desktop multi-agent manager
@@ -56,6 +84,11 @@ on Linux).
 
 The steps below take you from nothing to a first working request: check the requirements, install,
 apply ORCHE to one project, send a first request. Jev is optional and comes after.
+
+</details>
+
+<details>
+<summary><b>Requirements</b></summary>
 
 ## Requirements
 
@@ -76,6 +109,11 @@ sharing). ORCHE works without them; `orche doctor` lists each one as OK or WARN.
 ubuntu, but Orca (a macOS app) is still required for panes and `orche init`. Windows is not
 supported: Orca is a macOS app and the CLI relies on POSIX process control (`ps`, process groups,
 signals) and the macOS keychain; WSL2 is unverified.
+
+</details>
+
+<details>
+<summary><b>Install</b></summary>
 
 ## Install
 
@@ -288,6 +326,11 @@ These need a fix:
 - **Undo the install.** `orche uninstall` restores the backed-up values (see
   [Uninstall](#uninstall-and-leaving-orche)).
 
+</details>
+
+<details>
+<summary><b>Apply ORCHE to a project</b></summary>
+
 ## Apply ORCHE to a project
 
 ORCHE joins one project at a time, when you name it (`orche apply-all` exists but is not the way to
@@ -472,6 +515,11 @@ orche status my-app   # one line: stage, awake count, divisions (○ = dormant),
 orche depts my-app    # divisions and feature agents with status, session, branch, idle days
 ```
 
+</details>
+
+<details>
+<summary><b>First request</b></summary>
+
 ## First request
 
 ### Step 1. Open the Main pane
@@ -530,6 +578,11 @@ Success: the result of your unit appears in Main's reply. See [How units run](#h
 when a unit counts as done.
 
 Every command takes `--json`; commands that change state take `--dry-run` (`orche --help`).
+
+</details>
+
+<details>
+<summary><b>Jev (optional)</b></summary>
 
 ## Jev (optional)
 
@@ -622,6 +675,11 @@ deletes it.
 Non-interactive installs: `orche install --no-jev` never asks; `orche install --jev-key-stdin
 --jev-kind gateway` reads the key from stdin.
 
+</details>
+
+<details>
+<summary><b>Uninstall and leaving ORCHE</b></summary>
+
 ## Uninstall and leaving ORCHE
 
 ### Leave one project
@@ -650,6 +708,11 @@ values recorded in `install-state.json`, and removes the agent symlinks. It keep
 
 Then, inside Claude Code, remove the plugin with `/plugin` (uninstall `orche@orche`). Finally delete
 the clone (`~/orche`) and the PATH line from your login profile.
+
+</details>
+
+<details>
+<summary><b>How units run</b></summary>
 
 ## How units run
 
@@ -888,6 +951,11 @@ Below about 1 s, `triage.max_latency_s` usually skips the classifier on a busy m
 `claude --version`/`--help` probe gets at most half the budget, so the probe alone can use it up.
 Triage needs `delivery: runner`, and only Main sessions are triaged.
 
+</details>
+
+<details>
+<summary><b>The organization</b></summary>
+
 ## The organization
 
 Main assigns work with structured `dispatch` blocks; hooks, not model turns, deliver them.
@@ -922,6 +990,11 @@ HR (one global) ── registry.json ── create · sleep · retire · rate li
 | Janitor | `orche janitor …`: state-based cleanup; archives sessions, never deletes them |
 | Jev gate | Optional fast typed-decision model for drain urgency; off by default |
 
+</details>
+
+<details>
+<summary><b>Token economy</b></summary>
+
 ## Token economy
 
 Numbers below come from **one deployment, Oct 2026** (a single operator's 30-day transcript
@@ -951,6 +1024,11 @@ Replaying the same 30 days under ORCHE rules (anonymized simulation): Main trigg
 weakly with cost reduction, and savings must be tracked together with the ledger pass rate.
 `orche metrics` computes the real numbers from your transcripts, without a model.
 
+</details>
+
+<details>
+<summary><b>Documentation</b></summary>
+
 ## Documentation
 
 - [SPEC.md](SPEC.md): the full specification (rule IDs, schemas, hook contracts)
@@ -959,12 +1037,24 @@ weakly with cost reduction, and savings must be tracked together with the ledger
 - [docs/orca-sidebar.md](docs/orca-sidebar.md): how ORCHE looks in Orca
 - [CHANGELOG.md](CHANGELOG.md) · [CONTRIBUTING.md](CONTRIBUTING.md) · [SECURITY.md](SECURITY.md)
 
+</details>
+
+<details>
+<summary><b>Attribution</b></summary>
+
 ## Attribution
 
 Several conventions are adapted from Cursor's **pstack** plugin (MIT, by Lauren Tan): the
 verification ledger, the decision log, the Always-pause list and the "show me your work"
 reporting conventions, among others listed at the top of [SPEC.md](SPEC.md).
 
+</details>
+
+<details>
+<summary><b>License</b></summary>
+
 ## License
 
 MIT. See [LICENSE](LICENSE).
+
+</details>
