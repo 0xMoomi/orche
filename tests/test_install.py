@@ -793,11 +793,13 @@ class ApplyAllDryRunTest(InstallCase):
         self.assertEqual(tree_digest(self.home), before)
         self.assertEqual([" ".join(c[1:3]) for c in calls], ["status --json", "repo list"])
         plans = [l for l in out.splitlines() if l.startswith("plan ")]
-        self.assertEqual(plans, ["plan Beta App (beta-app): orche init repo-beta --stage building --divisions rnd,research,build,gtm,ops --wake build",
-                                 "plan Gamma (gamma): orche init repo-gamma --stage building --divisions rnd,research,build,gtm,ops --wake build"])
+        self.assertEqual(plans, ["plan Beta App (beta-app): orche init repo-beta --stage building --divisions rnd,research,build,gtm,ops --no-intake --wake build",
+                                 "plan Gamma (gamma): orche init repo-gamma --stage building --divisions rnd,research,build,gtm,ops --no-intake --wake build"])
         self.assertIn("skip Acme Shop: already registered as acme-shop", out)
         self.assertIn("3 repo(s), 2 planned, 0 failed", out)
         self.assertIn("panes: 6 to open (main + liaison per repo, plus --wake)", out)
+        self.assertEqual(out.splitlines()[-1], "intake not run for 2 projects: run `orche intake <proj>` "
+                                               "per project (about $0.1–0.3 each)")
 
     def test_plugin_repo_itself_is_skipped(self):
         registry.save(registry.empty())
@@ -837,8 +839,12 @@ class ApplyAllRunTest(HrCase):
         reg = registry.empty()
         reg["limits"]["max_awake_sessions"] = 1
         registry.save(reg)
-        code, out, err = self.orche("apply-all", "--wake", "build")
+        from orche import intake
+        swept = []
+        with mock.patch.object(intake, "run", lambda *a, **k: swept.append(a)):
+            code, out, err = self.orche("apply-all", "--wake", "build")
         self.assertEqual(code, 1, err)
+        self.assertEqual(swept, [])                    # I-3: apply-all never runs the paid intake
         reg = registry.load()
         self.assertEqual(sorted(reg["projects"]), ["acme-shop", "beta"])
         self.assertEqual(reg["projects"]["acme-shop"]["divisions"]["build"]["status"], "active")
@@ -850,8 +856,10 @@ class ApplyAllRunTest(HrCase):
                                            "main-acme-shop,liaison-acme-shop\tok"), rows[1])
         self.assertIn("ok [--wake build dropped (awake limit 1)]", rows[2])
         self.assertTrue(rows[3].startswith("Gone\tgone\t-\t-\t-\tfailed (exit "), rows[3])
-        self.assertEqual(rows[-2], "3 repo(s), 3 processed, 1 failed")
-        self.assertEqual(rows[-1], "panes: 5 opened (main + liaison per repo, plus --wake)")
+        self.assertEqual(rows[-3], "3 repo(s), 3 processed, 1 failed")
+        self.assertEqual(rows[-2], "panes: 5 opened (main + liaison per repo, plus --wake)")
+        self.assertEqual(rows[-1], "intake not run for 2 projects: run `orche intake <proj>` per project "
+                                   "(about $0.1–0.3 each)")
 
     def test_second_orca_entry_for_onboarded_path_is_already_registered(self):
         self.beta = self.home / "repos" / "beta"

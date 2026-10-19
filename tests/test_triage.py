@@ -201,6 +201,36 @@ class BypassTest(TriageCase):
         # A question after an earlier block stays; a plain trailing code block is still stripped.
         self.assertEqual(triage.strip_trailer(nested + "\nShall I go?\n```\ncode\n```"), nested + "\nShall I go?")
 
+    def test_tilde_fences_mirror_the_backtick_tests(self):
+        """`~~~` fences are stripped like ``` fences: same character, at least the opener's length."""
+        prompt = "옵션 B로 README.md 수정해줘"
+        tilde = "~~~dispatch\nTO build\nGOAL x\n  more\nTIER standard\n~~~"
+        asked = ("Which option do you prefer?\n\n" + tilde,
+                 "A와 B 중 어느 쪽으로 할까요\n\n" + tilde + "\n\nSTATUS: waiting\n",
+                 "Which one?\n~~~\ncode\n~~~\n" + tilde,
+                 "Which one?\n```\ncode\n```\n" + tilde,
+                 "Which one?\n~~~~dispatch\nTO build\n~~~\n```\n~~~~")
+        for text in asked:
+            d = self.decide(prompt, stub(DIRECT), transcript=self.assistant_transcript(text))
+            self.assertEqual((d.decision, d.reason), ("bypass", "reply-to-main"), text)
+        for text in ("Dispatched the README change.\n\n" + tilde, "Which one?\n\nI picked B.\n" + tilde):
+            d = self.decide(prompt, stub(DIRECT), transcript=self.assistant_transcript(text))
+            self.assertEqual(d.decision, "direct", text)
+        self.assertEqual(triage.strip_trailer("Ok?\n~~~dispatch\nTO build"), "Ok?\n~~~dispatch\nTO build")
+        self.assertEqual(triage.strip_trailer("Ok?\n\nSTATUS: done\n~~~dispatch\nTO b\n~~~\n\n"), "Ok?")
+        # A closer of the other character, or a shorter one, does not close the block.
+        self.assertEqual(triage.strip_trailer("Ok?\n~~~dispatch\nTO b\n```"), "Ok?\n~~~dispatch\nTO b\n```")
+        self.assertEqual(triage.strip_trailer("Ok?\n````dispatch\nTO b\n```"), "Ok?\n````dispatch\nTO b\n```")
+        nested = ("~~~dispatch\nTO build\nGOAL fix the parser\nCONTEXT the failing call:\n  ~~~py\n"
+                  "  parse(x)\n  ~~~\n  and a backtick twin:\n  ```\n  y = 1\n  ```\nTIER standard\n~~~")
+        for opener in ("dispatch", "amend", "stop"):
+            block = nested.replace("~~~dispatch", "~~~" + opener, 1)
+            self.assertEqual(triage.strip_trailer("Which option?\n\n" + block), "Which option?", opener)
+            self.assertEqual(triage.strip_trailer("Which option?\n\n" + block + "\n\nSTATUS: waiting\n"),
+                             "Which option?", opener)
+        self.assertEqual(triage.strip_trailer("I picked B.\n\n" + nested), "I picked B.")
+        self.assertEqual(triage.strip_trailer(nested + "\nShall I go?\n~~~\ncode\n~~~"), nested + "\nShall I go?")
+
     def test_an_acknowledgement_or_continuation_word_first_reaches_main(self):
         """I6: the prompt continues the conversation; no classifier call, whatever Main said last."""
         calls = []
@@ -271,6 +301,56 @@ class HeuristicTest(TriageCase):
                   "Update nothing; do not touch README.md", "Never rename `fooBar` in utils"):
             self.assertFalse(triage.is_candidate(p), p)
 
+    # M5 table: (prompt, is a candidate). Korean verb forms count, a bare verbal noun in the middle
+    # ("수정 이력") does not; a Korean question ending never makes a candidate, with or without `?`.
+    KO_TABLE = [
+        ("README.md에 설치 섹션 추가해줘", True), ("docs/a.md 오타 수정해 주세요", True), ("src/app.py 정리하자", True),
+        ("CHANGELOG.md 업데이트해줘", True), ("config.yaml에서 debug 항목 삭제해", True), ("utils.py 이름 바꿔줘", True),
+        ("README.md 고쳐 주세요", True), ("notes.txt 지워줘", True), ("docs/guide.md에 예시 넣어줘", True),
+        ("README.md 수정 부탁해", True), ("docs/guide.md 오타 수정", True), ("lib/x.py 헤더 주석 작성해", True),
+        ("package.json 버전 올려줘", True), ("README.md 링크 고치자", True), ("src/App.tsx 버튼 문구 바꾸세요", True),
+        ("README.md는 수정하지 말고 읽어보고 의견 줘", False), ("README.md 수정 이력 좀 봐줘", False),
+        ("README.md 수정했니", False), ("docs/a.md 정리해야 하나", False), ("README.md 고칠까", False),
+        ("src/App.jsx 고치고 나서 배포 계획도 세워줘", False), ("src/App.jsx 수정하고 배포 계획도 세워줘", False),
+        ("README.md 추가된 부분 어때", False), ("이거 왜 이래 README.md 보면 이상한데", False),
+        ("README.md 내용이 맞는지", False), ("docs/a.md 건드리지 마세요", False), ("README.md 수정해줄래", False),
+        ("config.yaml 변경 사항 뭐야", False), ("README.md 바꾼 게 언제냐", False), ("src/app.py 수정된 건가요", False)]
+    EN_TABLE = [
+        ("Add a FAQ section to README.md", True), ("Please fix the typo in docs/guide.md", True),
+        ("Let's rename utils.py to helpers.py", True), ("update CHANGELOG.md with the 0.3.3 entry", True),
+        ("remove the unused import in src/app.ts", True), ("Delete old.txt please", True),
+        ("Replace foo with bar in config.yaml", True), ("Move notes.md into docs/notes.md", True),
+        ("bump the version in package.json", True), ("Implement the parse function in lib/parse.py", True),
+        ("Just set debug to false in config.yaml", True), ("I need you to clean up src/util.py", True),
+        ("go and reword the intro of README.md", True), ("Kindly translate the intro of docs/ko.md", True),
+        ("please don't change src/App.jsx", False), ("Do not touch README.md, just read it", False),
+        ("never edit .github/ci.yml", False), ("what does README.md say?", False),
+        ("Is CHANGELOG.md up to date", False), ("Can you fix README.md", False),
+        ("README.md looks fine to me", False), ("I fixed docs/a.md yesterday", False), ("add more tests", False),
+        ("Should we rename utils.py", False), ("Do the rename of foo.py to bar.py", False),
+        ("Has anyone updated package.json", False), ("Fix README.md, or should we leave it?", False),
+        ("no need to update CHANGELOG.md", False)]
+
+    def test_m5_table_korean_and_english(self):
+        for table in (self.KO_TABLE, self.EN_TABLE):
+            self.assertGreaterEqual(len(table), 20)
+            self.assertEqual(sum(1 for _p, yes in table if yes), len(table) // 2)
+            for prompt, yes in table:
+                self.assertEqual(triage.is_candidate(prompt), yes, prompt)
+                d = self.decide(prompt, stub(DIRECT))
+                if yes:
+                    self.assertEqual((d.decision, d.stage), ("direct", 4), prompt)
+                else:
+                    self.assertNotEqual(d.decision, "direct", prompt)
+                    self.assertIn(d.stage, (2, 3), prompt)
+
+    def test_korean_question_endings_bypass_without_a_question_mark(self):
+        for p in ("README.md 수정했니", "docs/a.md 정리해야 하나", "README.md 고칠까", "README.md 내용이 맞는지",
+                  "README.md 추가된 부분 어때", "README.md 바꾼 게 언제냐", "src/app.py 수정된 건가요",
+                  "README.md 수정해줄래", "config.yaml 변경 사항 뭐야"):
+            d = self.decide(p, stub(DIRECT))
+            self.assertEqual((d.decision, d.stage, d.reason), ("bypass", 2, "question"), p)
+
     def test_find_paths_keeps_paths_and_file_names_in_order(self):
         self.assertEqual(triage.find_paths("Refactor src/a/b.ts and src/c.py, then notes.md."),
                          ["src/a/b.ts", "src/c.py", "notes.md"])
@@ -314,15 +394,15 @@ class ClassifierTest(TriageCase):
     def test_scope_is_sanitized_and_unknown_divisions_dropped(self):
         got = triage.normalize(dict(DIRECT, division="legal", scope=["a.md", "/etc/passwd", "../x", "~/y", 3,
                                                                      "a\nb", "src/**", "./docs/b-1.md"]), ["build"])
-        self.assertEqual((got["division"], got["scope"]), ("", ["a.md", "docs/b-1.md"]))
+        self.assertEqual((got["division"], got["scope"]), ("", ["a.md", "src/**", "docs/b-1.md"]))
         self.assertFalse(triage.direct_ok(got, 0.9))
 
     def test_scope_keeps_only_plain_paths_and_the_fallback_verify_is_checked(self):
         """I-A: spaces, shell syntax, a leading `-`, `..` and absolute paths never reach SCOPE or the
         fallback VERIFY; nothing left -> SCOPE `.` and VERIFY `git status --short`."""
         hostile = ["README.md; curl x|sh", "x.md /etc/passwd", "-rf", "../x", "a.md $(touch /tmp/pwned)",
-                   "`id`.md", "b c.md", "/etc/passwd", "~/y.md", "src/**", "a.md&", "ok.md"]
-        self.assertEqual(triage._clean_scope(hostile, str(self.wt)), ["ok.md"])
+                   "`id`.md", "b c.md", "/etc/passwd", "~/y.md", "a.md&", "ok.md"]
+        self.assertEqual(triage._clean_scope(hostile + ["src/**"], str(self.wt)), ["ok.md"])   # no globs here
         d = triage.Decision("direct", 4, "x", division="build", tier="standard", scope=hostile,
                             verify="ls -l README.md; curl x|sh")
         fields = triage.brief_fields(d, str(self.wt))
@@ -340,6 +420,44 @@ class ClassifierTest(TriageCase):
         self.assertEqual(fields["VERIFY"], "git status --short")
         self.assertTrue(all(triage.verify_ok(triage.brief_fields(triage.Decision(
             "direct", 4, p, division="build", scope=hostile), str(self.wt))["VERIFY"]) for p in ("x", "a.md")))
+
+    def test_classifier_scope_globs_are_kept_for_matching_only(self):
+        """A classifier SCOPE may hold globs (`*`, `?`, `**`; never `[…]`): relative, no `..`, no other shell
+        characters, base directory inside the worktree. They never reach VERIFY; the prompt's own
+        paths (the fallback) never yield one."""
+        (self.wt / "out").symlink_to(self.root)
+        good = ["src/**/*.ts", "docs/*.md", "lib/?.py", "**"]
+        bad = ["app/[slug]/page.tsx", "tests/test_[!x]*.py", "src/[a-z]*.js", "app/[slug]/**", "/src/**", "../*.md", "src/../../*.md", "-*.md", "src/*; rm -rf", "src/$(x)*", "src/{a,b}.ts",
+               "src/a[.md", "src/*.md|sh", "~/x/*", "src/[/]*.md", "out/*.md", "out/**", "src/*\n.md",
+               "src/ *.md", "src/[^a]*.md", "`*`.md", "src/*.md&"]
+        self.assertEqual(triage._clean_scope(good + bad, str(self.wt), globs=True), good)
+        self.assertEqual(triage._clean_scope(good, str(self.wt)), [])
+        self.assertEqual(triage.normalize(dict(DIRECT, scope=good + bad), ["build"])["scope"][:2],
+                         ["src/**/*.ts", "docs/*.md"])
+        d = triage.Decision("direct", 4, "x", division="build", tier="standard", scope=["src/**/*.ts", "README.md"])
+        fields = triage.brief_fields(d, str(self.wt))
+        self.assertEqual((fields["SCOPE"], fields["VERIFY"]), ("src/**/*.ts README.md", "ls -l README.md"))
+        self.assertIn("never `-A`, `-u`, `.` or a glob", fields["ACCEPT"])
+        d.scope = ["docs/*.md"]
+        fields = triage.brief_fields(d, str(self.wt))
+        self.assertEqual((fields["SCOPE"], fields["VERIFY"]), ("docs/*.md", "git status --short"))
+        self.assertFalse(triage.verify_ok("ls -l docs/*.md"))
+        d.scope, d.prompt = [], "fix src/*.ts and README.md"
+        self.assertEqual(triage.brief_fields(d, str(self.wt))["SCOPE"], "README.md")
+        # The scope-gate grammar (units.scope_match) the globs mean.
+        # `[` is literal (0.3.2 again): a feature scope `app/[slug]/**` admits only that directory.
+        match = [("src/a/b.ts", "src/**/*.ts"), ("src/b.ts", "src/**/*.ts"), ("lib/a.py", "lib/?.py"),
+                 ("app/[slug]/page.tsx", "app/[slug]/page.tsx"), ("app/[slug]/x/y.tsx", "app/[slug]/**"),
+                 ("a/[z-a].md", "a/[z-a].md"), ("pages/[...all].tsx", "pages/[...all].tsx")]
+        miss = [("lib/ab.py", "lib/?.py"), ("lib/a/b.py", "lib/?.py"), ("app/x/page.tsx", "app/[slug]/page.tsx"),
+                ("app/s/page.tsx", "app/[slug]/page.tsx"), ("app/s/x.tsx", "app/[slug]/**"),
+                ("app/g/x.tsx", "app/[slug]/**"), ("pages/a.tsx", "pages/[...all].tsx"),
+                ("pages/..tsx", "pages/[...all].tsx"), ("tests/test_a.py", "tests/test_[!x]*.py"),
+                ("src/b.js", "src/[a-z]*.js"), ("a/b.md", "a/[z-a].md"), ("src/a.ts", "docs/*.md")]
+        for path, pattern in match:
+            self.assertTrue(units.scope_match(path, pattern), (path, pattern))
+        for path, pattern in miss:
+            self.assertFalse(units.scope_match(path, pattern), (path, pattern))
 
     def test_verify_git_takes_only_read_only_options_and_plain_paths(self):
         """m4: `git diff`/`git status` options that write or run something are refused."""
@@ -569,15 +687,17 @@ class ActionTest(TriageCase):
         out = self.handle(self.PROMPT, stub(DIRECT))
         unit = self.only_unit()
         self.assertEqual(out.block, {"decision": "block", "reason": (
-            f"[orche] routed to div-acme-build as {unit} (runner-started, TIER mechanical). Results arrive in "
-            f"this inbox; prefix the prompt with [main] to talk to Main instead (to cancel: [main] STOP {unit}).")})
+            f"[orche] routed to div-acme-build as {unit} (runner-started, TIER mechanical): \"Add an install "
+            f"section to README.md\". Results arrive in this inbox; prefix the prompt with [main] to talk to "
+            f"Main instead (to cancel: [main] STOP {unit}).")})
         fields = dispatch.read_brief_fields(self.repo, unit)
         # The classifier's `grep -q …` cannot run at TIER mechanical (I4): the fallback replaces it.
+        # GOAL is the classifier's sentence, so CONTEXT quotes the prompt itself (M8).
         self.assertEqual(fields, {"TO": "div-acme-build", "GOAL": DIRECT["goal"], "SCOPE": "README.md",
-                                  "CONTEXT": triage.CONTEXT,
+                                  "CONTEXT": triage.CONTEXT_QUOTED + "\n> " + self.PROMPT,
                                   "ACCEPT": DIRECT["accept"] + "; `git add` only the files you changed, by name "
-                                                               "(never `-A`, `-u` or `.`); exactly one commit "
-                                                               "with a conventional message",
+                                                               "(never `-A`, `-u`, `.` or a glob); exactly one "
+                                                               "commit with a conventional message",
                                   "VERIFY": "ls -l README.md",
                                   "TIMEBOX": "30m", "FORBID": "push, amend, --no-verify, files outside SCOPE",
                                   "REPORT": "standard", "TIER": "mechanical"})
@@ -649,6 +769,59 @@ class ActionTest(TriageCase):
         self.handle("[build] README.md 정리해\n# Install\n  keep this indented")
         goal = dispatch.read_brief_fields(self.repo, self.only_unit())["GOAL"]
         self.assertEqual(goal.splitlines()[:2], ["README.md 정리해", "# Install"])
+
+    def test_a_long_prompt_gives_a_bounded_goal_and_the_whole_prompt_in_context(self):
+        """M8: GOAL is an excerpt of at most GOAL_EXCERPT characters plus the pointer; CONTEXT quotes
+        every line of the prompt (blank lines too), so the brief loses nothing."""
+        body = " ".join(f"step{i} README.md 정리해" for i in range(40))
+        prompt = f"[build] {body}\n\n# keep this heading\n  {SECRET} stays where it was typed"
+        out = self.handle(prompt)
+        unit = self.only_unit()
+        fields = dispatch.read_brief_fields(self.repo, unit)
+        rest = prompt[len("[build] "):]
+        excerpt, pointer = fields["GOAL"].rsplit(" (", 1)
+        self.assertEqual(pointer, triage.GOAL_POINTER + ")")
+        self.assertLessEqual(len(excerpt), triage.GOAL_EXCERPT)
+        self.assertTrue(excerpt.endswith("…") and body.startswith(excerpt[:-1]), excerpt)
+        self.assertEqual(fields["CONTEXT"].split("\n"),
+                         [triage.CONTEXT_QUOTED] + [f"> {ln}" if ln.strip() else ">" for ln in rest.splitlines()])
+        # The block reason shows the GOAL's first REASON_GOAL characters, masked.
+        reason = out.block["reason"]
+        self.assertIn(f'(runner-started, TIER standard): "{triage.excerpt(fields["GOAL"], triage.REASON_GOAL)}"',
+                      reason)
+        self.assertNotIn(SECRET, reason)
+
+    def test_goal_bound_is_inclusive_and_short_prompts_stay_verbatim(self):
+        d = triage.Decision("direct", 1, "x" * triage.GOAL_CHARS, division="build", tier="standard")
+        self.assertEqual(triage.goal_and_context(d), (d.prompt, triage.CONTEXT))
+        d.prompt = "add README.md\n# Install\n  keep"                     # multi-line but short: verbatim
+        self.assertEqual(triage.goal_and_context(d), (d.prompt, triage.CONTEXT))
+        d.prompt = "y" * (triage.GOAL_CHARS + 1)
+        goal, context = triage.goal_and_context(d)
+        self.assertEqual(goal, "y" * (triage.GOAL_EXCERPT - 1) + f"… ({triage.GOAL_POINTER})")
+        self.assertEqual(context, f"{triage.CONTEXT_QUOTED}\n> {d.prompt}")
+        d.goal = "Tidy the install section"
+        self.assertEqual(triage.goal_and_context(d), (d.goal, f"{triage.CONTEXT_QUOTED}\n> {d.prompt}"))
+        self.assertEqual(triage.block_reason("div-a-build", "u-1", "runner-started", "standard"),
+                         "[orche] routed to div-a-build as u-1 (runner-started, TIER standard). Results arrive in "
+                         "this inbox; prefix the prompt with [main] to talk to Main instead (to cancel: "
+                         "[main] STOP u-1).")
+        masked = triage.block_reason("div-a-build", "u-1", "runner-started", "standard", f"use {SECRET} in a.md")
+        self.assertNotIn(SECRET, masked)
+        self.assertIn('(runner-started, TIER standard): "use ', masked)
+
+    def test_a_blocked_prompt_touches_mains_activity(self):
+        """M10: a blocked prompt never reaches inbox.handle_prompt, so triage touches Main's activity."""
+        path = units.activity_file("main-acme")
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.touch()
+        os.utime(path, (1_000_000, 1_000_000))
+        self.assertIsNotNone(self.handle(self.PROMPT, stub(DIRECT)).block)
+        self.assertGreater(path.stat().st_mtime, time.time() - 60)
+        # Not blocked: triage leaves it to the inbox path (which touches it on every prompt).
+        os.utime(path, (1_000_000, 1_000_000))
+        self.assertIsNone(self.handle(self.PROMPT, stub(DIRECT), popen=mock.Mock(side_effect=OSError("x"))).block)
+        self.assertEqual(path.stat().st_mtime, 1_000_000)
 
     def test_spawn_failure_does_not_block_and_injects_one_line(self):
         out = self.handle(self.PROMPT, stub(DIRECT), popen=mock.Mock(side_effect=OSError("no exec")))
@@ -828,6 +1001,67 @@ class CommandTest(TriageCase):
         self.assertEqual((r["tp"], r["fp"], r["classifier_calls"]), (3, 1, 4))
         out = self.orche_ok("--dry-run", "triage", "eval", self.labelled())
         self.assertEqual(out, "would make 4 claude-haiku classifier calls for 6 labelled prompts\n")
+
+    def test_status_shows_the_eval_on_file_and_when_it_last_ran(self):
+        """M9: eval.json records each run's summary per backend (no prompts); status shows it."""
+        data = json.loads(self.orche_ok("--json", "triage", "status"))
+        self.assertEqual((data["eval"]["last_run"], data["eval"]["resolved_evaluated"]), (None, False))
+        self.assertIn("eval: never run (no labelled eval set on file", self.orche_ok("triage", "status"))
+        self.orche_ok("--dry-run", "triage", "eval", self.labelled(), "--backend", "heuristics")
+        self.assertFalse((self.home / "triage" / "eval.json").exists())        # a dry run records nothing
+        path = self.labelled()
+        self.orche_ok("triage", "eval", path, "--backend", "heuristics")
+        saved = json.loads((self.home / "triage" / "eval.json").read_text())
+        self.assertEqual(saved["last"], "heuristics")
+        run = saved["runs"]["heuristics"]
+        self.assertEqual((run["file"], run["n"], run["precision"], run["recall"]),
+                         (str(Path(path).resolve()), 6, 0.75, 1.0))
+        self.assertNotIn("prompt", json.dumps(saved))
+        text = self.orche_ok("triage", "status")
+        self.assertIn(f"eval: last run {run['at']} (heuristics, n 6, precision 0.750 recall 1.000) on "
+                      f"{run['file']} (present)", text)
+        self.assertIn("eval: none on file for the claude-haiku backend", text)
+        Path(path).unlink()
+        self.assertIn(f"on {run['file']} (missing)", self.orche_ok("triage", "status"))
+        (self.fake / "reply.json").write_text(haiku_reply(DIRECT))
+        self.orche_ok("triage", "eval", self.labelled())
+        data = json.loads(self.orche_ok("--json", "triage", "status"))["eval"]
+        self.assertEqual((data["last_backend"], data["resolved_evaluated"], data["set_exists"]),
+                         ("claude-haiku", True, True))
+        self.assertEqual(set(json.loads((self.home / "triage" / "eval.json").read_text())["runs"]),
+                         {"heuristics", "claude-haiku"})
+
+    def test_partial_eval_file_neither_crashes_status_nor_hides_the_triage_line(self):
+        """0.3.4 review M-10: a run entry without `file`/`at`/`n` is shown with `?`, not a KeyError."""
+        (self.home / "triage").mkdir(parents=True, exist_ok=True)
+        (self.home / "triage" / "eval.json").write_text(json.dumps(
+            {"last": "heuristics", "runs": {"heuristics": {"precision": 0.5}, "jev": "garbage"}}))
+        text = self.orche_ok("triage", "status")
+        self.assertIn("eval: last run ? (heuristics, n ?, precision 0.500 recall -) on ? (missing)", text)
+        self.assertTrue(any(l.startswith("triage: enabled") for l in self.orche_ok("status").splitlines()))
+
+    def test_jev_without_an_eval_is_visible_in_status_enable_and_orche_status(self):
+        """M9: triage on Jev with no Jev eval on file warns (SPEC §7.3 condition 5)."""
+        self.assertEqual(self.orche_ok("status").splitlines()[-1], "triage: enabled, backend claude-haiku, "
+                                                                   "no eval on file")
+        cfg = self.enable(backend="auto")
+        cfg["jev"] = {"enabled": True, "base_url": "https://jev.test"}
+        self.config(cfg)
+        warning = "warning: triage is enabled on the Jev backend with no Jev eval on file"
+        with mock.patch.dict(os.environ, {"JEV_API_KEY": "k"}):
+            self.assertIn(warning, self.orche_ok("triage", "status"))
+            self.assertIn(warning, self.orche_ok("triage", "enable"))
+            line = self.orche_ok("status").splitlines()[-1]
+            self.assertTrue(line.startswith("triage: enabled, backend jev, no eval on file · " + warning), line)
+            from orche import cmd_triage
+            cmd_triage.save_eval(self.labelled(), "jev", cmd_triage.report(
+                [{"label": True, "direct": True, "model_ms": 5, "called": True}], "jev"))
+            self.assertNotIn(warning, self.orche_ok("triage", "status"))
+            self.assertNotIn(warning, self.orche_ok("triage", "enable"))
+            self.assertRegex(self.orche_ok("status").splitlines()[-1],
+                             r"^triage: enabled, backend jev, last eval \S+ \(jev\)$")
+        self.orche_ok("triage", "disable")
+        self.assertFalse(any(l.startswith("triage:") for l in self.orche_ok("status").splitlines()))
 
     def test_eval_rejects_bad_files(self):
         bad = self.root / "bad.jsonl"

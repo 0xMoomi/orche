@@ -91,14 +91,16 @@ class PersonaTemplatesTest(unittest.TestCase):
 
     def test_agents_never_wait_on_a_long_intake(self):
         """Intake fix round I5: the apply skill runs init with --no-intake, then the intake with a
-        10-minute Bash timeout; the liaison only starts `--if-stale` in the background."""
+        10-minute Bash timeout; the liaison only starts `--if-stale --background` (0.3.4: it detaches
+        itself, so the end of the Bash tool call cannot end it)."""
         apply_text = (SKILLS / "orche-apply" / "SKILL.md").read_text()
         for part in ("`orche init <name> --setup-file <path> --no-intake`", "`orche intake <proj>` with the Bash",
                      "`timeout` raised to 600000 ms", "Tell the user its one-line result"):
             self.assertIn(part, apply_text)
         liaison = (PERSONAS / "liaison.md").read_text()
-        self.assertIn("`orche intake {{PROJECT}} --if-stale > .orche/liaison/intake.log 2>&1 &`", liaison)
-        self.assertIn("in the background only, and never wait on it", liaison)
+        self.assertIn("`orche intake {{PROJECT}} --if-stale --background`", liaison)
+        self.assertIn("never add `&` and never wait on", liaison)
+        self.assertNotIn("2>&1 &", liaison)
 
     def test_rendered_personas_carry_the_rules(self):
         for path in sorted(p for p in PERSONAS.glob("*.md") if p.name != INTAKE):

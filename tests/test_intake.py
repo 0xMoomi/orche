@@ -356,6 +356,58 @@ class IntakeRunTest(IntakeCase):
         self.assertIn("intake fresh (", out)
 
 
+class BackgroundTest(IntakeCase):
+    """`orche intake <proj> --background`: detached (own session), log under ORCHE_HOME/logs/intake."""
+
+    def test_spawns_detached_and_creates_the_log_dir(self):
+        from orche import dispatch, paths
+        seen = []
+        with mock.patch.object(dispatch.subprocess, "Popen", lambda argv, **kw: seen.append((argv, kw))):
+            code, out, err = self.orche("intake", "acme", "--background", "--if-stale")
+        self.assertEqual((code, err), (0, ""))
+        log = self.home / "logs" / "intake" / "acme.log"
+        self.assertTrue(log.parent.is_dir())
+        self.assertEqual(out, f"intake started in the background (log: {log}); "
+                              "`orche intake status acme` reads the stamp\n")
+        [(argv, kw)] = seen
+        self.assertEqual(argv[1:], [str(paths.PLUGIN_ROOT / "bin" / "orche.py"), "intake", "acme", "--if-stale"])
+        self.assertTrue(kw["start_new_session"])
+        self.assertEqual(kw["stdin"], subprocess.DEVNULL)
+        self.assertFalse((self.fake / "argv.txt").exists())          # nothing ran in the foreground
+
+    def test_background_run_writes_the_stamp_after_the_caller_returned(self):
+        self.reply(answer({"build": "Run `make test`.", "research": "r", "design": "d"}))
+        code, out, err = self.orche("--json", "intake", "acme", "--background")
+        self.assertEqual(code, 0, err)
+        data = json.loads(out)
+        self.assertEqual((data["project"], data["status"]), ("acme", "started"))
+        stamp = self.repo / ".orche" / "intake.json"
+        deadline = time.monotonic() + 30
+        while not stamp.is_file() and time.monotonic() < deadline:
+            time.sleep(0.1)
+        self.assertTrue(stamp.is_file(), Path(data["log"]).read_text() if Path(data["log"]).exists() else "")
+        self.assertEqual(self.stamp()["head"], head(self.repo))
+
+    def test_running_intake_holds_the_lock_so_nothing_is_spawned(self):
+        from orche import dispatch
+        with intake.lock("acme"), \
+                mock.patch.object(dispatch.subprocess, "Popen", lambda *a, **k: self.fail("spawned")):
+            code, out, err = self.orche("intake", "acme", "--background")
+        self.assertEqual((code, out, err), (0, "intake already running for acme\n", ""))
+
+    def test_unknown_project_fails_before_spawning(self):
+        from orche import dispatch
+        with mock.patch.object(dispatch.subprocess, "Popen", lambda *a, **k: self.fail("spawned")):
+            code, _out, err = self.orche("intake", "nope", "--background")
+        self.assertEqual(code, 2)
+        self.assertIn("nope", err)
+
+    def test_json_status_without_a_stamp_prints_a_record(self):
+        code, out, _err = self.orche("--json", "intake", "status", "acme")
+        self.assertEqual(code, 2)
+        self.assertEqual(json.loads(out), {"project": "acme", "status": "none"})
+
+
 class IfStaleTest(IntakeCase):
     def write_stamp(self, sha, days_ago=0):
         when = (dt.datetime.now(dt.timezone.utc) - dt.timedelta(days=days_ago)).isoformat(timespec="seconds")

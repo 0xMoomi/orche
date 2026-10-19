@@ -3,7 +3,7 @@
 `scan(text)` returns `Command`s in order. A command's `words` are its words with quotes removed (a
 quoted string stays ONE word, so `git commit -m "… security …"` is one argument of `git`, never a
 command). Commands start at the beginning of the text and after `;`, `&`, `|`, `&&`, `||`, a
-newline, `(` and `)`; the insides of `$( … )` and `` `…` `` are scanned as commands of their own,
+newline (`\r\n` and a lone `\r` count as one, see `newlines`), `(` and `)`; the insides of `$( … )` and `` `…` `` are scanned as commands of their own,
 also inside double quotes (the shell runs them there too). `$'…'` (ANSI-C quoting) is decoded.
 
 Not words: redirection operators and their targets (`Command.redirects`; `<` targets also in
@@ -327,7 +327,13 @@ def scan(text, depth=0):
     """The simple commands of `text` (see the module docstring); TooDeep past MAX_DEPTH."""
     if depth > MAX_DEPTH:
         raise TooDeep()
-    return _Scanner(str(text or ""), depth).run()
+    return _Scanner(newlines(str(text or "")), depth).run()
+
+
+def newlines(text):
+    """`text` with `\\r\\n` and a lone `\\r` read as `\\n`, before any line or token handling: a bare CR
+    must not hide what follows it (Python and a heredoc reader both see a new line there)."""
+    return text.replace("\r\n", "\n").replace("\r", "\n")
 
 
 def _skip_options(words, i, short_values, long_values, string_opt):

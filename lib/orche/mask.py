@@ -3,8 +3,12 @@
 PATTERNS is `[(name, rule)]`; every rule has `subn(repl, text)`: a compiled regex replaces the
 whole match, a `_Keep` rule keeps its group 1 (a key word such as `DB_PASSWORD=`, or the
 `scheme://user:` of a URL) and replaces only the value after it. Order matters: specific token
-shapes go first, so the generic `<secret word> = <value>` rule then sees `[REDACTED]` and leaves
-it alone. Git shas, ordinary words and file paths never match (tests/test_mask.py pins both sides).
+shapes go first, so the `<secret word> = <value>` rules then see `[REDACTED]` and leave it alone.
+Those rules are two: config syntax (`KEY=value`, `"key": value`, `KEY: value`) masks any value that
+is not a reference; prose (`the token: …`) masks only a credential-like value (6+ characters with a
+digit, a symbol or a lower-then-upper case change) or a quoted one. Known gap: a letters-only
+password written as prose (`password: correcthorse`) is not masked. Git shas, ordinary words and
+file paths never match (tests/test_mask.py pins both sides).
 """
 import re
 
@@ -19,6 +23,28 @@ _WORD = r"[a-z]{3,8}"
 # `<key>` + optional closing quote + `:`/`=` (same line) + optional opening quote.
 _ASSIGN = r"""["']?[ \t]*[:=][ \t]*["']?"""
 _SECRET_WORDS = r"(?:password|passwd|pwd|secret|token|api[_-]?key|authorization|bearer)"
+# A key holding a secret word as a whole `_`/`-`/`.` separated part (`tokens: 3`, `max_tokens=8` stay),
+# never part of a path or a file name (`src/token.ts: …` stays). Group 1 opens here.
+_KEY_START = r"(?<![A-Za-z0-9_./\\-])("
+_SECRET_KEY = r"(?:[A-Za-z0-9]+[_.-])*" + _SECRET_WORDS + r"(?:[_-][A-Za-z0-9]+)*"
+# Config-style keys that may take `:` (YAML): an UPPER_SNAKE env name, or a dotted config key.
+_UPPER_KEY = (r"(?-i:(?:[A-Z0-9]+[_-])*(?:PASSWORD|PASSWD|PWD|SECRET|TOKEN|API[_-]?KEY|AUTHORIZATION|BEARER)"
+              r"(?:[_-][A-Z0-9]+)*)")
+_DOTTED_KEY = r"(?:[A-Za-z0-9_-]+\.)+" + _SECRET_WORDS + r"(?:[_-][A-Za-z0-9]+)*"
+_VALUE = r"[^\s\"'`,;]+"
+# Never masked: an already-masked value, a header's Bearer/Basic, a reference (`$X`, `${X}`, `<x>`,
+# `%(x)s`, `{{ x }}`, `process.env.X`, `os.environ…`, `env.X`, `secrets.X`), an ENV_VAR_NAME,
+# a path (`/…`, `./…`, `~/…`) or a plain number.
+_SKIP = (r"(?!\[REDACTED\])(?!(?:bearer|basic)[ \t])"
+         r"(?!\$|<|%\(|\{\{|process\.env\b|os\.environ\b|env\.|secrets\.)"
+         r"(?!(?-i:[A-Z][A-Z0-9_]*)(?![^\s\"'`,;]))"
+         r"(?!(?:~|\.{1,2})?/)"
+         r"(?!\d+(?![^\s\"'`,;]))")
+# A prose value must look like a credential: 6+ characters with a digit, a symbol or mixed case
+# (a lower-case letter followed by an upper-case one), unless it is quoted.
+_C = r"[^\s\"'`,;]"
+_SHAPED = (r"(?=" + _C + r"{6})(?:(?=" + _C + r"*[0-9!@#$%^&*+=~?])"
+           r"|(?=" + _C + r"*(?-i:[a-z][A-Z])))")
 
 
 class _Keep:
@@ -49,14 +75,19 @@ PATTERNS = [
     ("jwt", re.compile(_NB + r"eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}")),
     ("hex_private_key", re.compile(r"0x[0-9a-fA-F]{64}")),
     ("rpc_url", re.compile(r"https://[^/\s]*(?:alchemy|infura|quicknode)[^\s]*")),
-    # `DB_PASSWORD=x`, `api-key: x`, `"token": "x"`, `db.password=x`: keep the key, mask the value.
-    # The key word is a whole `_`/`-`/`.` separated part (`tokens: 3`, `max_tokens=8` stay), never
-    # part of a path or a file name (`src/token.ts: …` stays); the value is on the same line, not
-    # already masked and not the `Bearer`/`Basic` of a header handled above.
+    # Keep the key, mask the value (same line, not already masked, not a reference, see _SKIP).
+    # Config syntax masks any value: `key=value` (.env, TOML, shell), a quoted `"key": value` (JSON),
+    # and `KEY: value` / `db.password: value` (YAML with an env-style or dotted key).
     ("secret_assignment", _Keep(
-        r"(?i)(?<![A-Za-z0-9_./\\-])((?:[A-Za-z0-9]+[_.-])*" + _SECRET_WORDS + r"(?:[_-][A-Za-z0-9]+)*"
-        + _ASSIGN + r")"
-        r"(?!\[REDACTED\])(?!(?:bearer|basic)[ \t])[^\s\"'`,;]+")),
+        r"(?i)" + _KEY_START + r"(?:" + _SECRET_KEY + r"""(?:["']?[ \t]*=|["'][ \t]*:)"""
+        + r"|" + _UPPER_KEY + r"[ \t]*:|" + _DOTTED_KEY + r"[ \t]*:)"
+        + r"""[ \t]*["']?)""" + _SKIP + _VALUE)),
+    # Prose (`token: …`, `the secret: …`) masks only a credential-like value (_SHAPED) or a quoted
+    # one, so `secret: none`, `token: GITHUB_TOKEN`, `pwd: /path` stay readable. Accepted miss: a
+    # letters-only password written as prose (`password: correcthorse`).
+    ("secret_prose", _Keep(
+        r"(?i)" + _KEY_START + _SECRET_KEY + r"""[ \t]*:[ \t]*["']?)"""
+        + r"""(?:(?<=["'])""" + _SKIP + _VALUE + r"""(?=["'])|(?<!["'])""" + _SKIP + _SHAPED + _VALUE + r")")),
     # Candidate run: >= 12 lowercase 3-8 letter words separated by whitespace/newlines,
     # optionally numbered. Only BIP39 sub-runs of >= 12 words are redacted (see _redact_mnemonics).
     ("mnemonic", re.compile(

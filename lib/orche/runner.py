@@ -338,10 +338,12 @@ def _dropped(key) -> bool:
 
 
 def worker_env(run_id=None, **extra) -> dict:
-    """A headless worker's environment: os.environ without Main's session variables (_dropped),
-    the plugin's bin/ first on PATH, then `extra`, and `run_id` as ORCHE_RUN_ID (the tag
-    procs.sweep() kills by)."""
-    env = {k: v for k, v in os.environ.items() if not _dropped(k)}
+    """A headless worker's environment: os.environ without Main's session variables (_dropped) and
+    without the Jev key's variable (JEV_API_KEY and the configured `jev.api_key_env`: the key is read
+    only inside the orche process), the plugin's bin/ first on PATH, then `extra`, and `run_id` as
+    ORCHE_RUN_ID (the tag procs.sweep() kills by)."""
+    jev_key_env = {"JEV_API_KEY", str((config.load().get("jev") or {}).get("api_key_env") or "JEV_API_KEY")}
+    env = {k: v for k, v in os.environ.items() if not _dropped(k) and k not in jev_key_env}
     env["PATH"] = f"{paths.PLUGIN_ROOT / 'bin'}{os.pathsep}{env.get('PATH', '')}"
     env.update(extra)
     if run_id:

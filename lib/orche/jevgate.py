@@ -19,14 +19,17 @@ Bash, in this order:
      `secrets/jev.key` (normalised) or a glob in a secrets dir matching it; the PATTERN argument of
      `rg|grep|egrep|fgrep|ag|ack|git grep` is a pattern, not a path, and is exempt;
    - a read (`cat head tail less more xxd od strings base64 cp mv tee dd open source .`, or an
-     input redirect `< path`) of anything under `…/orche/secrets/`; `ls`, `stat`, `test`, `file`
-     and `rm` of other files there stay allowed;
+     input redirect `< path`) of anything in ORCHE_HOME's secrets dir (`~/.claude/orche/secrets/`,
+     `$ORCHE_HOME/secrets/`, the configured ORCHE_HOME's; a source folder such as this repo's
+     `lib/orche/secrets/` is not it); `ls`, `stat`, `test`, `file` and `rm` of other files there
+     stay allowed;
    - a search tool whose PATH argument is ORCHE_HOME, its secrets dir or the key file;
    - orche's stdin key flags (`--stdin`, `--key-stdin`, `--jev-key-stdin`, argparse prefixes);
    - inline interpreter code (python, perl, ruby, node, php, osascript, awk: `-c`/`-e`/`-E`/`-r`/
      `-l`/`--eval`/`-p`, awk's program, a heredoc or here-string, or text piped in) matching the
-     TEXT rules in `code_denied` (Python comments, whole-line and trailing, stripped first with
-     `tokenize`; code that does not tokenize is checked unstripped);
+     TEXT rules in `code_denied` (`\r\n` and a bare `\r` read as a newline first, as Python does;
+     then Python comments, whole-line and trailing, stripped with `tokenize`; code that does not
+     tokenize is checked unstripped);
    - shells (`sh -c`, `bash -c`, a heredoc or text piped into a shell, `eval`, `watch`, `script
      -c`, `flock -c`, `env -S`) have their string re-scanned as a command.
 4. Fail closed: nesting past the scanner's or this module's depth, a RecursionError or any other
@@ -145,7 +148,10 @@ def _resolve(word, cwd):
 
 
 def _secrets_dir(path) -> bool:
-    return path.rstrip("/").endswith("/orche/secrets") or path == os.path.join(orche_home(), "secrets")
+    """ORCHE_HOME's secrets dir: the configured one or the default `…/.claude/orche/secrets` (not a
+    source folder such as this repo's `lib/orche/secrets/`)."""
+    p = path.rstrip("/")
+    return p.endswith("/.claude/orche/secrets") or p == os.path.join(orche_home(), "secrets")
 
 
 def _is_orche_home(path) -> bool:
@@ -172,22 +178,25 @@ def key_path(word, in_secrets=False, cwd="") -> bool:
 
 
 def under_secrets(word, cwd="") -> bool:
-    """A word naming anything inside ORCHE_HOME's secrets dir (`…/orche/secrets/…`)."""
+    """A word naming anything inside ORCHE_HOME's secrets dir (`~/.claude/orche/secrets/…`,
+    `$ORCHE_HOME/secrets/…`, the configured ORCHE_HOME's), normalised; not the dir itself."""
     if not word or any(ch.isspace() for ch in word):
         return False
     w = word[3:] if word.startswith("if=") else word
     path = _resolve(w, cwd)
     if not path:
         return False
-    head = os.path.dirname(path)
-    return _secrets_dir(head) or "/orche/secrets/" in path + "/" and not _secrets_dir(path)
+    store = os.path.join(orche_home(), "secrets") + "/"
+    return not _secrets_dir(path) and ("/.claude/orche/secrets/" in path + "/" or path.startswith(store))
 
 
 # ---- inline interpreter code ------------------------------------------------------------------
 
 def strip_python_comments(code):
-    """`code` without its Python comments (whole-line and trailing `# …`), found by `tokenize`, so a
-    `#` inside a string stays. Code that does not tokenize comes back unchanged (nothing stripped)."""
+    """`code` without its Python comments (whole-line and trailing `# …`), found by `tokenize` after
+    `\\r\\n` and a bare `\\r` become `\\n` (Python reads a bare CR as a line break), so a `#` inside a
+    string stays. Code that does not tokenize comes back with only its newlines normalised."""
+    code = cmdscan.newlines(code)
     try:
         comments = [tok.start for tok in tokenize.generate_tokens(io.StringIO(code).readline)
                     if tok.type == tokenize.COMMENT]
@@ -197,14 +206,14 @@ def strip_python_comments(code):
         return code
     lines = code.split("\n")  # the rows tokenize counted (StringIO.readline splits at "\n" only)
     for row, col in comments:
-        line = lines[row - 1]
-        lines[row - 1] = line[:col] + ("\r" if line.endswith("\r") else "")
+        lines[row - 1] = lines[row - 1][:col]
     return "\n".join(lines)
 
 
 def code_denied(code, python=False) -> bool:
     """TEXT rules for interpreter code: the key path, `security` value lookups, orche's key API,
     the key's env var next to an env or keychain lookup."""
+    code = cmdscan.newlines(code)
     if python:
         code = strip_python_comments(code)
     for t in _norm_text(code):

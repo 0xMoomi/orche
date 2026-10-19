@@ -1025,7 +1025,7 @@ class GateRound2Test(support.TempHomeCase):
             "python3 -c \"jevkey.get()  # fine\"",
             "python3 -c \"print('# not a comment', jevkey.get())\"",  # a # inside a string is not a comment
             "python3 -c \"jevkey.get(  # unbalanced: does not tokenize, so nothing is stripped\"")
-        self.assertEqual(jevgate.strip_python_comments("a = 1  # c\r\nb = '#x'\n"), "a = 1  \r\nb = '#x'\n")
+        self.assertEqual(jevgate.strip_python_comments("a = 1  # c\r\nb = '#x'\n"), "a = 1  \nb = '#x'\n")
         self.assertEqual(jevgate.strip_python_comments("f(  # c"), "f(  # c")
 
     def test_shell_strings_rescanned_as_commands(self):
@@ -1091,6 +1091,21 @@ class GateRound2Test(support.TempHomeCase):
             for tool in ("Read", "Edit", "Write"):
                 self.assertEqual(jevgate.reason(tool, {"file_path": path}), jevgate.REASON, (tool, path))
         self.assertIsNone(jevgate.reason("Read", {"file_path": "/x/docs/jev.key.md"}))
+
+    def test_source_folder_named_secrets_is_not_the_store(self):
+        """0.3.4: the store rule is tied to ORCHE_HOME's secrets dir, not any `…/orche/secrets/`."""
+        repo = "/Users/x/projects/ORCHE"
+        self.assert_allowed("cat lib/orche/secrets/store.py", f"cat {repo}/lib/orche/secrets/store.py",
+                            "rg foo lib/orche/secrets/", f"cd {repo}/lib/orche/secrets && cat share.py")
+        for tool in ("Read", "Edit", "Write"):
+            self.assertIsNone(jevgate.reason(tool, {"file_path": f"{repo}/lib/orche/secrets/store.py"}), tool)
+        self.assertIsNone(jevgate.reason("Grep", {"pattern": "def", "path": "lib/orche/secrets"}))
+        self.assertIsNone(jevgate.reason("Grep", {"pattern": "def", "path": f"{repo}/lib/orche/secrets"}))
+        # the real store, every spelling, stays refused; so does any `secrets/jev.key`
+        self.assert_denied(f"cat {SD}/store.json", "cat ~/.claude/orche/secrets/audit.log",
+                           "cat $HOME/.claude/orche/secrets/x", "cat $ORCHE_HOME/secrets/x",
+                           f"cat {self.home}/secrets/x", "cat lib/orche/secrets/jev.key")
+        self.assertEqual(jevgate.reason("Grep", {"pattern": "x", "path": f"{self.home}/secrets"}), jevgate.REASON)
 
 
 class CmdScanTest(support.TempHomeCase):

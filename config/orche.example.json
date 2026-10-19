@@ -30,7 +30,7 @@
     "enabled": true,
     "model": "claude-sonnet-5-5",
     "max_turns": 30,
-    "timeout_s": 900,
+    "timeout_s": 540,
     "max_chars": 2000,
     "refresh_commits": 50,
     "refresh_days": 14

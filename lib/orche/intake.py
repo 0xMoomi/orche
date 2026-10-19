@@ -406,7 +406,7 @@ def plan(reg, name, cfg, flags, started_ns="<started_ns>") -> Plan:
     today = _dt.date.today().isoformat()
     return Plan(key, root, head, divs, build_argv(cfg, flags, rid),
                 request(key, root, head, divs, int(s.get("max_chars") or 2000), today),
-                int(s.get("timeout_s") or 900), s.get("model") or "claude-sonnet-5-5", rid)
+                int(s.get("timeout_s") or 540), s.get("model") or "claude-sonnet-5-5", rid)
 
 
 @contextlib.contextmanager

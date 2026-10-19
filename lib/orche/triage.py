@@ -14,7 +14,9 @@ Runs inside the UserPromptSubmit hook (hooks/report_inject.py) of a Main session
    environment, its own process group); direct only when route == direct, confidence >=
    triage.min_confidence and tier != hard.
 5. action: a brief relayed through the same path as a Main dispatch (dispatch.relay_detail,
-   `by=triage`), then the hook blocks the prompt so Main spends no turn.
+   `by=triage`), then the hook blocks the prompt so Main spends no turn (Main's activity is touched,
+   as on any Main prompt). GOAL is the classifier's goal, the prompt (<= GOAL_CHARS) or a marked
+   excerpt; CONTEXT then quotes the whole prompt.
 
 Everything is fail-open: an error, a timeout or a low confidence leaves the prompt to Main. Once the
 runner started, the prompt is always blocked: recording the decision is best-effort. Every
@@ -22,6 +24,7 @@ decision writes one `events` line and one masked row to ORCHE_HOME/triage/sample
 itself only with `triage.keep_prompts`). Off unless `triage.enabled`; a non-Main session never triages.
 """
 import hashlib
+import itertools
 import json
 import os
 import re
@@ -46,17 +49,27 @@ MAX_SCOPE = 20
 PROBE_S = 2.0                                        # cap per `claude --version`/`--help` call on this path
 
 CONTEXT = "routed by triage from a Main prompt; the prompt is the whole instruction"
+CONTEXT_QUOTED = "routed by triage from a Main prompt; the prompt, quoted below, is the whole instruction"
+GOAL_CHARS = 300                                     # a prompt up to this long is the GOAL verbatim
+GOAL_EXCERPT = 200                                   # else GOAL is this long an excerpt of it, plus:
+GOAL_POINTER = "excerpt; the full prompt is quoted in CONTEXT"
+REASON_GOAL = 60                                     # GOAL characters shown in the block reason
 TIMEBOX = "30m"
 FORBID = "push, amend, --no-verify, files outside SCOPE"
 REPORT = "standard"
 DEFAULT_ACCEPT = "the change the prompt asks for is made in the SCOPE files and nothing else changed"
-COMMIT_ACCEPT = ("`git add` only the files you changed, by name (never `-A`, `-u` or `.`); exactly one commit "
-                 "with a conventional message")
+COMMIT_ACCEPT = ("`git add` only the files you changed, by name (never `-A`, `-u`, `.` or a glob); exactly one "
+                 "commit with a conventional message")
 NO_SCOPE = "."
 SCOPE_PATH = re.compile(r"[A-Za-z0-9_./-]+")         # a SCOPE entry: path characters only
+# A classifier SCOPE glob: path characters plus `*` and `?` (`**` spans directories); the
+# units.scope_match grammar. An entry with `[` or `]` is neither a glob nor a plain path: dropped.
+# A glob never reaches VERIFY (refused); the commit clause tells the worker never to `git add` one.
+SCOPE_GLOB = re.compile(r"(?:[A-Za-z0-9_./-]|\*|\?)+")
+GLOB_CHARS = "*?["
 # What the classifier may say: a one-line VERIFY a mechanical worker can run (runner.MECH_TOOLS).
 VERIFY_OK = re.compile(r"^(?:ls|test|git\s+(?:status|diff))(?:\s|$)")
-VERIFY_SHELL = re.compile(r"[;&|<>`$\\\n\r]")
+VERIFY_SHELL = re.compile(r"[;&|<>`$\\\n\r*?\[\]]")   # shell syntax, and globs (SCOPE-only)
 # `git status`/`git diff` options a VERIFY may use; any other option (`--output`, `--ext-diff`,
 # `--textconv`, `-c`, …) is refused, since some write files or run programs.
 GIT_VERIFY_OPTS = ("--short", "--stat", "--name-only", "--name-status", "--cached", "--porcelain", "--")
@@ -64,14 +77,37 @@ MAX_GOAL, MAX_ACCEPT, MAX_VERIFY = 500, 300, 200
 
 _TAG = re.compile(r"^\s*\[([A-Za-z]+)\](?=\s|$)\s*")      # the whole first token: `[build]s` is no tag
 _QUESTION_START = re.compile(
-    r"^\s*(?:(?:뭐|무엇|무슨|왜|어떻게|어디|언제|누가|누구|몇|어느)"
-    r"|(?:what|why|how|where|when|who|which|should|can|could|would|is|are|do|does|did|will)\b)",
-    re.IGNORECASE)
-_QUESTION_END = re.compile(r"(?:[?？]|인가요?|일까요?|나요|까요)\s*[.!]*\s*$")
-_KO_IMPERATIVE = re.compile(r"해\s*줘|해\s*주세요|하자|만들어|수정|추가|삭제|바꿔|작성|정리|고쳐|해\s*[.!]*\s*$")
+    r"^\s*(?:(?:뭐|무엇|무슨|왜|어떻게|어디|언제|누가|누구|몇|어느|얼마)"
+    r"|(?:what|why|how|where|when|who|whom|whose|which|should|shall|can|could|would|may|might|is|are|was|"
+    r"were|has|have|had|do|does|did|will|any|isn'?t|aren'?t|wasn'?t|doesn'?t|didn'?t|won'?t|can'?t|"
+    r"couldn'?t|shouldn'?t|wouldn'?t)\b)", re.IGNORECASE)
+# A Korean question ending (with or without `?`): …인가(요), …일까(요)/할까/될까, …나(요), …니, …냐,
+# …는가/은가/던가/건가, …는지/은지/을지/할지, …래(요), …어때(요), 뭐야/뭐지/뭐예요.
+_QUESTION_END = re.compile(
+    r"(?:[?？]|까요?|나요?|니|냐|[는은인던건]가요?|[는은인을할될건]지|래요?|어때요?|"
+    r"(?:뭐|무엇|어디|누구|언제|얼마)(?:야|지|예요|에요|이야|이지|죠))\s*[.!~…]*\s*$")
+# Korean imperative/propositive forms. A verbal noun (수정, 추가, …) counts only with a verb ending
+# (수정해, 수정하자, 수정 부탁) or as the prompt's last word ("docs/a.md 오타 수정"): "수정 이력" is a noun.
+_KO_NOUN = r"(?:수정|추가|삭제|작성|정리|변경|제거|생성|반영|구현|적용|교체|갱신|업데이트|리팩터링|리팩토링|문서화|번역|이동|복사)"
+_KO_VERB_INF = r"(?:만들어|바꿔|고쳐|지워|넣어|빼|옮겨|붙여|올려|써|채워|늘려|줄여|나눠|합쳐|맞춰|되돌려|돌려)"
+_KO_VERB_STEM = r"(?:만들|바꾸|고치|지우|넣|빼|옮기|붙이|올리|쓰|채우|늘리|줄이|나누|합치|맞추|되돌리|돌리)"
+_KO_IMPERATIVE = re.compile(
+    _KO_NOUN + r"\s*(?:해|하자|합시다|하세요|하십시오|하라|부탁|바랍니다|바람|요망)"
+    r"|" + _KO_NOUN + r"(?:\s*좀)?\s*[.!~]*\s*$"
+    r"|" + _KO_VERB_INF + r"(?:\s*줘|\s*주세요|\s*주십시오|\s*줄래|\s*봐|라|\s*[.!~]*\s*$)"
+    r"|" + _KO_VERB_STEM + r"(?:자|세요|으세요|십시오)(?=[\s,.!~]|$)"
+    r"|해\s*줘|해\s*주세요|해\s*주십시오|하자|합시다|해\s*[.!~]*\s*$")
+_EN_VERBS = (r"add|create|write|fix|update|remove|rename|document|refactor|change|delete|replace|move|insert|"
+             r"append|prepend|implement|bump|set|edit|correct|translate|tweak|clean\s+up|tidy(?:\s+up)?|make|put|"
+             r"drop|convert|format|sort|reword|rewrite|rephrase|revert|undo|split|merge|extract|inline|"
+             r"generate|include|exclude|enable|disable|adjust|shorten|expand|simplify|polish|capitali[sz]e|"
+             r"fill\s+in|link|swap|wrap|upgrade|downgrade|comment\s+out|uncomment|mark|pin|unpin")
 _EN_IMPERATIVE = re.compile(
-    r"^\s*(?:please\s+)?(?:add|create|write|fix|update|remove|rename|document|refactor|change)\b", re.IGNORECASE)
-_NEGATION = re.compile(r"하지\s*마|하지\s*말고|말아|\bdon'?t\b|\bdo not\b|\bnever\b", re.IGNORECASE)
+    r"^\s*(?:(?:please|pls|kindly|just|also|now|then|quickly|go(?:\s+and)?|let'?s|let\s+us|"
+    r"i\s+(?:need|want)\s+you\s+to)[\s,]+)*(?:" + _EN_VERBS + r")\b", re.IGNORECASE)
+_NEGATION = re.compile(
+    r"지\s*마(?:세요|십시오|시고|라|요)?(?=[\s,.!~]|$)|지\s*말(?:고|아|라|자)|말아|"
+    r"\bdon'?t\b|\bdo not\b|\bnever\b|\bno need to\b", re.IGNORECASE)
 # An acknowledgement or continuation word first: the prompt answers Main, whatever Main's last line was.
 _CONTINUATION = re.compile(
     r"^\s*(?:(?:응|네|예|그래|좋아|아니|그걸로|그렇게|그럼)요?(?=[\s,.!?~…]|$)"
@@ -91,7 +127,7 @@ _CONFIRM = re.compile(
     r"할까요|될까요|드릴까요|볼까요|괜찮을까요|괜찮으신가요|원하시나요|하시겠습니까|맞나요|맞습니까|"
     r"확인해\s*주세요|알려\s*주세요|말씀해\s*주세요|선택해\s*주세요|결정해\s*주세요", re.IGNORECASE)
 _STATUS_LINE = re.compile(r"^\W*STATUS:", re.IGNORECASE)
-_TRAILER_FENCE = re.compile(r"^\s*```(?:dispatch|amend|stop)\b", re.IGNORECASE)
+_BARE_FENCE = re.compile(r"^(?:`{3,}|~{3,})$")
 _FENCED_JSON = re.compile(r"```(?:json)?\s*(\{.*?\})\s*```", re.DOTALL)
 
 SYSTEM_PROMPT = """You are the triage classifier of a software project's orchestrator. Decide whether a
@@ -105,8 +141,8 @@ hard = design or root-cause work.
 Reply with ONE JSON object and nothing else, no prose, no code fence:
 {{"route": "main"|"direct", "division": one of the divisions, "tier": "mechanical"|"standard"|"hard",
 "confidence": a number 0..1 for the route, "goal": one sentence, "accept": how to tell it is done,
-"verify": one read-only command starting with ls, test, git status or git diff that checks it,
-"scope": [relative file paths it touches]}}"""
+"verify": one read-only command starting with ls, test, git status or git diff that checks it (no wildcards),
+"scope": [relative file paths it touches, or globs such as src/**/*.ts]}}"""
 
 
 @dataclass
@@ -227,36 +263,23 @@ def last_assistant_text(path) -> str:
     return ""
 
 
-def _is_fence(line) -> bool:
-    return line.lstrip().startswith("```")
-
-
 def _closing_block_start(lines):
-    """The index of the fence that opens the block the last line closes, or None (scanning openers
-    forward). Inside a ```dispatch/```amend/```stop block only a bare fence indented no deeper than
-    its opener closes it, so a fenced snippet in an indented continuation line stays inside."""
-    start = indent = tagged = None
-    for i, line in enumerate(lines):
-        if not _is_fence(line):
-            continue
-        depth = len(line) - len(line.lstrip())
-        if start is None:
-            start, indent, tagged = i, depth, bool(_TRAILER_FENCE.match(line))
-        elif line.strip().strip("`").strip() == "" and (not tagged or depth <= indent):
-            if i == len(lines) - 1:
-                return start
-            start = None
-    return None
+    """The index of the fence that opens the block the last line closes, or None (util.fence_spans:
+    ``` or ~~~, a closer of the opener's character and at least its length; inside a dispatch/amend/
+    stop block only a closer indented no deeper than its opener, so a nested snippet stays inside)."""
+    last = len(lines) - 1
+    return next((start for start, end, _info in util.fence_spans(lines) if end == last), None)
 
 
 def strip_trailer(text: str) -> str:
-    """`text` without its trailing fenced blocks (Main's ```dispatch block), STATUS lines and blank lines."""
+    """`text` without its trailing fenced blocks (Main's ```dispatch or ~~~dispatch block), STATUS
+    lines and blank lines."""
     lines = (text or "").rstrip().splitlines()
     while lines:
         last = lines[-1].strip()
         if not last or _STATUS_LINE.match(last):
             lines.pop()
-        elif _is_fence(last) and last.strip("`").strip() == "":
+        elif _BARE_FENCE.match(last):
             opening = _closing_block_start(lines)
             if opening is None:
                 break
@@ -313,14 +336,29 @@ def has_target(prompt: str) -> bool:
 
 
 def is_candidate(prompt: str) -> bool:
-    return is_imperative(prompt) and has_target(prompt) and not _NEGATION.search(prompt[:HEURISTIC_CHARS])
+    """An imperative (a verb form, not a bare verbal noun) naming a target, with no negation, not a question."""
+    return (is_imperative(prompt) and has_target(prompt) and not _NEGATION.search(prompt[:HEURISTIC_CHARS])
+            and not is_question(prompt))
 
 
 # ---- stage 4: classifier ---------------------------------------------------
 
-def _clean_scope(value, root=None) -> list:
+def is_glob(entry: str) -> bool:
+    return any(c in entry for c in GLOB_CHARS)
+
+
+def _glob_base(entry: str) -> str:
+    """The literal directories before a glob's first wildcard segment (`src/**/*.ts` -> `src`)."""
+    parts = entry.split("/")
+    return "/".join(itertools.takewhile(lambda s: not is_glob(s), parts[:-1]))
+
+
+def _clean_scope(value, root=None, globs=False) -> list:
     """Plain relative paths (SCOPE_PATH: no spaces, no shell characters, no leading `-`), no `..`
-    segment, inside `root` when given, `./` dropped; anything else dropped."""
+    segment, inside `root` when given, `./` dropped; anything else dropped. With `globs` (the
+    classifier's scope only) an entry may also be a glob (SCOPE_GLOB: `*`, `?`, `**`, nothing else;
+    `[`/`]` drop the entry), relative, without `..`, whose literal base directory is inside `root`;
+    it is matched like a feature scope (units.scope_match) and never handed to a command."""
     out = []
     for p in value if isinstance(value, list) else []:
         if not isinstance(p, str):
@@ -328,9 +366,12 @@ def _clean_scope(value, root=None) -> list:
         p = p.strip()
         while p.startswith("./"):
             p = p[2:]
-        if (p and len(p) <= 200 and SCOPE_PATH.fullmatch(p) and not p.startswith(("/", "-"))
+        glob = is_glob(p)
+        shape = SCOPE_GLOB.fullmatch(p) if glob and globs else (not glob and SCOPE_PATH.fullmatch(p))
+        inside = Path(root) / (_glob_base(p) if glob else p) if root is not None else None
+        if (p and len(p) <= 200 and shape and not p.startswith(("/", "-"))
                 and ".." not in p.split("/") and p not in out
-                and (root is None or units.is_within(Path(root) / p, root))):
+                and (root is None or units.is_within(inside, root))):
             out.append(p)
     return out[:MAX_SCOPE]
 
@@ -361,7 +402,7 @@ def normalize(data, divisions):
     return {"route": route, "division": division if division in divisions else "", "tier": tier,
             "confidence": float(conf), "goal": str(data.get("goal") or "").strip()[:MAX_GOAL],
             "accept": " ".join(str(data.get("accept") or "").split())[:MAX_ACCEPT],
-            "verify": verify if verify_ok(verify) else "", "scope": _clean_scope(data.get("scope"))}
+            "verify": verify if verify_ok(verify) else "", "scope": _clean_scope(data.get("scope"), globs=True)}
 
 
 def parse_json_object(text):
@@ -577,22 +618,55 @@ def target_root(reg, proj, division):
     return wt or entry.get("path") or None
 
 
+def excerpt(text: str, limit: int) -> str:
+    """`text` on one line (whitespace collapsed), cut to at most `limit` characters at a word
+    boundary when one is near, with `…` when cut."""
+    flat = " ".join((text or "").split())
+    if len(flat) <= limit:
+        return flat
+    cut = flat[:limit - 1]
+    space = cut.rfind(" ")
+    if space >= limit * 2 // 3:
+        cut = cut[:space]
+    return cut.rstrip() + "…"
+
+
+def goal_and_context(d: Decision):
+    """(GOAL, CONTEXT). GOAL is the classifier's goal, else the prompt itself when it has at most
+    GOAL_CHARS characters, else a GOAL_EXCERPT-character excerpt marked as one. Whenever GOAL is not
+    the prompt verbatim, CONTEXT quotes the whole prompt (`> ` lines), so nothing is lost."""
+    if d.goal:
+        goal = d.goal
+    elif len(d.prompt) <= GOAL_CHARS:
+        return d.prompt, CONTEXT
+    else:
+        goal = f"{excerpt(d.prompt, GOAL_EXCERPT)} ({GOAL_POINTER})"
+    quoted = "\n".join("> " + line if line.strip() else ">" for line in d.prompt.splitlines())
+    return goal, f"{CONTEXT_QUOTED}\n{quoted}"
+
+
 def brief_fields(d: Decision, root=None) -> dict:
-    """The brief. SCOPE: the classifier's paths, else the prompt's, each cleaned (_clean_scope: plain
-    relative paths inside `root`); else `.`. VERIFY: the classifier's when verify_ok, else
-    `ls -l <scope files>` when that is verify_ok too, else `git status --short`."""
-    scope = _clean_scope(d.scope, root) or _clean_scope(find_paths(d.prompt), root)
-    fallback = "ls -l " + " ".join(scope) if scope else ""
+    """The brief. GOAL/CONTEXT: goal_and_context. SCOPE: the classifier's paths and globs, else the
+    prompt's paths, each cleaned (_clean_scope: relative, inside `root`); else `.`. VERIFY: the
+    classifier's when verify_ok, else `ls -l <scope files>` (plain paths only, never a glob) when that
+    is verify_ok too, else `git status --short`."""
+    scope = _clean_scope(d.scope, root, globs=True) or _clean_scope(find_paths(d.prompt), root)
+    files = [p for p in scope if not is_glob(p)]
+    fallback = "ls -l " + " ".join(files) if files else ""
     if not verify_ok(fallback):
         fallback = "git status --short"
-    return {"TO": d.division, "GOAL": d.goal or d.prompt, "SCOPE": " ".join(scope) or NO_SCOPE,
-            "CONTEXT": CONTEXT, "ACCEPT": f"{d.accept or DEFAULT_ACCEPT}; {COMMIT_ACCEPT}",
+    goal, context = goal_and_context(d)
+    return {"TO": d.division, "GOAL": goal, "SCOPE": " ".join(scope) or NO_SCOPE,
+            "CONTEXT": context, "ACCEPT": f"{d.accept or DEFAULT_ACCEPT}; {COMMIT_ACCEPT}",
             "VERIFY": d.verify if verify_ok(d.verify) else fallback,
             "TIMEBOX": TIMEBOX, "FORBID": FORBID, "REPORT": REPORT, "TIER": d.tier or "standard"}
 
 
-def block_reason(to, unit, state, tier) -> str:
-    return (f"[orche] routed to {to} as {unit} ({state}, TIER {tier}). Results arrive in this inbox; "
+def block_reason(to, unit, state, tier, goal="") -> str:
+    """What the user sees instead of Main's turn: where it went, the GOAL's first REASON_GOAL
+    characters (masked; the prompt itself is gone from Main's context) and how to cancel."""
+    what = f': "{excerpt(mask.redact(goal)[0], REASON_GOAL)}"' if goal.strip() else ""
+    return (f"[orche] routed to {to} as {unit} ({state}, TIER {tier}){what}. Results arrive in this inbox; "
             f"prefix the prompt with [main] to talk to Main instead (to cancel: [main] STOP {unit}).")
 
 
@@ -611,7 +685,8 @@ def act(d: Decision, reg, me, proj, deadline=None) -> Outcome:
         return Outcome(note=f"[orche] triage could not route this prompt: {res['unit']} was filed for "
                             f"{res['to']} but the runner did not start ({res['state']})")
     return Outcome(block={"decision": "block",
-                          "reason": block_reason(res["to"], res["unit"], res["state"], fields["TIER"])})
+                          "reason": block_reason(res["to"], res["unit"], res["state"], fields["TIER"],
+                                                 fields["GOAL"])})
 
 
 # ---- record ----------------------------------------------------------------
@@ -688,6 +763,10 @@ def handle(payload, started=None) -> Outcome:
             out.model_s = d.model_s
             if out.block is None:
                 d.decision, d.stage, d.reason = "main", 5, out.note
+            else:
+                # The blocked prompt skips inbox.handle_prompt, which touches Main's activity on every
+                # other prompt: touch it here so `orche depts` and the status line do not show Main idle.
+                units.touch_activity(me)
     except Exception as exc:  # noqa: BLE001 - fail-open
         log.log("hooks", f"triage: {type(exc).__name__}: {exc}")
         return Outcome()

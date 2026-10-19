@@ -50,7 +50,28 @@ def cmd_status(args):
             print(row["line"])
         if not rows:
             print("no projects")
+        line = triage_line()
+        if line:
+            print(line)
     return EXIT_OK
+
+
+def triage_line():
+    """One line when triage is enabled: the backend, the last eval and, on Jev with no Jev eval on
+    file, the warning (`orche triage status` has the details). None when triage is off."""
+    from . import cmd_triage, config
+    try:
+        cfg = config.load()
+        if not (cfg.get("triage") or {}).get("enabled"):
+            return None
+        d = cmd_triage.status_data(cfg)
+    except Exception:  # noqa: BLE001 - a status line never fails the command
+        return None
+    e = d["eval"]
+    run = e["last_run"]
+    seen = f"last eval {run.get('at', '?')} ({e['last_backend']})" if run else "no eval on file"
+    return " · ".join(x for x in (f"triage: enabled, backend {d['resolved_backend']}, {seen}",
+                                  cmd_triage.eval_warning(d)) if x)
 
 
 def cmd_statusline(args):

@@ -3,6 +3,111 @@
 All notable changes to ORCHE are listed here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow semantic versioning.
 
+## 0.3.4 — 2026-10-19
+
+### Added
+
+- **`orche intake <project> --background`** starts the intake detached (its own session, so it
+  outlives the calling Bash tool call), logs to `~/.claude/orche/logs/intake/<project>.log` and returns
+  at once ("intake started in the background (log: …)"). The liaison starts its `--if-stale` refresh
+  this way instead of a shell `&` into `.orche/liaison/intake.log`, a folder that might not exist.
+
+### Changed
+
+- **Triage heuristics: verb forms, Korean question endings.** A Korean verbal noun (수정, 추가, 삭제, …)
+  is an instruction only with a verb ending (수정해줘, 추가하자, 정리 부탁해) or as the prompt's last
+  word ("오타 수정"), so "README.md 수정 이력 좀 봐줘" no longer reaches the classifier; native verbs
+  need an imperative or propositive ending (바꿔줘, 고치자, 바꾸세요). A Korean question ending without
+  `?` (…니, …냐, …나(요), …까(요), …는가, …는지, …래(요), 어때, 뭐야) is a question and never a
+  candidate. English takes more verbs (delete, replace, move, implement, bump, set, …) and lead-ins
+  (just, kindly, let's, I need you to); the negation guard also covers 지 마(세요)/지 말고 and "no need
+  to".
+- **Triage brief: bounded GOAL, the whole prompt in CONTEXT.** GOAL is the classifier's goal, else the
+  prompt when it has at most 300 characters, else a 200-character excerpt marked "(excerpt; the full
+  prompt is quoted in CONTEXT)". Whenever GOAL is not the prompt verbatim, CONTEXT quotes every prompt
+  line (before, a classifier goal replaced the prompt). The block reason shows the GOAL's first 60
+  characters, masked.
+- **Triage SCOPE may hold globs** (`*`, `?`, `**` only; an entry with `[` or `]` is dropped) from the
+  classifier, relative and based inside the worktree. A glob never reaches VERIFY (refused); the commit
+  clause tells the worker never to `git add` one ("never `-A`, `-u`, `.` or a glob"), which, like SCOPE
+  itself, is an instruction. Feature scope matching (`units.scope_match`) is unchanged from 0.3.2: `[`
+  is literal, so `app/[slug]/**` admits only that directory.
+- **`orche triage eval` records its summary** per backend in `~/.claude/orche/triage/eval.json`;
+  `orche triage status` shows when it last ran, on which labelled file and whether that file still
+  exists, and warns (as do `orche triage enable` and `orche status`) when triage is enabled on Jev
+  with no Jev eval on file. `orche status` prints one triage line while triage is enabled.
+- **Dispatch blocks may use `~~~` fences.** One fence scanner (`util.fence_spans`) serves the Stop-hook
+  relay and triage: ```` ``` ```` or `~~~`, closed by the same character at least as long.
+- **A dispatch block inside another open fence, or whose closing fence is indented deeper than its
+  opener, is no longer relayed** (0.3.3 relayed it); ORCHE now says so instead of dropping it: "[orche]
+  dispatch block not relayed: the block at line N: <reason>; close the earlier fence / outdent the
+  closer" (exit 2, or a parked question under `stop_hook_active`), only when the reply holds no
+  relayable block: a well-formed block outside any fence is relayed even next to an example. The
+  refusal says nothing in the reply was relayed; it fires in ORCHE sessions only.
+- **`orche apply-all` never runs the project intake** (and so neither does `install.sh
+  --all-projects`): every init gets `--no-intake`, and the run ends with "intake not run for <n>
+  projects: run `orche intake <proj>` per project (about $0.1–0.3 each)". In 0.3.3 it ran one paid
+  sweep per repo, its output hidden, and Ctrl-C moved on to the next repo.
+- **`intake.timeout_s` defaults to 540** (was 900), so a sweep started by `/orche-apply` ends inside
+  the Bash tool's 10-minute maximum.
+
+### Fixed
+
+- **A fenced snippet inside a dispatch block no longer cuts the block short** in the Stop-hook relay
+  (an indented ```` ``` ```` line in a CONTEXT continuation closed it, and the relay refused the block
+  for missing fields); only a closer indented no deeper than the opener closes a dispatch block.
+- **A prompt triage routes now touches Main's activity**, so `orche depts` and the status line no
+  longer show Main idle after blocked prompts.
+- **Masking no longer rewrites ordinary prose** (shipped in 0.3.3, whose entry said "ordinary words
+  are left alone", which was not true for prose). The generic `<secret word>: <value>` rule masked
+  "Secret: not needed" into "Secret: [REDACTED] needed", standing orders, cross-project request bodies,
+  `token: GITHUB_TOKEN`, `${DB_PASSWORD}` and `pwd: /path`. It is now two rules: config syntax
+  (`KEY=value`, `"key": value`, `KEY: value`, `a.b.password: value`) masks any value that is not a
+  reference, an ENV_NAME, a path or a number; prose (`the token: …`) masks only a credential-like value
+  (6+ characters, no spaces, with a digit, a symbol or mixed case) or a quoted one. On the final
+  review's 50 phrases: 0 false positives, 9 of the 10 review secrets masked (the letters-only prose
+  password is a known gap).
+- **A carriage return no longer hides code from the env-read gate** (shipped in 0.3.3). Python reads a
+  bare `\r` as a line break, but the gate stripped a `#` comment to the next `\n`, so
+  `python3 -c '#<CR>import orche.jevkey …'` passed again (0.3.2 refused it), as did environment dumps
+  and `.env` reads hidden that way. `\r\n` and a lone `\r` are now read as `\n` before any line or
+  token handling, by both rule sets and the command scanner.
+- **The env-read gate lets ordinary environment hand-overs through again** (shipped in 0.3.3):
+  `env={**os.environ, "X": "1"}`, `child_env = dict(os.environ)`, `{...process.env, X: 1}`,
+  `"CI" in os.environ`, `len(os.environ)`, `Object.keys(process.env)`, `ENV.keys`, and
+  `for k in os.environ:` when the code prints nothing. Real dumps stay refused: `print(os.environ)`,
+  `print(dict(os.environ))`, `print({**os.environ})`, `json.dumps(os.environ)`,
+  `console.log(process.env)`, `ENV.to_h`, `printenv`, a bare `env`, `export -p`.
+- **The Jev key-store rule is tied to the real store**: ORCHE_HOME's secrets folder (any spelling) and
+  any `secrets/jev.key`. ORCHE's own sources under `lib/orche/secrets/` can be read, edited and searched
+  with a code glob again (a code-blind search of any `secrets/` folder is still refused).
+- **The Jev key's variable no longer reaches workers.** `JEV_API_KEY` (and the configured
+  `jev.api_key_env`) is dropped from every `orche run` and intake worker's environment.
+- **`orche --json intake status <project>` without a stamp** prints `{"project", "status": "none"}`
+  (exit 2 as before) instead of nothing.
+- **A partial `triage/eval.json`** (a run without `file`, `at` or `n`) no longer crashes `orche triage
+  status` or `orche status`; the missing parts show as `?`.
+- **Docs and help**: the env-read gate's "only what a command runs counts" now says the Jev key file's
+  full path is refused anywhere in a command; SPEC §10.5 says environment dumps are denied (not
+  "careful (ask)"); R-DISPATCH-9 names the division's CONTEXT block on the worker's stdin; `orche
+  triage status`, `orche janitor run` and `orche intake --if-stale` help and the README's init flags
+  say what they do. CI runs with `permissions: contents: read`.
+
+### Known gaps
+
+- **Masking:** a letters-only password written as prose (`password: correcthorse`) is not masked; an
+  all-caps value that looks like an env variable name is read as a reference and not masked, so a
+  base32 TOTP seed (`OTP_SECRET=JBSWY3DPEHPK3PXP`) stays readable.
+- **Env-read gate:** an environment copy printed later through an alias (`env = {**os.environ};
+  print(env)`) or `print(os.environ.copy())` passes; `const {NODE_ENV} = process.env`,
+  `os.execvpe(…, os.environ)` and a secret-shaped name within 40 characters of a harmless lookup are
+  refused; `*.key` matches Keynote and i18n files; `declare -F`, `echo $MONKEY_PATCH` and
+  `$TOKENIZERS_PARALLELISM` are refused; `docker compose config`, `cat .envrc` and quote-split names
+  (`cat .e""nv`) pass. Script files are not inspected (as before).
+- **Dispatch relay:** a reply whose only dispatch block is an example inside another fence is refused
+  once.
+- **CI** has no Python 3.9 job for the hook modules (their 3.9 decisions were checked by hand).
+
 ## 0.3.3 — 2026-10-19
 
 ### Added

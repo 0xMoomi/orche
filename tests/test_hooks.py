@@ -434,6 +434,59 @@ class DispatchRelayTest(HookCase):
         self.assertIn("missing VERIFY", ptr["summary"])
         self.assertIn("refused under stop_hook_active", (self.home / "logs" / "hooks.log").read_text())
 
+    def test_dispatch_with_nested_snippet_is_relayed(self):
+        nested = DISPATCH_OK.replace("CONTEXT   Design note in docs/coupon.md\n",
+                                     "CONTEXT   Design note in docs/coupon.md\n  ```ts\n  applyCoupon(code)\n  ```\n")
+        res = self.stop(nested)
+        self.assertEqual((res.returncode, res.stderr), (0, ""))
+        unit = self.only_unit()
+        self.assertIn("applyCoupon(code)", (self.units_dir() / unit / "BRIEF.md").read_text())
+
+    def test_dispatch_after_unclosed_fence_is_refused_not_dropped(self):
+        text = "Log so far:\n```\nTraceback (most recent call last)\n\n" + DISPATCH_OK
+        res = self.stop(text)
+        self.assertEqual(res.returncode, 2)
+        self.assertIn("[orche] dispatch block not relayed: the block at line 7: it is inside the fenced block "
+                      "opened at line 2", res.stderr)
+        self.assertIn("close the earlier fence / outdent the closer", res.stderr)
+        self.assertFalse(self.units_dir().exists())
+        # under stop_hook_active the refusal is parked in Main's own inbox, nothing is relayed
+        deeper = DISPATCH_OK.rstrip("\n")[:-3] + "    ```\n"
+        res = self.stop(deeper, msg_id="msg_2", stop_hook_active=True)
+        self.assertEqual((res.returncode, res.stderr), (0, ""))
+        [ptr] = [json.loads(p.read_text()) for p in self.inbox("main-acme")]
+        self.assertEqual((ptr["status"], ptr["unit"]), ("question", "dispatch-refused"))
+        self.assertIn("indented deeper than its opener", ptr["summary"])
+        self.assertFalse(self.units_dir().exists())
+
+    def test_example_next_to_a_real_block_relays_the_real_block(self):
+        """B-2: an example inside a closed ````markdown fence does not stop the real block after it."""
+        block = DISPATCH_OK[DISPATCH_OK.index("```dispatch"):]
+        text = "Example:\n````markdown\n" + block + "````\n\nNow the real one:\n\n" + block
+        res = self.stop(text)
+        self.assertEqual((res.returncode, res.stderr), (0, ""))
+        self.only_unit()
+
+    def test_example_only_is_refused_with_nothing_relayed(self):
+        block = DISPATCH_OK[DISPATCH_OK.index("```dispatch"):]
+        lines = ("Example:\n````markdown\n" + block + "````\n").splitlines()
+        res = self.stop("\n".join(lines) + "\n")
+        self.assertEqual(res.returncode, 2)
+        self.assertIn("Nothing in this reply was relayed; re-send the dispatch block outside any fence",
+                      res.stderr)
+        self.assertNotIn("say so", res.stderr)
+        # F-4: the swallowing fence is named by its own opener, not as "closed at" the block's closer
+        self.assertIn("inside the fenced block opened at line 2, which swallows it (that fence pairs with the "
+                      f"closer at line {len(lines)})", res.stderr)
+        self.assertFalse(self.units_dir().exists())
+
+    def test_unrelayed_block_outside_an_orche_session_is_not_refused(self):
+        """F-6: only an identified ORCHE session gets the not-relayed refusal."""
+        res = self.run_hook("dispatch_relay.py", self.payload(
+            "stop.json", transcript_path=self.transcript("x\n````markdown\n" + DISPATCH_OK + "````\n"),
+            cwd=str(self.root / "scratch")), ORCHE_SESSION="")
+        self.assertEqual((res.returncode, res.stderr), (0, ""))
+
     def test_liaison_and_feature_senders_refused(self):
         path = self.transcript(DISPATCH_OK)
         res = self.run_hook("dispatch_relay.py", self.payload("stop.json", transcript_path=path),
@@ -822,6 +875,115 @@ class EnvReadGateTest(HookCase):
             self.assertIsNone(envgate.reason("Bash", {"command": command}))
             self.assertIsNone(jevgate.reason("Bash", {"command": command}))
         self.assertLess((time.perf_counter() - start) / 20, 0.05)  # measured ~1 ms; generous for CI
+
+
+# The 0.3.4 final review's table (g): (command, denied). g1 ordinary hand-overs pass; g2 real dumps
+# stay refused; the residual and alias rows are the documented known gaps (envgate docstring).
+ENV_TABLE = [
+    # g1: ordinary code
+    ("""python3 -c 'import os, subprocess; subprocess.run(["ls"], env={**os.environ, "X": "1"})'""", False),
+    ("python3 - <<'EOF'\nimport os, subprocess\nenv = {**os.environ, \"ORCHE_HOME\": \"/tmp/x\"}\n"
+     "subprocess.run([\"true\"], env=env)\nEOF", False),
+    ("""python3 -c "import os, subprocess; subprocess.run(['true'], env={**os.environ})\"""", False),
+    ("""python3 -c "import os, subprocess; child_env = {**os.environ, 'A': '1'}; """
+     """subprocess.run(['true'], env=child_env)\"""", False),
+    ("""python3 -c 'import os; env = dict(os.environ); env["X"] = "1"'""", False),
+    ("""python3 -c "import os; new_env = dict(os.environ); new_env['A'] = '1'\"""", False),
+    ("""python3 -c "import os; ENV = dict(os.environ)\"""", False),
+    ("""python3 -c "import os, subprocess; my_env = os.environ; subprocess.run(['true'], env=my_env)\"""", False),
+    ("""python3 -c 'import os; env = os.environ.copy(); env["X"] = "1"'""", False),
+    ("""python3 -c 'import os; child_env = os.environ.copy()'""", False),
+    ("""python3 -c 'import os, subprocess; subprocess.run(["ls"], env=os.environ)'""", False),
+    ("""python3 -c 'import os; print("CI" in os.environ)'""", False),
+    ("""python3 -c 'import os; print(len(os.environ))'""", False),
+    ("""python3 -c "import os; print(list(os.environ.keys()))\"""", False),
+    ("""python3 -c 'import os; print(os.environ.get("HOME"))'""", False),
+    ("""python3 -c 'import os; print(os.getenv("HOME"))'""", False),
+    ("""python3 -c 'import os; print(os.environ["PATH"])'""", False),
+    ("""python3 -c 'print("set API_KEY in your environment first")'""", False),
+    ("python3 -c 'import os\nfor k in os.environ: pass'", False),
+    ("""node -e 'console.log(process.env.NODE_ENV)'""", False),
+    ("""node -e 'require("child_process").spawnSync("ls", {env: {...process.env, FOO: "1"}})'""", False),
+    ("""node -e "const childEnv = {...process.env, A: '1'}; """
+     """require('child_process').spawnSync('true', {env: childEnv})\"""", False),
+    ("""node -e 'require("child_process").spawnSync("ls", {env: process.env})'""", False),
+    ("""node -e 'console.log(Object.keys(process.env).length)'""", False),
+    ("""node -e "console.log(Object.keys(process.env))\"""", False),
+    ("""ruby -e 'puts ENV["HOME"]'""", False),
+    ("""ruby -e 'puts ENV.keys'""", False),
+    ("""ruby -e 'p ENV.keys'""", False),
+    ("""perl -e 'print $ENV{HOME}'""", False),
+    ("""awk 'BEGIN{print ENVIRON["HOME"]}'""", False),
+    # g1 residual false positives (known gaps)
+    ("""python3 -c 'import os; os.execvpe("ls", ["ls"], os.environ)'""", True),
+    ("""python3 -c 'import os; h = os.environ.get("HOME"); TOKEN_LIMIT = 5'""", True),
+    ("""node -e 'const {NODE_ENV} = process.env; console.log(NODE_ENV)'""", True),
+    # g2: real reads and dumps
+    ("""python3 -c 'import os; print(os.environ)'""", True),
+    ("""python3 -c 'import os; print(os.environ["OPENAI_API_KEY"])'""", True),
+    ("""python3 -c 'import os; print(os.getenv("GITHUB_TOKEN"))'""", True),
+    ("""python3 -c "import os; print(dict(os.environ))\"""", True),
+    ("""python3 -c "import os; print({**os.environ})\"""", True),
+    ("""python3 -c "import os, json; print(json.dumps(dict(os.environ)))\"""", True),
+    ("""python3 -c "import os, json; print(json.dumps(os.environ))\"""", True),
+    ("python3 -c 'import os\nfor k, v in os.environ.items(): print(k, v)'", True),
+    ("python3 -c 'import os\nfor k in os.environ: print(k)'", True),
+    # F-5: a dump carried out by raise/exit is not a quiet loop
+    ("""python3 -c 'import os; raise SystemExit(str({k: os.environ[k] for k in os.environ}))'""", True),
+    ("python3 -c 'import os, sys\nd = {k: os.environ[k] for k in os.environ}\nsys.exit(str(d))'", True),
+    ("""python3 -c "import os; print(len(os.environ), os.environ)\"""", True),
+    ("""python3 -c "import os; x = 'CI' in os.environ; print(os.environ)\"""", True),
+    ("""python3 -c "import os; environment = 1; print(os.environ)\"""", True),
+    ("""python3 -c "import os; xenv=1; print(os.environ)\"""", True),
+    ("""node -e 'console.log(process.env)'""", True),
+    ("""node -e "console.log({...process.env})\"""", True),
+    ("""node -e "console.log(Object.entries(process.env))\"""", True),
+    ("""ruby -e 'p ENV.to_h'""", True),
+    ("printenv", True), ("env", True), ("export -p", True), ("set", True), ("declare -p", True),
+    # g3: dumps through an alias or .copy() (known gaps, documented)
+    ("""python3 -c "import os; print(os.environ.copy())\"""", False),
+    ("""python3 -c "import os; env=os.environ; print(env)\"""", False),
+    ("""python3 -c "import os; env={**os.environ}; print(env)\"""", False),
+    ("""python3 -c "import os; env=dict(os.environ); print(env)\"""", False),
+    ("""node -e "const env={...process.env}; console.log(env)\"""", False),
+]
+
+
+class EnvGateTableTest(HookCase):
+    def test_env_table_in_process(self):
+        from orche import envgate
+        for command, denied in ENV_TABLE:
+            with self.subTest(command=command):
+                self.assertEqual(envgate.reason("Bash", {"command": command}) is not None, denied)
+
+    def test_env_table_through_the_hook(self):
+        for command, denied in ENV_TABLE[:2] + ENV_TABLE[33:35]:
+            res = self.run_hook("env_read_gate.py", self.payload(
+                "pretool_read.json", tool_name="Bash", tool_input={"command": command}))
+            self.assertEqual(bool(res.stdout.strip()), denied, command)
+
+    def test_carriage_return_hides_nothing(self):
+        """A bare CR is a line break to Python: code after `#…\\r` is checked (both rule sets)."""
+        from orche import envgate, jevgate
+        env_cases = ["python3 -c '#\rimport os; print(os.environ)'",
+                     "python3 -c $'#\\rimport os; print(os.environ)'",
+                     "python3 -c '#\rimport os; print(os.environ[\"OPENAI_API_KEY\"])'",
+                     "python3 -c '#\rprint(open(\".env\").read())'",
+                     "python3 - <<'EOF'\n#\rimport os; print(os.environ)\nEOF",
+                     "python3 - <<'EOF'\r\n#c\rimport os; print(os.environ)\r\nEOF",
+                     "python3 -c 'x=1 # c\rimport os; print(os.environ)'"]
+        for command in env_cases:
+            self.assertEqual(envgate.reason("Bash", {"command": command}), envgate.REASON, repr(command))
+        jev_cases = ["python3 -c '#\rimport orche.jevkey as j; print(j.resolve())'",
+                     "python3 -c $'#\\rimport orche.jevkey as j; print(j.resolve())'",
+                     "python3 - <<'EOF'\n#\rimport orche.jevkey as j; print(j.resolve())\nEOF"]
+        for command in jev_cases:
+            self.assertEqual(jevgate.reason("Bash", {"command": command}), jevgate.REASON, repr(command))
+        res = self.run_hook("env_read_gate.py", self.payload(
+            "pretool_read.json", tool_name="Bash", tool_input={"command": jev_cases[0]}))
+        self.assertIn("Jev key", json.loads(res.stdout)["hookSpecificOutput"]["permissionDecisionReason"])
+        # a CR alone still leaves ordinary code alone
+        self.assertIsNone(envgate.reason("Bash", {"command": "python3 -c 'x = 1\r\nprint(x)'"}))
 
 
 class ScopeGateTest(HookCase):

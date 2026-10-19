@@ -77,11 +77,14 @@ Flags (after `bash -s --` when piping, e.g. `curl -fsSL … | bash -s -- --dry-r
 | `--no-jev` | do not ask for a Jev key |
 | `--yes` | ask nothing (implies `--no-jev`) |
 | `--no-profile` | leave your login profile alone and print the PATH line |
-| `--all-projects` | afterwards, apply ORCHE to every Orca repo at once (`orche apply-all`) |
+| `--all-projects` | afterwards, apply ORCHE to every Orca repo at once (`orche apply-all`), without the paid intake |
 
 Applying ORCHE is per project: run `orche init <project>` for each project you want (see
 [Apply ORCHE to a project](#apply-orche-to-a-project)). `--all-projects` onboards every Orca repo
-that is not registered yet in one go; it is off by default.
+that is not registered yet in one go; it is off by default. Those projects are onboarded without
+the [project intake](#project-intake): apply-all ends with `intake not run for <n> projects: run
+\`orche intake <proj>\` per project (about $0.1–0.3 each)`, and you run `orche intake <proj>` for the
+ones you want.
 
 From a clone, `bash install.sh` does the same with that clone (it does not pull; update it with
 `git pull`).
@@ -327,7 +330,7 @@ what a shell would have shown: the directory tree three levels deep (without `.g
   wrote is left alone.
 
 It costs well under a dollar for a mid-size repo on Sonnet and usually takes under a minute (up to
-15 on a large repo; `orche init` prints `intake running… 60 s (claude-sonnet-5-5)` every 30 s); the
+9 on a large repo, `intake.timeout_s` 540; `orche init` prints `intake running… 60 s (claude-sonnet-5-5)` every 30 s); the
 last line of `orche init` says what it cost: `intake my-app: 4 divisions, $0.42, 38 s
 (claude-sonnet-5-5)`. If it cannot run (no `claude`, a timeout, an unusable answer), init still
 succeeds and prints `intake skipped: <reason>; run \`orche intake my-app\` later`. Ctrl-C during the
@@ -337,7 +340,9 @@ summary, and exits 0.
 ```sh
 orche init my-app --no-intake        # skip it
 orche intake my-app                  # run it (again) now
-orche intake my-app --if-stale       # only if 50+ commits landed or it is 14+ days old
+orche intake my-app --if-stale       # only if there is no stamp yet, 50+ commits landed, the stamped
+                                     # commit is no longer an ancestor of HEAD, or it is 14+ days old
+orche intake my-app --background     # start it detached and return at once (log in ~/.claude/orche/logs/intake/)
 orche intake status my-app           # when it ran, at which commit, what it cost
 orche --dry-run intake my-app        # print the exact claude command; writes nothing
 ```
@@ -345,8 +350,9 @@ orche --dry-run intake my-app        # print the exact claude command; writes no
 `orche janitor run` refreshes it with `--if-stale` for projects that already had one (this runs even
 while the janitor itself is still a dry run; `"intake": {"enabled": false}` in the config turns it
 off). An agent never waits on the sweep through its Bash tool: `/orche-apply` runs `orche init …
---no-intake` and then `orche intake <proj>` with a 10-minute tool timeout, and the liaison starts
-`--if-stale` refreshes only in the background.
+--no-intake` and then `orche intake <proj>` with a 10-minute tool timeout (the sweep's own limit is 9
+minutes), and the liaison starts `--if-stale` refreshes only with `--background`. `orche apply-all`
+never runs the intake.
 
 Secrets: the worker cannot run commands, so it cannot print a file or old diffs through `git`. It may
 not read `.env*` files, anything under `secrets/`, keys (`*.pem`, `*.key`, `*.p12`, `id_rsa*`, …),
@@ -357,7 +363,10 @@ settings and hooks and its file tools stay inside the checkout. Its instructions
 anything that looks like a credential, and ORCHE masks keys, tokens, JWTs, passwords
 (`DB_PASSWORD=…`, `postgres://user:…@`) and `Authorization` headers in the answer before writing a
 single file. The same masking module (`lib/orche/mask.py`) covers everything else ORCHE writes or
-sends.
+sends. Config syntax (`KEY=value`, `"key": value`, `KEY: value`) has its value masked; in a sentence
+(`the token: …`) only a credential-like value is (6+ characters with a digit, a symbol or mixed case,
+or quoted), so prose such as "secret: not needed" stays readable. A letters-only password written as
+prose (`password: correcthorse`) is not masked.
 
 ### Choices and options
 
@@ -399,7 +408,8 @@ sends.
   wrong type or value) stops with one `orche:` line and exit 1 (a user error; 2 means "not found");
   `--print-setup` only prints and refuses
   any other setup flag. Other flags: `--stage building|public`, `--aliases a,b`, `--wake build,gtm`
-  (start those divisions now), `--automations` (create the weekly Orca automations).
+  (start those divisions now), `--automations` (create the weekly Orca automations), `--no-intake`
+  (skip the closing [project intake](#project-intake)).
 - **Adding later.** Re-run `orche init <project>` with more divisions or custom ones (on a terminal,
   the checklist marks what the project has as `(onboarded)`). Only the new divisions get worktrees and
   files; existing worktrees, files and registry entries are left untouched.
@@ -547,7 +557,8 @@ keychain value lookup (`security find-generic-password … -w`, also behind `tim
 secrets folder, and inline `python -c`/`node -e`/heredoc code that names it or calls orche's key
 API) and the stdin flags (`--stdin`, `--key-stdin`, `--jev-key-stdin`). A command too nested to
 check is refused too. Only what a command runs counts: a commit message, a search pattern or a
-file's content that merely mentions these is allowed. The gate is a guard against accidents, not a sandbox: inline interpreter
+file's content that merely mentions these is allowed, except the key file's full path, which is
+refused anywhere in a command. The gate is a guard against accidents, not a sandbox: inline interpreter
 code is checked as text, but a script file that reads the key is not, and a determined program
 running as you can still reach the key, so the keychain's own access control and your operating
 system remain the boundary. An exported `JEV_API_KEY` variable
@@ -756,15 +767,22 @@ the prompt to Main unchanged):
    prompts starting with `/` or `!` are left alone.
 2. **Bypasses** (no model). Prompts under 12 characters; prompts that start with an
    acknowledgement or continuation word (응, 네, 예, 그래, 좋아, 아니, 그걸로, 그렇게, 그럼; yes,
-   yeah, ok, okay, sure, no, nope, go ahead, do it, that one); questions (ending in `?` or
-   starting with a question word, Korean or English); and replies to a question Main just asked
-   go to Main. For the last one, Main's last message is read from the transcript, its trailing
-   fenced blocks (Main's ```` ```dispatch ```` block) and `STATUS:` lines are dropped, and what is
+   yeah, ok, okay, sure, no, nope, go ahead, do it, that one); questions (ending in `?`, starting
+   with a question word, Korean or English, or ending in a Korean question form even without `?`:
+   …니, …냐, …나(요), …까(요), …는가, …는지, …래(요), 어때, 뭐야); and replies to a question Main
+   just asked go to Main. For the last one, Main's last message is read from the transcript, its
+   trailing fenced blocks (Main's ```` ```dispatch ```` block, with ```` ``` ```` or `~~~` fences)
+   and `STATUS:` lines are dropped, and what is
    left must end with `?` or a confirmation request ("Shall I …", "진행할까요", …).
-3. **Heuristics** (no model). Only a request that is an instruction ("add", "fix", "rename", …;
-   "추가해줘", "수정", "정리", …) AND names a concrete target (`docs/guide.md`, `README.md`,
-   or a quoted identifier such as `` `fooBar` ``) AND has no negation ("don't", "하지 말고", …)
-   is a candidate. Everything else goes to Main.
+3. **Heuristics** (no model). Only a request that is an instruction AND names a concrete target
+   (`docs/guide.md`, `README.md`, or a quoted identifier such as `` `fooBar` ``) AND has no
+   negation ("don't", "never", "no need to", "하지 말고", "건드리지 마세요", …) AND is not a
+   question is a candidate. An instruction is an English verb first ("add", "fix", "rename",
+   "delete", "replace", "move", "implement", "bump", …, optionally after "please", "just",
+   "let's" or "I need you to") or a Korean imperative or propositive form: a verbal noun with a
+   verb ending ("수정해줘", "추가하자", "정리 부탁해") or as the last word ("오타 수정"), or a verb
+   such as "바꿔줘", "고치자", "지워 주세요". A verbal noun used as a noun ("수정 이력 좀 봐줘") is
+   not. Everything else goes to Main.
 4. **Classifier** (candidates only). It returns a route, a division, a TIER, a confidence and a
    draft GOAL/ACCEPT/VERIFY/SCOPE. The backend is Jev (about 1 s) when Jev is enabled and
    configured, otherwise `claude -p` with Haiku (about 3 s measured on 2026-10-18, 5–9 s
@@ -774,19 +792,31 @@ the prompt to Main unchanged):
    the runner's filtered environment; on timeout its whole process group is killed. The prompt
    goes direct only when the route is `direct`, the confidence is at least
    `triage.min_confidence` (0.9) and the TIER is not `hard`.
-5. **Action.** ORCHE writes the brief (CONTEXT "routed by triage from a Main prompt"; ACCEPT
-   ends with "`git add` only the files you changed, by name (never `-A`, `-u` or `.`); exactly
-   one commit with a conventional message";
+5. **Action.** ORCHE writes the brief. GOAL is the classifier's goal, else the prompt itself
+   when it has at most 300 characters, else a 200-character excerpt marked "(excerpt; the full
+   prompt is quoted in CONTEXT)". Whenever GOAL is not the prompt word for word, CONTEXT ("routed
+   by triage from a Main prompt; the prompt, quoted below, is the whole instruction") quotes the
+   whole prompt line by line, so nothing is lost (otherwise CONTEXT is "routed by triage from a
+   Main prompt; the prompt is the whole instruction"). ACCEPT
+   ends with "`git add` only the files you changed, by name (never `-A`, `-u`, `.` or a glob);
+   exactly one commit with a conventional message";
    TIMEBOX 30m; FORBID "push, amend, --no-verify, files outside SCOPE") and starts the runner
-   through the same path as a Main dispatch. SCOPE keeps only plain relative paths inside the
+   through the same path as a Main dispatch. SCOPE keeps only relative paths inside the
    division's worktree (letters, digits, `_`, `.`, `/` and `-` only, no leading `-`, no `/…`,
-   `~…` or `..`), else `.`. VERIFY is the classifier's only when it is one `ls`, `test`,
+   `~…` or `..`), else `.`. The classifier's SCOPE may also hold globs (`*`, `?` and `**` only;
+   an entry with `[` or `]` is dropped; the base directory inside the worktree), meaning what they
+   mean in a feature scope; a glob never reaches VERIFY (refused), and the commit clause tells the
+   worker never to `git add` a glob, which, like SCOPE itself, is an instruction. The scope gate enforces feature scopes
+   and the worktree boundary, not a division brief's SCOPE, so SCOPE is an instruction to the
+   worker. VERIFY is the classifier's only when it is one `ls`, `test`,
    `git status` or `git diff` command a mechanical worker can run (`git` with plain paths and
    only `--short`, `--stat`, `--name-only`, `--name-status`, `--cached` or `--porcelain`), else
-   `ls -l <scope files>` when that passes the same check, else `git status --short` (also with
-   no files). The `claude --version`/`--help` probe counts against `triage.max_latency_s` (each
+   `ls -l <scope files>` (plain paths only) when that passes the same check, else
+   `git status --short` (also with no files). The `claude --version`/`--help` probe counts against `triage.max_latency_s` (each
    call capped at 2 s); a failed probe means no classifier this time. The prompt is then blocked with "[orche] routed to <division>
-   as <unit> (runner-started, TIER <t>) … (to cancel: [main] STOP <unit>)". Once the runner
+   as <unit> (runner-started, TIER <t>): "<the GOAL's first 60 characters, masked>" … (to cancel:
+   [main] STOP <unit>)", and Main's activity is touched as on any Main prompt, so `orche depts`
+   and the status line do not show Main idle. Once the runner
    started the prompt is always blocked; writing the records is best-effort. The result
    arrives in Main's inbox like any other unit's. A routed Build unit commits, so the worktree
    stays clean for the next unit, and its pointer reads "unverified: STATUS: done (no ledger
@@ -798,10 +828,15 @@ Each decision writes an `events.log` line (`triage session=… decision=main|dir
 stage=… conf=… backend=… ms=… unit=…`) and a row in `~/.claude/orche/triage/samples.jsonl`
 (a hash of the prompt, the decision, confidence, backend and latency; the masked prompt only with
 `triage.keep_prompts: true`). A routed prompt's row and events line also carry its unit id, whose
-slug is made from the prompt's first words (masked). `orche triage status` shows the backend, latency p50/p95 and the
-last 20 decisions; `orche triage eval <file>` scores labelled prompts (`{"prompt": …, "label":
-"direct"|"main"}` per line; `--backend heuristics` scores the no-model checks alone); `orche
-metrics` has a Triage section. Config: `triage.enabled`, `triage.backend` (`auto`, `jev`,
+slug is made from the prompt's first words (masked). `orche triage status` shows the backend,
+latency p50/p95, the last eval and the last 20 decisions. `orche triage eval <file>` scores
+labelled prompts (`{"prompt": …, "label": "direct"|"main"}` per line; `--backend heuristics`
+scores the no-model checks alone) and records the summary per backend in
+`~/.claude/orche/triage/eval.json` (when, which file, the scores; never the prompts; not with
+`--dry-run`). `orche triage status` says when the last eval ran, on which file and whether that
+file still exists. With triage enabled on Jev and no Jev eval on file, `orche triage status`,
+`orche triage enable` and `orche status` print a warning: run an eval first. `orche status`
+prints one triage line while triage is enabled. `orche metrics` has a Triage section. Config: `triage.enabled`, `triage.backend` (`auto`, `jev`,
 `claude-haiku`), `triage.min_confidence`, `triage.max_latency_s`, `triage.keep_prompts`.
 Below about 1 s, `triage.max_latency_s` usually skips the classifier on a busy machine: each
 `claude --version`/`--help` probe gets at most half the budget, so the probe alone can use it up.
