@@ -872,23 +872,21 @@ the prompt to Main unchanged):
    prompt runs as TIER `standard`, or `mechanical` when the classifier says so. `[drain]` and
    prompts starting with `/` or `!` are left alone.
 2. **Bypasses** (no model). Prompts under 12 characters; prompts that start with an
-   acknowledgement or continuation word (응, 네, 예, 그래, 좋아, 아니, 그걸로, 그렇게, 그럼; yes,
-   yeah, ok, okay, sure, no, nope, go ahead, do it, that one); questions (ending in `?`, starting
-   with a question word, Korean or English, or ending in a Korean question form even without `?`:
-   …니, …냐, …나(요), …까(요), …는가, …는지, …래(요), 어때, 뭐야); and replies to a question Main
+   acknowledgement or continuation word (yes, yeah, ok, okay, sure, no, nope, go ahead, do it,
+   that one, and their Korean equivalents); questions (ending in `?`, starting with a question
+   word, or ending in a Korean question form even without `?`); and replies to a question Main
    just asked go to Main. For the last one, Main's last message is read from the transcript, its
    trailing fenced blocks (Main's ```` ```dispatch ```` block, with ```` ``` ```` or `~~~` fences)
    and `STATUS:` lines are dropped, and what is
-   left must end with `?` or a confirmation request ("Shall I …", "진행할까요", …).
+   left must end with `?` or a confirmation request ("Shall I …", "Want me to …", …).
 3. **Heuristics** (no model). Only a request that is an instruction AND names a concrete target
    (`docs/guide.md`, `README.md`, or a quoted identifier such as `` `fooBar` ``) AND has no
-   negation ("don't", "never", "no need to", "하지 말고", "건드리지 마세요", …) AND is not a
-   question is a candidate. An instruction is an English verb first ("add", "fix", "rename",
-   "delete", "replace", "move", "implement", "bump", …, optionally after "please", "just",
-   "let's" or "I need you to") or a Korean imperative or propositive form: a verbal noun with a
-   verb ending ("수정해줘", "추가하자", "정리 부탁해") or as the last word ("오타 수정"), or a verb
-   such as "바꿔줘", "고치자", "지워 주세요". A verbal noun used as a noun ("수정 이력 좀 봐줘") is
-   not. Everything else goes to Main.
+   negation ("don't", "never", "no need to", and their Korean forms) AND is not a question is a
+   candidate. An instruction is an English verb first ("add", "fix", "rename", "delete",
+   "replace", "move", "implement", "bump", …, optionally after "please", "just", "let's" or
+   "I need you to") or a Korean imperative or propositive form (a verbal noun with a verb ending
+   or as the last word, or an imperative verb); a verbal noun used as a plain noun is not.
+   Everything else goes to Main.
 4. **Classifier** (candidates only). It returns a route, a division, a TIER, a confidence and a
    draft GOAL/ACCEPT/VERIFY/SCOPE. The backend is Jev (about 1 s) when Jev is enabled and
    configured, otherwise `claude -p` with Haiku (about 3 s measured on 2026-10-18, 5–9 s
