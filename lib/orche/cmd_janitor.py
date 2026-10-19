@@ -30,7 +30,9 @@ def register(subparsers):
     p = subparsers.add_parser("janitor", help="state-based cleanup: archive retired sessions, trash discarded files")
     sub = p.add_subparsers(dest="janitor_cmd", metavar="<action>")
     p.set_defaults(func=lambda a: (p.print_help(sys.stderr), EXIT_USER)[1])
-    sp = sub.add_parser("run", help="plan (and, when enabled, perform) one cleanup pass")
+    sp = sub.add_parser("run", help="plan (and, when enabled, perform) one cleanup pass; also refreshes "
+                                    "stale project intakes (`orche intake --if-stale`, a paid read-only "
+                                    "sweep each), even while the cleanup itself is a dry run")
     sp.add_argument("--apply-removed", action="store_true",
                     help="retire units whose worktree Orca no longer lists")
     sp.add_argument("--claude-projects", help="Claude transcript root (default ~/.claude/projects)")

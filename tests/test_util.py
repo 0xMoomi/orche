@@ -109,6 +109,53 @@ class FindFencedBlockTest(unittest.TestCase):
     def test_none_when_absent(self):
         self.assertIsNone(util.find_fenced_block("no fences here", "dispatch"))
         self.assertIsNone(util.find_fenced_block("```dispatchx\nTO a\n```", "dispatch"))
+        self.assertIsNone(util.find_fenced_block("~~~dispatchx\nTO a\n~~~", "dispatch"))
+
+    def test_tilde_fences_mirror_the_backtick_tests(self):
+        text = ("intro\n~~~dispatch\nTO a\n~~~\nmiddle\n~~~python\nprint(1)\n~~~\n"
+                "~~~dispatch\nTO b\nGOAL g\n~~~\nend")
+        self.assertEqual(util.find_fenced_block(text, "dispatch"), "TO b\nGOAL g")
+        self.assertEqual(util.find_fenced_block(text, "python"), "print(1)")
+        self.assertEqual(util.fenced_bodies(text, "dispatch"), ["TO a", "TO b\nGOAL g"])
+
+
+class FenceSpansTest(unittest.TestCase):
+    """util.fence_spans: ``` and ~~~ fences close with the same character and at least the same length."""
+
+    def spans(self, text):
+        return util.fence_spans(text.splitlines())
+
+    def test_backtick_and_tilde_blocks(self):
+        for f in ("```", "~~~"):
+            self.assertEqual(self.spans(f"a\n{f}dispatch\nTO b\n{f}\nz"), [(1, 3, "dispatch")], f)
+            self.assertEqual(self.spans(f"{f}\nx\n{f}\n{f}py\ny\n{f}"), [(0, 2, ""), (3, 5, "py")], f)
+            self.assertEqual(self.spans(f"{f}dispatch\nTO b"), [(0, None, "dispatch")], f)   # unclosed
+
+    def test_the_other_character_or_a_shorter_fence_is_content(self):
+        self.assertEqual(self.spans("```dispatch\n~~~\nTO b\n```"), [(0, 3, "dispatch")])
+        self.assertEqual(self.spans("~~~dispatch\n```\nTO b\n~~~"), [(0, 3, "dispatch")])
+        self.assertEqual(self.spans("~~~~dispatch\n~~~\nTO b\n~~~~"), [(0, 3, "dispatch")])
+        self.assertEqual(self.spans("````dispatch\n```\nTO b\n`````"), [(0, 3, "dispatch")])
+        self.assertEqual(self.spans("```\nx\n```py"), [(0, None, "")])    # a fence with info never closes
+
+    def test_a_snippet_indented_inside_a_trailer_block_stays_inside(self):
+        for f in ("```", "~~~"):
+            body = (f"{f}dispatch\nTO build\nCONTEXT the call:\n  {f}py\n  parse(x)\n  {f}\n  bare:\n  {f}\n"
+                    f"  y = 1\n  {f}\nTIER standard\n{f}")
+            self.assertEqual(self.spans(body), [(0, 11, "dispatch")], f)
+            # A plain block has no such rule: an indented bare fence closes it.
+            self.assertEqual(self.spans(f"{f}\n  {f}\nx\n{f}"), [(0, 1, ""), (3, None, "")], f)
+
+    def test_dispatch_find_blocks_reads_tilde_blocks_and_nested_snippets(self):
+        from orche import dispatch
+        nested = ("CONTEXT see:\n  ```py\n  parse(x)\n  ```\n  ~~~\n  y\n  ~~~\nTIER standard")
+        for f in ("```", "~~~", "````", "~~~~"):
+            text = f"Done.\n\n{f}dispatch\nTO build\nGOAL g\n{nested}\n{f}\n\nSTATUS: waiting"
+            self.assertEqual(dispatch.find_blocks(text), [f"TO build\nGOAL g\n{nested}"], f)
+        self.assertEqual(dispatch.find_blocks("~~~dispatch\nTO a\n```\n~~~dispatch\nTO b\n~~~"),
+                         ["TO a\n```\n~~~dispatch\nTO b"])                              # inner lines are content
+        self.assertEqual(dispatch.find_blocks("```dispatch\nTO a\n```\n~~~dispatch\nTO b\n~~~"), ["TO a", "TO b"])
+        self.assertEqual(dispatch.find_blocks("```dispatch\nTO a\n~~~"), [])                 # never closed
 
 
 class PathsLogConfigTest(support.TempHomeCase):

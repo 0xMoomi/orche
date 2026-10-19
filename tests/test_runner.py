@@ -1383,6 +1383,19 @@ class RoundTwoRunTest(RunnerCase):
                           "CLAUDE_CODE_CLIENT_KEY_PASSPHRASE": "pw", "ORCA_TERMINAL_HANDLE": None,
                           "ORCHE_RUN_SINCE": None})
 
+    def test_worker_env_drops_the_jev_key_variable(self):
+        """0.3.4 review M-13: the Jev key is read only inside orche; a worker with Bash never gets it."""
+        unit = self.brief()
+        self.reply("STATUS: blocked\nx")
+        cfg = json.loads((self.home / "config.json").read_text())
+        cfg["jev"] = {"api_key_env": "MY_JEV_KEY"}
+        (self.home / "config.json").write_text(json.dumps(cfg))
+        with mock.patch.dict(os.environ, {"JEV_API_KEY": "k1", "MY_JEV_KEY": "k2", "OTHER_VAR": "v"}):
+            self.orche("run", unit)
+        env = dict(line.split("=", 1) for line in (self.fake / "env.txt").read_text().splitlines() if "=" in line)
+        self.assertEqual({k: env.get(k) for k in ("JEV_API_KEY", "MY_JEV_KEY", "OTHER_VAR")},
+                         {"JEV_API_KEY": None, "MY_JEV_KEY": None, "OTHER_VAR": "v"})
+
     def test_doctor_reconciles_a_dead_runs_lock(self):
         """A SIGKILLed `orche run` filed nothing; `orche doctor` reconciles it (resilience R-A):
         `failed` "runner died" is filed, the lock goes, one WARN row says so; a dry run touches nothing."""

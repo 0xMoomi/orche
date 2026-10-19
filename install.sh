@@ -38,7 +38,8 @@ Options:
   --ref REF        branch or tag to install (default: main)
   --mode MODE      plugin (default): hooks via the Claude Code plugin;
                    settings: hooks registered in ~/.claude/settings.json instead
-  --all-projects   afterwards run `orche apply-all` (init every Orca repo not registered yet);
+  --all-projects   afterwards run `orche apply-all` (init every Orca repo not registered yet,
+                   without the paid intake: run `orche intake <proj>` per project afterwards);
                    without it, apply ORCHE per project with `orche init <project>`
   --no-jev         do not ask for the optional Jev key (add it later: orche jev setup)
   --yes            ask nothing (implies --no-jev)
@@ -340,7 +341,7 @@ apply_all() {
     return 0
   fi
   if [ "$DRY_RUN" = 1 ]; then
-    step "would run: orche apply-all (init every Orca repo not registered yet)"
+    step "would run: orche apply-all (init every Orca repo not registered yet; no intake)"
     return 0
   fi
   step "orche apply-all"

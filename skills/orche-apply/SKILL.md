@@ -27,7 +27,7 @@ user names it. `orche apply-all` is never used: some repos are dormant and some 
    <project>`; the worker has Read/Glob/Grep only, no shell) that writes `.orche/div/<division>/CONTEXT.md`
    per division (what that division needs to know; appended to its units' briefs as fenced reference
    data), the empty sections of `PROJECT_CARD.md` and `.orche/intake.json`. Usually well under a dollar
-   and a minute, up to 15 minutes on a large repo; its line shows the cost. If it fails, init still
+   and a minute, up to 9 minutes on a large repo (`intake.timeout_s`, 540); its line shows the cost. If it fails, init still
    succeeds and says `intake skipped: …`. Skip it with `--no-intake`; re-run it any time with
    `orche intake <project>` (`--if-stale` only when 50+ commits or 14+ days passed).
 
@@ -73,8 +73,9 @@ In chat there is no terminal, so the setup goes through a JSON file. (A user at 
      its division names, custom ones included, `○` = dormant) and `orche depts <proj>` (one row per
      division, also by name). Only the status-line cell uses the label (`Design` → `DES○`).
    - `orche intake <proj>` with the Bash tool's `timeout` raised to 600000 ms (10 minutes; the sweep
-     prints nothing until it ends). Tell the user its one-line result, e.g. `intake <proj>: 4 divisions,
-     $0.42, 38 s (claude-sonnet-5-5)`, or the failure line and that `orche intake <proj>` can be re-run.
+     stops itself after 9 and prints nothing until it ends). Tell the user its one-line result, e.g.
+     `intake <proj>: 4 divisions, $0.42, 38 s (claude-sonnet-5-5)`, or the failure line and that
+     `orche intake <proj>` can be re-run.
 6. Hand over in three lines: where the Main pane is (Orca tab `main-<proj>`), that the first request goes
    there in plain language (Main echoes `Understood: source = <proj>, output = <proj>` and ends with a
    dispatch block), and that `[drain]` shows finished work.

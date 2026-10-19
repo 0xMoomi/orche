@@ -26,7 +26,8 @@ DEFAULTS = {
     # .orche/div/<division>/CONTEXT.md (max_chars each) and PROJECT_CARD.md. enabled: `orche init`
     # runs it at the end and `orche janitor run` refreshes a stamped project once HEAD moved
     # refresh_commits commits or the stamp is refresh_days old (`orche intake` itself always runs).
-    "intake": {"enabled": True, "model": "claude-sonnet-5-5", "max_turns": 30, "timeout_s": 900,
+    # timeout_s 540: a sweep ends inside the Bash tool's 10-minute maximum (/orche-apply).
+    "intake": {"enabled": True, "model": "claude-sonnet-5-5", "max_turns": 30, "timeout_s": 540,
                "max_chars": 2000, "refresh_commits": 50, "refresh_days": 14},
 }
 

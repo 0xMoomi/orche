@@ -34,10 +34,15 @@ skipped). Refused:
   `$HOME`, `$secret_sauce`). Passing such a variable to another program (`curl -H "…$TOKEN"`) is
   allowed: the value goes to the program, not to the transcript;
 - inline interpreter code (python, perl, ruby, node, php, osascript, awk; `-c`/`-e`/…, heredoc,
-  here-string, piped text) matching the TEXT rules in `code_denied` (Python comments stripped
-  first): an environment lookup next to a secret-shaped name (`os.environ['OPENAI_API_KEY']`,
-  `process.env.API_KEY`), a whole-environment read (`print(os.environ)`, `console.log(process.env)`,
-  `p ENV`, `%ENV`, `$_ENV`, `getenv()`, awk's `ENVIRON`), a string literal naming a secret path
+  here-string, piped text) matching the TEXT rules in `code_denied` (`\r\n` and a bare `\r` read as
+  a newline, then Python comments stripped): an environment lookup next to a secret-shaped name
+  (`os.environ['OPENAI_API_KEY']`, `process.env.API_KEY`), a whole-environment read
+  (`print(os.environ)`, `print(dict(os.environ))`, `json.dumps(os.environ)`, `console.log(process.env)`,
+  `p ENV`, `ENV.to_h`, `%ENV`, `$_ENV`, `getenv()`, awk's `ENVIRON`) unless it is a hand-over
+  (`env={**os.environ, …}`, `child_env = dict(os.environ)`, `{...process.env, X: 1}`,
+  `"CI" in os.environ`, `len(os.environ)`, `Object.keys(process.env)`, `ENV.keys`, a lookup such as
+  `os.environ.get("HOME")` or `process.env.NODE_ENV`, and `for k in os.environ:` when the code
+  prints nothing), a string literal naming a secret path
   (`open('.env')`), or a multi-word string literal that is itself a refused command
   (`os.system('cat .env')`, `execSync('printenv')`);
 - shells (`sh -c`, `bash -c`, a heredoc or text piped into a shell, `eval`, `watch`, `script -c`,
@@ -48,7 +53,15 @@ prefilter refuses with TOO_COMPLEX.
 Known gaps (best effort, not a sandbox): a script file that reads a secret (`python3 x.py`);
 programs that load `.env` themselves (`node --env-file=.env`, `dotenv`); `git show :.env`;
 variable indirection; `cat *` in a directory holding `key.pem`; `subprocess.run(['env'])` in
-inline code (single-word literals other than secret paths and `printenv` are not re-scanned).
+inline code (single-word literals other than secret paths and `printenv` are not re-scanned);
+an environment copy printed later through an alias (`env = {**os.environ}; print(env)`,
+`const env = {...process.env}; console.log(env)`) or `print(os.environ.copy())`; destructuring
+(`const {NODE_ENV} = process.env` is refused, a false positive); `os.execvpe(…, os.environ)` (refused,
+a false positive); a secret-shaped name within 40 characters of a harmless lookup
+(`os.environ.get("HOME"); TOKEN_LIMIT = 5`, refused); `docker compose config` (prints interpolated
+`.env` values); `cat .envrc`; quote-split names (`cat .e""nv`). False positives: `*.key` also
+matches Keynote decks and i18n `.key` files; `declare -F` (function names only) is refused;
+`echo $MONKEY_PATCH` / `$TOKENIZERS_PARALLELISM` are refused.
 
 Stdlib only and free of new syntax (the hook also runs on old interpreters).
 """
@@ -94,16 +107,27 @@ PREFILTER_NAME = re.compile(SECRET_WORD)
 # ---- inline interpreter code (TEXT rules) ------------------------------------------------------
 ENV_LOOKUP_SECRET = re.compile(r"(?:environ|getenv|Getenv|process\.env|\bENV\b|%ENV|\$_ENV|\$_SERVER|ENVIRON)"
                                r"[\s\S]{0,40}?(?<![A-Za-z0-9_])" + SECRET_NAME)
-# Whole-environment reads; (pattern, prefix that makes the match a hand-over, not a read).
+# Whole-environment reads; (pattern, prefix that makes the match a hand-over, not a read). A
+# hand-over is an assignment to an `…env` name (`env=`, `child_env = {**`, `ENV = dict(`,
+# `childEnv = {...`, `{env: …}`), `import`, a membership test (`"CI" in`), `len(` or
+# `Object.keys(`. A generic `in` or `**` is not one: `print({**os.environ})` stays a dump.
 ENV_DUMPS = {
     "python": (re.compile(r"\benviron\b(?!\s*(?:\[|\.get\b|\.setdefault\b|\.pop\b|\.copy\b|\.keys\b|"
-                          r"\.update\b|\.__contains__\b))"), re.compile(r"(?:\benv\s*=|\bimport)\s*(?:os\.)?$")),
-    "node": (re.compile(r"\bprocess\.env\b(?!\s*(?:\.|\[|\?\.))"), re.compile(r"\benv\s*[:=]\s*$")),
-    "ruby": (re.compile(r"\bENV\b(?!\s*(?:\[|\.fetch\b|\.key\?|\.has_key\?|\.include\?))"), None),
+                          r"\.update\b|\.__contains__\b))"),
+               re.compile(r"(?:\b\w*env\s*=(?:\s*\{\s*\*\*|\s*dict\()?|\bimport|\blen\(|[\"']\s+in)"
+                          r"\s*(?:os\.)?$", re.I)),
+    "node": (re.compile(r"\bprocess\.env\b(?!\s*(?:\.|\[|\?\.))"),
+             re.compile(r"(?:\b\w*env\s*[:=](?:\s*\{\s*\.\.\.)?|\bObject\.keys\()\s*$", re.I)),
+    "ruby": (re.compile(r"\bENV\b(?!\s*(?:\[|\.fetch\b|\.key\?|\.has_key\?|\.include\?|\.keys\b))"), None),
     "perl": (re.compile(r"%ENV\b"), None),
     "php": (re.compile(r"\bgetenv\s*\(\s*\)|\$_ENV\b(?!\s*\[)|\$_SERVER\b(?!\s*\[)|\bphpinfo\b"), None),
     "awk": (re.compile(r"\bENVIRON\b(?!\s*\[)"), None),
 }
+# `for k in os.environ:` walks names; it is a hand-over only when the code prints nothing (no
+# output call, and no `raise`/`return`/`exit`/`sys.exit`/`SystemExit` that could carry a built string).
+FOR_LOOP = re.compile(r"\bfor\s+\w+\s+in\s+(?:os\.)?$")
+PRINTS = re.compile(r"\b(?:print|pprint|write|writelines|dump|dumps|echo|log|info|debug|warning|error|exit|"
+                    r"SystemExit)\s*\(|\b(?:raise|return)\b")
 STRING_LITERAL = re.compile(r"'([^'\n]{1,300})'|\"([^\"\n]{1,300})\"|`([^`\n]{1,300})`")
 
 
@@ -186,6 +210,7 @@ def _family(name):
 
 def code_denied(code, family, depth=0) -> bool:
     """TEXT rules for interpreter code (see the module docstring)."""
+    code = cmdscan.newlines(code)
     if family == "python":
         code = jevgate.strip_python_comments(code)
     if ENV_LOOKUP_SECRET.search(code):
@@ -194,8 +219,12 @@ def code_denied(code, family, depth=0) -> bool:
     if dump:
         pattern, handover = dump
         for m in pattern.finditer(code):
-            if handover is None or not handover.search(code[max(0, m.start() - 40):m.start()]):
-                return True
+            before = code[max(0, m.start() - 40):m.start()]
+            if handover is not None and handover.search(before):
+                continue
+            if family == "python" and FOR_LOOP.search(before) and not PRINTS.search(code):
+                continue
+            return True
     for m in STRING_LITERAL.finditer(code):
         literal = next(g for g in m.groups() if g is not None)
         if secret_path(literal) or literal.strip() == "printenv":

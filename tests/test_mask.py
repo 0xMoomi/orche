@@ -171,7 +171,7 @@ REVIEW_TABLE = [
     ("api_key: " + "0123456789abcdef" * 2, "api_key: [REDACTED]"),
     ("x-api-key: abc123", "x-api-key: [REDACTED]"),
     ("GITHUB_TOKEN=ghp" + "_" + "b" * 36, "GITHUB_TOKEN=[REDACTED]"),
-    ("secret: x\nnext line", "secret: [REDACTED]\nnext line"),
+    ("secret = x\nnext line", "secret = [REDACTED]\nnext line"),
     ("Authorization: Bearer abc.def-123", "Authorization: Bearer [REDACTED]"),
     ('curl -H "Authorization: Bearer xyz"', 'curl -H "Authorization: Bearer [REDACTED]"'),
     ("Bearer " + "Ab1." * 6, "Bearer [REDACTED]"),
@@ -191,6 +191,69 @@ NOT_SECRETS = [
     "http://localhost:8080/a@b", "https://github.com/acme/shop/pull/12",
     "npm run build && npm test", "`make test`; `make run`",
 ]
+
+
+# The 0.3.4 final review's table (c): prose that mentions a secret word stays readable; config
+# syntax masks any value that is not a reference; prose masks a credential-like or quoted value.
+PROSE_UNCHANGED = [
+    "token: see docs", "Token: none (the CLI reads it from the keychain)", "password reset flow",
+    "secret: none", "Secret: not needed for local dev", "api_key param",
+    "api_key: optional (falls back to JEV_API_KEY)",
+    "| Field | Type | Notes |\n|---|---|---|\n| token | string | required |\n| api_key | string | optional |",
+    "| key | value |\n|---|---|\n| token: | rotated weekly |",
+    "- `token`: the session token (string)", "token=<redacted by user>",
+    "STATUS: done\nVerified: token refresh works; password: unchanged; secret_name: OPENAI_API_KEY",
+    "Ops: secret: VERCEL_TOKEN (GitHub Actions secret), token: GITHUB_TOKEN",
+    "auth token: passed via the Authorization header", "pwd: /Users/me/project", "pwd=/tmp/work",
+    "token_count: 1234", "token_budget=2000", "max_tokens: 4096", "tokens: 3", "input_tokens=5",
+    "bearer token: required for /api", "Bearer authentication is used",
+    "secret-scanning: enabled (gitleaks)", "password_hash: bcrypt (cost 12)", "token.ts: handles refresh",
+    "the reset-password: page lives in src/pages", "csrf_token: double-submit cookie",
+    "secret_key_base: set by Rails credentials", "fix the token: refresh bug in src/auth.ts",
+    "/correct never print the secret: use orche secret run instead",
+    "Ops: token: `GITHUB_TOKEN` in Actions", "API key: RESEND_API_KEY (Vercel dashboard)",
+    "Env: password=${DB_PASSWORD} in docker-compose.yml", 'password: "${DB_PASSWORD}"',
+    "secret: ${{ secrets.VERCEL_TOKEN }}", "token: process.env.GITHUB_TOKEN", 'api_key_env="JEV_API_KEY"',
+    "token: GITHUB_TOKEN", "secret: x\nnext line",
+    "Authorization: Bearer|Basic|Token",
+    # Accepted miss (SPEC, CHANGELOG known gaps): a letters-only password written as prose.
+    "password: correcthorse",
+]
+REAL_SECRETS = [
+    ("DB_PASSWORD=hunter2", "DB_PASSWORD=[REDACTED]"),
+    ("aws_secret_access_key=" + AWS_SECRET, "aws_secret_access_key=[REDACTED]"),
+    ('password: "hunter2"', 'password: "[REDACTED]"'),
+    ("token = ghp" + "_" + "abcdefghijklmnopqrstuvwxyz0123456789", "token = [REDACTED]"),
+    ("password: hunter22!", "password: [REDACTED]"),
+    ("secret: s3cr3t-Value9", "secret: [REDACTED]"),
+    ("secret = x\nnext line", "secret = [REDACTED]\nnext line"),
+    ('"password": "correct-horse"', '"password": "[REDACTED]"'),
+    ("OPENAI_API_KEY=sk-" + "proj-abc123def456", "OPENAI_API_KEY=[REDACTED]"),
+    # config keys (YAML env-style, dotted) take any value; prose takes a mixed-case one
+    ("OPENAI_API_KEY: abcdefgh", "OPENAI_API_KEY: [REDACTED]"),
+    ("db.password: abc", "db.password: [REDACTED]"),
+    ("the token: correctHorse", "the token: [REDACTED]"),
+    # B-1: a lower-case YAML key is prose to the rule; a 6+ character credential-like value is masked
+    ("database:\n  password: hunter2", "database:\n  password: [REDACTED]"),
+    ("password: abc123!", "password: [REDACTED]"),
+]
+
+
+class ConfigVersusProseTest(unittest.TestCase):
+    def test_prose_is_left_alone(self):
+        for text in PROSE_UNCHANGED:
+            with self.subTest(text=text):
+                self.assertEqual(mask.redact(text), (text, 0))
+
+    def test_real_secrets_are_masked(self):
+        for text, want in REAL_SECRETS:
+            with self.subTest(text=text):
+                self.assertEqual(mask.redact(text)[0], want)
+
+    def test_rule_names(self):
+        self.assertEqual(mask.redact_counts("DB_PASSWORD=hunter2")[1], {"secret_assignment": 1})
+        self.assertEqual(mask.redact_counts("password: hunter22!")[1], {"secret_prose": 1})
+        self.assertEqual(mask.redact_counts('{"passwd": "hunter2"}')[1], {"secret_assignment": 1})
 
 
 class ReviewTableTest(unittest.TestCase):

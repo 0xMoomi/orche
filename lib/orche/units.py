@@ -207,7 +207,8 @@ def project_root(reg: dict, key: str):
 
 
 def scope_match(rel_path: str, pattern: str) -> bool:
-    """Glob match on a `/`-separated relative path; `**` spans directories, `*` does not."""
+    """Glob match on a `/`-separated relative path; `**` spans directories, `*` and `?` do not.
+    `[` is literal (a Next.js `app/[slug]/**` admits only that directory, never `app/s/…`)."""
     out, i = [], 0
     while i < len(pattern):
         if pattern.startswith("**/", i):

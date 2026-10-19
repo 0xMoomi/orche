@@ -149,9 +149,49 @@ def parse_kv_block(text: str):
     return fields, unknown
 
 
+_FENCE_LINE = re.compile(r"^([ \t]*)(`{3,}|~{3,})(.*)$")
+# Blocks whose continuation lines may hold their own fenced snippets (the dispatch grammar indents them).
+TRAILER_INFOS = ("dispatch", "amend", "stop")
+
+
+def fence_spans(lines, nest=TRAILER_INFOS) -> list:
+    """[(start, end or None, info)] for the fenced blocks in `lines`, in order (CommonMark-like).
+
+    A fence is 3+ backticks or 3+ tildes (a backtick fence's info string has no backtick). A block is
+    closed only by a bare fence of the same character and at least the opener's length; a fence line
+    of the other character, or a shorter one, is content. Inside a block whose info word is in `nest`
+    (```dispatch, ~~~amend, …) only a closer indented no deeper than its opener closes it, so a fenced
+    snippet in an indented continuation line stays inside. `end` is None for an unclosed block.
+    """
+    spans, cur = [], None
+    for i, line in enumerate(lines):
+        m = _FENCE_LINE.match(line)
+        if not m:
+            continue
+        indent, fence, info = len(m.group(1)), m.group(2), m.group(3).strip()
+        if cur is None:
+            if fence[0] == "`" and "`" in info:
+                continue
+            cur = (i, fence[0], len(fence), indent, info)
+            continue
+        start, char, size, depth, opened = cur
+        word = opened.split()[0].lower() if opened else ""
+        if fence[0] == char and len(fence) >= size and not info and (word not in nest or indent <= depth):
+            spans.append((start, i, opened))
+            cur = None
+    if cur is not None:
+        spans.append((cur[0], None, cur[4]))
+    return spans
+
+
+def fenced_bodies(text: str, lang: str) -> list:
+    """Bodies of the closed fenced blocks (``` or ~~~) whose info string is exactly `lang`, in order."""
+    lines = (text or "").splitlines()
+    return ["\n".join(lines[s + 1:e]).rstrip("\n") for s, e, info in fence_spans(lines)
+            if e is not None and info == lang]
+
+
 def find_fenced_block(text: str, lang: str):
-    """Body of the last ```<lang> fenced block in `text`, or None."""
-    pattern = re.compile(r"^[ \t]*```" + re.escape(lang) + r"[ \t]*\n(.*?)^[ \t]*```[ \t]*$",
-                         re.MULTILINE | re.DOTALL)
-    matches = pattern.findall(text or "")
-    return matches[-1].rstrip("\n") if matches else None
+    """Body of the last ```<lang> (or ~~~<lang>) fenced block in `text`, or None."""
+    bodies = fenced_bodies(text, lang)
+    return bodies[-1] if bodies else None

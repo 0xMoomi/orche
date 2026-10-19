@@ -3,7 +3,8 @@
 dumps, secret managers; rules and gaps in `lib/orche/envgate.py`) and of the stored Jev key
 (keychain value lookups, ORCHE_HOME/secrets/jev.key, orche's key API, keys fed to orche's stdin
 flags; `lib/orche/jevgate.py`). Both rule sets look at command words and tool paths, never at text
-that merely mentions a secret (a Markdown file about `.env`, a commit message, a search pattern).
+that merely mentions a secret (a Markdown file about `.env`, a commit message, a search pattern),
+except the Jev key file's full ORCHE_HOME path, which is refused anywhere in a command.
 
 Denies only on a positive match; prints nothing otherwise (no auto-allow). Internal error -> allow +
 log, except that both rule sets refuse a command they cannot finish checking ("too complex").

@@ -20,7 +20,6 @@ REFUSE = "[orche] dispatch refused: "
 BODY_MARK = re.compile(r"^## Brief\b.*$", re.MULTILINE)
 CLAIM = re.compile(r"^(STATUS|Status):\s*(release-ready|done|완료)", re.MULTILINE)
 UNIT_ID = re.compile(r"^[a-z0-9][a-z0-9-]*-\d{8}-\d+$")
-BLOCK = re.compile(r"^[ \t]*```dispatch[ \t]*\n(.*?)^[ \t]*```[ \t]*$", re.MULTILINE | re.DOTALL)
 
 
 class Refusal(Exception):
@@ -37,7 +36,46 @@ class Block:
 
 
 def find_blocks(text: str) -> list:
-    return [m.rstrip("\n") for m in BLOCK.findall(text or "")]
+    """Bodies of the closed ```dispatch (or ~~~dispatch) blocks, in order (util.fence_spans: a closer
+    uses the opener's character and at least its length; an indented snippet inside stays inside)."""
+    return util.fenced_bodies(text, "dispatch")
+
+
+DISPATCH_OPENER = re.compile(r"^([ \t]*)(`{3,}|~{3,})[ \t]*dispatch[ \t]*$")
+
+
+def unrelayed_openers(text) -> list:
+    """[(line, reason)] (1-based) for each ```dispatch / ~~~dispatch opener that yields no relayed
+    block: inside another fenced block (an earlier unclosed fence, a lone `~~~`, an indented fence
+    line), or never closed (often a closer indented deeper than its opener)."""
+    lines = (text or "").splitlines()
+    spans = util.fence_spans(lines)
+    relayed = {s for s, e, info in spans if e is not None and info == "dispatch"}
+    out = []
+    for i, line in enumerate(lines):
+        m = DISPATCH_OPENER.match(line)
+        if not m or i in relayed:
+            continue
+        outer = next(((s, e) for s, e, _info in spans if s < i and (e is None or e > i)), None)
+        if outer is not None:
+            reason = (f"it is inside the fenced block opened at line {outer[0] + 1}"
+                      + (", which is never closed" if outer[1] is None else
+                         f", which swallows it (that fence pairs with the closer at line {outer[1] + 1})"))
+        else:
+            indent, char = len(m.group(1).expandtabs()), m.group(2)[0]
+            deeper = next((j for j in range(i + 1, len(lines))
+                           if lines[j].strip().strip(char) == "" and lines[j].strip().startswith(char * 3)
+                           and len(lines[j]) - len(lines[j].lstrip()) > indent), None)
+            reason = ("its closing fence at line %d is indented deeper than its opener" % (deeper + 1)
+                      if deeper is not None else "it is never closed")
+        out.append((i + 1, reason))
+    return out
+
+
+def unrelayed_message(found) -> str:
+    where = "; ".join(f"the block at line {n}: {reason}" for n, reason in found)
+    return (f"[orche] dispatch block not relayed: {where}. Nothing in this reply was relayed; re-send the "
+            "dispatch block outside any fence (close the earlier fence / outdent the closer).")
 
 
 def _check_keys(fields, unknown, allowed):
@@ -338,13 +376,21 @@ def spawn_run(unit) -> None:
     if it lands before the new process got going; an AMEND's marker, written before, never does.
     The plugin `bin` leads PATH; ORCHE_RUN_ID (set when the hook itself runs inside a run's worker)
     is dropped, so that run's end-of-run sweep never takes this new run with it."""
-    out = paths.orche_home() / "logs" / "runs" / f"{unit}.log"
-    out.parent.mkdir(parents=True, exist_ok=True)
+    spawn_detached(run_argv(unit), paths.orche_home() / "logs" / "runs" / f"{unit}.log",
+                   ORCHE_RUN_SINCE=str(time.time_ns()))
+
+
+def spawn_detached(argv, log, **extra_env) -> None:
+    """Start `argv` detached: its own session (it outlives the caller, a Bash tool call included),
+    stdin closed, output appended to `log` (its folder created). The plugin `bin` leads PATH;
+    ORCHE_RUN_ID is dropped (see spawn_run). Never waits."""
+    log = Path(log)
+    log.parent.mkdir(parents=True, exist_ok=True)
     env = {k: v for k, v in os.environ.items() if k != "ORCHE_RUN_ID"}
-    env["ORCHE_RUN_SINCE"] = str(time.time_ns())
+    env.update(extra_env)
     env["PATH"] = f"{paths.PLUGIN_ROOT / 'bin'}{os.pathsep}{env.get('PATH', '')}"
-    with open(out, "ab") as fh:
-        subprocess.Popen(run_argv(unit), stdin=subprocess.DEVNULL, stdout=fh, stderr=subprocess.STDOUT,
+    with open(log, "ab") as fh:
+        subprocess.Popen(argv, stdin=subprocess.DEVNULL, stdout=fh, stderr=subprocess.STDOUT,
                          start_new_session=True, close_fds=True, env=env)
 
 
@@ -655,12 +701,18 @@ def handle_stop(payload: dict, started=None):
     if identified:
         units.touch_activity(me)
     bodies = find_blocks(text)
-    if bodies:
+    # A reply whose dispatch openers yield no relayable block at all (an example inside another fence,
+    # an unclosed earlier fence, …) is refused so Main learns why instead of believing it dispatched;
+    # a well-formed block outside any fence is relayed even next to an example. ORCHE sessions only.
+    unrelayed = unrelayed_openers(text) if identified and not bodies else []
+    if bodies or unrelayed:
         marker = _relayed_marker(payload.get("session_id"))
         seen = util.read_json(marker, default={}) or {}
         text_hash = hashlib.sha256(text.encode("utf-8")).hexdigest()[:16]
         if not (seen.get("text_hash") == text_hash or (msg_id is not None and seen.get("msg_id") == msg_id)):
             try:
+                if unrelayed:
+                    raise Refusal(unrelayed_message(unrelayed))
                 relay(reg, bodies, units.project_from_cwd(reg, cwd), me, deadline, identified=identified)
             except Refusal as exc:
                 if not payload.get("stop_hook_active"):

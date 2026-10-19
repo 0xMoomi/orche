@@ -4,7 +4,9 @@ Refuses when Orca does not answer. The awake limit is honoured across the whole 
 repo's `--wake` divisions would exceed it, that repo is initialised all-dormant instead. A failing
 repo is reported and the run continues; the exit code is 1 when any repo failed. The ORCHE
 plugin repo itself is skipped. The plan and the summary print how many panes the run opens
-(main + liaison per repo, plus the `--wake` divisions).
+(main + liaison per repo, plus the `--wake` divisions). Every init gets `--no-intake`: apply-all
+never runs the paid intake sweep; its last line says for how many projects to run
+`orche intake <proj>` by hand.
 """
 import argparse
 import io
@@ -97,8 +99,9 @@ def run(args) -> int:
             budget = limit - len(registry.awake_sessions(registry.load()))
         woken = wake if len(wake) <= budget else []
         note = "" if woken == wake else f"--wake {','.join(wake)} dropped (awake limit {limit})"
-        argv = ["init", repo["id"], "--stage", args.stage, "--divisions", ",".join(registry.DIVISIONS)] \
-            + (["--wake", ",".join(woken)] if woken else [])   # the standard set, never the setup screen
+        # The standard set, never the setup screen; never the paid intake (one per project, by hand).
+        argv = ["init", repo["id"], "--stage", args.stage, "--divisions", ",".join(registry.DIVISIONS),
+                "--no-intake"] + (["--wake", ",".join(woken)] if woken else [])
         row = {"repo": name, "key": key, "argv": ["orche", *argv], "note": note, "pane_count": 2 + len(woken)}
         if args.dry_run:
             budget -= len(woken)
@@ -135,5 +138,10 @@ def run(args) -> int:
     panes = sum(r.get("pane_count", 0) for r in rows if r["result"] in ("planned", "ok"))
     lines.append(f"{len(repos)} repo(s), {planned} {'planned' if args.dry_run else 'processed'}, {failed} failed")
     lines.append(f"panes: {panes} {'to open' if args.dry_run else 'opened'} (main + liaison per repo, plus --wake)")
-    out(args, {"dry_run": args.dry_run, "repos": rows, "failed": failed, "panes": panes}, lines)
+    no_intake = sum(1 for r in rows if r["result"] in ("planned", "ok"))
+    if no_intake:
+        lines.append(f"intake not run for {no_intake} project{'s' if no_intake != 1 else ''}: run "
+                     "`orche intake <proj>` per project (about $0.1–0.3 each)")
+    out(args, {"dry_run": args.dry_run, "repos": rows, "failed": failed, "panes": panes,
+               "intake_not_run": no_intake}, lines)
     return EXIT_USER if failed else EXIT_OK
