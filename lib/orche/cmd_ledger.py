@@ -4,7 +4,7 @@ import os
 import sys
 from pathlib import Path
 
-from . import ledger, registry, shell, units
+from . import ledger, registry, roster, shell, units
 
 EXIT_OK, EXIT_USER, EXIT_NOT_FOUND, EXIT_BLOCKED = 0, 1, 2, 3
 
@@ -72,18 +72,6 @@ def _emit(args, data, lines):
             print(line)
 
 
-def _project_from(reg, cwd):
-    """project_from_cwd, falling back to symlink-resolved unit/project paths (e.g. /var -> /private/var)."""
-    key = units.project_from_cwd(reg, cwd)
-    if key is None:
-        unit = units.unit_from_cwd(reg, cwd)
-        key = unit.project if unit is not None else None
-    if key is None:
-        key = next((k for k in reg.get("projects", {})
-                    if units.project_root(reg, k) and units.is_within(cwd, units.project_root(reg, k))), None)
-    return key
-
-
 def _project(args, reg=None):
     reg = reg if reg is not None else registry.load()
     if args.proj:
@@ -91,7 +79,7 @@ def _project(args, reg=None):
         if found is None:
             raise _Exit(EXIT_NOT_FOUND, f"unknown project: {args.proj}")
         return found[0], reg
-    key = _project_from(reg, os.getcwd())
+    key = roster.Roster(reg).place(os.getcwd()).project
     if key is None:
         raise _Exit(EXIT_USER, "cannot resolve the project from cwd; pass --proj")
     return key, reg
@@ -106,7 +94,7 @@ def _git(argv, cwd=None):
 
 def cmd_record(args):
     proj, _ = _project(args)
-    producer = args.producer if args.producer is not None else os.environ.get("ORCHE_SESSION")
+    producer = args.producer if args.producer is not None else roster.env_session()
     try:
         row = ledger.make_row(args.pr, args.sha, args.verdict, args.evidence, args.verifier, producer)
     except ledger.WriterIsJudge as exc:
@@ -178,7 +166,8 @@ def cmd_export(args):
         raise _Exit(EXIT_NOT_FOUND, f"repo not found: {repo}")
     reg = registry.load()
     if not args.proj:
-        key = _project_from(reg, repo) or _project_from(reg, os.getcwd())
+        r = roster.Roster(reg)
+        key = r.place(repo).project or r.place(os.getcwd()).project
         if key is None:
             raise _Exit(EXIT_USER, "cannot resolve the project; pass --proj")
         args.proj = key

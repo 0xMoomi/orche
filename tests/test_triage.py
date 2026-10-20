@@ -12,8 +12,7 @@ from pathlib import Path
 from unittest import mock
 
 import support
-from orche import config, dispatch, jev, triage, units
-from support import HELP_OLD, write_fake_claude
+from orche import brief, config, dispatch, jev, paths, procs, registry, roster, triage, units
 from test_runner import REAL_POPEN, SPAWN, RunnerCase, alive
 
 SECRET = "sk-" + "b" * 30
@@ -68,9 +67,10 @@ class TriageCase(RunnerCase):
         payload = {"session_id": "sess-main-0001", "prompt": prompt, "cwd": str(self.repo),
                    "transcript_path": transcript or str(self.root / "none.jsonl")}
         env = {"ORCHE_SESSION": session} if session else {}
-        with mock.patch.dict(os.environ, env), mock.patch.object(dispatch.subprocess, "Popen", fake_popen), \
+        with mock.patch.dict(os.environ, env), mock.patch.object(procs.subprocess, "Popen", fake_popen), \
                 mock.patch.object(triage, "classify", classifier or stub(None)):
-            return triage.handle(payload, time.monotonic())
+            r = roster.Roster(registry.load())
+            return triage.handle(payload, time.monotonic(), r, r.identify(payload["cwd"]))
 
     def samples(self):
         path = self.home / "triage" / "samples.jsonl"
@@ -375,21 +375,23 @@ class HeuristicTest(TriageCase):
 class ClassifierTest(TriageCase):
     def test_parse_valid_fenced_and_embedded_json(self):
         divs = ["build", "rnd"]
-        self.assertEqual(triage.parse_claude(haiku_reply(DIRECT), divs)[0]["route"], "direct")
+        self.assertEqual(triage.normalize(triage.parse_json_object(json.dumps(DIRECT)), divs)["route"], "direct")
         fenced = "```json\n" + json.dumps(DIRECT) + "\n```"
-        self.assertEqual(triage.parse_claude(haiku_reply(fenced), divs)[0]["division"], "build")
+        self.assertEqual(triage.normalize(triage.parse_json_object(fenced), divs)["division"], "build")
         prose = "Sure. " + json.dumps(DIRECT) + " Hope that helps."
-        self.assertEqual(triage.parse_claude(haiku_reply(prose), divs)[0]["tier"], "mechanical")
-        self.assertEqual(triage.parse_claude(haiku_reply(DIRECT, cost=0.002), divs)[1], 0.002)
+        self.assertEqual(triage.normalize(triage.parse_json_object(prose), divs)["tier"], "mechanical")
 
     def test_garbage_and_wrong_types_are_none(self):
         divs = ["build"]
         for bad in ("not json at all", "", json.dumps([1, 2]), json.dumps(dict(DIRECT, route="maybe")),
                     json.dumps(dict(DIRECT, tier="easy")), json.dumps(dict(DIRECT, confidence=1.5)),
                     json.dumps(dict(DIRECT, confidence=True)), json.dumps(dict(DIRECT, confidence="0.9"))):
-            self.assertIsNone(triage.parse_claude(haiku_reply(bad), divs)[0], bad)
-        self.assertIsNone(triage.parse_claude(haiku_reply(DIRECT, is_error=True), divs)[0])
-        self.assertIsNone(triage.parse_claude("garbage", divs)[0])
+            self.assertIsNone(triage.normalize(triage.parse_json_object(bad), divs), bad)
+
+    def test_an_is_error_reply_fails_open_with_its_cost(self):
+        self.write_reply(haiku_reply(DIRECT, cost=0.002, is_error=True))
+        result, _name, _secs, cost = triage.classify("Add a line to README.md", ["build"], self.cfg())
+        self.assertEqual((result, cost), (None, 0.002))
 
     def test_scope_is_sanitized_and_unknown_divisions_dropped(self):
         got = triage.normalize(dict(DIRECT, division="legal", scope=["a.md", "/etc/passwd", "../x", "~/y", 3,
@@ -493,28 +495,28 @@ class ClassifierTest(TriageCase):
         (self.fake / "exit").write_text(str(code))
 
     def test_haiku_backend_runs_claude_with_the_brief_flags_from_a_temp_dir_outside_home(self):
-        """I3 + M3 + M4: a fresh temp dir outside $HOME (removed after), `--tools ""`, the runner's env filter."""
+        """I3 + M3 + M4: the blank headless call: a fresh temp dir outside $HOME (removed after),
+        `--tools ""`, no inherited identity and no Jev key."""
         self.write_reply(haiku_reply(DIRECT))
         env = {"ORCHE_SESSION": "main-acme", "ORCHE_RUN_ID": "r1", "CLAUDECODE": "1", "CLAUDE_PROJECT_DIR": "/p",
-               "ORCA_TERMINAL_HANDLE": "t1", "CLAUDE_CODE_ENTRYPOINT": "cli", "CLAUDE_CODE_OAUTH_TOKEN": "keep-me"}
+               "ORCA_TERMINAL_HANDLE": "t1", "CLAUDE_CODE_ENTRYPOINT": "cli", "CLAUDE_CODE_OAUTH_TOKEN": "keep-me",
+               "JEV_API_KEY": "jev-secret"}
         with mock.patch.dict(os.environ, env):
             result, name, secs, cost = triage.classify(f"Add {SECRET} to README.md", ["rnd", "build"], self.cfg())
         self.assertEqual((result["route"], name, cost), ("direct", "claude-haiku", 0.0012))
         argv = (self.fake / "argv.txt").read_text().splitlines()
-        self.assertEqual(argv[:13], ["-p", "--model", "claude-haiku-5-5", "--output-format", "json",
-                                     "--max-turns", "1", "--setting-sources", "project", "--strict-mcp-config",
-                                     "--mcp-config", str(self.home / "triage" / "mcp-empty.json"), "--tools"])
-        self.assertEqual(argv[13:15], ["", "--no-session-persistence"])
+        self.assertEqual(argv[:14], ["-p", "--model", "claude-haiku-5-5", "--output-format", "json",
+                                     "--max-turns", "1", "--setting-sources", "project", "--tools", "",
+                                     "--strict-mcp-config", "--no-session-persistence", "--system-prompt"])
         self.assertNotIn("--allowedTools", argv)
-        self.assertIn("--system-prompt", argv)
+        self.assertNotIn("--mcp-config", argv)
         self.assertIn("Divisions: rnd, build.", (self.fake / "argv.txt").read_text())
-        self.assertEqual(json.loads((self.home / "triage" / "mcp-empty.json").read_text()), {"mcpServers": {}})
         stdin = (self.fake / "stdin.txt").read_text()
         self.assertNotIn(SECRET, stdin)
         self.assertIn("[REDACTED]", stdin)
         cwd = (self.fake / "cwd.txt").read_text().strip()
         self.assertTrue(cwd.startswith(os.path.realpath(tempfile.gettempdir()) + os.sep), cwd)
-        self.assertTrue(os.path.basename(cwd).startswith("orche-triage-"), cwd)
+        self.assertTrue(os.path.basename(cwd).startswith("orche-blank-"), cwd)
         self.assertFalse(units.is_within(cwd, Path.home()), cwd)
         self.assertFalse(os.path.exists(cwd))                                       # removed afterwards
         self.assertEqual((self.fake / "session.txt").read_text().strip(), "")   # ORCHE_SESSION dropped
@@ -522,29 +524,13 @@ class ClassifierTest(TriageCase):
         for key in ("ORCHE_RUN_ID", "CLAUDECODE", "CLAUDE_PROJECT_DIR", "ORCA_TERMINAL_HANDLE",
                     "CLAUDE_CODE_ENTRYPOINT"):
             self.assertNotIn(key, seen)
+        self.assertNotIn("ORCHE_SESSION", seen)                                     # no caller identity
+        self.assertNotIn("JEV_API_KEY", seen)                                       # the Jev key never passes
         self.assertEqual(seen.get("CLAUDE_CODE_OAUTH_TOKEN"), "keep-me")              # auth stays
-
-    def test_haiku_without_the_tools_flag_denies_every_tool_instead(self):
-        write_fake_claude(self.fake, HELP_OLD)
-        self.write_reply(haiku_reply(DIRECT))
-        triage.classify("Add a line to README.md", ["build"], self.cfg())
-        argv = (self.fake / "argv.txt").read_text().splitlines()
-        self.assertEqual(argv[12:14], ["--allowedTools", ""])
-        self.assertNotIn("--tools", argv)
-
-    def test_a_temp_home_under_home_still_runs_outside_home(self):
-        with mock.patch.object(triage.tempfile, "gettempdir", return_value=str(Path.home())):
-            path = triage.scratch_dir()
-        try:
-            self.assertFalse(units.is_within(path, Path.home()), path)
-        finally:
-            os.rmdir(path)
+        self.assertTrue(seen.get("PATH", "").startswith(str(paths.PLUGIN_ROOT / "bin")), seen.get("PATH"))
 
     def test_timeout_kills_the_classifier_process_group(self):
-        """M3: a wrapper's child (here a background sleep) dies with it; nothing is left behind.
-
-        The latency must leave room for the probe: each `--version`/`--help` call gets half of it,
-        and at 0.5 s a 0.25 s cap failed the probe in about 1 run in 6, so no classifier ever ran."""
+        """M3: a wrapper's child (here a background sleep) dies with it; nothing is left behind."""
         latency = 2.0
         self.enable(max_latency_s=latency)
         self.write_reply(haiku_reply(DIRECT))
@@ -553,7 +539,7 @@ class ClassifierTest(TriageCase):
         started = time.monotonic()
         self.assertIsNone(triage.classify("Add a line to README.md", ["build"], self.cfg())[0])
         self.assertLess(time.monotonic() - started, latency + 2.5)
-        self.assertIn("triage: claude-haiku timed out after", self.hooks_log())   # the classifier ran, and was cut
+        self.assertIn("triage: claude-haiku timeout after", self.hooks_log())   # the classifier ran, and was cut
         pids = [(self.fake / "pid").read_text().strip(), (self.fake / "child").read_text().strip()]
         deadline = time.monotonic() + 10
         while time.monotonic() < deadline and any(alive(p) for p in pids):
@@ -566,61 +552,20 @@ class ClassifierTest(TriageCase):
         return path.read_text() if path.exists() else ""
 
     def test_haiku_timeout_and_failure_go_to_main(self):
-        latency = 2.0           # room for the probe (see test_timeout_kills_the_classifier_process_group)
+        latency = 2.0
         self.enable(max_latency_s=latency)
         self.write_reply(haiku_reply(DIRECT))
         (self.fake / "sleep").write_text("5")
         started = time.monotonic()
         self.assertIsNone(triage.classify("Add a line to README.md", ["build"], self.cfg())[0])
         self.assertLess(time.monotonic() - started, latency + 2.5)
-        self.assertIn("triage: claude-haiku timed out after", self.hooks_log())
+        self.assertIn("triage: claude-haiku timeout after", self.hooks_log())
         (self.fake / "sleep").unlink()
         self.write_reply(haiku_reply(DIRECT), code=1)
         self.assertIsNone(triage.classify("Add a line to README.md", ["build"], self.cfg())[0])
         self.write_reply("I think you should ask Main.")
         d = triage.decide("Add a line to README.md", ["build"], self.cfg())
         self.assertEqual((d.decision, d.stage, d.reason), ("main", 4, "classifier unavailable"))
-
-    def slow_probe_claude(self, version_sleep=None):
-        """A fake claude whose `--version` sleeps (hangs when None); its classifier call leaves a
-        `called` marker and takes 1.5 s."""
-        path = self.root / "slowclaude" / "claude"
-        path.parent.mkdir(exist_ok=True)
-        version = ("exec sleep 60" if version_sleep is None else
-                   f'sleep {version_sleep}; echo "9.9.9 (Claude Code)"; exit 0')
-        path.write_text(f'#!/bin/sh\nd=$(dirname "$0")\ncase "$1" in\n  --version) {version} ;;\n'
-                        f'  --help) cat "{self.fake}/help.txt"; exit 0 ;;\n'
-                        f'esac\ncat > /dev/null\ntouch "$d/called"\nsleep 1.5\ncat "{self.fake}/reply.json"\n')
-        path.chmod(0o755)
-        return path
-
-    def test_the_claude_probe_counts_against_max_latency_and_fails_open(self):
-        """m3: a hung `claude --version` costs at most PROBE_S (and half the budget); a failed probe
-        means no classifier this time, logged once; probe time is subtracted from the call's budget."""
-        self.write_reply(haiku_reply(DIRECT))
-        claude = self.slow_probe_claude()
-        self.config({"claude_bin": str(claude), "triage": {"enabled": True, "backend": "claude-haiku",
-                                                           "max_latency_s": 10}})
-        started = time.monotonic()
-        self.assertIsNone(triage.classify("Add a line to README.md", ["build"], self.cfg())[0])
-        self.assertLess(time.monotonic() - started, triage.PROBE_S * 2 + 1.5)
-        self.assertFalse((claude.parent / "called").exists())
-        lines = [ln for ln in (self.home / "logs" / "hooks.log").read_text().splitlines() if "triage:" in ln]
-        self.assertEqual(len(lines), 1, lines)
-        self.assertIn("probe failed; no classifier this time", lines[0])
-        # A 0.6 s probe within a 2 s budget leaves < 1.5 s: the 1.5 s classifier call times out
-        # (it would fit in the whole 2 s).
-        claude = self.slow_probe_claude(0.6)
-        self.config({"claude_bin": str(claude), "triage": {"enabled": True, "backend": "claude-haiku",
-                                                           "max_latency_s": 2}})
-        started = time.monotonic()
-        self.assertIsNone(triage.classify("Add a line to README.md", ["build"], self.cfg())[0])
-        self.assertLess(time.monotonic() - started, 3.0)
-        self.assertIn("claude-haiku timed out", (self.home / "logs" / "hooks.log").read_text())
-        # With a budget that covers both, the same claude classifies.
-        self.config({"claude_bin": str(claude), "triage": {"enabled": True, "backend": "claude-haiku",
-                                                           "max_latency_s": 4}})
-        self.assertEqual(triage.classify("Add a line to README.md", ["build"], self.cfg())[0]["route"], "direct")
 
     def test_backend_resolution(self):
         cfg = self.enable(backend="auto")
@@ -754,7 +699,7 @@ class ActionTest(TriageCase):
             f"[orche] routed to div-acme-build as {unit} (runner-started, TIER mechanical): \"Add an install "
             f"section to README.md\". Results arrive in this inbox; prefix the prompt with [main] to talk to "
             f"Main instead (to cancel: [main] STOP {unit}).")})
-        fields = dispatch.read_brief_fields(self.repo, unit)
+        fields = brief.find(registry.load(), unit).fields
         # The classifier's `grep -q …` cannot run at TIER mechanical (I4): the fallback replaces it.
         # GOAL is the classifier's sentence, so CONTEXT quotes the prompt itself (M8).
         self.assertEqual(fields, {"TO": "div-acme-build", "GOAL": DIRECT["goal"], "SCOPE": "README.md",
@@ -779,14 +724,14 @@ class ActionTest(TriageCase):
     def test_fallbacks_when_the_classifier_gave_no_goal_or_scope(self):
         out = self.handle("[build] lib/x.py 헤더 주석 작성해")
         self.assertIsNotNone(out.block)
-        fields = dispatch.read_brief_fields(self.repo, self.only_unit())
+        fields = brief.find(registry.load(), self.only_unit()).fields
         self.assertEqual((fields["GOAL"], fields["SCOPE"], fields["VERIFY"], fields["TIER"], fields["ACCEPT"]),
                          ("lib/x.py 헤더 주석 작성해", "lib/x.py", "ls -l lib/x.py", "standard",
                           triage.DEFAULT_ACCEPT + "; " + triage.COMMIT_ACCEPT))
 
     def test_a_valid_classifier_verify_is_kept(self):
         self.handle(self.PROMPT, stub(dict(DIRECT, verify="git diff --stat -- README.md")))
-        self.assertEqual(dispatch.read_brief_fields(self.repo, self.only_unit())["VERIFY"],
+        self.assertEqual(brief.find(registry.load(), self.only_unit()).fields["VERIFY"],
                          "git diff --stat -- README.md")
 
     def test_scope_paths_stay_relative_and_inside_the_worktree(self):
@@ -831,7 +776,7 @@ class ActionTest(TriageCase):
 
     def test_a_multiline_prompt_with_hash_lines_survives_as_the_goal(self):
         self.handle("[build] README.md 정리해\n# Install\n  keep this indented")
-        goal = dispatch.read_brief_fields(self.repo, self.only_unit())["GOAL"]
+        goal = brief.find(registry.load(), self.only_unit()).fields["GOAL"]
         self.assertEqual(goal.splitlines()[:2], ["README.md 정리해", "# Install"])
 
     def test_a_long_prompt_gives_a_bounded_goal_and_the_whole_prompt_in_context(self):
@@ -841,7 +786,7 @@ class ActionTest(TriageCase):
         prompt = f"[build] {body}\n\n# keep this heading\n  {SECRET} stays where it was typed"
         out = self.handle(prompt)
         unit = self.only_unit()
-        fields = dispatch.read_brief_fields(self.repo, unit)
+        fields = brief.find(registry.load(), unit).fields
         rest = prompt[len("[build] "):]
         excerpt, pointer = fields["GOAL"].rsplit(" (", 1)
         self.assertEqual(pointer, triage.GOAL_POINTER + ")")
@@ -973,9 +918,9 @@ class HookTest(TriageCase):
         self.assertEqual(json.loads(record.read_text())["status"], "info")
         [summary] = [p["summary"] for p in self.pointers("main-acme") if p["from"] == "div-acme-build"]
         self.assertIn(f"unverified: STATUS: done (no ledger row for {head[:7]})", summary)
-        brief = dispatch.read_brief_fields(self.repo, unit)
-        self.assertEqual(brief["FORBID"], "push, amend, --no-verify, files outside SCOPE")
-        self.assertTrue(brief["ACCEPT"].endswith("; " + triage.COMMIT_ACCEPT), brief["ACCEPT"])
+        got = brief.find(registry.load(), unit).fields
+        self.assertEqual(got["FORBID"], "push, amend, --no-verify, files outside SCOPE")
+        self.assertTrue(got["ACCEPT"].endswith("; " + triage.COMMIT_ACCEPT), got["ACCEPT"])
 
     def test_untriaged_prompt_still_gets_the_inbox(self):
         from orche import inbox

@@ -19,7 +19,7 @@ import json
 import shlex
 import sys
 
-from . import config, dispatch, intake, paths, registry, runner
+from . import config, headless, intake, paths, procs, registry
 
 EXIT_OK, EXIT_USER, EXIT_INTERRUPTED = 0, 1, 130
 
@@ -74,19 +74,20 @@ def cmd_intake(args):
             return EXIT_OK
     if args.dry_run:
         try:
-            p = intake.plan(reg, key, cfg, runner.claude_flags(cfg, write=False))
+            p = intake.plan(reg, key, cfg)
         except intake.IntakeError as exc:
             return _fail(exc.code, str(exc))
-        _emit(args, {"project": key, "cwd": str(p.root), "head": p.head, "timeout_s": p.timeout,
-                     "divisions": [d[0] for d in p.divisions], "argv": p.argv, "stdin": p.stdin},
-              [shlex.join(p.argv)])
+        argv = headless.argv(p.call, cfg)
+        _emit(args, {"project": key, "cwd": str(p.root), "head": p.head, "timeout_s": p.call.timeout,
+                     "divisions": [d[0] for d in p.divisions], "argv": argv, "stdin": p.stdin},
+              [shlex.join(argv)])
         if not args.json:
             print(f"[dry-run] cwd {p.root}; stdin: intake request ({len(p.divisions)} divisions, HEAD "
-                  f"{p.head[:7]}); timeout {p.timeout}s; writes nothing", file=sys.stderr)
+                  f"{p.head[:7]}); timeout {p.call.timeout}s; writes nothing", file=sys.stderr)
         return EXIT_OK
     try:
         rec = intake.run(reg, key, cfg)
-    except KeyboardInterrupt:       # claude's group was killed on the way out (runner.execute)
+    except KeyboardInterrupt:       # claude's group was killed on the way out (headless.run)
         return _fail(EXIT_INTERRUPTED, f"intake {key} interrupted; nothing written")
     except intake.IntakeError as exc:
         if args.json:
@@ -97,13 +98,13 @@ def cmd_intake(args):
 
 
 def background_argv(key, if_stale=False) -> list:
-    """`orche intake <key> [--if-stale]` under this very interpreter (like dispatch.run_argv)."""
+    """`orche intake <key> [--if-stale]` under this very interpreter (like runs.start's)."""
     return [sys.executable, str(paths.PLUGIN_ROOT / "bin" / "orche.py"), "intake", key] \
         + (["--if-stale"] if if_stale else [])
 
 
 def _background(args, key):
-    """Start the intake detached (dispatch.spawn_detached) so it survives the calling Bash tool call."""
+    """Start the intake detached (procs.spawn_detached) so it survives the calling Bash tool call."""
     try:
         with intake.lock(key):      # held by a running intake: start nothing
             pass
@@ -111,7 +112,7 @@ def _background(args, key):
         _emit(args, {"project": key, "status": "running"}, [f"intake already running for {key}"])
         return EXIT_OK
     log = paths.orche_home() / "logs" / "intake" / f"{key}.log"
-    dispatch.spawn_detached(background_argv(key, args.if_stale), log)
+    procs.spawn_detached(background_argv(key, args.if_stale), log)
     _emit(args, {"project": key, "status": "started", "log": str(log)},
           [f"intake started in the background (log: {log}); `orche intake status {key}` reads the stamp"])
     return EXIT_OK

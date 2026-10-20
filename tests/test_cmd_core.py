@@ -12,7 +12,7 @@ from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
 
 import support
-from orche import registry, shell, units
+from orche import hr, registry, shell, units
 from test_registry import load_cli
 
 SAMPLE = json.loads((support.FIXTURES / "registry.sample.json").read_text())
@@ -133,6 +133,22 @@ class StatuslineTest(CoreCase):
         self.assertEqual((code, out, err), (0, line + "\n", ""))
         self.assertEqual((self.home / "status" / "acme-shop.line").read_text(), line + "\n")
 
+    def test_one_roster_per_refresh(self):
+        from orche import roster
+        built, orig = [], roster.Roster
+
+        class Counting(orig):
+            def __init__(self, *a, **k):
+                built.append(1)
+                super().__init__(*a, **k)
+
+        roster.Roster = Counting
+        self.addCleanup(setattr, roster, "Roster", orig)
+        self.counters()
+        out = self.orche("statusline", "--cwd", "/srv/orca/acme-shop/src/app")[1]
+        self.assertEqual(out, "R&D○ BUILD●1 · new1 · 🔑1 · unverified1\n")
+        self.assertEqual(len(built), 1)
+
     def test_marker_and_zero_cells_omitted(self):
         self.counters()
         with tempfile.TemporaryDirectory() as tmp:
@@ -218,7 +234,7 @@ class CustomDivisionTest(CoreCase):
                                                "model": "claude-opus-5-5", "effort": "high"}}
         proj["divisions"]["design"] = {"status": "dormant", "worktree": "repo-acme::/srv/orca/acme-shop-design",
                                        "branch": "div/design", "session": "div-acme-shop-design",
-                                       "model": "claude-opus-5-5", "effort": "high",
+                                       "model": "claude-opus-5-5",
                                        "last_activity": "2026-10-14T09:00:00+09:00"}
         registry.save(self.reg)
 
@@ -290,11 +306,11 @@ class HrTest(CoreCase):
     def test_freeze_dry_run_mutates_nothing(self):
         self.assertEqual(self.orche("--dry-run", "hr", "freeze")[:2], (0, "would freeze (dry-run)\n"))
         self.assertFalse(registry.load()["frozen"])
-        self.assertFalse(units.hr_log_path().exists())
+        self.assertFalse(hr.log_path().exists())
 
     def test_log_creates_missing_file(self):
         self.assertEqual(self.orche("hr", "log")[:2], (0, "# HR log\n\n"))
-        self.assertTrue(units.hr_log_path().exists())
+        self.assertTrue(hr.log_path().exists())
 
 
 class SleepWakeTest(CoreCase):
@@ -342,7 +358,7 @@ class SleepWakeTest(CoreCase):
         self.assertEqual(reg["projects"]["acme-shop"]["divisions"]["build"]["status"], "paused")
         self.assertEqual({k: reg["events"][-1][k] for k in ("type", "project", "unit")},
                          {"type": "sleep", "project": "acme-shop", "unit": "build"})
-        self.assertIn("sleep div-acme-shop-build by user", units.hr_log_path().read_text())
+        self.assertIn("sleep div-acme-shop-build by user", hr.log_path().read_text())
 
     def test_sleep_without_pane_just_records(self):
         self.fresh_handoff()
@@ -354,16 +370,31 @@ class SleepWakeTest(CoreCase):
         self.assertEqual((code, out), (0, "would wake feat-acme-shop-search (dry-run)\n"))
         self.assertEqual(err, "[dry-run] orca terminal create --worktree id:repo-acme::/srv/orca/acme-shop-search"
                               f" --title feat-acme-shop-search --command PATH={support.ROOT / 'bin'}:$PATH"
-                              " ORCHE_SESSION=feat-acme-shop-search claude --resume feat-acme-shop-search"
-                              " --json\n")
+                              " ORCHE_SESSION=feat-acme-shop-search claude --permission-mode bypassPermissions"
+                              " --resume feat-acme-shop-search --json\n")
         self.assertEqual(registry.load(), self.reg)
+
+    def test_wake_dry_run_json_argv_carries_bypass_permissions(self):
+        code, out, _ = self.orche("--json", "wake", "feat-acme-shop-search", "--dry-run")
+        self.assertEqual(code, 0)
+        command = json.loads(out)["argv"][json.loads(out)["argv"].index("--command") + 1]
+        self.assertIn(" --permission-mode bypassPermissions --resume feat-acme-shop-search", command)
+
+    def test_wake_and_sleep_load_the_registry_once(self):
+        from unittest import mock
+        with mock.patch.object(registry, "load", wraps=registry.load) as load:
+            self.assertEqual(self.orche("wake", "feat-acme-shop-search", "--dry-run")[0], 0)
+            self.assertEqual(load.call_count, 1)
+            load.reset_mock()
+            self.orche("sleep", "div-acme-shop-build", "--dry-run")
+            self.assertEqual(load.call_count, 1)
 
     def test_wake_creates_pane_and_records(self):
         code, out, _ = self.orche("wake", "feat-acme-shop-search")
         self.assertEqual((code, out), (0, "feat-acme-shop-search active\n"))
         self.assertEqual(self.calls[-1][:3], ["orca", "terminal", "create"])
-        self.assertIn(f"PATH={support.ROOT / 'bin'}:$PATH ORCHE_SESSION=feat-acme-shop-search claude --resume "
-                      "feat-acme-shop-search", self.calls[-1])
+        self.assertIn(f"PATH={support.ROOT / 'bin'}:$PATH ORCHE_SESSION=feat-acme-shop-search claude "
+                      "--permission-mode bypassPermissions --resume feat-acme-shop-search", self.calls[-1])
         reg = registry.load()
         self.assertEqual(reg["projects"]["acme-shop"]["divisions"]["build"]["features"][1]["status"], "active")
         self.assertEqual((reg["events"][-1]["type"], reg["events"][-1]["unit"]), ("wake", "build/search"))
@@ -380,11 +411,11 @@ class SleepWakeTest(CoreCase):
         self.assertEqual(create[create.index("--title") + 1], "div-acme-shop-build")
         self.assertEqual(create[create.index("--command") + 1],
                          f"PATH={support.ROOT / 'bin'}:$PATH ORCHE_SESSION=div-acme-shop-build "
-                         "claude --resume div-acme-shop-build")
+                         "claude --permission-mode bypassPermissions --resume div-acme-shop-build")
         reg = registry.load()
         self.assertEqual(reg["projects"]["acme-shop"]["divisions"]["build"]["status"], "active")
         self.assertEqual(reg["events"], self.reg["events"])
-        self.assertIn("reopen div-acme-shop-build pane by user", units.hr_log_path().read_text())
+        self.assertIn("reopen div-acme-shop-build pane by user", hr.log_path().read_text())
         self.assertTrue((self.home / "activity" / "div-acme-shop-build").is_file())
 
     def test_wake_active_unit_with_pane_stays_already_active(self):
@@ -393,7 +424,7 @@ class SleepWakeTest(CoreCase):
         self.assertEqual((code, out), (0, "div-acme-shop-build is already active\n"))
         self.assertEqual([c[1:3] for c in self.calls], [["terminal", "list"]])
         self.assertEqual(registry.load(), self.reg)
-        self.assertFalse(units.hr_log_path().exists())
+        self.assertFalse(hr.log_path().exists())
 
     def test_wake_active_unit_without_pane_dry_run(self):
         code, out, err = self.orche("--dry-run", "wake", "div-acme-shop-build")
@@ -432,7 +463,98 @@ class SleepWakeTest(CoreCase):
 
     def test_unknown_unit(self):
         self.assertEqual(self.orche("sleep", "div-acme-shop-gtm")[0], 2)
-        self.assertEqual(self.orche("wake", "nonsense")[0], 2)
+        code, _, err = self.orche("wake", "nonsense")
+        self.assertEqual(code, 2)
+        self.assertIn("main-<proj> or liaison-<proj>", err)
+
+
+class ProjectPaneTest(CoreCase):
+    """`orche wake main-<proj>|liaison-<proj>` opens the project pane or switches to it."""
+    WT = "id:repo-acme::/srv/orca/acme-shop"
+    ENV = f"PATH={support.ROOT / 'bin'}:$PATH "
+
+    def calls_of(self, sub):
+        return [c for c in self.calls if c[1:3] == ["terminal", sub]]
+
+    def test_wake_main_opens_a_pane_when_none_is_open(self):
+        events = len(registry.load()["events"])
+        self.assertEqual(self.orche("wake", "main-acme-shop"), (0, "main-acme-shop pane opened\n", ""))
+        self.assertEqual(self.calls_of("create"), [
+            ["orca", "terminal", "create", "--worktree", self.WT, "--title", "main-acme-shop", "--command",
+             f"{self.ENV}ORCHE_SESSION=main-acme-shop claude --name main-acme-shop", "--json"]])
+        self.assertEqual(self.calls_of("switch"), [])
+        self.assertEqual(len(registry.load()["events"]), events)
+        self.assertNotIn("--permission-mode", " ".join(self.calls_of("create")[0]))
+
+    def test_wake_main_switches_to_an_open_pane(self):
+        self.terminals = [{"handle": "t-main", "title": "✳ main-acme-shop"}]
+        self.assertEqual(self.orche("wake", "main-acme-shop"), (0, "main-acme-shop pane switched to\n", ""))
+        self.assertEqual(self.calls_of("create"), [])
+        self.assertEqual(self.calls_of("switch"), [["orca", "terminal", "switch", "--terminal", "t-main", "--json"]])
+
+    def test_wake_liaison_opens_with_the_liaison_agent(self):
+        code, out, err = self.orche("--json", "wake", "liaison-acme-shop")
+        self.assertEqual((code, err), (0, ""))
+        self.assertEqual(json.loads(out), {"session": "liaison-acme-shop", "pane": "opened"})
+        self.assertEqual(self.calls_of("create")[0][-2],
+                         f"{self.ENV}ORCHE_SESSION=liaison-acme-shop claude --agent liaison --name liaison-acme-shop")
+        self.assertNotIn("--permission-mode", self.calls_of("create")[0][-2])
+
+    def test_wake_main_dry_run_prints_create_argv_or_switch(self):
+        code, out, err = self.orche("--dry-run", "wake", "main-acme-shop")
+        self.assertEqual((code, out), (0, "would open main-acme-shop pane (dry-run)\n"))
+        self.assertEqual(err, f"[dry-run] orca terminal create --worktree {self.WT} --title main-acme-shop --command "
+                              f"{self.ENV}ORCHE_SESSION=main-acme-shop claude --name main-acme-shop --json\n")
+        self.terminals = [{"handle": "t-main", "title": "main-acme-shop"}]
+        self.assertEqual(self.orche("--dry-run", "wake", "main-acme-shop"), (0, "would switch to main-acme-shop\n", ""))
+        self.assertEqual({c[2] for c in self.calls}, {"list"})
+
+    def test_wake_main_dry_run_json_carries_the_create_argv(self):
+        code, out, _ = self.orche("--json", "--dry-run", "wake", "main-acme-shop")
+        self.assertEqual(code, 0)
+        self.assertEqual(json.loads(out), {
+            "session": "main-acme-shop", "pane": "opened", "dry_run": True,
+            "argv": ["orca", "terminal", "create", "--worktree", self.WT, "--title", "main-acme-shop", "--command",
+                     f"{self.ENV}ORCHE_SESSION=main-acme-shop claude --name main-acme-shop", "--json"]})
+
+    def test_wake_main_ignores_awake_limit_and_stage(self):
+        self.reg["limits"]["max_awake_sessions"] = 0
+        self.reg["projects"]["acme-shop"]["stage"] = "building"
+        registry.save(self.reg)
+        self.assertEqual(self.orche("wake", "main-acme-shop")[0], 0)
+        self.assertEqual(len(self.calls_of("create")), 1)
+
+    def _orca_fails_on(self, sub, message):
+        def runner(argv, *, timeout, input):
+            if argv[1:3] == ["terminal", sub]:
+                self.calls.append(argv)
+                return shell.Result(1, json.dumps({"ok": False, "error": {"message": message}}), "", argv)
+            return CoreCase.fake_runner(self, argv, timeout=timeout, input=input)
+        shell.RUNNER = runner
+
+    def test_wake_main_reports_a_failed_terminal_list(self):
+        self._orca_fails_on("list", "list broke")
+        self.assertEqual(self.orche("wake", "main-acme-shop"),
+                         (1, "", "orche: could not open or switch to main-acme-shop: orca_error: list broke\n"))
+        self.assertEqual(self.calls_of("create") + self.calls_of("switch"), [])
+
+    def test_wake_main_reports_a_failed_terminal_create(self):
+        self._orca_fails_on("create", "create broke")
+        self.assertEqual(self.orche("wake", "main-acme-shop"),
+                         (1, "", "orche: could not open or switch to main-acme-shop: orca_error: create broke\n"))
+        self.assertEqual(len(self.calls_of("create")), 1)
+
+    def test_wake_main_reports_a_failed_terminal_switch(self):
+        self.terminals = [{"handle": "t-main", "title": "main-acme-shop"}]
+        self._orca_fails_on("switch", "switch broke")
+        self.assertEqual(self.orche("wake", "main-acme-shop"),
+                         (1, "", "orche: could not open or switch to main-acme-shop: orca_error: switch broke\n"))
+        self.assertEqual(self.calls_of("create"), [])
+
+    def test_sleep_main_is_refused(self):
+        self.assertEqual(self.orche("sleep", "main-acme-shop"),
+                         (1, "", "orche: main-acme-shop is a project pane: close it in Orca\n"))
+        self.assertEqual(self.calls, [])
 
 
 class CardTest(CoreCase):
@@ -459,21 +581,30 @@ class PaneCommandTest(support.TempHomeCase):
     """F3: every ORCHE pane command puts the plugin's bin/ on PATH next to ORCHE_SESSION."""
 
     def test_pane_command_prefixes_plugin_bin(self):
-        from orche import cmd_sleep_wake
-        self.assertEqual(cmd_sleep_wake.pane_command("feat-acme-x", resume=True),
-                         f"PATH={support.ROOT / 'bin'}:$PATH ORCHE_SESSION=feat-acme-x claude --resume feat-acme-x")
+        from orche.hr import panes
+        self.assertEqual(panes.pane_command("feat-acme-x", resume=True),
+                         f"PATH={support.ROOT / 'bin'}:$PATH ORCHE_SESSION=feat-acme-x claude "
+                         "--permission-mode bypassPermissions --resume feat-acme-x")
+
+    def test_unit_panes_start_with_bypass_permissions(self):
+        from orche.hr import panes
+        for session in ("div-acme-build", "feat-acme-x"):
+            for resume, flag in ((True, "--resume"), (False, "--name")):
+                self.assertTrue(panes.pane_command(session, resume=resume).endswith(
+                    f" claude --permission-mode bypassPermissions {flag} {session}"))
 
     def test_plugin_root_is_shell_quoted_and_path_left_unexpanded(self):
         from unittest import mock
-        from orche import cmd_sleep_wake, paths
+        from orche import paths
+        from orche.hr import panes
         with mock.patch.object(paths, "PLUGIN_ROOT", Path("/opt/my plugins/orche")):
-            env = cmd_sleep_wake.session_env("main-acme")
+            env = panes.session_env("main-acme")
         self.assertEqual(env, "PATH='/opt/my plugins/orche/bin':$PATH ORCHE_SESSION=main-acme ")
 
     def test_pane_shell_resolves_orche(self):
         import subprocess
-        from orche import cmd_sleep_wake
-        res = subprocess.run(["/bin/sh", "-c", cmd_sleep_wake.session_env("main-acme")
+        from orche.hr import panes
+        res = subprocess.run(["/bin/sh", "-c", panes.session_env("main-acme")
                               + "sh -c 'command -v orche; echo $ORCHE_SESSION'"],
                              env={"PATH": "/usr/bin:/bin"}, capture_output=True, text=True, timeout=10)
         self.assertEqual(res.stdout.split(), [str(support.ROOT / "bin" / "orche"), "main-acme"])

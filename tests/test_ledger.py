@@ -22,7 +22,7 @@ def make_registry(root: Path) -> dict:
         "main_session": "main-acme", "liaison_session": "liaison-acme", "card": "", "standing": "",
         "divisions": {"build": {
             "worktree": f"repo-acme::{root / 'acme-build'}", "branch": "div/build",
-            "session": "div-acme-build", "model": "opus", "effort": "medium", "status": "active",
+            "session": "div-acme-build", "model": "opus", "status": "active",
             "last_activity": "2026-10-16T00:00:00Z",
             "features": [{"name": "checkout", "worktree": f"repo-acme::{root / 'acme-checkout'}",
                           "branch": "feat/checkout", "session": "feat-acme-checkout", "status": "active",

@@ -10,6 +10,7 @@ relays it and stores it as <project root>/.orche/units/<unit>/BRIEF.md with the 
 header above on top (the hook writes the header; Main never does). STANDING.md and the persona
 line follow, then `## Brief <unit>` and the fields.
 Lines are `KEY<spaces>VALUE`; continue a value on lines indented by two or more spaces.
+Write each key once. A line starting with `#` is a comment, except inside an indented value, where it is content.
 All fields below are required except ROLLBACK (mandatory when the unit deploys).
 A correction is `AMEND <unit> rev N` + `SUPERSEDES rev N-1: <what>`; a halt is `STOP <unit>`.
 -->

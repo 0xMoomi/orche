@@ -1,11 +1,12 @@
 """Inbox pointers: ORCHE_HOME/inbox/<session>/<ISO-ts>-<unit>.json (write, list, drain)."""
 import datetime as _dt
+import json
 import os
 import re
 import time
 from pathlib import Path
 
-from . import config, log, orca, paths, registry, units, util
+from . import config, log, orca, paths, units, util
 
 STATUSES = ("done", "failed", "blocked", "question", "info", "external-request", "stop")
 URGENT_STATUSES = ("failed", "blocked", "question", "stop", "external-request")
@@ -17,9 +18,10 @@ STATUS_RE = re.compile(r"(진행\s*상황|상황\s*알려|어디까지|status|pr
 DRAIN_COUNT = 4
 DRAIN_AGE = _dt.timedelta(minutes=90)
 STALL_AGE_MS = 20 * 60 * 1000
-CACHE_TTL = 600
 IN_FLIGHT = ("blocked", "question", "info")
 RECONCILE_RESERVE_S = 1.0   # of the prompt hook's budget, kept for the inbox, Jev and stall marks
+MAX_LINES = 5
+TRUNCATED = "[…truncated]"
 
 
 def box(session: str) -> Path:
@@ -49,6 +51,27 @@ def write(ptr: dict) -> Path:
         target = folder / f"{stem}-{n}.json"
     util.write_json(target, ptr)
     return target
+
+
+def clip(summary: str) -> str:
+    """A pointer summary: at most MAX_LINES lines, the last one TRUNCATED when cut."""
+    lines = summary.strip().splitlines()
+    return "\n".join(lines[:MAX_LINES - 1] + [TRUNCATED]) if len(lines) > MAX_LINES else "\n".join(lines)
+
+
+def about(session: str, unit: str, frm: str) -> list:
+    """[(path, pointer)] in `session`'s inbox, pending and drained, for `unit` from `frm`; unreadable
+    files are skipped. Raises ValueError for an unsafe session name (box)."""
+    folder = box(session)
+    out = []
+    for path in list(folder.glob("*.json")) + list((folder / DRAINED).glob("*.json")):
+        try:
+            ptr = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        if isinstance(ptr, dict) and ptr.get("unit") == unit and ptr.get("from") == frm:
+            out.append((path, ptr))
+    return out
 
 
 def pending(session: str) -> list:
@@ -117,69 +140,29 @@ def render(items: list, stalled=()) -> str:
     return "\n".join(lines)
 
 
-
-# ---- identity --------------------------------------------------------------
+# ---- UserPromptSubmit ------------------------------------------------------
 
 def _session_file(session_id, suffix):
     safe = re.sub(r"[^A-Za-z0-9_-]", "", str(session_id or ""))
     return paths.orche_home() / "sessions" / f"{safe}{suffix}" if safe else None
 
 
-def _title_session(reg, title):
-    title = orca.normalize_title(title)
-    return title if title in units.all_sessions(reg) else None
-
-
-def _pane_session(reg, session_id, terms):
-    """Own pane title via the run's terminal list + $ORCA_TERMINAL_HANDLE, cached 10 min."""
-    handle = os.environ.get("ORCA_TERMINAL_HANDLE")
-    cache = _session_file(session_id, ".json")
-    if not handle or cache is None:
-        return None
-    cached = util.read_json(cache, default={}) or {}
-    if time.time() - float(cached.get("cached", 0)) < CACHE_TTL:
-        return cached.get("session")
-    listed = terms.list()
-    if terms.error:
-        return None
-    title = next((t.get("title") for t in listed if t.get("handle") == handle), None)
-    session = _title_session(reg, title)
-    util.write_json(cache, {"session": session, "cached": time.time()})
-    return session
-
-
-def identify(reg, payload, terms=None):
-    """Own session: $ORCHE_SESSION, else the unit worktree holding the cwd, else the Orca pane title.
-
-    Never guessed from the main checkout (ruling 137): an unidentified session there gets None, so
-    nothing is drained into it (Main's pane carries ORCHE_SESSION).
-    """
-    env = os.environ.get("ORCHE_SESSION")
-    if env:
-        return env
-    unit = units.unit_from_cwd(reg, payload.get("cwd") or os.getcwd())
-    if unit is not None and unit.session:
-        return unit.session
-    return _pane_session(reg, payload.get("session_id"), terms or orca.Terminals(orca.hook_deadline()))
-
-
-# ---- UserPromptSubmit ------------------------------------------------------
-
-def _standing_once(reg, payload, me):
+def _standing_once(r, payload, who):
+    """The STANDING orders once per Claude session: the member's project, else the cwd's."""
     marker = _session_file(payload.get("session_id"), ".standing_seen")
     if marker is None or marker.exists():
         return []
     from . import dispatch
-    key = units.project_from_cwd(reg, payload.get("cwd") or os.getcwd()) or dispatch.project_of_session(reg, me)
+    key = who.member.project if who.member else who.place.project
     marker.parent.mkdir(parents=True, exist_ok=True)
     marker.write_text(util.now_iso() + "\n", encoding="utf-8")
     if not key:
         return []
-    text = dispatch.standing_text(reg, key)
+    text = dispatch.standing_text(r.reg, key)
     return ["## Standing orders\n" + "\n".join(text.splitlines()[:40])]
 
 
-def _stalled(reg, items, terms):
+def _stalled(r, items, terms):
     if not any(p.get("status") in IN_FLIGHT for _x, p in items):
         return set()
     now_ms = time.time() * 1000
@@ -187,9 +170,9 @@ def _stalled(reg, items, terms):
     for term in terms.list():
         if not isinstance(term.get("lastOutputAt"), (int, float)):
             continue
-        session = _title_session(reg, term.get("title"))
-        if session and now_ms - term["lastOutputAt"] > STALL_AGE_MS:
-            out.add(session)
+        member = r.member(orca.normalize_title(term.get("title")))
+        if member is not None and now_ms - term["lastOutputAt"] > STALL_AGE_MS:
+            out.add(member.session)
     return {p.get("from") for _x, p in items if p.get("status") in IN_FLIGHT} & out
 
 
@@ -218,40 +201,32 @@ def _jev(prompt, items, deadline=None):
         return items
 
 
-def _project_of(reg, me):
-    for key, proj in reg.get("projects", {}).items():
-        if me in (proj.get("main_session"), proj.get("liaison_session")):
-            return key
-    unit = units.find_unit(reg, me)
-    return unit.project if unit else None
-
-
-def _reconcile(reg, me, terms) -> None:
+def _reconcile(r, who, terms) -> None:
     """Settle the session's project's lost runs (runs.reconcile) before the inbox is read, so a
     `failed` "runner died: …" filed now shows in this very prompt. Bounded by the hook budget less
     RECONCILE_RESERVE_S: with no time left only `kill -0` and file writes run (no `ps`)."""
     try:
-        key = _project_of(reg, me)
+        key = who.member.project if who.member else None
         if key:
             from . import runs
-            runs.reconcile(reg, key, budget_s=max(0.0, terms.remaining() - RECONCILE_RESERVE_S))
+            runs.reconcile(r.reg, key, budget_s=max(0.0, terms.remaining() - RECONCILE_RESERVE_S))
     except Exception as exc:  # noqa: BLE001 - fail-open
         log.log("hooks", f"report_inject: reconcile: {type(exc).__name__}: {exc}")
 
 
-def handle_prompt(payload, started=None) -> str:
+def handle_prompt(payload, started, r, who) -> str:
     """Text to inject for a UserPromptSubmit event ('' for nothing).
 
-    Orca is listed at most once per run (identity + stall marks), within the hook budget.
+    `r` is the run's roster.Roster and `who` this session's Identity. An unidentified session gets
+    nothing (ruling 137). Orca is listed at most once per run (stall marks), within the hook budget.
     """
-    terms = orca.Terminals(orca.hook_deadline(started))
-    reg = registry.load()
-    me = identify(reg, payload, terms)
-    if not me:
+    me = who.session
+    if me is None:
         return ""
+    terms = orca.Terminals(orca.hook_deadline(started))
     units.touch_activity(me)
-    _reconcile(reg, me, terms)
-    out = _standing_once(reg, payload, me)
+    _reconcile(r, who, terms)
+    out = _standing_once(r, payload, who)
     prompt = payload.get("prompt") or ""
     items = _jev(prompt, pending(me), terms.deadline)
     if items:
@@ -260,7 +235,7 @@ def handle_prompt(payload, started=None) -> str:
                      or len(items) >= DRAIN_COUNT or (times and units.now() - min(times) > DRAIN_AGE))
         inject = items if drain_all else [it for it in items if is_urgent(it[1])]
         if inject:
-            out.append(render(inject, _stalled(reg, inject, terms)))
+            out.append(render(inject, _stalled(r, inject, terms)))
             drain([p for p, _x in inject])
         held = len(items) - len(inject)
         if held:

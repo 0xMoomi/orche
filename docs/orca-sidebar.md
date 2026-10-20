@@ -24,9 +24,10 @@ my-app                                   (Orca repo)
 | Division card / pane | worktree `div-<division>`, pane `div-<proj>-<division>` | its own worktree, branch `div/<division>` |
 | Feature card / pane | worktree `feat-<feature>`, pane `feat-<proj>-<feature>` | child worktree of Build, branch `feat/<feature>` |
 
-Pane titles equal Claude Code session names. ORCHE starts each pane with
-`PATH=<plugin>/bin:$PATH ORCHE_SESSION=<session> claude --name <session>` (or `--resume <session>`
-on wake), so hooks know the pane's role and `orche` is on the pane's PATH. `orche init` creates the division worktrees; `orche feat new` creates
+Pane titles equal Claude Code session names. ORCHE starts a division or feature pane with
+`PATH=<plugin>/bin:$PATH ORCHE_SESSION=<session> claude --permission-mode bypassPermissions --name <session>`
+(or `--resume <session>` on wake), and a Main or Liaison pane with the same command without
+`--permission-mode bypassPermissions`, so hooks know the pane's role and `orche` is on the pane's PATH. `orche init` creates the division worktrees; `orche feat new` creates
 feature worktrees.
 
 ## Lineage

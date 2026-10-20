@@ -2,6 +2,7 @@
 import datetime as dt
 import json
 import os
+import shlex
 import subprocess
 import sys
 import tempfile
@@ -18,6 +19,14 @@ DISPATCH_OK = json.loads(SAMPLE.read_text().splitlines()[1])["message"]["content
 STANDING = "1. Opus for hard work, Sonnet for reads.\n2. Never force-push.\n"
 GIT_ENV = {"GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@example.com",
            "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@example.com"}
+PREFIX = "[orche] completion blocked: missing "                 # donegate's Stop text (test_donegate too)
+SUFFIX = ". Record the verdict / update STATUS.md, then report again."
+
+
+def no_row_blocked(head):
+    """The Stop hook's full text for a done claim from feat-acme-checkout with no ledger row for `head`."""
+    return (PREFIX + f"LEDGER row for HEAD {head[:12]} in ORCHE_HOME/ledger/acme.tsv "
+            "(verdict >= type-check-only)" + SUFFIX)
 
 
 class HookCase(support.TempHomeCase):
@@ -199,11 +208,6 @@ class DispatchRelayTest(HookCase):
         proj["divisions"]["design"] = {**proj["divisions"]["rnd"], "worktree": f"repo-acme::{self.root / 'acme-design'}",
                                        "branch": "div/design", "session": "div-acme-design"}
         (self.home / "registry.json").write_text(json.dumps(reg))
-        from orche import dispatch
-        self.assertEqual(dispatch.resolve_target(reg, "design", "acme"), "div-acme-design")
-        self.assertIsNone(dispatch.resolve_target(reg, "design", None))
-        self.assertNotIn("ops", proj["divisions"])
-        self.assertIsNone(dispatch.resolve_target(reg, "ops", "acme"))   # a standard division the project lacks
         res = self.stop(DISPATCH_OK.replace("TO        build", "TO        design"))
         self.assertEqual(res.returncode, 0, res.stderr)
         brief = (self.units_dir() / self.only_unit() / "BRIEF.md").read_text()
@@ -242,7 +246,7 @@ class DispatchRelayTest(HookCase):
                                    "liaison_session": "liaison-beta", "card": "x", "standing": ".orche/STANDING.md",
                                    "divisions": {"build": {"status": "active", "worktree": "repo-beta::/nowhere",
                                                            "branch": "div/build", "session": "div-beta-build",
-                                                           "model": "m", "effort": "high",
+                                                           "model": "m",
                                                            "last_activity": "2026-10-15T18:30:00+09:00"}}}
         (self.home / "registry.json").write_text(json.dumps(reg))
 
@@ -307,6 +311,69 @@ class DispatchRelayTest(HookCase):
         res = self.stop(DISPATCH_OK.replace("TO        build", "TO        nobody"))
         self.assertEqual(res.returncode, 2)
         self.assertIn("unknown TO 'nobody'. Valid targets: div-acme-build, div-acme-rnd", res.stderr)
+
+    def test_hash_line_in_a_value_is_kept_and_a_repeated_key_is_refused(self):
+        twice = DISPATCH_OK.replace("VERIFY    ", "ACCEPT    Totals update\nVERIFY    ")
+        res = self.stop(twice)
+        self.assertEqual(res.returncode, 2)
+        self.assertIn("[orche] dispatch refused: duplicate keys ACCEPT.", res.stderr)
+        self.assertFalse(self.units_dir().exists())
+        hashed = DISPATCH_OK.replace("VERIFY    scripts/verify-checkout.sh\n",
+                                     "VERIFY    scripts/verify-checkout.sh\n  # unit tests\n")
+        res = self.stop(hashed, msg_id="msg_2")
+        self.assertEqual((res.returncode, res.stderr), (0, ""))
+        brief = (self.units_dir() / self.only_unit() / "BRIEF.md").read_text()
+        self.assertIn("VERIFY    scripts/verify-checkout.sh\n  # unit tests\n", brief)
+
+    def test_amend_of_a_unit_without_a_brief_is_refused(self):
+        ghost = f"acme-ghost-{dt.date.today():%Y%m%d}-1"
+        (self.units_dir() / ghost).mkdir(parents=True)
+        res = self.stop(f"```dispatch\nAMEND {ghost} rev 2\nGOAL      g2\n```")
+        self.assertEqual(res.returncode, 2)
+        self.assertIn(f"[orche] dispatch refused: unknown unit {ghost!r} (no .orche/units/{ghost}/BRIEF.md).",
+                      res.stderr)
+        self.assertEqual(list((self.units_dir() / ghost).iterdir()), [])
+        self.assertEqual(self.inbox("div-acme-build"), [])
+
+    def test_retired_target_is_refused(self):
+        reg = json.loads((self.home / "registry.json").read_text())
+        reg["projects"]["acme"]["divisions"]["build"]["status"] = "retired"
+        (self.home / "registry.json").write_text(json.dumps(reg))
+        res = self.stop(DISPATCH_OK)
+        self.assertEqual(res.returncode, 2)
+        self.assertIn("[orche] dispatch refused: target div-acme-build is retired.", res.stderr)
+        self.assertFalse(self.units_dir().exists())
+        self.assertEqual(self.inbox("div-acme-build"), [])
+
+    def _retire_build_after_one_unit(self):
+        self.run_hook("dispatch_relay.py", self.payload("stop.json", transcript_path=str(SAMPLE)))
+        unit = self.only_unit()
+        reg = json.loads((self.home / "registry.json").read_text())
+        reg["projects"]["acme"]["divisions"]["build"]["status"] = "retired"
+        (self.home / "registry.json").write_text(json.dumps(reg))
+        folder = self.units_dir() / unit
+        return unit, folder, sorted(p.name for p in folder.iterdir()), (folder / "BRIEF.md").read_bytes()
+
+    def test_amend_to_retired_target_is_refused(self):
+        unit, folder, files, brief = self._retire_build_after_one_unit()
+        pointers = len(self.inbox("div-acme-build"))
+        res = self.stop(f"```dispatch\nAMEND {unit} rev 2\nSUPERSEDES rev 1: smaller\n"
+                        "GOAL      Add coupon field only\n```", msg_id="msg_2")
+        self.assertEqual(res.returncode, 2)
+        self.assertIn("[orche] dispatch refused: target div-acme-build is retired.", res.stderr)
+        self.assertEqual(sorted(p.name for p in folder.iterdir()), files)
+        self.assertEqual((folder / "BRIEF.md").read_bytes(), brief)
+        self.assertEqual(len(self.inbox("div-acme-build")), pointers)
+
+    def test_stop_to_retired_target_is_refused(self):
+        unit, folder, files, brief = self._retire_build_after_one_unit()
+        pointers = len(self.inbox("div-acme-build"))
+        res = self.stop(f"```dispatch\nSTOP {unit} user changed plans\n```", msg_id="msg_3")
+        self.assertEqual(res.returncode, 2)
+        self.assertIn("[orche] dispatch refused: target div-acme-build is retired.", res.stderr)
+        self.assertEqual(sorted(p.name for p in folder.iterdir()), files)
+        self.assertEqual((folder / "BRIEF.md").read_bytes(), brief)
+        self.assertEqual(len(self.inbox("div-acme-build")), pointers)
 
     def test_amend_creates_rev2_with_supersedes(self):
         self.run_hook("dispatch_relay.py", self.payload("stop.json", transcript_path=str(SAMPLE)))
@@ -378,8 +445,12 @@ class DispatchRelayTest(HookCase):
         status.write_text("coupon field landed\n")
         return wt, head
 
-    def claim(self, text="Coupon unit finished.\nSTATUS: done\n", **over):
-        return self.stop(text, cwd=str(self.root / "acme-checkout"), **over)
+    def claim(self, text="Coupon unit finished.\nSTATUS: done\n", first_ts="2026-10-16T00:00:00.000Z", **over):
+        """The feature agent claims from its worktree (the claimant is the identity, SPEC §14.11)."""
+        path = self.transcript(text, first_ts=first_ts)
+        return self.run_hook("dispatch_relay.py", self.payload(
+            "stop.json", transcript_path=path, cwd=str(self.root / "acme-checkout"), **over),
+            ORCHE_SESSION="feat-acme-checkout")
 
     def test_completion_claim_without_ledger_row_blocked(self):
         self.feature_repo()
@@ -387,7 +458,15 @@ class DispatchRelayTest(HookCase):
         self.assertEqual(res.returncode, 2)
         self.assertIn("LEDGER row", res.stderr)
 
-    def test_completion_gate_reads_claim_from_payload_text(self):
+    def test_completion_claim_in_bold_list_or_lower_case_reaches_gate(self):
+        self.feature_repo()
+        for text in ("Coupon unit finished.\n**STATUS: done**\n", "- status: Done.\n", "> 1. STATUS: done\n"):
+            with self.subTest(text=text):
+                res = self.claim(text)
+                self.assertEqual(res.returncode, 2)
+                self.assertIn("LEDGER row", res.stderr)
+
+    def test_donegate_reads_claim_from_payload_text(self):
         self.feature_repo()
         res = self.claim("Still working.", last_assistant_message="Coupon unit finished.\nSTATUS: done\n")
         self.assertEqual(res.returncode, 2)
@@ -412,8 +491,7 @@ class DispatchRelayTest(HookCase):
         self.ledger(("12", head, "type-check-only", "logs/v.txt", "div-acme-build", "2026-10-16T01:00:00Z"))
         status = wt / ".orche" / "feat" / "checkout" / "STATUS.md"
         os.utime(status, (time.time() - 86400 * 400,) * 2)
-        res = self.stop("STATUS: release-ready\n", cwd=str(wt),
-                        first_ts=dt.datetime.now(dt.timezone.utc).isoformat())
+        res = self.claim("STATUS: release-ready\n", first_ts=dt.datetime.now(dt.timezone.utc).isoformat())
         self.assertEqual(res.returncode, 2)
         self.assertIn("has verdict 'type-check-only'; need >= unit-test-verified", res.stderr)
         self.assertIn(".orche/feat/checkout/STATUS.md update in this session", res.stderr)
@@ -425,6 +503,38 @@ class DispatchRelayTest(HookCase):
         res = self.claim("STATUS: release-ready\n")
         self.assertEqual(res.returncode, 2)
         self.assertIn("independent verifier", res.stderr)
+
+    def test_main_standing_in_a_feature_worktree_is_not_gated(self):
+        """D9a: the claimant is the identity (Main), not the place (the feature worktree)."""
+        self.feature_repo()
+        res = self.stop("Coupon unit finished.\nSTATUS: done\n", cwd=str(self.root / "acme-checkout"))
+        self.assertEqual((res.returncode, res.stderr), (0, ""))
+
+    def test_feature_agent_outside_its_worktree_is_gated(self):
+        """D9b: a feature agent claiming from the main checkout is still gated on its worktree's HEAD."""
+        _, head = self.feature_repo()
+        res = self.run_hook("dispatch_relay.py", self.payload(
+            "stop.json", transcript_path=self.transcript("Coupon unit finished.\nSTATUS: done\n"),
+            cwd=str(self.repo)), ORCHE_SESSION="feat-acme-checkout")
+        self.assertEqual((res.returncode, res.stderr.strip()), (2, no_row_blocked(head)))
+
+    def test_template_echo_is_not_a_claim(self):
+        """D2: `STATUS: done|blocked|failed` echoes the brief template; it claims nothing."""
+        self.feature_repo()
+        res = self.claim("End with\nSTATUS: done|blocked|failed\n")
+        self.assertEqual((res.returncode, res.stderr), (0, ""))
+
+    def test_the_last_status_line_wins(self):
+        """D1: a later `STATUS: blocked` replaces an earlier done claim."""
+        self.feature_repo()
+        res = self.claim("STATUS: done\nthen\nSTATUS: blocked\n")
+        self.assertEqual((res.returncode, res.stderr), (0, ""))
+
+    def test_heading_status_line_reaches_gate(self):
+        """D3: `## STATUS: done` is a claim."""
+        _, head = self.feature_repo()
+        res = self.claim("## STATUS: done\n")
+        self.assertEqual((res.returncode, res.stderr.strip()), (2, no_row_blocked(head)))
 
     def test_refusal_under_stop_hook_active_parks_question_and_allows(self):
         res = self.stop(DISPATCH_OK.replace("VERIFY    scripts/verify-checkout.sh\n", ""), stop_hook_active=True)
@@ -523,16 +633,115 @@ class DispatchRelayTest(HookCase):
         self.assertFalse(self.units_dir().exists())
         self.assertEqual(self.orca_calls(), [])
 
-    def test_unit_worktree_without_session_is_unidentified(self):
+    # -- C1 T3 ledger rows -------------------------------------------------------------------
+    def test_unidentified_refusal_under_stop_hook_active_only_logs(self):
+        """L1: no identified session -> the refusal goes to hooks.log only, never an inbox."""
+        text = DISPATCH_OK.replace("VERIFY    scripts/verify-checkout.sh\n", "")
+        for cwd in (self.repo, self.root / "elsewhere"):
+            res = self.run_hook("dispatch_relay.py", self.payload(
+                "stop.json", transcript_path=self.transcript(text), cwd=str(cwd), stop_hook_active=True),
+                ORCHE_SESSION="")
+            self.assertEqual((res.returncode, res.stderr), (0, ""))
+            self.assertEqual(self.inbox("main-acme"), [])
+            self.assertFalse((self.home / "inbox" / "unknown").exists())
+        self.assertIn("refused under stop_hook_active", (self.home / "logs" / "hooks.log").read_text())
+        self.assertFalse(self.units_dir().exists())
+
+    def test_may_stop_night_predicate_needs_an_identified_session(self):
+        """L2: an unidentified session in the main checkout never runs Main's predicate."""
+        pred = self.repo / ".orche" / "night" / "main-acme.predicate.sh"
+        pred.parent.mkdir()
+        pred.write_text("#!/bin/sh\necho 'night: 2 units still open'\nexit 1\n")
+        pred.chmod(0o755)
+        res = self.run_hook("dispatch_relay.py", self.payload(
+            "stop.json", transcript_path=self.transcript("All quiet."), cwd=str(self.repo)), ORCHE_SESSION="")
+        self.assertEqual((res.returncode, res.stderr), (0, ""))
+
+    def test_may_stop_night_predicate_runs_for_an_identified_main(self):
+        """L2: ORCHE_SESSION=main-acme in the main checkout runs Main's predicate and blocks on it."""
+        pred = self.repo / ".orche" / "night" / "main-acme.predicate.sh"
+        pred.parent.mkdir()
+        pred.write_text("#!/bin/sh\necho 'night: 2 units still open'\nexit 1\n")
+        pred.chmod(0o755)
+        res = self.run_hook("dispatch_relay.py", self.payload(
+            "stop.json", transcript_path=self.transcript("All quiet."), cwd=str(self.repo)),
+            ORCHE_SESSION="main-acme")
+        self.assertEqual((res.returncode, res.stderr), (2, "night: 2 units still open\n"))
+
+    def test_unidentified_hint_names_the_place_main(self):
+        """L3: the identify hint names the Main of the cwd's project (here beta via a marker), not main-acme."""
+        self.add_project_b()
+        marker = self.root / "elsewhere" / ".orche" / "project"
+        marker.parent.mkdir()
+        marker.write_text("beta\n")
+        res = self.run_hook("dispatch_relay.py", self.payload(
+            "stop.json", transcript_path=str(SAMPLE), cwd=str(self.root / "elsewhere")), ORCHE_SESSION="")
+        self.assertEqual((res.returncode, res.stderr),
+                         (2, "dispatch requires an identified session: set ORCHE_SESSION=main-beta "
+                             "(ORCHE panes set it automatically)\n"))
+        self.assertFalse(self.units_dir().exists())
+
+    def test_stop_in_a_sessionless_unit_worktree_is_unidentified(self):
+        """D2: a unit worktree whose registry session is blank identifies nobody; the hint is its project's Main."""
         reg = json.loads((self.home / "registry.json").read_text())
         reg["projects"]["acme"]["divisions"]["build"]["session"] = ""
         (self.home / "registry.json").write_text(json.dumps(reg))
-        res = self.run_hook("dispatch_relay.py", self.payload("stop.json", transcript_path=str(SAMPLE),
-                                                              cwd=str(self.root / "acme-build")),
-                            ORCHE_SESSION="")
-        self.assertEqual(res.returncode, 2)
-        self.assertIn("dispatch requires an identified session", res.stderr)
+        res = self.run_hook("dispatch_relay.py", self.payload(
+            "stop.json", transcript_path=str(SAMPLE), cwd=str(self.root / "acme-build")), ORCHE_SESSION="")
+        self.assertEqual((res.returncode, res.stderr),
+                         (2, "dispatch requires an identified session: set ORCHE_SESSION=main-acme "
+                             "(ORCHE panes set it automatically)\n"))
         self.assertFalse(self.units_dir().exists())
+        self.assertEqual(self.orca_calls(), [])
+
+    def test_local_division_beats_a_project_with_the_same_key(self):
+        """L24: `TO build` is the sender's Build division even when a project is keyed `build`."""
+        reg = json.loads((self.home / "registry.json").read_text())
+        (self.root / "buildproj").mkdir()
+        reg["projects"]["build"] = {"repo_id": "repo-build", "path": str(self.root / "buildproj"),
+                                    "stage": "building", "aliases": [], "main_session": "main-build",
+                                    "liaison_session": "", "card": "x", "standing": ".orche/STANDING.md",
+                                    "divisions": {}}
+        (self.home / "registry.json").write_text(json.dumps(reg))
+        res = self.stop(DISPATCH_OK)
+        self.assertEqual((res.returncode, res.stderr), (0, ""))
+        unit = self.only_unit()
+        [ptr] = [json.loads(p.read_text()) for p in self.inbox("div-acme-build")]
+        self.assertEqual((ptr["unit"], ptr["to"]), (unit, "div-acme-build"))
+        self.assertEqual(self.inbox("main-build"), [])
+
+    def test_other_project_main_session_files_external_request(self):
+        """L25: `TO main-<other>` files an external-request like `TO <other>`."""
+        self.add_project_b()
+        res = self.stop(DISPATCH_OK.replace("TO        build", "TO        main-beta"))
+        self.assertEqual((res.returncode, res.stderr), (0, ""))
+        self.assertFalse(self.units_dir().exists())
+        [ptr] = [json.loads(p.read_text()) for p in self.inbox("main-beta")]
+        self.assertEqual((ptr["status"], ptr["from"]), ("external-request", "main-acme"))
+        [fb] = [json.loads(p.read_text()) for p in self.inbox("main-acme")]
+        self.assertIn("→ main-beta rev 0 (external-request filed)", fb["summary"])
+
+    def test_cross_project_refusal_suggests_their_main_session(self):
+        """L25: the cross-project refusal names the other project's Main session."""
+        self.add_project_b()
+        res = self.stop(DISPATCH_OK.replace("TO        build", "TO        div-beta-build"))
+        self.assertEqual(res.returncode, 2)
+        self.assertIn("Cross-project work goes through Main(beta): use `TO main-beta` (files an external-request).",
+                      res.stderr)
+
+    def test_project_without_a_main_is_an_unknown_target(self):
+        """L26: `TO <project>` whose main_session is "" is "unknown TO", listing the valid targets."""
+        self.add_project_b()
+        reg = json.loads((self.home / "registry.json").read_text())
+        reg["projects"]["beta"]["main_session"] = ""
+        (self.home / "registry.json").write_text(json.dumps(reg))
+        res = self.stop(DISPATCH_OK.replace("TO        build", "TO        beta"))
+        self.assertEqual((res.returncode, res.stderr),
+                         (2, "[orche] dispatch refused: unknown TO 'beta'. Valid targets: div-acme-build, "
+                             "div-acme-rnd, div-beta-build, feat-acme-checkout, liaison-acme, liaison-beta, "
+                             "main-acme.\n"))
+        self.assertFalse(self.units_dir().exists())
+        self.assertEqual(self.inbox("main-beta"), [])
 
     def test_build_division_dispatches_to_feature(self):
         path = self.transcript(DISPATCH_OK.replace("TO        build\n", "TO        feat-acme-checkout\n"))
@@ -575,24 +784,6 @@ class DispatchRelayTest(HookCase):
         _, lines = self.feature_brief(lambda feat: feat.update(worktree="", branch=""))
         self.assertEqual(lines[3], f"worktree: {self.repo} (main checkout)   branch: trunk")
 
-    # -- R1: the main-checkout `git branch` call is bounded by the hook budget -------------------
-    def test_where_skips_git_when_budget_is_gone(self):
-        from orche import dispatch, registry
-        reg = registry.load()
-        calls = []
-        real = shell.RUNNER
-        shell.RUNNER = lambda argv, **kw: calls.append((argv, kw)) or real(argv, **kw)
-        self.addCleanup(setattr, shell, "RUNNER", real)
-        at = dispatch.where(reg, "main-acme", "div-acme-build", "acme", timeout=-0.2)
-        self.assertEqual((at.worktree, at.branch, calls), (str(self.repo), "-", []))
-        dispatch.where(reg, "main-acme", "div-acme-build", "acme", timeout=0.3)
-        self.assertEqual([kw["timeout"] for _, kw in calls], [0.3])
-        # Review M-2: a unit without a worktree but with a recorded branch needs no git call.
-        calls.clear()
-        reg["projects"]["acme"]["divisions"]["build"]["features"][0]["worktree"] = ""
-        at = dispatch.where(reg, "feat-acme-checkout", "div-acme-build", "acme", timeout=0.3)
-        self.assertEqual((at.worktree, at.branch, calls), (f"{self.repo} (main checkout)", "feat/checkout", []))
-
     def test_glyph_prefixed_pane_title_is_nudged(self):
         self.fake_orca({"terminal list": {"terminals": [{"handle": "t-glyph", "title": "✳ div-acme-build"}]}})
         self.run_hook("dispatch_relay.py", self.payload("stop.json", transcript_path=str(SAMPLE)))
@@ -616,7 +807,7 @@ class DispatchRelayTest(HookCase):
         self.assertEqual(self.events().count("delivery=budget-exceeded"), 2)
         self.assertEqual([a[2] for a in self.orca_calls()], ["list"])
 
-    def test_night_predicate_blocks_with_its_stdout(self):
+    def test_may_stop_night_predicate_blocks_with_its_stdout(self):
         pred = self.repo / ".orche" / "night" / "main-acme.predicate.sh"
         pred.parent.mkdir()
         pred.write_text("#!/bin/sh\necho 'night: 2 units still open'\nexit 1\n")
@@ -707,11 +898,31 @@ class ReportInjectTest(HookCase):
         self.assertTrue(first.stdout.startswith("## Standing orders\n1. Opus"), first.stdout)
         self.assertEqual(self.prompt(seen=False).stdout, "")
 
-    def test_unknown_session_is_skipped(self):
+    def test_standing_orders_follow_the_member_project_not_the_cwd(self):
+        """L5: the member's project picks STANDING; a Main prompting from another project's cwd
+        still gets its own orders."""
+        reg = json.loads((self.home / "registry.json").read_text())
+        beta = self.root / "beta"
+        (beta / ".orche").mkdir(parents=True)
+        (beta / ".orche" / "STANDING.md").write_text("1. Beta orders only.\n")
+        reg["projects"]["beta"] = {"repo_id": "repo-beta", "path": str(beta), "stage": "building",
+                                   "aliases": [], "main_session": "main-beta", "liaison_session": "liaison-beta",
+                                   "card": "x", "standing": ".orche/STANDING.md", "divisions": {}}
+        (self.home / "registry.json").write_text(json.dumps(reg))
+        res = self.run_hook("report_inject.py", self.payload("prompt.json", cwd=str(beta)))
+        self.assertTrue(res.stdout.startswith("## Standing orders\n1. Opus"), res.stdout)
+        self.assertNotIn("Beta orders", res.stdout)
+
+    def test_pane_title_no_longer_identifies(self):
+        """L4: without ORCHE_SESSION the Orca pane title is not consulted — Main's checkout stays
+        unidentified, its inbox untouched, and Orca is never listed."""
         self.pointer("acme-a-20261016-1", status="failed")
-        res = self.run_hook("report_inject.py", self.payload("prompt.json", cwd=str(self.root / "elsewhere")),
-                            ORCHE_SESSION="")
+        self.fake_orca({"terminal list": {"terminals": [{"handle": "t-main", "title": "main-acme"}]}})
+        res = self.run_hook("report_inject.py", self.payload("prompt.json"),
+                            ORCHE_SESSION="", ORCA_TERMINAL_HANDLE="t-main")
         self.assertEqual((res.returncode, res.stdout), (0, ""))
+        self.assertEqual(len(self.inbox("main-acme")), 1)
+        self.assertEqual([a for a in self.orca_calls() if a[1:3] == ["terminal", "list"]], [])
 
     def test_unidentified_main_checkout_drains_nothing(self):
         self.pointer("acme-a-20261016-1")
@@ -733,18 +944,6 @@ class ReportInjectTest(HookCase):
                       ORCHE_SESSION="")
         self.assertEqual(sorted(p.name for p in (self.home / "activity").iterdir()),
                          ["feat-acme-checkout", "main-acme"])
-
-    def test_unit_worktree_identifies_without_env(self):
-        self.pointer("acme-a-20261016-1", status="question", to="div-acme-build")
-        res = self.run_hook("report_inject.py", self.payload("prompt.json", cwd=str(self.root / "acme-build")),
-                            ORCHE_SESSION="")
-        self.assertIn("## Inbox (1)", res.stdout)
-
-    def test_orche_session_env_wins(self):
-        self.pointer("acme-a-20261016-1", status="question", to="div-acme-build")
-        res = self.run_hook("report_inject.py", self.payload("prompt.json", cwd=str(self.root / "elsewhere")),
-                            ORCHE_SESSION="div-acme-build")
-        self.assertIn("## Inbox (1)", res.stdout)
 
 
 class EnvReadGateTest(HookCase):
@@ -1031,6 +1230,16 @@ class ScopeGateTest(HookCase):
         self.assertEqual(self.gate(str(self.root / "acme" / "a.ts"), cwd="acme-build")["permissionDecision"], "deny")
         self.assertIsNone(self.gate(str(self.root / "acme-build" / "a.ts"), cwd="elsewhere"))
 
+    def test_live_record_beats_its_retired_twin(self):
+        """L15: a retired twin listed first at the same worktree no longer decides the scope."""
+        reg = json.loads((self.home / "registry.json").read_text())
+        features = reg["projects"]["acme"]["divisions"]["build"]["features"]
+        twin = {**features[0], "scope": ["old/**"], "status": "retired"}
+        features.insert(0, twin)
+        (self.home / "registry.json").write_text(json.dumps(reg))
+        self.assertIsNone(self.gate("src/checkout/x.ts"))
+        self.assertEqual(self.gate("old/x.ts")["permissionDecision"], "deny")
+
 
 class SessionStartEndTest(HookCase):
     def unit_files(self, standing):
@@ -1104,18 +1313,106 @@ class SessionStartEndTest(HookCase):
 
     def test_unidentified_main_checkout_gets_generic_card_and_note(self):
         out = self.run_hook("session_start.py", self.payload("session_start_clear.json", cwd=str(self.repo))).stdout
-        self.assertTrue(out.startswith("## ORCHE role\n[orche] unidentified session in main checkout — "
-                                       "set ORCHE_SESSION=main-acme for Main's rules\nproject: acme"))
+        self.assertTrue(out.startswith("## ORCHE role\n[orche] this is not an ORCHE pane: Main's rules apply in the "
+                                       "main-acme tab — you can run: orche wake main-acme\nproject: acme"))
         self.assertIn("## Role rules\nORCHE unit rules", out)
         self.assertIn("Never force-push", out)
         for absent in ("session: main-acme", "ORCHE Main rules"):
             self.assertNotIn(absent, out)
 
-    def test_orche_session_wins_over_cwd(self):
-        out = self.run_hook("session_start.py", self.payload("session_start_clear.json", cwd=str(self.repo)),
-                            ORCHE_SESSION="div-acme-build").stdout
-        self.assertTrue(out.startswith("## ORCHE role\nsession: div-acme-build\ndivision: build"))
-        self.assertIn("ORCHE Build rules", out)
+    # -- CLAUDE_ENV_FILE: the session's Bash gets the plugin bin on PATH -------------------------
+    BIN = str(Path(support.ROOT).resolve() / "bin")
+    ENV_LINE = f"export PATH={shlex.quote(BIN)}:\"$PATH\"\n"
+
+    def env_hook(self, payload, env_file, path="/usr/bin:/bin", **env):
+        return self.run_hook("session_start.py", payload, CLAUDE_ENV_FILE=str(env_file), PATH=path, **env)
+
+    def test_env_file_gets_the_plugin_path_line_appended(self):
+        env_file = self.root / "env.sh"
+        env_file.write_text("export A=1\n")
+        res = self.env_hook(self.payload("session_start_clear.json"), env_file)
+        self.assertEqual(res.returncode, 0)
+        self.assertEqual(env_file.read_text(), "export A=1\n" + self.ENV_LINE)
+        self.assertTrue(res.stdout.startswith("## ORCHE role\nsession: feat-acme-checkout"))
+
+    def test_env_file_without_a_trailing_newline_gets_one_before_the_line(self):
+        env_file = self.root / "env.sh"
+        env_file.write_text("OTHER=1")
+        self.assertEqual(self.env_hook(self.payload("session_start_clear.json"), env_file).returncode, 0)
+        self.assertEqual(env_file.read_text(), "OTHER=1\n" + self.ENV_LINE)
+
+    def test_env_file_line_is_written_once_across_repeated_starts(self):
+        env_file = self.root / "env.sh"
+        for _ in range(2):
+            self.assertEqual(self.env_hook(self.payload("session_start_clear.json"), env_file).returncode, 0)
+        self.assertEqual(env_file.read_text(), self.ENV_LINE)
+
+    def test_env_file_non_os_error_is_logged_and_the_hook_continues(self):
+        env_file = self.root / "env.sh"
+        env_file.write_bytes(b"\xff\xfe broken\n")
+        res = self.env_hook(self.payload("session_start_clear.json"), env_file)
+        self.assertEqual(res.returncode, 0)
+        self.assertTrue(res.stdout.startswith("## ORCHE role\nsession: feat-acme-checkout"))
+        self.assertEqual(env_file.read_bytes(), b"\xff\xfe broken\n")
+        log = (self.home / "logs" / "hooks.log").read_text()
+        self.assertEqual(log.count("session_start: CLAUDE_ENV_FILE: UnicodeDecodeError"), 1, log)
+
+    def test_env_file_skipped_when_bin_already_on_path(self):
+        env_file = self.root / "env.sh"
+        res = self.env_hook(self.payload("session_start_clear.json"), env_file, path=f"/usr/bin:{self.BIN}")
+        self.assertEqual(res.returncode, 0)
+        self.assertFalse(env_file.exists())
+
+    def test_no_env_file_writes_nothing(self):
+        plain = self.run_hook("session_start.py", self.payload("session_start_clear.json"))
+        empty = self.run_hook("session_start.py", self.payload("session_start_clear.json"), CLAUDE_ENV_FILE="")
+        self.assertEqual((plain.returncode, empty.returncode), (0, 0))
+        self.assertEqual(empty.stdout, plain.stdout)
+        self.assertTrue(plain.stdout.startswith("## ORCHE role\nsession: feat-acme-checkout"))
+        self.assertEqual(sorted(p.name for p in self.root.iterdir() if p.is_file()), [])
+
+    def test_env_file_written_for_unmanaged_cwd_subagent_other_source_and_broken_registry(self):
+        cases = [("unmanaged", self.payload("session_start_clear.json", cwd=str(self.root / "elsewhere"))),
+                 ("agent", self.payload("session_start_clear.json", agent_id="agent-1")),
+                 ("compact", self.payload("session_start_clear.json", source="compact"))]
+        for name, payload in cases:
+            env_file = self.root / f"{name}.sh"
+            res = self.env_hook(payload, env_file)
+            self.assertEqual((name, res.returncode, res.stdout), (name, 0, ""))
+            self.assertEqual(env_file.read_text(), self.ENV_LINE, name)
+        (self.home / "registry.json").write_text("{broken")
+        env_file = self.root / "broken.sh"
+        res = self.env_hook(self.payload("session_start_clear.json"), env_file)
+        self.assertEqual((res.returncode, res.stdout), (0, ""))
+        self.assertEqual(env_file.read_text(), self.ENV_LINE)
+
+    def test_env_file_error_is_logged_and_the_hook_continues(self):
+        res = self.env_hook(self.payload("session_start_clear.json"), self.root / "missing-dir" / "env.sh")
+        self.assertEqual(res.returncode, 0)
+        self.assertTrue(res.stdout.startswith("## ORCHE role\nsession: feat-acme-checkout"))
+        self.assertIn("session_start: CLAUDE_ENV_FILE:", (self.home / "logs" / "hooks.log").read_text())
+
+    def test_unregistered_session_gets_note_not_the_cwd_role(self):
+        """L6: an unregistered ORCHE_SESSION never falls back to the cwd's unit."""
+        out = self.run_hook("session_start.py", self.payload("session_start_clear.json",
+                                                              cwd=str(self.root / "acme-build")),
+                            ORCHE_SESSION="ghost-acme").stdout
+        self.assertTrue(out.startswith("## ORCHE role\n[orche] session ghost-acme is not registered — check "
+                                       "ORCHE_SESSION (`orche depts` lists the sessions)\nproject: acme"))
+        self.assertIn("## Role rules\nORCHE unit rules", out)
+        self.assertIn("## STANDING.md", out)
+        for absent in ("session: div-acme-build", "ORCHE Build rules"):
+            self.assertNotIn(absent, out)
+
+    def test_sessionless_record_worktree_gets_unidentified_note(self):
+        """L7: an env-less session in a worktree whose record has no session is unidentified."""
+        reg = json.loads((self.home / "registry.json").read_text())
+        reg["projects"]["acme"]["divisions"]["build"]["features"][0]["session"] = ""
+        (self.home / "registry.json").write_text(json.dumps(reg))
+        out = self.run_hook("session_start.py", self.payload("session_start_clear.json")).stdout
+        self.assertTrue(out.startswith("## ORCHE role\n[orche] unidentified session in the build/checkout "
+                                       "worktree — its registry record has no session\nproject: acme"))
+        self.assertNotIn("session: \n", out)
 
     def test_session_end_trashes_orche_scratch_and_leaves_others(self):
         scratch = self.root / "scratch" / "-proj" / "sess-orphan-0001"

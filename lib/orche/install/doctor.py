@@ -8,7 +8,7 @@ import shlex
 import shutil
 import sys
 
-from .. import config, jev_setup, orca, paths, procs, registry, runner, runs, shell
+from .. import config, headless, jev_setup, orca, paths, procs, registry, runs, shell
 from . import careful, settings, statusline
 
 TOOLS = ("gcloud", "gh", "vercel", "age", "zstd")
@@ -84,22 +84,9 @@ def orche_login():
 
 
 def claude_checks() -> list:
-    """(level, name, detail) rows: the configured `claude` binary, its version, and whether its
-    `--help` lists `--setting-sources` (the runner passes `--setting-sources project`)."""
-    claude_bin = config.load().get("claude_bin") or "claude"
-    found = (claude_bin if os.path.isabs(claude_bin) and os.access(claude_bin, os.X_OK)
-             else shutil.which(claude_bin))
-    if not found:
-        return [("WARN", "claude", f"{claude_bin} not found (config claude_bin); the runner cannot start units")]
-    res = shell.run([found, "--version"], timeout=10)
-    version = (res.out or "").strip().splitlines()[:1]
-    rows = [("OK", "claude", f"{found} {version[0]}") if res.ok and version else
-            ("WARN", "claude", f"{found} --version failed: {(res.err or res.out or '').strip()[:200]}")]
-    flags = runner.probe(found)
-    rows.append(("OK", "claude --setting-sources", "supported") if flags["setting_sources"] else
-                ("WARN", "claude --setting-sources", "not listed in claude --help; the runner needs it "
-                                                     "(update Claude Code or set config delivery: pane)"))
-    return rows
+    """(level, name, detail) rows from headless.check: the configured `claude` binary, its version,
+    and whether its `--help` lists every flag a headless call uses."""
+    return headless.check(config.load())
 
 
 MIN_FREE = 1 << 30          # WARN below 1 GiB free on ORCHE_HOME's filesystem

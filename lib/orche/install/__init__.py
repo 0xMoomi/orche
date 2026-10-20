@@ -10,8 +10,7 @@ import re
 import shutil
 from pathlib import Path
 
-from .. import util
-from ..hr import PLUGIN_ROOT
+from .. import paths, util
 
 MIGRATION_LINE = ("Restart any main-/liaison-/div-/feat- panes opened before this version: ORCHE now "
                   "identifies sessions by the ORCHE_SESSION variable its pane commands set.")
@@ -21,7 +20,7 @@ MUTATING = {"patch", "create", "backup", "symlink", "relink", "move", "remove", 
 class Ctx:
     """One install/uninstall run: target home, flags, timestamp, and the recorded actions."""
 
-    def __init__(self, home, *, dry_run=False, yes=False, plugin_root=PLUGIN_ROOT, ts=None):
+    def __init__(self, home, *, dry_run=False, yes=False, plugin_root=paths.PLUGIN_ROOT, ts=None):
         self.home = Path(home)
         self.claude = self.home / ".claude"
         self.dry_run = dry_run

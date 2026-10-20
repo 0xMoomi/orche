@@ -1,12 +1,26 @@
-"""Runner lock files under ORCHE_HOME/runs/<proj>/, one set per live `orche run`.
+"""The Run module: one unit's run from its spawn to its last file (SPEC §14.13).
 
-- `<unit>.lock` holds `{"pid", "unit", "to", "started", "started_ns", "run_id"}` and, once claude
+Interface: start, stop, restart, execute, preview, count/live, reconcile/reconcile_cli/describe/
+pending_sweeps, logs_dir/prune_logs, records(roots), RunError.
+
+Run locks under ORCHE_HOME/runs/<proj>/, one set per live `orche run`.
+
+- `<unit>.lock` holds `{"pid", "unit", "started", "started_ns", "run_id"}`, what runs (`to`, `rev`,
+  `tier`, `model`, `effort`, `worktree`, `branch`: filing.LOCKED, job.lock_info()) and, once claude
   is up, `child_pid` and `pgid` (its own process group); it is live while its pid (the `orche run`
   process) is. `run_id` (`<unit>@<started_ns>`) is the worker's ORCHE_RUN_ID (procs.py).
 - `<to>.target.lock` (same record): one live run per target session, because a target's runs
   share one worktree. A second unit for the same target waits like a run over the project cap.
 
-Light on purpose: the status line counts live runs on every prompt render.
+Light on purpose: this file imports only headless, log, paths, procs, registry, shell and util,
+and loads `filing` and `job` only inside the functions that need them (the status line counts
+runs on every render; the prompt hook reconciles on every prompt).
+
+start() is the Stop hook's `orche run <unit>`, detached (procs.spawn_detached), dated by SINCE_ENV;
+restart() is AMEND: stop(), then start() — the order is the contract.
+
+execute() is `orche run <unit>` (an Outcome: exit code, RUN record, stderr lines) and preview() its
+dry run; both load job.py only when called. RunError is resolve's refusal (exit 1 or 2).
 
 reconcile() settles a lock whose `orche run` is gone (SIGKILL, OOM, power loss, a failed filing) or
 whose pid now belongs to another program: a minimal RUN.json (`stop_reason: lost`) and `failed`
@@ -20,7 +34,7 @@ It runs at `orche run` start (and when a dead lock turns up while waiting), in t
 any session of the project (cheap: `kill -0`, `ps` only within the budget), and in
 `orche status|depts|doctor|metrics|janitor run`.
 
-STOP/AMEND (stop()): a `<unit>.stop` marker, which a running run polls every runner.STOP_POLL_S,
+STOP/AMEND (stop()): a `<unit>.stop` marker, which a running run polls every headless.POLL_S,
 then, as the fast path, SIGTERM to the `orche run` process of a live lock once `ps` (at most
 PS_TIMEOUT_S) shows that the pid still is that run: a recycled pid drops the lock as stale; a `ps`
 that fails or times out counts the lock as live and sends nothing (`runner-pid-check-failed`: never
@@ -41,7 +55,7 @@ import sys
 import time
 from pathlib import Path
 
-from . import log, paths, procs, registry, shell, util
+from .. import headless, log, paths, procs, registry, shell, util
 
 WAIT_S = 1800.0    # default for config runner.queue_wait_s: slot and target waits, then "runner busy"
 POLL_S = 2.0
@@ -51,6 +65,7 @@ TARGET_SUFFIX = ".target.lock"
 SWEEP_SUFFIX = ".sweep"     # a filed lost run whose leftovers are not swept yet (holds no slot)
 SWEEP_TRIES = 3     # unreadable process tables in a row before a pending sweep is settled by kill -0
 LOST = object()     # _try_acquire: a dead run's lock is left; reconcile() first
+SINCE_ENV = "ORCHE_RUN_SINCE"   # start() dates the request; job.run_since() reads it
 
 
 class Busy(Exception):
@@ -67,6 +82,37 @@ class Cancelled(Exception):
     def __init__(self, reason):
         super().__init__(reason)
         self.reason = reason
+
+
+class RunError(Exception):
+    """`orche run` cannot run the unit: exit `code` (1: a bad unit id; 2: an unknown unit, no brief,
+    an unknown or retired target, a missing worktree). `job` is set once the target is known: the
+    run still files a `failed` pointer."""
+
+    def __init__(self, code, message, job=None):
+        super().__init__(message)
+        self.code = code
+        self.job = job
+
+
+def execute(reg, unit, cfg):
+    """`orche run <unit>` in this process: job.execute's Outcome(code, record, stderr); files, never
+    prints."""
+    from . import job
+    return job.execute(reg, unit, cfg)
+
+
+def records(roots) -> list:
+    """filing.records: the RUN.json records under `roots` (what `orche metrics` sums)."""
+    from . import filing
+    return filing.records(roots)
+
+
+def preview(reg, unit, cfg):
+    """`orche --dry-run run <unit>`: job.preview's Preview(job, call, argv); writes nothing. Raises
+    RunError, or what call_for / headless.argv raise."""
+    from . import job
+    return job.preview(reg, unit, cfg)
 
 
 def run_dir(proj: str) -> Path:
@@ -222,18 +268,14 @@ def acquire(proj: str, unit: str, info: dict, limit: int, wait_s=None, poll_s=No
         time.sleep(POLL_S if poll_s is None else poll_s)
 
 
-def mcp_config_path(run_id) -> Path:
-    """ORCHE_HOME/runner/mcp/<run_id>.json: the run's own empty `--mcp-config` (`{"mcpServers": {}}`),
-    written when claude starts, removed when the run ends, when reconcile drops the run's lock or
-    pending sweep, and by prune_logs once old. Its path in claude's command line is what
-    procs._is_claude proves a lost run's claude by (runner.claude_marker)."""
-    return paths.orche_home() / "runner" / "mcp" / f"{run_id}.json"
-
-
-def drop_mcp_config(run_id) -> None:
+# The run's own empty `--mcp-config` (headless.marker_path): written when claude starts, removed
+# when the run ends (headless.run), when reconcile drops the run's lock or pending sweep, and by
+# prune_logs once old. Its path in claude's command line is what procs._is_claude proves a lost
+# run's claude by (headless.marker).
+def _drop_marker(run_id) -> None:
     if run_id:
         try:
-            mcp_config_path(run_id).unlink(missing_ok=True)
+            headless.marker_path(run_id).unlink(missing_ok=True)
         except OSError:
             pass
 
@@ -337,7 +379,7 @@ def is_run_process(pid, unit, timeout=PS_TIMEOUT_S):
 # ---- run logs ----------------------------------------------------------------
 
 def logs_dir() -> Path:
-    """ORCHE_HOME/logs/runs: one `<unit>.log` per spawned run (dispatch.spawn_run)."""
+    """ORCHE_HOME/logs/runs: one `<unit>.log` per spawned run (start())."""
     return paths.orche_home() / "logs" / "runs"
 
 
@@ -362,7 +404,7 @@ def prune_logs(keep_days) -> int:
                 gone += 1
         except OSError:
             continue
-    for path in (paths.orche_home() / "runner" / "mcp").glob("*.json"):
+    for path in headless.marker_dir().glob("*.json"):
         try:
             if path.is_file() and path.stat().st_mtime < cutoff:
                 path.unlink()
@@ -394,7 +436,7 @@ class _Mutex:
         self.fh.close()
 
 
-FILED = ("reconciled", "stale-lock")    # file_lost() outcomes after which Main has the run's pointer
+FILED = ("reconciled", "stale-lock")    # filing.lost() outcomes after which Main has the run's pointer
 
 
 def _sweep_path(folder: Path, data: dict) -> Path:
@@ -439,12 +481,11 @@ def _sweep_lost(data: dict, deadline):
     that one's environment is hidden and procs._is_claude proves it by the run's own
     `--mcp-config` path. (pids signalled or None, whether the table was tried and failed: False
     when there was no time to try or the deadline cut the read short (procs.NoTime))."""
-    from . import runner            # lazy: the hook's cheap path never imports the runner stack
     if procs._budget(deadline) <= 0:
         return None, False
     child, rid = data.get("child_pid"), data.get("run_id")
     claude = ({"pid": child, "pgid": data.get("pgid"), "started_ns": data.get("started_ns"),
-               "marker": runner.claude_marker(rid) if rid else None} if child else None)
+               "marker": headless.marker(rid) if rid else None} if child else None)
     try:
         hit = procs.sweep(rid, claude=claude, deadline=deadline)
     except procs.NoTime:
@@ -467,7 +508,7 @@ def _lost(reg, proj: str, path: Path, data: dict, deadline):
     settled the lock first.
 
     Under the project mutex (so two reconcilers never both file): unless the lock says an earlier
-    reconcile filed it, runner.file_lost() writes the minimal RUN.json and the `failed` pointer
+    reconcile filed it, filing.lost() writes, from the lock, the minimal RUN.json and the `failed` pointer
     (or finds a pointer the run or its worker filed: `runner-stale-lock`), and the lock is marked
     `reconciled`. A filing that raises (ENOSPC, EACCES, …) leaves the lock as it was for a later
     reconcile. Then, while `deadline` allows, the sweep (_sweep_lost) and the locks go. A filed
@@ -481,9 +522,9 @@ def _lost(reg, proj: str, path: Path, data: dict, deadline):
         if cur is None or str(cur.get("pid")) != str(pid):
             return None
         if not cur.get("reconciled"):
-            from . import runner
+            from . import filing
             try:
-                act["action"] = runner.file_lost(reg, cur)
+                act["action"] = filing.lost(reg, proj, cur)
             except OSError as exc:      # ENOSPC, EACCES, …: keep the lock, a later reconcile files it
                 log.log("hooks", f"runner: reconcile {unit}: cannot file the lost run: {type(exc).__name__}: {exc}")
                 act.update(action="unfiled", error=f"{type(exc).__name__}: {exc}")
@@ -509,7 +550,7 @@ def _lost(reg, proj: str, path: Path, data: dict, deadline):
             act["killed"] = hit
             path.unlink(missing_ok=True)
             _drop_target(folder, cur)
-            drop_mcp_config(cur.get("run_id"))
+            _drop_marker(cur.get("run_id"))
             act["removed"] = True
         else:
             act["removed"] = act["pending"] = _settle(folder, path, cur, failures=1 if failed else 0)
@@ -533,7 +574,7 @@ def _pending_sweep(proj: str, path: Path, deadline):
     act = {**_act(proj, data, "cleared"), "filed": True}
     if hit is not None:
         path.unlink(missing_ok=True)
-        drop_mcp_config(rid)
+        _drop_marker(rid)
         if not hit:
             return None
         log.log("events", f"run unit={unit} runner-swept pids={','.join(map(str, hit))}")
@@ -545,7 +586,7 @@ def _pending_sweep(proj: str, path: Path, deadline):
                          f"the pending sweep of {rid} is settled by kill -0 (child_pid {child})")
     if n >= SWEEP_TRIES and not (child and alive(child)):
         path.unlink(missing_ok=True)
-        drop_mcp_config(rid)
+        _drop_marker(rid)
         log.log("events", f"run unit={unit} runner-sweep-abandoned run_id={rid} failures={n}")
         return {**act, "action": "abandoned", "removed": True, "failures": n}
     try:
@@ -648,7 +689,7 @@ def describe(act) -> str:
 
 def stop(proj: str, unit: str, timeout=PS_TIMEOUT_S, reg=None) -> bool:
     """Ask `unit` to stop: always the marker (a run waiting for a slot gives up on it; a running
-    run polls it every runner.STOP_POLL_S, kills claude's process group and files the pointer),
+    run polls it every headless.POLL_S, kills claude's process group and files the pointer),
     then, as the fast path, SIGTERM to the `orche run` process of a live lock once `ps` verifies the
     pid. Never waits longer than `timeout` (the `ps` check and, for a lost run, its sweep; the Stop
     hook passes what is left of its budget). False when no run of the unit is live; a lock whose
@@ -680,3 +721,29 @@ def stop(proj: str, unit: str, timeout=PS_TIMEOUT_S, reg=None) -> bool:
     except OSError:
         pass
     return True
+
+
+# ---- start / restart ---------------------------------------------------------
+
+def _argv(unit) -> list:
+    """`orche run <unit>` under this very interpreter (the 3.11+ running the hook): no launcher has to
+    find Python again after the spawn, so a run never dies there without a pointer."""
+    return [sys.executable, str(paths.PLUGIN_ROOT / "bin" / "orche.py"), "run", unit]
+
+
+def start(unit) -> None:
+    """Start `orche run <unit>` detached (procs.spawn_detached: its own session, output appended to
+    logs/runs/<unit>.log, the plugin bin first on PATH, ORCHE_RUN_ID dropped); never waits.
+    SINCE_ENV (now, ns) dates the request: a STOP marker written after it stops the run even before
+    the new process got going; an older marker never does."""
+    procs.spawn_detached(_argv(unit), logs_dir() / f"{unit}.log", **{SINCE_ENV: str(time.time_ns())})
+
+
+def restart(proj: str, unit: str, timeout=PS_TIMEOUT_S, reg=None) -> bool:
+    """AMEND: stop() a live run of `unit`, then start() a fresh one, which waits for the stopped run's
+    slot (_try_acquire waits while the unit's live lock carries a marker). The order is the contract:
+    the marker is older than the fresh run's request time, so it stops only the old run. True when a
+    live run was stopped; the fresh run is started either way."""
+    stopped = stop(proj, unit, timeout=timeout, reg=reg)
+    start(unit)
+    return stopped

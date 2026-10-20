@@ -1,7 +1,8 @@
 """`orche install|uninstall|doctor|apply-all` — set up (and take down) ORCHE in the user's home.
 
 install patches only: `~/.claude/settings.json`, `~/.claude/statusline-command.sh`,
-`~/.claude/agents/<ours>.md` (symlinks), `~/.claude/fable/{fable,active}.md`,
+`~/.claude/agents/<ours>.md` (symlinks), `~/.claude/skills/<ours>` (symlinks, settings mode only;
+a plugin-mode install removes them), `~/.claude/fable/{fable,active}.md`,
 `~/.claude/fable/agents/runner.md`, and moves `~/.codex/AGENTS.md.recovered` into place
 (`--yes`). Every changed file is first copied to `<file>.bak-<ts>`; `--dry-run` prints the plan
 and writes nothing. `--home PATH` targets another home (tests); ORCHE_HOME then defaults to
@@ -15,8 +16,8 @@ import os
 from pathlib import Path
 
 from . import jev_setup, paths, util
-from .hr import EXIT_OK, EXIT_USER, out
-from .install import MIGRATION_LINE, Ctx, backup, agents, apply_all, codex, doctor, fable, settings, statusline
+from .cli import EXIT_OK, EXIT_USER, out
+from .install import MIGRATION_LINE, Ctx, backup, agents, apply_all, codex, doctor, fable, settings, skills, statusline
 
 STATE_FILE = "install-state.json"
 LEGACY_STATE_FILE = "install.json"  # read (and migrated) for one version
@@ -186,6 +187,7 @@ def cmd_install(args):
             _save_state(ctx, new_state)  # before the riskier file edits: uninstall must see added hooks
             _run_steps(ctx, "install", [("statusline-command.sh", lambda: statusline.install(ctx)),
                                         ("agents", lambda: agents.install(ctx)),
+                                        ("skills", lambda: skills.install(ctx, args.mode)),
                                         ("runner.md", lambda: agents.flip_runner(ctx)),
                                         ("fable.md", lambda: fable.install(ctx)),
                                         ("AGENTS.md", lambda: codex.install(ctx))])
@@ -214,6 +216,7 @@ def cmd_uninstall(args):
     if state is not None:
         steps.append(("settings.json", lambda: settings.uninstall(ctx, state)))
     steps.append(("agents", lambda: agents.uninstall(ctx, state or {})))
+    steps.append(("skills", lambda: skills.uninstall(ctx, state or {})))
     try:
         _run_steps(ctx, "uninstall", steps)
     finally:

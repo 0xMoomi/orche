@@ -4,14 +4,15 @@ import io
 import json
 import os
 import subprocess
+import types
 import unittest
 from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
 from unittest import mock
 
 import support
-from orche import registry, shell
-from orche.hr import PLUGIN_ROOT
+from orche import headless, registry, shell
+from orche.paths import PLUGIN_ROOT
 from orche.install import MIGRATION_LINE, doctor
 from test_hr import HrCase
 from test_registry import load_cli
@@ -540,6 +541,84 @@ class InstallTest(InstallCase):
         self.assertIn("appeared before the move; refusing to replace it", out)
         self.assertTrue((self.h / ".codex" / "AGENTS.md.recovered").is_file())
 
+class SkillsTest(InstallCase):
+    """Settings mode links each plugin skill into ~/.claude/skills/; plugin mode and uninstall remove ours."""
+
+    NAMES = sorted(p.name for p in (PLUGIN_ROOT / "skills").iterdir() if (p / "SKILL.md").is_file())
+
+    def skills(self):
+        return self.c / "skills"
+
+    def test_settings_mode_links_every_skill_and_is_idempotent(self):
+        self.assertEqual(self.NAMES, ["orche", "orche-apply", "orche-build", "orche-main"])
+        out = self.install("--mode", "settings")
+        for name in self.NAMES:
+            self.assertEqual(os.readlink(self.skills() / name), str(PLUGIN_ROOT / "skills" / name))
+            self.assertIn(f"skills: symlink {self.skills() / name}", out)
+        out = self.install("--mode", "settings")
+        for name in self.NAMES:
+            self.assertIn(f"skills: ok {self.skills() / name} (already linked)", out)
+
+    def test_foreign_entries_with_our_names_are_skipped_and_reported(self):
+        (self.skills() / "orche").mkdir(parents=True)
+        (self.skills() / "orche" / "SKILL.md").write_text("mine\n")
+        (self.skills() / "orche-main").symlink_to(self.home)
+        out = self.install("--mode", "settings")
+        self.assertIn(f"skills: skip {self.skills() / 'orche'} (existing entry, not ORCHE's; left untouched)", out)
+        self.assertIn(f"skills: skip {self.skills() / 'orche-main'} (existing symlink to", out)
+        self.assertEqual((self.skills() / "orche" / "SKILL.md").read_text(), "mine\n")
+        self.assertEqual(os.readlink(self.skills() / "orche-main"), str(self.home))
+        self.assertTrue((self.skills() / "orche-build").is_symlink())
+        code, out, err = self.orche("uninstall", "--home", str(self.h))
+        self.assertEqual((code, err), (0, ""), out)
+        self.assertEqual(sorted(p.name for p in self.skills().iterdir()), ["orche", "orche-main"])
+        self.assertTrue((self.skills() / "orche").is_dir() and (self.skills() / "orche-main").is_symlink())
+
+    def test_a_skills_dir_without_skill_md_is_not_linked(self):
+        from orche.install import skills
+        root = self.home / "plugin"
+        (root / "skills" / "real").mkdir(parents=True)
+        (root / "skills" / "real" / "SKILL.md").write_text("x\n")
+        (root / "skills" / "_shared").mkdir()
+        (root / "skills" / "_shared" / "note.md").write_text("x\n")
+        notes = []
+        ctx = types.SimpleNamespace(plugin_root=root, claude=self.c, dry_run=False,
+                                    note=lambda *a: notes.append(a))
+        skills.install(ctx, "settings")
+        self.assertEqual(sorted(p.name for p in self.skills().iterdir()), ["real"])
+        self.assertEqual([n[2] for n in notes], [self.skills() / "real"])
+
+    def test_dry_run_writes_nothing(self):
+        before = tree_digest(self.home)
+        code, out, err = self.orche("--dry-run", "install", "--home", str(self.h), "--mode", "settings")
+        self.assertEqual((code, err), (0, ""), out)
+        self.assertEqual(tree_digest(self.home), before)
+        self.assertIn(f"skills: would symlink {self.skills() / 'orche-apply'}", out)
+        self.assertFalse(self.skills().exists())
+
+    def test_plugin_mode_removes_our_links_and_keeps_foreign_ones(self):
+        self.install("--mode", "settings")
+        (self.skills() / "mine").mkdir()
+        out = self.install()
+        for name in self.NAMES:
+            self.assertFalse((self.skills() / name).is_symlink(), name)
+            self.assertIn(f"skills: remove {self.skills() / name}", out)
+        self.assertIn("plugin mode: the plugin ships the skills", out)
+        self.assertTrue((self.skills() / "mine").is_dir())
+
+    def test_plain_plugin_mode_says_nothing_about_skills(self):
+        out = self.install()
+        self.assertNotIn("skills:", out)
+        self.assertFalse(self.skills().exists())
+
+    def test_uninstall_removes_our_links(self):
+        self.install("--mode", "settings")
+        code, out, err = self.orche("uninstall", "--home", str(self.h))
+        self.assertEqual((code, err), (0, ""), out)
+        self.assertEqual(list(self.skills().iterdir()), [])
+        self.assertIn(f"skills: remove {self.skills() / 'orche'}", out)
+
+
 class SegmentTest(InstallCase):
     def run_sh(self, path, cwd_json, env_extra=None):
         env = {"PATH": os.environ.get("PATH", "/usr/bin:/bin"), "HOME": str(self.h), "ORCHE_HOME": str(self.home)}
@@ -675,21 +754,25 @@ class DoctorTest(InstallCase):
         _, out, _ = self.doctor()
         self.assertIn("OK\tpython3 (login shell)\t/opt/homebrew/bin/python3 3.14.0", out.splitlines())
 
-    def test_claude_binary_version_and_setting_sources(self):
+    def test_claude_binary_version_and_flags(self):
         registry.save(registry.empty())
         _, out, _ = self.doctor()
         self.assertIn(f"OK\tclaude\t{self.claude} 9.9.9 (Claude Code)", out.splitlines())
-        self.assertIn("OK\tclaude --setting-sources\tsupported", out.splitlines())
+        self.assertIn("OK\tclaude flags\tall 15 listed in claude --help", out.splitlines())
         (self.claude.parent / "help.txt").write_text("Usage: claude [options]\n  -p\n")
         code, out, _ = self.doctor()
         self.assertEqual(code, 0, out)
-        self.assertIn("WARN\tclaude --setting-sources\tnot listed in claude --help; the runner needs it "
-                      "(update Claude Code or set config delivery: pane)", out.splitlines())
+        self.assertIn(f"WARN\tclaude flags\tnot listed in claude --help: {', '.join(headless.FLAGS)}; "
+                      "headless calls that use them fail (update Claude Code)", out.splitlines())
+        (self.claude.parent / "help.txt").write_text(support.HELP_FULL.replace("  --effort <x>\n", ""))
+        _, out, _ = self.doctor()
+        self.assertIn("WARN\tclaude flags\tnot listed in claude --help: --effort; "
+                      "headless calls that use them fail (update Claude Code)", out.splitlines())
         (self.home / "config.json").write_text(json.dumps({"claude_bin": "/nowhere/claude"}))
         _, out, _ = self.doctor(missing=("age", "/nowhere/claude"))
-        self.assertIn("WARN\tclaude\t/nowhere/claude not found (config claude_bin); the runner cannot start units",
-                      out.splitlines())
-        self.assertFalse(any(l.startswith(("OK\tclaude --", "WARN\tclaude --")) for l in out.splitlines()))
+        self.assertIn("WARN\tclaude\t/nowhere/claude not found (config claude_bin); "
+                      "orche run, intake and triage cannot start claude", out.splitlines())
+        self.assertFalse(any(l.split("\t")[1:2] == ["claude flags"] for l in out.splitlines()))
 
     def test_orche_missing_from_login_shell_warns_with_path_hint(self):
         registry.save(registry.empty())

@@ -13,8 +13,7 @@ DEFAULTS = {
     "delivery": "runner",
     # queue_wait_s: how long a run waits for a project slot or its target's lock, then "runner busy".
     # log_keep_days: logs/runs/*.log older than this go at `orche run` start and `orche janitor run`.
-    "runner": {"model_mechanical": "claude-sonnet-5-5", "max_turns": 20, "max_parallel": 4,
-               "hard_in_pane": False, "queue_wait_s": 1800, "log_keep_days": 14},
+    "runner": {"max_turns": 20, "max_parallel": 4, "hard_in_pane": False, "queue_wait_s": 1800, "log_keep_days": 14},
     "jev": {"enabled": False, "base_url": "", "model": "jev-1.13.0", "timeout_s": 1.0,
             "api_key_env": "JEV_API_KEY"},
     # Triage of a Main pane's prompts (lib/orche/triage.py): backend auto = Jev when enabled and

@@ -1,6 +1,6 @@
 """`orche metrics [--days N] [--root PATH] [--prices FILE]` — token-economy metrics from transcripts,
 a Triage section from ORCHE_HOME/triage/samples.jsonl, and a Runner section summing the registered
-projects' `orche run` records (RUN.json)."""
+projects' `orche run` records (RUN.json), also by model and effort."""
 import json
 import sys
 
@@ -33,7 +33,7 @@ def cmd_metrics(args):
         reg = registry.empty()
     runs.reconcile_cli(reg, args)       # a lost run's RUN.json counts in the Runner section
     roots = [units.project_root(reg, key) for key in sorted(reg["projects"])]
-    result["runner"] = metrics.runner_summary([r for r in roots if r], days=args.days)
+    result["runner"] = metrics.runner_summary(runs.records([r for r in roots if r]), days=args.days)
     result["triage"] = metrics.triage_summary(triage.samples_path(), days=args.days)
     if args.json:
         print(json.dumps(result, indent=2, ensure_ascii=False))

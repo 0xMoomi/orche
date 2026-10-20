@@ -3,6 +3,7 @@ import hashlib
 import io
 import json
 import os
+import subprocess
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -10,7 +11,7 @@ from unittest import mock
 import support
 from orche import registry, setup_flow, shell
 from orche.hr import onboarding
-from test_hr import ALL, HrCase
+from test_hr import ALL, HrCase, git_repo
 
 CHARTER = "owns the visual system, reviews UI changes, keeps the brand kit current"
 DESIGN = {"label": "Design", "charter": CHARTER, "model": "claude-opus-5-5", "effort": "high"}
@@ -95,8 +96,9 @@ class InteractiveTest(SetupCase):
         self.assertEqual(registry.divisions_of(proj), ["build", "gtm", "design"])
         self.assertEqual(proj["aliases"], ["dw", "acme"])
         design = proj["divisions"]["design"]
-        self.assertEqual((design["status"], design["session"], design["branch"], design["model"], design["effort"]),
-                         ("dormant", "div-acme-shop-design", "div/design", "claude-opus-5-5", "high"))
+        self.assertEqual((design["status"], design["session"], design["branch"], design["model"]),
+                         ("dormant", "div-acme-shop-design", "div/design", "claude-opus-5-5"))
+        self.assertNotIn("effort", design)   # the custom spec's effort renders the persona only
         wt = self.wtroot / "div-design"
         self.assertEqual(sorted(p.name for p in (wt / ".orche" / "div" / "design").iterdir()),
                          ["CHARTER.md", "DECISIONS.tsv", "HANDOFF.md", "STATUS.md"])
@@ -544,6 +546,314 @@ class PrintSetupFlagsTest(SetupCase):
         code, _, err = self.orche("init", "--print-setup", "--stage", "public", "--wake", "rnd", "Acme Shop")
         self.assertEqual(err, "orche: --print-setup only prints; drop --stage, --wake\n")
         self.assertEqual(self.calls, [])
+
+
+# ---- C7 A2: an unlisted git repo is added to Orca; init lands on Main ---------------------------
+
+class AddRepoTest(SetupCase):
+    """`orche init <path>` for a git repo Orca does not list adds it first (`orca repo add`)."""
+
+    def setUp(self):
+        super().setUp()
+        self.new = self.home / "repos" / "new-app"
+        (self.new / ".git").mkdir(parents=True)
+        self.listed_after_add = True
+        self.list_error_after_add = None
+        self.display = "new-app"
+        self.added = []
+
+    def fake_runner(self, argv, *, timeout, input):
+        if argv[:3] == ["orca", "repo", "add"]:
+            self.calls.append(argv)
+            self.added.append(argv[argv.index("--path") + 1])
+            return shell.Result(0, json.dumps({"ok": True, "result": {}}), "", argv)
+        result = super().fake_runner(argv, timeout=timeout, input=input)
+        if argv[:3] == ["orca", "repo", "list"] and self.added and self.list_error_after_add:
+            return shell.Result(0, json.dumps({"ok": False, "error": {"message": self.list_error_after_add}}),
+                                "", argv)
+        if argv[:3] == ["orca", "repo", "list"] and self.added and self.listed_after_add:
+            data = json.loads(result.out)
+            data["result"]["repos"].append({"id": "repo-new", "path": self.added[-1], "displayName": self.display,
+                                            "kind": "git"})
+            return shell.Result(0, json.dumps(data), "", argv)
+        return result
+
+    def test_unlisted_git_repo_is_added_then_onboarded(self):
+        code, out, err = self.orche("init", str(self.new), "--divisions", "build", "--no-intake")
+        self.assertEqual(code, 0, err)
+        self.assertNotIn("warning", err)
+        real = os.path.realpath(self.new)
+        self.assertEqual(self.orca_calls("repo add"), [["orca", "repo", "add", "--path", real, "--json"]])
+        self.assertEqual(len(self.orca_calls("repo list")), 2)   # the lookup, then the re-read after the add
+        proj = registry.load()["projects"]["new-app"]
+        self.assertEqual((proj["repo_id"], proj["path"]), ("repo-new", real))
+        self.assertEqual(out.splitlines()[0], f"added {real} to Orca")
+
+    def test_a_submodule_git_file_counts_as_a_repo(self):
+        os.rmdir(self.new / ".git")
+        (self.new / ".git").write_text("gitdir: ../../super/.git/modules/new-app\n")
+        self.assertEqual(self.orche("init", str(self.new), "--no-intake")[0], 0)
+        self.assertEqual(len(self.orca_calls("repo add")), 1)
+
+    def test_a_linked_worktree_is_refused_and_names_the_main_checkout(self):
+        main, linked = self.home / "repos" / "mainrepo", self.home / "repos" / "linked"
+        main.mkdir(parents=True)
+        git = ["git", "-c", "user.name=t", "-c", "user.email=t@example.invalid", "-C", str(main)]
+        for argv in (["init", "-q"], ["commit", "-q", "--allow-empty", "-m", "x"],
+                     ["worktree", "add", "-q", str(linked)]):
+            subprocess.run(git + argv, check=True, capture_output=True)
+        for argv in (("init", str(linked), "--no-intake"), ("init", "--print-setup", str(linked))):
+            code, out, err = self.orche(*argv)
+            self.assertEqual(code, 1, argv)
+            self.assertEqual(err, f"orche: {os.path.realpath(linked)} is a git worktree of "
+                                  f"{os.path.realpath(main)}; put ORCHE on the main checkout\n")
+        self.assertEqual(self.orca_calls("repo add"), [])
+        self.assertEqual(self.orche("init", str(main), "--no-intake")[0], 0)   # the main checkout is fine
+
+    def test_added_but_not_listed_fails_with_the_path(self):
+        self.listed_after_add = False
+        code, out, err = self.orche("init", str(self.new), "--no-intake")
+        real = os.path.realpath(self.new)
+        self.assertEqual(code, 1)
+        self.assertEqual(err, f"orche: added {real} to Orca but orca repo list does not show it\n")
+        self.assertEqual(self.orca_calls("worktree create"), [])
+        self.assertNotIn("new-app", registry.load().get("projects", {}))
+
+    def test_a_failed_list_after_the_add_names_the_path(self):
+        self.list_error_after_add = "orca is busy"
+        code, _, err = self.orche("init", str(self.new), "--no-intake")
+        self.assertEqual(code, 1)
+        self.assertEqual(err, f"orche: added {os.path.realpath(self.new)} to Orca but orca repo list failed: "
+                              "orca_error: orca is busy\n")
+        self.assertEqual(self.orca_calls("worktree create"), [])
+
+    def test_json_says_whether_the_repo_was_added_to_orca(self):
+        code, out, err = self.orche("init", str(self.new), "--no-intake", "--json")
+        self.assertEqual(code, 0, err)
+        self.assertIs(json.loads(out)["added_to_orca"], True)
+        code, out, err = self.orche("init", str(self.new), "--no-intake", "--json")   # now listed: no add
+        self.assertEqual(code, 0, err)
+        self.assertIs(json.loads(out)["added_to_orca"], False)
+        self.assertEqual(len(self.orca_calls("repo add")), 1)
+
+    def test_an_orca_display_name_other_than_the_folder_name_says_so_once(self):
+        self.display = "Shiny App"
+        code, out, err = self.orche("init", str(self.new), "--divisions", "build", "--no-intake")
+        self.assertEqual(code, 0, err)
+        self.assertEqual(out.splitlines()[1], "registered as shiny-app (Orca names the repo Shiny App)")
+        self.assertIn("shiny-app", registry.load()["projects"])
+        self.assertEqual(self.created(), ["div-build"])
+
+    def test_an_aborted_checklist_leaves_orca_untouched(self):
+        code, out, err = self.typed("", "", "", "n", argv=("init", str(self.new)))
+        self.assertEqual((code, err), (0, ""))
+        self.assertTrue(out.endswith("aborted; nothing written\n"), out)
+        self.assertEqual(self.orca_calls("repo add"), [])
+        self.assertEqual(registry.load()["projects"], {})
+
+    def test_a_path_without_git_keeps_the_not_found_failure(self):
+        plain = self.home / "plain"
+        plain.mkdir()
+        code, _, err = self.orche("init", str(plain), "--no-intake")
+        self.assertEqual(code, 2)
+        self.assertIn("no registry project or Orca repo matches", err)
+        self.assertEqual(self.orca_calls("repo add"), [])
+
+    def test_registered_project_whose_repo_left_orca_keeps_the_repo_missing_failure(self):
+        self.assertEqual(self.orche("init", "Acme Shop", "--divisions", "build", "--no-intake")[0], 0)
+        reg = registry.load()   # registered at a git path Orca no longer lists
+        reg["projects"]["acme-shop"].update(repo_id="repo-gone", path=str(self.new))
+        registry.save(reg)
+        self.calls.clear()
+        code, _, err = self.orche("init", "acme-shop", "--no-intake")
+        self.assertEqual(code, 2)
+        self.assertIn("is registered as acme-shop but its Orca repo is not in", err)
+        self.assertEqual(self.orca_calls("repo add"), [])
+
+    def test_a_registered_path_whose_repo_left_orca_is_repo_missing_and_never_added(self):
+        self.assertEqual(self.orche("init", "Acme Shop", "--divisions", "build", "--no-intake")[0], 0)
+        reg = registry.load()
+        reg["projects"]["acme-shop"].update(repo_id="repo-gone", path=str(self.new))
+        registry.save(reg)
+        self.calls.clear()
+        for argv in (("init", str(self.new), "--no-intake"), ("init", "--print-setup", str(self.new))):
+            code, _, err = self.orche(*argv)
+            self.assertEqual(code, 2, argv)
+            self.assertEqual(err, f"orche: {str(self.new)!r} is registered as acme-shop but its Orca repo is not "
+                                  "in `orca repo list`\n")
+        self.assertEqual(self.orca_calls("repo add"), [])
+
+    def test_dry_run_adds_nothing_and_says_it_would(self):
+        code, out, err = self.orche("--dry-run", "init", str(self.new), "--no-intake")
+        self.assertEqual(code, 0, err)
+        real = os.path.realpath(self.new)
+        lines = out.splitlines()
+        self.assertEqual(lines[0], f"would add {real} to Orca (orca repo add --path {real})")
+        self.assertTrue(lines[2].startswith("Summary: "), lines)
+        self.assertEqual(lines[-1], "would switch to main-new-app")
+        self.assertEqual([c for c in self.calls if c[1:3] in (["repo", "add"], ["terminal", "switch"],
+                                                              ["terminal", "create"], ["worktree", "create"])], [])
+        self.assertIn("id:pending::", err)   # the placeholder repo id in the printed create argvs
+
+    def test_print_setup_of_an_unlisted_git_repo_prints_the_defaults_and_adds_nothing(self):
+        code, out, err = self.orche("init", "--print-setup", str(self.new))
+        self.assertEqual(code, 0, err)
+        self.assertEqual(json.loads(out), setup_flow.defaults())
+        self.assertEqual(self.orca_calls("repo add"), [])
+
+
+class BareInitTest(SetupCase):
+    """`orche init` with no argument: the git repository holding the current directory."""
+
+    def setUp(self):
+        super().setUp()
+        self.here = git_repo(self.home / "repos" / "cwd-app")
+
+    def fake_runner(self, argv, *, timeout, input):
+        result = super().fake_runner(argv, timeout=timeout, input=input)
+        if argv[:3] == ["orca", "repo", "list"]:
+            data = json.loads(result.out)
+            data["result"]["repos"].append({"id": "repo-cwd", "path": str(self.here), "displayName": "cwd-app",
+                                            "kind": "git"})
+            return shell.Result(0, json.dumps(data), "", argv)
+        return result
+
+    def from_dir(self, cwd, *argv):
+        """`orche <argv>` run with `cwd` as the current directory (restored afterwards)."""
+        before = os.getcwd()
+        os.chdir(cwd)
+        try:
+            return self.orche(*argv)
+        finally:
+            os.chdir(before)
+
+    def test_bare_init_inside_a_repo_onboards_it_under_the_folder_name(self):
+        sub = self.here / "src"
+        sub.mkdir()
+        code, out, err = self.from_dir(sub, "init", "--divisions", "build", "--no-intake")
+        self.assertEqual(code, 0, err)
+        proj = registry.load()["projects"]["cwd-app"]
+        self.assertEqual((proj["repo_id"], proj["path"]), ("repo-cwd", os.path.realpath(self.here)))
+        self.assertEqual(self.created(), ["div-build"])
+        self.assertEqual(self.orca_calls("repo add"), [])
+        self.assertEqual(out.splitlines()[-1], "Main is open in the main-cwd-app tab; type a request there.")
+
+    def test_bare_init_outside_any_repo_asks_for_the_path(self):
+        plain = self.home / "plain"
+        plain.mkdir()
+        # GIT_CEILING_DIRECTORIES: git never looks above the temp home, wherever the suite runs
+        with mock.patch.dict(os.environ, {"GIT_CEILING_DIRECTORIES": str(self.home)}):
+            for argv in (("init", "--no-intake"), ("init", "--print-setup")):
+                code, out, err = self.from_dir(plain, *argv)
+                self.assertEqual((code, out), (1, ""), argv)
+                self.assertEqual(err, "orche: not inside a git repository: pass the project path "
+                                      "(orche init <path>)\n")
+        self.assertEqual(registry.load().get("projects", {}), {})
+        self.assertEqual(self.calls, [])
+
+    def test_bare_print_setup_inside_a_repo_prints_the_defaults(self):
+        code, out, err = self.from_dir(self.here, "init", "--print-setup")
+        self.assertEqual(code, 0, err)
+        self.assertEqual(json.loads(out), setup_flow.defaults())
+        self.assertEqual(registry.load().get("projects", {}), {})
+
+    def test_bare_init_in_a_linked_worktree_is_refused_and_names_the_main_checkout(self):
+        linked = self.home / "repos" / "cwd-app-wt"
+        subprocess.run(["git", "-C", str(self.here), "worktree", "add", "-q", str(linked)], check=True,
+                       capture_output=True)
+        code, out, err = self.from_dir(linked, "init", "--no-intake")
+        self.assertEqual(code, 1)
+        self.assertEqual(err, f"orche: {os.path.realpath(linked)} is a git worktree of "
+                              f"{os.path.realpath(self.here)}; put ORCHE on the main checkout\n")
+        self.assertEqual(self.calls, [])
+
+
+class LandOnMainTest(SetupCase):
+    """A live init ends with one `terminal switch` to `main-<proj>`; dry-run never switches."""
+
+    def test_switches_once_to_main_at_the_very_end(self):
+        code, out, err = self.orche("init", "Acme Shop", "--divisions", "build", "--no-intake")
+        self.assertEqual(code, 0, err)
+        self.assertNotIn("warning", err)
+        self.assertEqual(out.splitlines()[-1], "Main is open in the main-acme-shop tab; type a request there.")
+        self.assertEqual(self.orca_calls("terminal switch"),
+                         [["orca", "terminal", "switch", "--terminal", "t-main-acme-shop", "--json"]])
+        writes = [" ".join(c[1:3]) for c in self.calls if c[1] in ("terminal", "automations", "worktree")
+                  and c[2] not in ("list",)]
+        self.assertEqual(writes[-1], "terminal switch")   # after both panes were created
+
+    def test_open_panes_are_not_switched_to_before_the_end(self):
+        self.terminals = [{"handle": "t1", "title": "main-acme-shop"}, {"handle": "t2", "title": "liaison-acme-shop"}]
+        code, out, err = self.orche("init", "Acme Shop", "--divisions", "build", "--no-intake")
+        self.assertEqual(code, 0, err)
+        self.assertNotIn("warning", err)
+        self.assertEqual(self.orca_calls("terminal create"), [])
+        self.assertEqual(self.orca_calls("terminal switch"), [["orca", "terminal", "switch", "--terminal", "t1", "--json"]])
+
+    def test_json_reports_switched(self):
+        code, out, err = self.orche("--json", "init", "Acme Shop", "--divisions", "build", "--no-intake")
+        self.assertEqual(code, 0, err)
+        self.assertIs(json.loads(out)["switched"], True)
+        code, out, err = self.orche("--json", "--dry-run", "init", "Acme Shop", "--no-intake")
+        self.assertEqual(code, 0, err)
+        self.assertIs(json.loads(out)["switched"], False)
+
+    def test_a_failed_switch_is_one_warning_and_init_still_succeeds(self):
+        real = self.fake_runner
+
+        def runner(argv, *, timeout, input):
+            if argv[1:3] == ["terminal", "switch"]:
+                self.calls.append(argv)
+                return shell.Result(1, json.dumps({"ok": False, "error": {"code": "boom", "message": "no window"}}),
+                                    "", argv)
+            return real(argv, timeout=timeout, input=input)
+        shell.RUNNER = runner
+        code, out, err = self.orche("--json", "init", "Acme Shop", "--divisions", "build", "--no-intake")
+        self.assertEqual(code, 0, err)
+        warnings = [l for l in err.splitlines() if l.startswith("orche: warning:")]
+        self.assertEqual(warnings, [self.SWITCH_WARNING], err)
+        self.assertIs(json.loads(out)["switched"], False)
+        self.assertEqual(registry.divisions_of(self.proj()), ["build"])
+
+    SWITCH_WARNING = "orche: warning: could not switch to main-acme-shop; open that tab in Orca"
+
+    def test_a_failed_switch_never_claims_main_is_open(self):
+        real = self.fake_runner
+
+        def runner(argv, *, timeout, input):
+            if argv[1:3] == ["terminal", "switch"]:
+                self.calls.append(argv)
+                return shell.Result(1, json.dumps({"ok": False, "error": {"code": "boom", "message": "no window"}}),
+                                    "", argv)
+            return real(argv, timeout=timeout, input=input)
+        shell.RUNNER = runner
+        code, out, err = self.orche("init", "Acme Shop", "--divisions", "build", "--no-intake")
+        self.assertEqual(code, 0, err)
+        self.assertEqual([l for l in err.splitlines() if l.startswith("orche: warning:")], [self.SWITCH_WARNING], err)
+        self.assertNotIn("Main is open", out)
+
+    def test_a_missing_main_tab_warns_and_does_not_switch(self):
+        real = self.fake_runner
+
+        def runner(argv, *, timeout, input):
+            result = real(argv, timeout=timeout, input=input)
+            self.terminals[:] = [t for t in self.terminals if t["title"] != "main-acme-shop"]
+            return result
+        shell.RUNNER = runner
+        code, out, err = self.orche("init", "Acme Shop", "--divisions", "build", "--no-intake")
+        self.assertEqual(code, 0, err)
+        self.assertEqual([l for l in err.splitlines() if l.startswith("orche: warning:")], [self.SWITCH_WARNING], err)
+        self.assertNotIn("Main is open", out)
+        self.assertEqual(self.orca_calls("terminal switch"), [])
+        code, out, err = self.orche("--json", "init", "Acme Shop", "--divisions", "build", "--no-intake")
+        self.assertIs(json.loads(out)["switched"], False, err)
+
+    def test_dry_run_prints_would_switch_and_switches_nothing(self):
+        self.terminals = [{"handle": "t1", "title": "main-acme-shop"}]
+        code, out, err = self.orche("--dry-run", "init", "Acme Shop", "--no-intake")
+        self.assertEqual(code, 0, err)
+        self.assertEqual(out.splitlines()[-1], "would switch to main-acme-shop")
+        self.assertEqual(self.orca_calls("terminal switch"), [])
 
 
 class SetupModelTest(unittest.TestCase):

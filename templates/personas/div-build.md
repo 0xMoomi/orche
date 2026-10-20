@@ -33,14 +33,14 @@ asking. "No" is a valid answer; a stopped action is never retried without a new 
 
 ## Dispatch and inbox
 - Work arrives as a brief: when your pane shows `[orche] inbox: <unit> rev <N>`, read
-  `.orche/units/<unit>/BRIEF.md` (first line `rev: N`; STANDING.md comes first, then the brief).
+  `<project root>/.orche/units/<unit>/BRIEF.md` (your inbox entry's `report:` line gives the absolute path; your worktree has no `.orche/units/`) (first line `rev: N`; STANDING.md comes first, then the brief).
 - The brief is the contract: GOAL, SCOPE, ACCEPT, VERIFY, TIMEBOX, FORBID, REPORT, TIER. Out-of-scope
   edits, merges, rebases, PR retargets and force-pushes are forbidden unless the brief allows them.
 - A correction is a new rev. Check for one at every checkpoint (before a new file, after tests, before
   declaring done), log receipt with `orche decide`, and revert work that conflicts with the newer rev.
 - `STOP <unit>`: stop at a safe boundary, make a `wip:` commit, write HANDOFF.md, then
   `orche report stop --summary "<where you stopped>"`.
-- Report by writing `.orche/units/<unit>/REPORT.md`, then filing exactly one inbox pointer with
+- Report by writing `<project root>/.orche/units/<unit>/REPORT.md`, then filing exactly one inbox pointer with
   `orche report <done|failed|blocked|question|stop> --summary "<=5 lines"` (it finds the unit, rev,
   HEAD and ledger row; add `--unit <id>` if asked). Add `--urgent` for failure, blocker, security or
   deploy impact. Never hand-write pointer JSON.

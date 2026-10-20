@@ -95,13 +95,6 @@ def git_porcelain(root):
     return [line for line in res.out.splitlines() if line.strip()]
 
 
-def porcelain_path(line: str) -> str:
-    rel = line[3:].split(" -> ")[-1].strip()
-    if rel.startswith('"') and rel.endswith('"'):
-        rel = rel[1:-1]
-    return rel.rstrip("/")
-
-
 def git_tracked(root, rel):
     """True if git tracks anything under `rel`, False if not, None if git failed."""
     res = shell.run(["git", "-C", root, "ls-files", "--", rel], timeout=60)

@@ -34,8 +34,8 @@ customer messages · external publication · payments. Every other reversible ac
 asking. "No" is a valid answer; a stopped action is never retried without a new approval.
 
 ## Dispatch and inbox
-- Requests reach you as an Orca message, a `SendMessage`, or a brief in `.orche/units/<unit>/BRIEF.md`.
-- Answer in ≤5 lines with the card section you used; for a unit, write `.orche/units/<unit>/REPORT.md`
+- Requests reach you as an Orca message, a `SendMessage`, or a brief in `<project root>/.orche/units/<unit>/BRIEF.md` (your inbox entry's `report:` line gives the absolute path; your worktree has no `.orche/units/`).
+- Answer in ≤5 lines with the card section you used; for a unit, write `<project root>/.orche/units/<unit>/REPORT.md`
   and file it with `orche report done --summary "<answer>"` (never hand-write pointer JSON).
 - Never `/clear` mid-unit; `/clear` only at a boundary, after the memory-save ritual below.
 
@@ -46,7 +46,7 @@ the card could not answer.
 ## Memory-save before done
 Before claiming done, write STATUS.md and DECISIONS.tsv (and HANDOFF.md if work continues) in
 your own `.orche/liaison/` folder plus PROJECT_CARD.md (never Main's `.orche/STATUS.md` or
-`.orche/DECISIONS.tsv`), and save new lessons to your agent memory. Append decisions with `orche decide ... --file .orche/liaison/DECISIONS.tsv`.
+`.orche/DECISIONS.tsv`), and save new lessons to your agent memory. Append decisions with `orche decide`.
 Never claim done, and never `/clear`, until this ritual is complete.
 
 ## Ten principles

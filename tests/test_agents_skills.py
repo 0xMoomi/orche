@@ -90,12 +90,20 @@ class PersonaTemplatesTest(unittest.TestCase):
         self.assertNotIn("`git show --stat`", text)
 
     def test_agents_never_wait_on_a_long_intake(self):
-        """Intake fix round I5: the apply skill runs init with --no-intake, then the intake with a
-        10-minute Bash timeout; the liaison only starts `--if-stale --background` (0.3.4: it detaches
+        """C7 A2c: the apply skill runs init (intake included) in one call with a 10-minute Bash
+        timeout and no two-step `--no-intake` path; the liaison only starts `--if-stale --background` (0.3.4: it detaches
         itself, so the end of the Bash tool call cannot end it)."""
         apply_text = (SKILLS / "orche-apply" / "SKILL.md").read_text()
-        for part in ("`orche init <name> --setup-file <path> --no-intake`", "`orche intake <proj>` with the Bash",
-                     "`timeout` raised to 600000 ms", "Tell the user its one-line result"):
+        for part in ("Apply with one call: `orche init <name> --setup-file <path>`",
+                     "Pass timeout 600000 — the intake can take up to 9 minutes",
+                     "Tell the user the intake's one-line result", "Orca has switched to the Main tab"):
+            self.assertIn(part, apply_text)
+        self.assertNotIn("--setup-file <path> --no-intake", apply_text)
+        # C7 A4: a bare `orche init` runs at once on the current repository, defaults, no questions.
+        for part in ("says `orche init` (or `/orche-apply`) with no project named",
+                     "Run `orche init` at once, with no argument:\n" "no checklist, no dry-run, no question",
+                     "`Main is open in the main-<proj> tab; type a request there.`",
+                     "Use this only when the user names divisions, a custom division, a stage or aliases"):
             self.assertIn(part, apply_text)
         liaison = (PERSONAS / "liaison.md").read_text()
         self.assertIn("`orche intake {{PROJECT}} --if-stale --background`", liaison)
@@ -126,7 +134,8 @@ class PersonaTemplatesTest(unittest.TestCase):
             self.assertIn(part, unit)
         liaison = templates.render((PERSONAS / "liaison.md").read_text(), **VARS)
         self.assertIn("`.orche/liaison/` folder plus PROJECT_CARD.md", liaison)
-        self.assertIn("--file .orche/liaison/DECISIONS.tsv", liaison)
+        self.assertIn("Append decisions with `orche decide`.", liaison)
+        self.assertNotIn("--file .orche/liaison/DECISIONS.tsv", liaison)
         main = templates.render((PERSONAS / "main.md").read_text(), **VARS)
         self.assertIn("Understood: source = <project>, output = <project>", main)
 

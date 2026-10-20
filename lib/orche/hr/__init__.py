@@ -1,38 +1,23 @@
-"""HR: onboarding of units (`onboarding`), creation limits (`limits`), the weekly audit (`audit`).
+"""HR: the one module that changes units and projects (SPEC §14.12).
 
-Shared CLI glue for `cmd_init`, `cmd_feat`, `cmd_stage` and `cmd_hr` lives here.
+Every transition — create a division or feature agent, wake, sleep, retire, stage change, freeze —
+runs here end to end: its rules (creation limits, awake limit, stage gate, retired/onboarding
+refusals), its Orca steps and its HR record (event -> registry.json -> HR-log line -> status line ->
+notification). registry.json is written only under lib/orche/hr/. Callers resolve names through the
+Roster and keep argument parsing and output: a transition returns (data, lines) or raises
+Refused(code, msg), `code` being the CLI exit code. HR prints, on stderr, only what happens during a
+transition: `[dry-run]` lines, warnings, retire's progress lines.
 """
-import json
-import sys
+from .audit import run as run_audit
+from .book import Refused, correct, log_path
+from .create import create_feature, onboard_project, plan_divisions
+from .limits import awake, set_frozen, stage_gate
+from .onboarding import session_name, session_owner
+from .panes import project_pane
+from .retire import retire, retire_gone
+from .transitions import set_stage, sleep, wake
 
-from .. import paths, statusline
+__all__ = ["Refused", "awake", "correct", "create_feature", "log_path", "onboard_project", "plan_divisions",
+           "project_pane", "retire", "retire_gone", "run_audit", "session_name", "session_owner", "set_frozen",
+           "set_stage", "sleep", "stage_gate", "wake"]
 
-EXIT_OK, EXIT_USER, EXIT_NOT_FOUND, EXIT_BLOCKED = 0, 1, 2, 3
-PLUGIN_ROOT = paths.PLUGIN_ROOT
-
-
-def out(args, data, lines) -> None:
-    if args.json:
-        print(json.dumps(data, indent=2, ensure_ascii=False))
-    else:
-        for line in [lines] if isinstance(lines, str) else lines:
-            print(line)
-
-
-def fail(code, msg) -> int:
-    print(f"orche: {msg}", file=sys.stderr)
-    return code
-
-
-def warn(msg) -> None:
-    print(f"orche: warning: {msg}", file=sys.stderr)
-
-
-def dry(msg) -> None:
-    """A non-Orca dry-run action, printed like orca's `[dry-run] <argv>` lines."""
-    print(f"[dry-run] {msg}", file=sys.stderr)
-
-
-def refresh_status_line(reg, key) -> None:
-    """Rewrite ORCHE_HOME/status/<proj>.line after a registry change (statusline.refresh)."""
-    statusline.refresh(reg, key)

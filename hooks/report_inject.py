@@ -25,14 +25,15 @@ def main():
         payload = json.load(sys.stdin)
         if not isinstance(payload, dict) or payload.get("agent_id"):
             return 0
-        from orche import triage
-        outcome = triage.handle(payload, STARTED)   # never raises
+        from orche import inbox, registry, roster, triage
+        r = roster.Roster(registry.load())
+        who = r.identify(payload.get("cwd") or os.getcwd())
+        outcome = triage.handle(payload, STARTED, r, who)   # never raises
         if outcome.block is not None:
             print(json.dumps(outcome.block, ensure_ascii=False))
             return 0
-        from orche import inbox
         # The hook budget runs from STARTED, less the time a classifier call was in flight.
-        text = inbox.handle_prompt(payload, STARTED + outcome.model_s)
+        text = inbox.handle_prompt(payload, STARTED + outcome.model_s, r, who)
         text = "\n\n".join(t for t in (outcome.note, text) if t)
     except Exception as exc:  # noqa: BLE001 - fail-open
         try:

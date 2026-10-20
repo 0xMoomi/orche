@@ -19,8 +19,9 @@ from pathlib import Path
 from unittest import mock
 
 import support
-from orche import config, dispatch, registry, runner, runs
-from support import HELP_BRACKET, HELP_OLD, write_fake_claude
+from orche import brief, dispatch, headless, procs, registry, roster, runs
+from orche.runs import job as runner
+from support import write_fake_claude
 from test_hooks import GIT_ENV, HookCase
 from test_registry import load_cli
 
@@ -89,16 +90,13 @@ class RunnerCase(HookCase):
     def config(self, data):
         (self.home / "config.json").write_text(json.dumps(data))
 
-    def brief(self, to="div-acme-build", tier="standard", timebox="20m", n=1):
-        unit = f"acme-coupon-field-20261018-{n}"
-        (self.repo / ".orche" / "units" / unit).mkdir(parents=True, exist_ok=True)
+    def brief(self, to="div-acme-build", tier="standard", timebox="20m"):
         fields = {"TO": to, "GOAL": "Add coupon field", "SCOPE": "src/**", "CONTEXT": "none",
                   "ACCEPT": "works", "VERIFY": "true", "TIMEBOX": timebox, "FORBID": "merge",
                   "REPORT": "status", "TIER": tier}
-        at = dispatch.where(self.reg, to, "main-acme", "acme", timeout=0)
-        dispatch.write_brief(self.repo, unit, 1,
-                             dispatch.render_brief(unit, 1, "1. Never force-push.", to, fields, at))
-        return unit
+        target = roster.Roster(registry.load()).member(to)    # not self.reg: add_research saves a division
+        return brief.write(brief.Block("brief", fields), target, "main-acme", "1. Never force-push.",
+                           timeout=0).unit
 
     def reply(self, result, cost=0.31, turns=4, is_error=False, subtype="success", code=0):
         (self.fake / "reply.json").write_text(json.dumps({
@@ -168,6 +166,14 @@ class RunnerCase(HookCase):
             f"`ps` never showed {script} run {' '.join(args)} (pid {proc.pid})")
         return proc
 
+    def lock_file(self, name, pid=None):
+        """A lock of `name`, held by `pid` or else by a live process `ps` shows as `orche run <name>`."""
+        folder = self.home / "runs" / "acme"
+        folder.mkdir(parents=True, exist_ok=True)
+        pid = self.fake_run(name).pid if pid is None else pid
+        (folder / f"{name}.lock").write_text(json.dumps({"pid": pid, "unit": name}))
+        return pid
+
     def busy_slots(self, n=4):
         """`n` live locks of other units, each held by a process `ps` shows as its `orche run`:
         the project's run slots are full. Returns the holders once every one of them still is its
@@ -190,7 +196,7 @@ class RunnerCase(HookCase):
         each call appends its pid to `entered` and waits until the test removes `gate` (60 s at
         most), then runs the real git. `entered` shows the moment the runner is inside a git call of
         its `starting` (before claude) or `finishing` (after claude) phase; the test signals there
-        and then opens the gate. (dispatch.git_head gives git 2 s: the test opens the gate well
+        and then opens the gate. (shell.git_head gives git 2 s: the test opens the gate well
         inside that.)"""
         folder = self.root / "gitgate"
         folder.mkdir(exist_ok=True)
@@ -251,11 +257,15 @@ def digest(root: Path) -> dict:
 
 
 class DryRunArgvTest(RunnerCase):
-    def base(self, unit, model, turns, tools):
-        """The run id exists only once the run has its slot: a dry run names a placeholder."""
-        return [str(self.claude), "-p", "--model", model, "--output-format", "json", "--max-turns", str(turns),
-                "--setting-sources", "project", "--strict-mcp-config", "--mcp-config",
-                str(self.home / "runner" / "mcp" / f"{unit}@<started_ns>.json"), "--allowedTools", tools]
+    def base(self, unit, model, effort, turns, tools, *rest):
+        """The run id exists only once the run has its slot: a dry run names a placeholder. `rest`
+        (deny list, persona) sits before the gates' --settings pair, which is always last (D8)."""
+        return [str(self.claude), "-p", "--model", model, "--effort", effort, "--output-format", "json",
+                "--max-turns", str(turns),
+                "--setting-sources", "project", "--permission-mode", "bypassPermissions",
+                "--strict-mcp-config", "--mcp-config",
+                str(self.home / "runner" / "mcp" / f"{unit}@<started_ns>.json"), "--allowedTools", tools,
+                *rest, "--settings", headless.gates()]
 
     def test_standard_unit_argv_is_exact_and_nothing_is_written(self):
         unit = self.brief(tier="standard")
@@ -263,76 +273,53 @@ class DryRunArgvTest(RunnerCase):
         before_home, before_repo = digest(self.home), digest(self.repo)
         code, out, err = self.orche("--dry-run", "run", unit)
         self.assertEqual(code, 0, err)
-        argv = self.base(unit, "claude-opus-5-5", 20, MECH + ",Bash") + ["--append-system-prompt-file", str(persona)]
+        argv = self.base(unit, "claude-opus-5-5", "medium", 20, MECH + ",Bash",
+                         "--append-system-prompt-file", str(persona))
         self.assertEqual(out.splitlines(), [shlex.join(argv)])
         self.assertIn("ORCHE_SESSION=div-acme-build", err)
         self.assertIn("timeout 1260s", err)   # TIMEBOX 20m + 60 s
         self.assertEqual((digest(self.home), digest(self.repo)), (before_home, before_repo))
         self.assertFalse((self.fake / "stdin.txt").exists())   # claude itself never ran (only --help)
 
-    def test_mechanical_unit_uses_sonnet_and_the_narrow_tool_list(self):
+    def build_model(self, model):
+        """Set the fixture's build division model in the registry."""
+        path = self.home / "registry.json"
+        reg = json.loads(path.read_text())
+        reg["projects"]["acme"]["divisions"]["build"]["model"] = model
+        path.write_text(json.dumps(reg))
+
+    def test_mechanical_unit_uses_the_build_model_at_low_effort_and_the_narrow_tool_list(self):
         unit = self.brief(tier="mechanical")
         code, out, err = self.orche("--dry-run", "--json", "run", unit)
         self.assertEqual(code, 0, err)
         data = json.loads(out)
         # It may commit (git add/commit); amend, -n, --no-verify and push are denied best-effort
         # (the done gate's ancestry check is the guarantee); no persona file: no flag.
-        self.assertEqual(data["argv"], self.base(unit, "claude-sonnet-5-5", 20, MECH) + MECH_DENY)
+        self.assertEqual(data["argv"], self.base(unit, "claude-opus-5-5", "low", 20, MECH, *MECH_DENY))
         self.assertEqual((data["cwd"], data["tier"], data["timeout_s"]), (str(self.wt), "mechanical", 1260))
         persona = self.persona()
         _, out, _ = self.orche("--dry-run", "--json", "run", unit)
-        self.assertEqual(json.loads(out)["argv"], self.base(unit, "claude-sonnet-5-5", 20, MECH) + MECH_DENY
-                         + ["--append-system-prompt-file", str(persona)])
+        self.assertEqual(json.loads(out)["argv"], self.base(unit, "claude-opus-5-5", "low", 20, MECH, *MECH_DENY,
+                                                             "--append-system-prompt-file", str(persona)))
 
-    def test_hard_unit_gets_40_turns_and_config_overrides_apply(self):
-        self.config({"claude_bin": str(self.claude), "runner": {"max_turns": 7, "model_mechanical": "m-x"}})
-        hard, mech = self.brief(tier="hard", n=1), self.brief(tier="mechanical", n=2)
+    def test_hard_unit_gets_40_turns_high_effort_and_the_registry_model(self):
+        self.config({"claude_bin": str(self.claude), "runner": {"max_turns": 7}})
+        self.build_model("m-x")
+        hard, mech = self.brief(tier="hard"), self.brief(tier="mechanical")
         _, out, _ = self.orche("--dry-run", "--json", "run", hard)
-        self.assertEqual(json.loads(out)["argv"], self.base(hard, "claude-opus-5-5", 40, MECH + ",Bash"))
+        self.assertEqual(json.loads(out)["argv"], self.base(hard, "m-x", "high", 40, MECH + ",Bash"))
         _, out, _ = self.orche("--dry-run", "--json", "run", mech)
-        self.assertEqual(json.loads(out)["argv"], self.base(mech, "m-x", 7, MECH) + MECH_DENY)
+        self.assertEqual(json.loads(out)["argv"], self.base(mech, "m-x", "low", 7, MECH, *MECH_DENY))
 
-    def test_persona_inline_when_claude_lacks_the_file_flag(self):
-        write_fake_claude(self.fake, HELP_OLD)
-        unit = self.brief()
-        self.persona()
-        _, out, _ = self.orche("--dry-run", "--json", "run", unit)
-        self.assertEqual(json.loads(out)["argv"][-2:], ["--append-system-prompt", "You are the build division.\n"])
-
-    def test_persona_file_flag_from_the_bracket_help_form(self):
-        """I-5: claude 2.1.302 lists the file flag only as `--append-system-prompt[-file]`."""
-        write_fake_claude(self.fake, HELP_BRACKET)
-        unit = self.brief()
-        persona = self.persona()
-        _, out, _ = self.orche("--dry-run", "--json", "run", unit)
-        self.assertEqual(json.loads(out)["argv"][-2:], ["--append-system-prompt-file", str(persona)])
-
-    def test_probe_cache_is_keyed_on_the_claude_version(self):
-        """M-6 / round-2 M-7: the cached probe (its own file, never config.json) is reused for the
-        same version, redone for a new one, and not written when `claude --version` says nothing."""
-        write_fake_claude(self.fake, HELP_BRACKET)
-        config_before = (self.home / "config.json").read_text()
-        first = runner.claude_flags(config.load())
-        self.assertEqual(first, {"bin": str(self.claude), "version": "9.9.9 (Claude Code)", "ok": True,
-                                 "system_prompt_file": True, "setting_sources": True, "tools": False,
-                                 "restricted": False})
-        self.assertEqual(json.loads((self.home / "runner" / "probe.json").read_text()), first)
-        self.assertEqual((self.home / "config.json").read_text(), config_before)
-        (self.fake / "help.txt").write_text(HELP_OLD)
-        self.assertTrue(runner.claude_flags(config.load())["system_prompt_file"])    # same version: cached
-        (self.fake / "version").write_text("9.9.10 (Claude Code)\n")
-        again = runner.claude_flags(config.load())
-        self.assertEqual((again["version"], again["system_prompt_file"]), ("9.9.10 (Claude Code)", False))
-        (self.home / "runner" / "probe.json").unlink()
-        (self.fake / "version").write_text("")
-        self.assertEqual(runner.claude_flags(config.load())["version"], "")
-        self.assertFalse((self.home / "runner" / "probe.json").exists())
-        # A probe cached before the `restricted` key existed is redone (intake needs it).
-        (self.fake / "version").write_text("9.9.10 (Claude Code)\n")
-        (self.fake / "help.txt").write_text(support.HELP_FULL + "  --restricted  Restricted mode\n")
-        old = {k: v for k, v in again.items() if k != "restricted"}
-        (self.home / "runner" / "probe.json").write_text(json.dumps(old))
-        self.assertTrue(runner.claude_flags(config.load())["restricted"])
+    def test_feature_unit_uses_its_division_model(self):
+        subprocess.run(["git", "init", "-q", str(self.root / "acme-checkout")], check=True)
+        self.build_model("m-x")
+        unit = self.brief(to="feat-acme-checkout")
+        code, out, err = self.orche("--dry-run", "--json", "run", unit)
+        self.assertEqual(code, 0, err)
+        argv = json.loads(out)["argv"]
+        at = argv.index("--model")
+        self.assertEqual(argv[at:at + 4], ["--model", "m-x", "--effort", "medium"])
 
     def test_timebox_parsing(self):
         cases = {"30m": 1800, "2h": 7200, "~45 min": 2700, "1.5 hours": 5400, "about an hour": 1800,
@@ -343,23 +330,13 @@ class DryRunArgvTest(RunnerCase):
         self.assertEqual({k: runner.timebox_seconds(k) for k in cases}, cases)
 
 
-class ParseTest(RunnerCase):
+class StatusTest(RunnerCase):
     def test_status_line_is_case_insensitive_and_ignores_the_template_echo(self):
         """M-1."""
         self.assertEqual(runner.status_of("ok\nstatus: blocked\nneed key")[:2], ("blocked", "status: blocked"))
         self.assertEqual(runner.status_of("Status: Done.\nx")[0], "done")
         self.assertEqual(runner.status_of("End with `STATUS: done|blocked|failed`")[0], None)
         self.assertEqual(runner.status_of("STATUS: done|blocked|failed\nSTATUS: failed\nboom")[0], "failed")
-
-    def test_output_parse_skips_noise_around_the_result(self):
-        """I-7: a banner before, a pretty-printed object, trailing noise."""
-        result = {"type": "result", "result": "STATUS: done", "num_turns": 2}
-        self.assertEqual(runner.parse_output("Update available: 2.1.303\n" + json.dumps(result) + "\n"), result)
-        self.assertEqual(runner.parse_output("hook says hi\n" + json.dumps(result, indent=2) + "\n"), result)
-        self.assertEqual(runner.parse_output(json.dumps(result) + "\nbye from a hook\n"), result)
-        self.assertEqual(runner.parse_output("[" + json.dumps({"type": "system"}) + "," + json.dumps(result) + "]"),
-                         result)
-        self.assertEqual(runner.parse_output("no json here\n"), {})
 
 
 class RunTest(RunnerCase):
@@ -382,6 +359,8 @@ class RunTest(RunnerCase):
                           "status": "done", "head_before": self.head, "head_sha": new, "tier": "standard",
                           "pointer_filed": True})
         self.assertEqual(rec["usage"], {"input_tokens": 10, "output_tokens": 20})
+        keys = list(rec)
+        self.assertEqual((rec["effort"], keys[keys.index("model") + 1]), ("medium", "effort"))
         self.assertTrue(rec["started"] and rec["finished"])
         self.assertNotIn(SECRET, rec["result_tail"])
         report = (self.units_dir() / unit / "REPORT.md").read_text()
@@ -407,10 +386,6 @@ class RunTest(RunnerCase):
         self.assertIn(f"run unit={unit} to=div-acme-build model=claude-opus-5-5 cost=0.31 turns=4 status=done",
                       self.events())
         self.assertTrue((self.home / "activity" / "div-acme-build").exists())
-        self.assertEqual(json.loads((self.home / "runner" / "probe.json").read_text()),
-                         {"bin": str(self.claude), "version": "9.9.9 (Claude Code)", "ok": True,
-                          "system_prompt_file": True, "setting_sources": True, "tools": True,
-                          "restricted": False})
         self.assertEqual(ptr["via"], "runner")
         self.assertEqual(list((self.home / "runs" / "acme").glob("*.lock")), [])
 
@@ -432,7 +407,7 @@ class RunTest(RunnerCase):
                  (2, dict(verdict=None), "(no ledger row for {sha})"),
                  (3, dict(verdict="verifier-failed"), "(ledger verdict verifier-failed for {sha})"))
         for n, kw, why in cases:
-            unit = self.brief(n=n)
+            unit = self.brief()
             self.commit_action(**kw)
             self.reply("STATUS: done\nok")
             self.orche("run", unit)
@@ -450,7 +425,7 @@ class RunTest(RunnerCase):
                  "commit -q --amen -m rewritten\n")
         for n, tier in enumerate(("mechanical", "standard", "hard"), 1):
             before = self.rev(self.wt)
-            unit = self.brief(tier=tier, n=n)
+            unit = self.brief(tier=tier)
             self.ledger()
             self.action(amend + ROW.format(verdict="unit-test-verified"))
             self.reply("STATUS: done\nok")
@@ -463,34 +438,86 @@ class RunTest(RunnerCase):
                                       f"ancestor of HEAD))\nok"), tier)
             self.assertEqual(self.run_record(unit)["status"], "info")
 
-    def test_a_new_commit_keeps_the_old_head_as_an_ancestor(self):
-        self.assertIsNone(runner.history_rewritten(self.wt, self.head, self.head))
-        (self.wt / "more.txt").write_text("x\n")
-        git = ["git", "-C", str(self.wt), "-c", "commit.gpgsign=false"]
-        subprocess.run(git + ["add", "more.txt"], check=True, env={**os.environ, **GIT_ENV})
-        subprocess.run(git + ["commit", "-q", "-m", "more"], check=True, env={**os.environ, **GIT_ENV})
-        new_sha = self.rev(self.wt)
-        self.assertIsNone(runner.history_rewritten(self.wt, self.head, new_sha))
-        self.assertEqual(runner.history_rewritten(self.wt, new_sha, self.head),
-                         f"history rewritten ({new_sha[:7]} is not an ancestor of HEAD)")
-        self.assertEqual(runner.history_rewritten(self.wt, None, new_sha),
-                         "history rewritten (HEAD before the run unknown)")
+    def test_release_ready_files_done_with_a_verified_row(self):
+        """Q4: release-ready from a gated target, a new commit and a unit-test-verified row from
+        another verifier files `done`."""
+        unit = self.brief()
+        self.commit_action(verdict="unit-test-verified")
+        self.reply("shipped\nSTATUS: release-ready\nok")
+        self.assertEqual(self.orche("run", unit)[0], 0)
+        [ptr] = self.pointers("main-acme")
+        self.assertEqual((ptr["status"], ptr["summary"]), ("done", "ok"))
+
+    def test_release_ready_below_unit_test_verified_is_unverified(self):
+        unit = self.brief()
+        self.commit_action(verdict="type-check-only")
+        self.reply("STATUS: release-ready\nok")
+        self.assertEqual(self.orche("run", unit)[0], 0)
+        sha = self.rev(self.wt)[:7]
+        [ptr] = self.pointers("main-acme")
+        self.assertEqual((ptr["status"], ptr["summary"]),
+                         ("info", f"unverified: STATUS: release-ready (ledger verdict type-check-only for {sha})\nok"))
+
+    def test_release_ready_verified_by_the_claimant_is_unverified(self):
+        """Q4: a unit-test-verified row whose verifier is the target itself does not prove
+        release-ready; the run is filed info, not done."""
+        unit = self.brief()
+        claimant = roster.Roster(registry.load()).member("div-acme-build").session
+        self.commit_action(verdict=None)
+        self.action(COMMIT + ROW.format(verdict="unit-test-verified").replace("verifier-1", claimant))
+        self.reply("STATUS: release-ready\nok")
+        self.assertEqual(self.orche("run", unit)[0], 0)
+        sha = self.rev(self.wt)[:7]
+        [ptr] = self.pointers("main-acme")
+        self.assertEqual((ptr["status"], ptr["summary"]),
+                         ("info", f"unverified: STATUS: release-ready (ledger verifier {claimant} is the "
+                                  f"claimant for {sha})\nok"))
+        self.assertEqual(self.run_record(unit)["status"], "info")
+
+    def test_an_echoed_status_template_is_no_status_line(self):
+        """Q8: the footer's echo `STATUS: done | blocked | failed | stop` is not a claim."""
+        unit = self.brief()
+        self.commit_action()
+        self.reply("STATUS: done | blocked | failed | stop\nok")
+        self.assertEqual(self.orche("run", unit)[0], 0)
+        [ptr] = self.pointers("main-acme")
+        self.assertEqual((ptr["status"], ptr["summary"]),
+                         ("info", "unverified: no STATUS line\nSTATUS: done | blocked | failed | stop\nok"))
+
+    def test_a_numbered_status_line_is_a_claim(self):
+        unit = self.brief()
+        self.commit_action()
+        self.reply("x\n1. STATUS: done\nok")
+        self.assertEqual(self.orche("run", unit)[0], 0)
+        [ptr] = self.pointers("main-acme")
+        self.assertEqual((ptr["status"], ptr["summary"]), ("done", "ok"))
 
     def test_blocked_and_failed_pass_through(self):
         for n, word in ((1, "blocked"), (2, "failed")):
-            unit = self.brief(n=n)
+            unit = self.brief()
             self.reply(f"STATUS: {word}\nneed the API key")
             code, _, _ = self.orche("run", unit)
             self.assertEqual(code, 1 if word == "failed" else 0)
             ptr = [p for p in self.pointers("main-acme") if p["unit"] == unit][0]
             self.assertEqual((ptr["status"], ptr["summary"]), (word, "need the API key"))
 
+    def test_stdin_and_pointer_carry_the_revision_the_run_was_given(self):
+        """BRIEF.md is read once at resolve: a rewrite during the run changes neither the prompt
+        nor the pointer's brief_rev."""
+        unit = self.brief()
+        self.reply("STATUS: blocked\nneed the API key")
+        self.action(f"printf 'rev: 2\\n' > {shlex.quote(str(self.units_dir() / unit / 'BRIEF.md'))}\n")
+        self.orche("run", unit)
+        self.assertTrue((self.fake / "stdin.txt").read_text().startswith("rev: 1\n"))
+        [ptr] = [p for p in self.pointers("main-acme") if p["unit"] == unit and p.get("via") == "runner"]
+        self.assertEqual(ptr["brief_rev"], 1)
+
     def test_lowercase_status_and_template_echo(self):
         """M-1 through a run: `status: blocked` counts; an echoed template is no `done` claim."""
-        unit = self.brief(n=1)
+        unit = self.brief()
         self.reply("status: blocked\nneed key")
         self.orche("run", unit)
-        unit2 = self.brief(n=2)
+        unit2 = self.brief()
         self.commit_action()
         self.reply("Reminder: end with STATUS: done|blocked|failed")
         self.orche("run", unit2)
@@ -597,23 +624,25 @@ class RunTest(RunnerCase):
         self.assertEqual(json.loads((self.fake / "mcp.json").read_text()), {"mcpServers": {}})
         self.assertFalse(mcp.exists())
 
-    def test_worker_env_drops_main_session_variables_but_keeps_auth(self):
-        """M-8."""
+    def test_worker_env_is_headless_env_end_to_end(self):
+        """The worker gets headless.env: Main's session, Orca and Jev variables never pass, the auth
+        variable does; the call sets ORCHE_SESSION / ORCHE_RUNNER and the run's ORCHE_RUN_ID."""
         unit = self.brief()
         self.reply("STATUS: blocked\nx")
-        extra = {"CLAUDE_PROJECT_DIR": "/main/checkout", "CLAUDE_CODE_ENTRYPOINT": "cli", "CLAUDECODE": "1",
-                 "CLAUDE_CODE_SUBAGENT_MODEL": "m", "CLAUDE_CODE_OAUTH_TOKEN": "tok",
-                 "CLAUDE_CODE_USE_BEDROCK": "1", "ANTHROPIC_BASE_URL": "https://example.invalid", "LANG": "C.UTF-8"}
-        with mock.patch.dict(os.environ, extra):
-            self.orche("run", unit)
+        caller = {"ORCHE_SESSION": "main-acme", "ORCHE_KEYMASTER": "1", "CLAUDE_EFFORT": "max",
+                  "ORCA_PANE_KEY": "p", "JEV_API_KEY": "k", "CLAUDE_CODE_OAUTH_TOKEN": "tok"}
+        with mock.patch.dict(os.environ, caller):
+            self.assertEqual(self.orche("run", unit)[0], 0)
         env = dict(line.split("=", 1) for line in (self.fake / "env.txt").read_text().splitlines() if "=" in line)
-        for gone in ("CLAUDE_PROJECT_DIR", "CLAUDE_CODE_ENTRYPOINT", "CLAUDECODE", "CLAUDE_CODE_SUBAGENT_MODEL"):
-            self.assertNotIn(gone, env)
-        self.assertEqual({k: env.get(k) for k in ("CLAUDE_CODE_OAUTH_TOKEN", "CLAUDE_CODE_USE_BEDROCK",
-                                                  "ANTHROPIC_BASE_URL", "LANG", "HOME")},
-                         {"CLAUDE_CODE_OAUTH_TOKEN": "tok", "CLAUDE_CODE_USE_BEDROCK": "1",
-                          "ANTHROPIC_BASE_URL": "https://example.invalid", "LANG": "C.UTF-8",
-                          "HOME": os.environ["HOME"]})
+        argv = (self.fake / "argv.txt").read_text().splitlines()
+        rid = Path(argv[argv.index("--mcp-config") + 1]).stem
+        self.assertTrue(rid.startswith(f"{unit}@"))
+        names = ("ORCHE_SESSION", "ORCHE_RUNNER", "ORCHE_RUN_ID", "CLAUDE_CODE_OAUTH_TOKEN", "ORCHE_KEYMASTER",
+                 "CLAUDE_EFFORT", "ORCA_PANE_KEY", "JEV_API_KEY")
+        self.assertEqual({k: env.get(k) for k in names},
+                         {"ORCHE_SESSION": "div-acme-build", "ORCHE_RUNNER": "1", "ORCHE_RUN_ID": rid,
+                          "CLAUDE_CODE_OAUTH_TOKEN": "tok", "ORCHE_KEYMASTER": None, "CLAUDE_EFFORT": None,
+                          "ORCA_PANE_KEY": None, "JEV_API_KEY": None})
 
     def test_main_target_runs_in_the_main_checkout_and_is_not_ledger_gated(self):
         self.git_init(self.repo, "docs/LEDGER.tsv")       # .orche/ stays untracked: ORCHE's own files
@@ -653,7 +682,7 @@ class RunTest(RunnerCase):
         reg = registry.load()
         reg["projects"]["acme"]["divisions"]["build"]["status"] = "retired"
         registry.save(reg)
-        retired = self.brief(n=2)
+        retired = self.brief()
         code, _, err = self.orche("run", retired)
         self.assertEqual(code, 2)
         self.assertIn("retired", err)
@@ -670,7 +699,7 @@ class RunnerFailureTest(RunnerCase):
     def test_runner_exception_files_failed_and_releases_the_slot(self):
         unit = self.brief()
         self.reply("STATUS: done")
-        with mock.patch.object(runner, "parse_output", side_effect=OSError("disk full")):
+        with mock.patch.object(runner, "decide", side_effect=OSError("disk full")):
             code, _, err = self.orche("run", unit)
         self.assertEqual(code, 1)
         self.assertIn("OSError: disk full", err)
@@ -679,6 +708,20 @@ class RunnerFailureTest(RunnerCase):
                          ("div-acme-build", "failed", "run failed: runner error: OSError: disk full"))
         rec = self.run_record(unit)
         self.assertEqual((rec["status"], rec["stop_reason"], rec["model"]), ("failed", "error", "claude-opus-5-5"))
+        self.assertEqual(list((self.home / "runs" / "acme").glob("*.lock")), [])
+
+    def test_headless_run_exception_files_failed_and_releases_the_lock(self):
+        unit = self.brief()
+        self.reply("STATUS: done")
+        with mock.patch.object(runner.headless, "run", side_effect=RuntimeError("boom")):
+            code, _, err = self.orche("run", unit)
+        self.assertEqual(code, 1)
+        self.assertIn("RuntimeError: boom", err)
+        [ptr] = self.pointers("main-acme")
+        self.assertEqual((ptr["from"], ptr["status"], ptr["summary"]),
+                         ("div-acme-build", "failed", "run failed: runner error: RuntimeError: boom"))
+        rec = self.run_record(unit)
+        self.assertEqual((rec["status"], rec["stop_reason"]), ("failed", "error"))
         self.assertEqual(list((self.home / "runs" / "acme").glob("*.lock")), [])
 
     def test_sigterm_kills_claude_and_files_failed(self):
@@ -725,7 +768,7 @@ class RunnerFailureTest(RunnerCase):
         claude): claude never runs; with the STOP marker (runs.stop: a verified real run) "stopped
         by Main before start"."""
         for n, stop in ((1, False), (2, True)):
-            unit = self.brief(n=n)
+            unit = self.brief()
             self.reply("STATUS: done")
             gate, entered = self.git_gate()
             gate.write_text("x")
@@ -812,14 +855,6 @@ class RunnerFailureTest(RunnerCase):
 
 
 class ConcurrencyTest(RunnerCase):
-    def lock_file(self, name, pid=None):
-        """A lock of `name`, held by `pid` or else by a live process `ps` shows as `orche run <name>`."""
-        folder = self.home / "runs" / "acme"
-        folder.mkdir(parents=True, exist_ok=True)
-        pid = self.fake_run(name).pid if pid is None else pid
-        (folder / f"{name}.lock").write_text(json.dumps({"pid": pid, "unit": name}))
-        return pid
-
     def dead_pid(self):
         proc = subprocess.Popen(["true"])
         proc.wait()
@@ -911,9 +946,10 @@ class RelayRunnerTest(RunnerCase):
             if popen is not None:
                 return popen(argv, **kw)
             return mock.Mock(pid=4242)
-        with mock.patch.object(dispatch.subprocess, "Popen", fake_popen):
+        with mock.patch.object(procs.subprocess, "Popen", fake_popen):
             started = time.monotonic()
-            [unit] = dispatch.relay(registry.load(), [body or BODY.format(to=to, tier=tier)], "acme", "main-acme",
+            r = roster.Roster(registry.load())
+            [unit] = dispatch.relay(r, [body or BODY.format(to=to, tier=tier)], r.member("main-acme"),
                                     deadline=time.monotonic() + 3)
             self.elapsed = time.monotonic() - started
         return unit
@@ -1234,7 +1270,7 @@ class GateScopeTest(RunnerCase):
         reg = registry.load()
         reg["projects"]["acme"]["divisions"]["research"] = {
             "status": "active", "worktree": f"repo-acme::{self.root / 'acme-research'}", "branch": "div/research",
-            "session": "div-acme-research", "model": "claude-opus-5-5", "effort": "high",
+            "session": "div-acme-research", "model": "claude-opus-5-5",
             "last_activity": "2026-10-15T18:30:00+09:00"}
         registry.save(reg)
         self.git_init(self.root / "acme-research")
@@ -1246,22 +1282,20 @@ class GateScopeTest(RunnerCase):
     def test_done_rule_by_target(self):
         self.add_research()
         self.reply("STATUS: done\nfindings in REPORT.md")
-        research = self.brief(to="div-acme-research", n=1)
+        research = self.brief(to="div-acme-research")
         self.assertEqual(self.orche("run", research)[0], 0)
         self.assertEqual(self.outcome(research), ("done", "findings in REPORT.md"))   # no commit needed
-        main = self.brief(to="main-acme", n=2)
+        main = self.brief(to="main-acme")
         self.git_init(self.repo, "docs/LEDGER.tsv")
         self.orche("run", main)
         self.assertEqual(self.outcome(main)[0], "done")
-        build = self.brief(n=3)
+        build = self.brief()
         self.orche("run", build)
         self.assertEqual(self.outcome(build), ("info", "unverified: STATUS: done (no commit)\nfindings in REPORT.md"))
-        verified = self.brief(n=4)
+        verified = self.brief()
         self.commit_action()
         self.orche("run", verified)
         self.assertEqual(self.outcome(verified)[0], "done")
-        self.assertTrue(runner.gated(self.reg, runner.resolve(registry.load(), build)))
-        self.assertFalse(runner.gated(registry.load(), runner.resolve(registry.load(), research)))
 
 
 class RoundTwoRunTest(RunnerCase):
@@ -1290,7 +1324,7 @@ class RoundTwoRunTest(RunnerCase):
     def test_two_units_for_one_target_run_one_after_the_other(self):
         """I-B: unit 2 waits for the target lock while unit 1 (a real run) works; unit 1's commit
         is no longer credited to unit 2."""
-        first, second = self.brief(n=1), self.brief(n=2)
+        first, second = self.brief(), self.brief()
         self.ledger()
         self.action(f"grep -q 'unit: {first}' \"$(dirname \"$0\")/stdin.txt\" || exit 0\n" + COMMIT
                     + ROW.format(verdict="unit-test-verified"))
@@ -1334,7 +1368,7 @@ class RoundTwoRunTest(RunnerCase):
         self.reply("STATUS: blocked\nx")
         started = time.monotonic()
         self.assertEqual(self.orche("run", unit)[0], 0)
-        self.assertGreaterEqual(time.monotonic() - started, runner.SWEEP_WAIT_S - 0.5)   # TERM ignored: KILL
+        self.assertGreaterEqual(time.monotonic() - started, headless.SWEEP_WAIT_S - 0.5)   # TERM ignored: KILL
         self.assertFalse(alive((self.fake / "grandchild").read_text().strip()))
 
     def test_stop_escalates_to_sigkill_for_a_claude_ignoring_sigterm(self):
@@ -1348,7 +1382,7 @@ class RoundTwoRunTest(RunnerCase):
         started = time.monotonic()
         self.assertTrue(runs.stop("acme", unit))
         self.assertEqual(proc.wait(timeout=20), 0, (self.root / f"{unit}.out").read_text())
-        self.assertGreaterEqual(time.monotonic() - started, runner.KILL_WAIT_S - 0.5)
+        self.assertGreaterEqual(time.monotonic() - started, headless.KILL_WAIT_S - 0.5)
         self.assertFalse(alive((self.fake / "pid").read_text().strip()))
         [ptr] = self.pointers("main-acme")
         self.assertEqual((ptr["status"], ptr["summary"]), ("info", "stopped by Main"))
@@ -1367,34 +1401,6 @@ class RoundTwoRunTest(RunnerCase):
         code, _, err = self.orche("--dry-run", "run", unit)
         self.assertEqual(code, 1)
         self.assertEqual(len(self.pointers("main-acme")), 1)       # a dry run files nothing
-
-    def test_worker_env_keeps_mtls_and_drops_the_orca_handle(self):
-        """M-6."""
-        unit = self.brief()
-        self.reply("STATUS: blocked\nx")
-        extra = {"CLAUDE_CODE_CLIENT_CERT": "/c.pem", "CLAUDE_CODE_CLIENT_KEY": "/k.pem",
-                 "CLAUDE_CODE_CLIENT_KEY_PASSPHRASE": "pw", "ORCA_TERMINAL_HANDLE": "term-1",
-                 "ORCHE_RUN_SINCE": "1"}
-        with mock.patch.dict(os.environ, extra):
-            self.orche("run", unit)
-        env = dict(line.split("=", 1) for line in (self.fake / "env.txt").read_text().splitlines() if "=" in line)
-        self.assertEqual({k: env.get(k) for k in extra},
-                         {"CLAUDE_CODE_CLIENT_CERT": "/c.pem", "CLAUDE_CODE_CLIENT_KEY": "/k.pem",
-                          "CLAUDE_CODE_CLIENT_KEY_PASSPHRASE": "pw", "ORCA_TERMINAL_HANDLE": None,
-                          "ORCHE_RUN_SINCE": None})
-
-    def test_worker_env_drops_the_jev_key_variable(self):
-        """0.3.4 review M-13: the Jev key is read only inside orche; a worker with Bash never gets it."""
-        unit = self.brief()
-        self.reply("STATUS: blocked\nx")
-        cfg = json.loads((self.home / "config.json").read_text())
-        cfg["jev"] = {"api_key_env": "MY_JEV_KEY"}
-        (self.home / "config.json").write_text(json.dumps(cfg))
-        with mock.patch.dict(os.environ, {"JEV_API_KEY": "k1", "MY_JEV_KEY": "k2", "OTHER_VAR": "v"}):
-            self.orche("run", unit)
-        env = dict(line.split("=", 1) for line in (self.fake / "env.txt").read_text().splitlines() if "=" in line)
-        self.assertEqual({k: env.get(k) for k in ("JEV_API_KEY", "MY_JEV_KEY", "OTHER_VAR")},
-                         {"JEV_API_KEY": None, "MY_JEV_KEY": None, "OTHER_VAR": "v"})
 
     def test_doctor_reconciles_a_dead_runs_lock(self):
         """A SIGKILLed `orche run` filed nothing; `orche doctor` reconciles it (resilience R-A):
@@ -1430,21 +1436,22 @@ class RoundThreeTest(RunnerCase):
 
     def test_unit_id_matches_as_a_whole_token(self):
         """m-2: `…-1` never matches the command line of `orche run …-12`."""
-        twelve = self.fake_run("acme-coupon-field-20261018-12")
+        unit = self.brief()
+        twelve_id = unit + "2"
+        twelve = self.fake_run(twelve_id)
         self.assertTrue(self.wait_for(lambda: "run acme" in subprocess.run(
             ["ps", "-o", "command=", "-p", str(twelve.pid)], capture_output=True, text=True).stdout))
-        self.assertTrue(runs.is_run_process(twelve.pid, "acme-coupon-field-20261018-12"))
-        self.assertIs(runs.is_run_process(twelve.pid, "acme-coupon-field-20261018-1"), False)
-        self.assertIs(runs.is_run_process(twelve.pid, "acme-coupon-field-20261018"), False)
-        one = self.fake_run("acme-coupon-field-20261018-1")
-        self.assertTrue(self.wait_for(lambda: runs.is_run_process(one.pid, "acme-coupon-field-20261018-1")))
-        self.assertIs(runs.is_run_process(self.sleeper().pid, "acme-coupon-field-20261018-1"), False)
-        rx = runs._run_command("acme-coupon-field-20261018-1")
-        self.assertTrue(rx.search("python3 /x/orche.py run acme-coupon-field-20261018-1 --json"))
-        self.assertIsNone(rx.search("/x/run acme-coupon-field-20261018-1"))            # no launcher
-        self.assertIsNone(rx.search("/x/orche run acme-coupon-field-20261018-1x"))
+        self.assertTrue(runs.is_run_process(twelve.pid, twelve_id))
+        self.assertIs(runs.is_run_process(twelve.pid, unit), False)
+        self.assertIs(runs.is_run_process(twelve.pid, unit.rsplit("-", 1)[0]), False)
+        one = self.fake_run(unit)
+        self.assertTrue(self.wait_for(lambda: runs.is_run_process(one.pid, unit)))
+        self.assertIs(runs.is_run_process(self.sleeper().pid, unit), False)
+        rx = runs._run_command(unit)
+        self.assertTrue(rx.search(f"python3 /x/orche.py run {unit} --json"))
+        self.assertIsNone(rx.search(f"/x/run {unit}"))            # no launcher
+        self.assertIsNone(rx.search(f"/x/orche run {unit}x"))
         # A STOP of `…-1` whose lock pid is now `orche run …-12` drops the lock, never signals.
-        unit = self.brief(n=1)
         self.lock_record(unit, twelve.pid)
         self.assertFalse(runs.stop("acme", unit))
         self.assertIsNone(twelve.poll())
@@ -1567,7 +1574,7 @@ class RoundFourTest(RunnerCase):
         folder = self.home / "runs" / "acme"
         folder.mkdir(parents=True, exist_ok=True)
         (folder / f"{unit}.stop").write_text("old\n")
-        (self.fake / "sleep").write_text(str(runner.STOP_POLL_S + 1.5))   # spans at least one poll
+        (self.fake / "sleep").write_text(str(headless.POLL_S + 1.5))   # spans at least one poll
         self.reply("STATUS: blocked\nneeds design")
         proc = self.spawn(unit, env={**os.environ, "ORCHE_RUN_SINCE": str(time.time_ns())})
         self.assertEqual(proc.wait(timeout=20), 0, (self.root / f"{unit}.out").read_text())
@@ -1650,33 +1657,6 @@ class RoundFourTest(RunnerCase):
         self.assertNotIn("runner-reconciled", self.events())     # R-A: a settled lock is never filed twice
         self.assertEqual(self.pointers("main-acme"), [])
         self.assertIsNone(other.poll())
-
-    def test_a_failed_watcher_start_still_kills_claude_and_files_failed(self):
-        """m4-1: `Thread.start()` of the STOP watcher raises; the run never joins the unstarted
-        thread, kills claude, writes RUN.json, files `failed` and releases its locks."""
-        unit = self.brief()
-        (self.fake / "sleep").write_text("30")
-        self.reply("STATUS: done")
-        real_start, children = runner.threading.Thread.start, []
-
-        def start(thread):
-            if getattr(thread, "_target", None) is runner._watch_stop:
-                children.append(thread._args[0])
-                raise RuntimeError("can't start new thread")
-            return real_start(thread)
-        with mock.patch.object(runner.threading.Thread, "start", start):
-            code, _, err = self.orche("run", unit)
-        self.assertEqual(code, 1)
-        self.assertIn("can't start new thread", err)
-        self.assertNotIn("cannot join thread", err)
-        [pid] = children
-        self.assertTrue(self.wait_for(lambda: not alive(pid), timeout=10))
-        rec = self.run_record(unit)
-        self.assertEqual((rec["status"], rec["stop_reason"]), ("failed", "error"))
-        [ptr] = self.pointers("main-acme")
-        self.assertEqual((ptr["from"], ptr["status"], ptr["summary"]),
-                         ("div-acme-build", "failed", "run failed: runner error: RuntimeError: can't start new thread"))
-        self.assertEqual(list((self.home / "runs" / "acme").glob("*.lock")), [])
 
 
 if __name__ == "__main__":

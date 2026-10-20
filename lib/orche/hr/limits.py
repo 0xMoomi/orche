@@ -1,19 +1,21 @@
-"""Feature-agent creation limits and scope-overlap checks (no side effects).
+"""Creation limits, scope overlaps, the awake limit, the stage gate and the freeze switch.
 
-Counts `create` events whose unit starts with `build/` (feature agents), by their `at` time:
+Creation limits count `create` events whose unit starts with `build/` (feature agents), by their `at` time:
 per project in the last 24 h and 7 days, globally in the last 24 h, and per `batch` id. The
-caller applies a `freeze` verdict (set `frozen`, record the event, notify).
+caller applies a `freeze` verdict through `freeze` (set `frozen`, record the event, notify).
 """
 import datetime as _dt
 import re
 from dataclasses import dataclass
 
-from .. import units
+from .. import cli, registry, roster, units
+from . import book
 
 DAY = _dt.timedelta(days=1)
 WEEK = _dt.timedelta(days=7)
 UNFREEZE_HINT = "run: orche hr unfreeze"
 _WILD = re.compile(r"[*?\[]")
+GATED = ("ops",)   # divisions that stay dormant while their project is building (R-STAGE-2)
 
 
 @dataclass
@@ -63,6 +65,64 @@ def check_create(reg, project, *, batch=None, now=None) -> Verdict:
     if batch and c["batch"] >= lim["per_request_auto"]:
         return Verdict(False, f"batch {batch}: per-request limit reached ({c['batch']}/{lim['per_request_auto']})")
     return Verdict(True)
+
+
+class AwakeLimit(book.Refused):
+    """One more awake session would pass limits.max_awake_sessions (exit 3)."""
+
+
+def awake(reg) -> tuple:
+    """(awake sessions, limits.max_awake_sessions). Awake = active divisions and active features
+    (registry.awake_sessions); Main and Liaison panes do not count."""
+    return len(registry.awake_sessions(reg)), reg["limits"]["max_awake_sessions"]
+
+
+def need_awake(reg, n=1, *, plan=False) -> None:
+    """Raise AwakeLimit when `n` more awake sessions would pass the limit (`plan`: init's --wake list).
+    n=0 still refuses when the registry is already over the limit, as init does today."""
+    count, limit = awake(reg)
+    if count + n > limit:
+        what = f"would be exceeded ({count}+{n}/{limit})" if plan else f"reached ({count}/{limit})"
+        raise AwakeLimit(cli.EXIT_BLOCKED, f"awake limit {what}; sleep a unit first (orche sleep <unit>)")
+
+
+def unit_gate(reg, unit) -> None:
+    """Refuse waking a unit recorded `gated_by_stage` while its project is building (wake)."""
+    if unit.entry.get("gated_by_stage") and reg["projects"][unit.project].get("stage") == "building":
+        raise book.Refused(cli.EXIT_BLOCKED, f"{unit.session} is gated by stage and {unit.project} is "
+                                             f"building (run: orche stage set {unit.project} public --yes)")
+
+
+def stage_gate(names, stage, key=None) -> None:
+    """Refuse a planned wake of a GATED division while `stage` is building (init and apply-all --wake).
+    `key` adds the run hint (apply-all has no single project)."""
+    gated = [n for n in names if n in GATED]
+    if gated and stage == "building":
+        hint = f" (run: orche stage set {key} public --yes)" if key else ""
+        raise book.Refused(cli.EXIT_BLOCKED,
+                           f"{gated[0]} is gated by stage: it stays dormant while stage is building{hint}")
+
+
+def freeze(reg, by, reason) -> None:
+    """The global creation cap was reached: set `frozen` and record it (by hr-limits)."""
+    reg["frozen"] = True
+    book.record(reg, f"freeze by hr-limits ({reason}; requested by {by})",
+                event={"type": "freeze", "project": "*", "unit": "hr", "by": "hr-limits"},
+                note="HR freeze: global feature-agent creation cap reached")
+
+
+def set_frozen(reg, frozen, *, dry_run=False) -> tuple:
+    """`orche hr freeze|unfreeze`. Returns (data, line); data keys: frozen, changed, dry_run."""
+    verb = "freeze" if frozen else "unfreeze"
+    changed = reg["frozen"] != frozen
+    if changed and not dry_run:
+        reg["frozen"] = frozen
+        by = roster.actor()
+        book.record(reg, f"{verb} by {by}", event={"type": verb, "project": "*", "unit": "hr", "by": by},
+                    note=f"HR {verb}: feature-agent creation {'stopped' if frozen else 'allowed'}")
+    state = "frozen" if frozen else "unfrozen"
+    line = f"already {state}" if not changed else f"would {verb} (dry-run)" if dry_run else state
+    return {"frozen": reg["frozen"], "changed": changed and not dry_run, "dry_run": dry_run}, line
 
 
 def _prefix(pattern: str) -> str:

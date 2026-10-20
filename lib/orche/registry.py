@@ -37,7 +37,7 @@ FEATURE_STATUSES = ("active", "paused", "retired", "onboarding")
 EVENT_TYPES = ("create", "sleep", "wake", "retire", "freeze", "unfreeze", "stage")
 
 PROJECT_STR_KEYS = ("repo_id", "path", "main_session", "liaison_session", "card", "standing")
-DIVISION_STR_KEYS = ("worktree", "branch", "session", "model", "effort", "last_activity")
+DIVISION_STR_KEYS = ("worktree", "branch", "session", "model", "last_activity")
 FEATURE_STR_KEYS = ("name", "worktree", "branch", "session", "created", "last_activity", "reason")
 EVENT_STR_KEYS = ("at", "project", "unit", "by")
 SECRET_BACKENDS = ("gcp", "vercel")
@@ -310,23 +310,6 @@ def append_event(reg: dict, **fields) -> dict:
         raise RegistryError(errors)
     reg.setdefault("events", []).append(copy.deepcopy(event))
     return event
-
-
-def session_owner(reg: dict, key: str, session: str):
-    """The other project that has `session`, or reserves it, else None. Session names are unique
-    registry-wide (units.find_unit resolves a name to one unit): another project holds every session
-    it has (main, liaison, divisions, features, retired ones too) and reserves `div-<other>-<d>` for
-    each standard division and each custom definition, onboarded or not."""
-    for other, proj in reg.get("projects", {}).items():
-        if other == key:
-            continue
-        held = {f"div-{other}-{d}" for d in (*DIVISIONS, *(proj.get("custom_divisions") or {}))}
-        held.update(s for s in (proj.get("main_session"), proj.get("liaison_session")) if s)
-        for div in (proj.get("divisions") or {}).values():
-            held.update(s for s in [div.get("session")] + [f.get("session") for f in div.get("features", [])] if s)
-        if session in held:
-            return other
-    return None
 
 
 def awake_sessions(reg: dict) -> list:

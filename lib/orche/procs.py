@@ -1,6 +1,6 @@
 """Every process a run started, found by its environment tag `ORCHE_RUN_ID=<unit>@<started_ns>`.
 
-The runner gives claude ORCHE_RUN_ID (runner.env_for); every process claude starts inherits it,
+The runner gives claude ORCHE_RUN_ID (headless.env); every process claude starts inherits it,
 also one that left claude's process group (`setsid`, a daemon), which a process-group kill misses.
 
 The tag counts only in a process's ENVIRONMENT, never in its arguments (`grep ORCHE_RUN_ID=<id>`
@@ -20,7 +20,7 @@ that run's claude beyond doubt (see _is_claude).
 sweep() kills them: SIGTERM, SIGKILL after `wait_s`. Never this process or its parent. No table
 -> nothing is signalled: None when the table is unreadable (a `ps` failed, or timed out with its
 full PS_TIMEOUT_S), NoTime raised when the caller's deadline cut the read short (a `ps` that could
-not start, or timed out under a shorter timeout): "no time", never "ps broken" (runs.py counts
+not start, or timed out under a shorter timeout): "no time", never "ps broken" (runs/__init__.py counts
 only the first toward SWEEP_TRIES). The Linux /proc walk keeps the same rules as one `ps`: it runs
 in a daemon thread joined for at most PS_TIMEOUT_S (or what the deadline leaves), so a /proc read
 that blocks (a process stuck in the kernel holding its memory lock) never stretches the caller.
@@ -28,13 +28,14 @@ that blocks (a process stuck in the kernel holding its memory lock) never stretc
 import os
 import re
 import signal
+import subprocess
 import sys
 import threading
 import time
 from dataclasses import dataclass
 from pathlib import Path
 
-from . import shell
+from . import paths, shell
 
 ENV = "ORCHE_RUN_ID"
 PS_TIMEOUT_S = 2.0   # each of the two `ps` calls (or the whole /proc walk)
@@ -282,7 +283,7 @@ def _is_claude(proc, claude) -> bool:
     """A lost run's claude whose environment cannot be read (an Apple platform binary; Linux: a
     non-dumpable process): only when
     ALL hold: it is the lock's `child_pid`, still in the lock's `pgid`, its command line carries
-    that run's own `--mcp-config …/runner/mcp/<run_id>.json` (runner.claude_marker) as a whole
+    that run's own `--mcp-config …/runner/mcp/<run_id>.json` (headless.marker) as a whole
     token, and it started at or after the lock's `started_ns`. A readable environment decides by
     the tag alone (a different tag: never)."""
     if proc.pid != claude.get("pid") or proc.env:
@@ -365,3 +366,18 @@ def sweep(rid, timeout=TABLE_S, wait_s=WAIT_S, claude=None, deadline=None):
     if not pids:
         return []
     return kill(pids, min(wait_s, max(0.0, end - time.monotonic() - MARGIN_S)))
+
+
+def spawn_detached(argv, log, **extra_env) -> None:
+    """Start `argv` detached: its own session (it outlives the caller, a Bash tool call included),
+    stdin closed, output appended to `log` (its folder created), the plugin bin first on PATH,
+    `extra_env` set and ENV (ORCHE_RUN_ID) dropped, so the end-of-run sweep of a run whose worker
+    started it never takes it along. Never waits."""
+    log = Path(log)
+    log.parent.mkdir(parents=True, exist_ok=True)
+    env = {k: v for k, v in os.environ.items() if k != ENV}
+    env.update(extra_env)
+    env["PATH"] = f"{paths.PLUGIN_ROOT / 'bin'}{os.pathsep}{env.get('PATH', '')}"
+    with open(log, "ab") as fh:
+        subprocess.Popen(argv, stdin=subprocess.DEVNULL, stdout=fh, stderr=subprocess.STDOUT,
+                         start_new_session=True, close_fds=True, env=env)

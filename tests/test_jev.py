@@ -406,7 +406,7 @@ class HelpersTest(JevCase):
         opener = jev.OPENER = FakeOpener(answer_all(default_value))
         self.assertIsNone(jev.classify_prompt("hi"))  # defaults: disabled
         self.configure(enabled=True, base_url="")
-        self.assertIsNone(jev.suggest_tier("brief"))
+        self.assertIsNone(jev.match_scope("add search", ["search"]))
         self.configure(enabled=True)
         os.environ.pop("JEV_API_KEY")
         self.assertIsNone(jev.card_needs_refresh(["feat: x"]))
@@ -418,7 +418,6 @@ class HelpersTest(JevCase):
         got = jev.classify_prompt("ship it", ["build", "rnd"])
         self.assertEqual(got, {"target": "build", "needs_plan": 0.97, "irreversible": 0.97, "urgency": 2,
                                "routine_kind": "status", "confidence": 0.95})
-        self.assertEqual(jev.suggest_tier("rename a var"), {"tier": "hard", "confidence": 0.95})
         self.assertEqual(jev.match_scope("add search", [{"name": "search", "scope": ["src/search/**"]}]),
                          {"match": "search", "new_justified": 0.97, "confidence": 0.95})
         self.assertEqual(jev.card_needs_refresh(["feat: new button"]), 0.97)
@@ -426,17 +425,6 @@ class HelpersTest(JevCase):
                          {"u1": {"wake_now": 0.97, "user_now": 0.97}})
         jev.OPENER = FakeOpener(exc=TimeoutError())
         self.assertIsNone(jev.classify_pointers([{"unit": "u1"}]))
-
-    def test_suggest_tier_mapping(self):
-        self.configure()
-        jev.OPENER = FakeOpener(answer_all(lambda q: 0 if q["type"] == "score" else 0.1))  # level 1
-        self.assertEqual(jev.suggest_tier("b")["tier"], "mechanical")
-        jev.OPENER = FakeOpener(answer_all(lambda q: 2 if q["type"] == "score" else 0.1))  # level 3
-        self.assertEqual(jev.suggest_tier("b")["tier"], "standard")
-        jev.OPENER = FakeOpener(answer_all(lambda q: 3 if q["type"] == "score" else 0.1))  # level 4
-        self.assertEqual(jev.suggest_tier("b")["tier"], "hard")
-        body = jev.OPENER.requests[0]["body"]["questions"]["complexity"]
-        self.assertEqual(body["criteria"], list(jev.COMPLEXITY_LEVELS))
 
 
 def ptr(unit, status="done", urgent=False):

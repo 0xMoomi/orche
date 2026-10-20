@@ -3,7 +3,7 @@ import os
 from pathlib import Path
 
 PLUGIN_ROOT = Path(__file__).resolve().parents[2]   # the plugin checkout: bin/, hooks/, lib/, templates/
-SUBDIRS =("logs", "status", "inbox", "cards", "secrets", "briefs", "jev-eval", "archive", "trash")
+SUBDIRS =("logs", "status", "inbox", "cards", "secrets", "jev-eval", "archive", "trash")
 
 
 def orche_home() -> Path:

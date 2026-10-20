@@ -25,7 +25,8 @@ def main():
         payload = json.load(sys.stdin)
         if not isinstance(payload, dict) or payload.get("agent_id"):
             return 0
-        me = os.environ.get("ORCHE_SESSION")
+        from orche import roster
+        me = roster.env_session()
         if not me:
             return 0
         session_id = str(payload.get("session_id") or "")
