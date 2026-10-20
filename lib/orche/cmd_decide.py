@@ -1,8 +1,8 @@
 """`orche decide <phase> <decision> <why> <evidence> <result> [--file PATH]` — append to DECISIONS.tsv.
 
-The file is the current unit's: a division worktree writes `.orche/div/<name>/DECISIONS.tsv`, a
-feature worktree `.orche/feat/<name>/DECISIONS.tsv`, the project's main checkout
-`.orche/DECISIONS.tsv`. `bin/log.sh` is the bash equivalent and must produce identical rows.
+The file is the calling member's (ORCHE_SESSION, else the unit whose worktree holds cwd), in its
+memory dir: `.orche/` (Main), `.orche/liaison/` (Liaison), `<worktree>/.orche/<div|feat>/<name>/`
+(division, feature). With no member, pass --file.
 """
 from __future__ import annotations
 
@@ -12,7 +12,7 @@ import os
 import sys
 from pathlib import Path
 
-from . import registry, units, util
+from . import registry, roster, util
 
 EXIT_OK, EXIT_USER = 0, 1
 COLUMNS = ("ts", "phase", "decision", "why", "evidence", "result")
@@ -25,7 +25,7 @@ def register(subparsers):
                               epilog="Put `--` before the five values if any starts with '-'.")
     for name in COLUMNS[1:]:
         p.add_argument(name)
-    p.add_argument("--file", help="DECISIONS.tsv to append to (default: resolved from cwd)")
+    p.add_argument("--file", help="DECISIONS.tsv to append to (default: the calling member's memory dir)")
     p.set_defaults(func=cmd_decide)
 
 
@@ -40,15 +40,10 @@ def row(phase, decision, why, evidence, result, ts=None) -> str:
     return "\t".join([ts] + [escape(v) for v in (phase, decision, why, evidence, result)])
 
 
-def resolve_file(reg, cwd) -> Path | None:
-    unit = units.unit_from_cwd(reg, cwd)
-    if unit is not None:
-        return unit.worktree_path / ".orche" / unit.kind / unit.name / "DECISIONS.tsv"
-    for key in reg.get("projects", {}):
-        root = units.project_root(reg, key)
-        if root and units.is_within(cwd, root):
-            return root / ".orche" / "DECISIONS.tsv"
-    return None
+def resolve_file(r: roster.Roster, cwd, env=None) -> Path | None:
+    """The member's DECISIONS.tsv; None when no registered member is identified."""
+    who = r.identify(cwd, env)
+    return who.member.memory / "DECISIONS.tsv" if who.member else None
 
 
 def append(path: Path, line: str) -> None:
@@ -60,9 +55,10 @@ def cmd_decide(args):
     if args.file:
         path = Path(args.file).expanduser()
     else:
-        path = resolve_file(registry.load(), os.getcwd())
+        path = resolve_file(roster.Roster(registry.load()), os.getcwd())
         if path is None:
-            print("orche: cwd is not inside a registered unit or project; pass --file", file=sys.stderr)
+            print("orche: cannot tell whose DECISIONS.tsv this is: set ORCHE_SESSION (ORCHE panes set it)"
+                  " or pass --file", file=sys.stderr)
             return EXIT_USER
     line = row(args.phase, args.decision, args.why, args.evidence, args.result)
     if not args.dry_run:

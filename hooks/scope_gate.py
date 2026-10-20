@@ -33,16 +33,16 @@ def scratch_allowed(path) -> bool:
 
 def decide(payload):
     """Deny reason, or None to stay silent."""
-    from orche import registry, units
+    from orche import registry, roster, units
     tool_input = payload.get("tool_input") or {}
     target = tool_input.get("file_path") or tool_input.get("notebook_path")
     if not target:
         return None
     cwd = payload.get("cwd") or os.getcwd()
-    unit = units.unit_from_cwd(registry.load(), cwd)
+    unit = roster.Roster(registry.load()).place(cwd).unit
     if unit is None:
         return None
-    root = os.path.realpath(unit.worktree_path)
+    root = os.path.realpath(unit.worktree)
     path = os.path.realpath(os.path.join(cwd, os.path.expanduser(target)))
     scope = (unit.entry.get("scope") or []) if unit.kind == "feat" else []
     allowed = [f"{root}/{g}" for g in scope] if scope else [f"{root}/"]

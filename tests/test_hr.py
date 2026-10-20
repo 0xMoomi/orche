@@ -9,10 +9,12 @@ import subprocess
 import unittest
 from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
+from unittest import mock
 
 import support
-from orche import registry, shell, templates, units
-from orche.hr import PLUGIN_ROOT, audit, limits, onboarding
+from orche import hr, registry, roster, shell, statusline, templates, units
+from orche.hr import audit, book, limits, onboarding
+from orche.paths import PLUGIN_ROOT
 from test_registry import load_cli
 
 SAMPLE = json.loads((support.FIXTURES / "registry.sample.json").read_text())
@@ -77,6 +79,10 @@ class HrCase(support.TempHomeCase):
                                  "kind": "git"}]}
         elif key == "terminal list":
             result = {"terminals": self.terminals}
+        elif key == "terminal create":   # as in Orca: the new pane is listed from now on
+            title = argv[argv.index("--title") + 1]
+            self.terminals.append({"handle": f"t-{title}", "title": title})
+            result = {"terminal": {"handle": f"t-{title}", "title": title}}
         elif key == "worktree list":
             result = {"worktrees": self.worktree_list}
         elif key == "worktree create":
@@ -156,8 +162,9 @@ class InitTest(HrCase):
                           "ops": "dormant"})
         self.assertTrue(divs["ops"]["gated_by_stage"])
         self.assertNotIn("gated_by_stage", divs["build"])
-        self.assertEqual((divs["research"]["model"], divs["research"]["effort"]), ("claude-sonnet-5-5", "medium"))
-        self.assertEqual((divs["rnd"]["model"], divs["rnd"]["effort"]), ("claude-opus-5-5", "high"))
+        self.assertEqual((divs["research"]["model"], divs["rnd"]["model"]),
+                         ("claude-sonnet-5-5", "claude-opus-5-5"))
+        self.assertFalse([d for d, v in divs.items() if "effort" in v])   # the persona holds it, not the record
         self.assertEqual(divs["build"]["branch"], "div/build")  # no branch in the result -> fallback
         wt = self.wtroot / "div-build"
         self.assertEqual(divs["build"]["worktree"], f"repo-acme::{wt}")
@@ -171,11 +178,11 @@ class InitTest(HrCase):
         self.assertTrue((wt / ".claude" / "agents" / "div-acme-shop-build.md").is_file())
         self.assertTrue((self.repo / ".claude" / "agents" / "liaison.md").is_file())
         self.assertFalse((self.repo / ".claude" / "settings.local.json").exists())
-        self.assertIn("persona template missing for division build", units.hr_log_path().read_text())
+        self.assertIn("persona template missing for division build", hr.log_path().read_text())
         # Panes: the two woken divisions, then main and liaison.
         panes = [c[c.index("--title") + 1:c.index("--title") + 4] for c in self.orca_calls("terminal create")]
-        self.assertEqual(panes, [["div-acme-shop-build", "--command", f"{PANE}ORCHE_SESSION=div-acme-shop-build claude --name div-acme-shop-build"],
-                                 ["div-acme-shop-gtm", "--command", f"{PANE}ORCHE_SESSION=div-acme-shop-gtm claude --name div-acme-shop-gtm"],
+        self.assertEqual(panes, [["div-acme-shop-build", "--command", f"{PANE}ORCHE_SESSION=div-acme-shop-build claude --permission-mode bypassPermissions --name div-acme-shop-build"],
+                                 ["div-acme-shop-gtm", "--command", f"{PANE}ORCHE_SESSION=div-acme-shop-gtm claude --permission-mode bypassPermissions --name div-acme-shop-gtm"],
                                  ["main-acme-shop", "--command", f"{PANE}ORCHE_SESSION=main-acme-shop claude --name main-acme-shop"],
                                  ["liaison-acme-shop", "--command", f"{PANE}ORCHE_SESSION=liaison-acme-shop claude --agent liaison --name liaison-acme-shop"]])
         self.assertEqual(self.orca_calls("automations create"), [])
@@ -201,7 +208,7 @@ class InitTest(HrCase):
         marker.write_text("stale\n")
         self.assertEqual(self.orche("init", "Acme Shop", "--divisions", "build,gtm")[0], 0)  # resumed init
         self.assertEqual(marker.read_text(), "acme-shop\n")
-        self.assertEqual(units.project_from_cwd(registry.load(), self.repo / "src"), "acme-shop")
+        self.assertEqual(roster.Roster(registry.load()).place(self.repo / "src").project, "acme-shop")
 
     def test_wake_ops_refused_while_building(self):
         code, _, err = self.orche("init", "Acme Shop", "--wake", "ops", "--divisions", ALL)
@@ -294,6 +301,7 @@ class InitTest(HrCase):
                           "crossSessionInbound": "accept"})
         titles = [c[c.index("--title") + 1] for c in self.orca_calls("terminal create")]
         self.assertEqual(titles, ["liaison-acme-shop"])
+        self.assertEqual(self.orca_calls("terminal switch"), [["orca", "terminal", "switch", "--terminal", "t1", "--json"]])
 
     def test_persona_templates_prefer_specific_then_generic(self):
         self.personas.mkdir()
@@ -309,7 +317,7 @@ class InitTest(HrCase):
         self.assertEqual((agents / "div-acme-shop-research.md").read_text(),
                          "---\nname: div-acme-shop-research\n---\nGeneric research medium\n")
         self.assertEqual(existing.read_text(), "mine\n")
-        self.assertNotIn("persona template missing for division", units.hr_log_path().read_text())
+        self.assertNotIn("persona template missing for division", hr.log_path().read_text())
 
     def test_rerun_resumes_partial_init_without_duplicates(self):
         self.assertEqual(self.orche("init", "Acme Shop", "--divisions", "rnd,build", "--wake", "build")[0], 0)
@@ -520,7 +528,7 @@ class FeatNewTest(FeatCase):
                                   "--parent-worktree", "id:repo-acme::/srv/orca/acme-shop-build", "--json"])
         wt = self.wtroot / "feat-payments"
         pane = self.orca_calls("terminal create")[0]
-        self.assertEqual(pane[pane.index("--command") + 1], f"{PANE}ORCHE_SESSION=feat-acme-shop-payments claude --name feat-acme-shop-payments")
+        self.assertEqual(pane[pane.index("--command") + 1], f"{PANE}ORCHE_SESSION=feat-acme-shop-payments claude --permission-mode bypassPermissions --name feat-acme-shop-payments")
         self.assertEqual(self.orca_calls("worktree set")[0],
                          ["orca", "worktree", "set", "--worktree", f"id:repo-acme::{wt}", "--unread", "--json"])
         reg = registry.load()
@@ -536,7 +544,7 @@ class FeatNewTest(FeatCase):
                          "feat-acme-shop-payments")
         self.assertTrue((self.repo / ".claude" / "agents" / "feat-acme-shop-payments.md").is_file())
         self.assertIn("create feat-acme-shop-payments by div-acme-shop-build: own payments",
-                      units.hr_log_path().read_text())
+                      hr.log_path().read_text())
         self.assertIn("BUILD●2", (self.home / "status" / "acme-shop.line").read_text())
 
     def test_failed_onboarding_resumes_without_second_worktree(self):
@@ -573,7 +581,7 @@ class FeatNewTest(FeatCase):
                                     "--reason", "r")
         self.assertEqual((code, out), (0, "would create feat-acme-shop-pay (dry-run)\n"))
         self.assertIn("[dry-run] orca worktree create --repo id:repo-acme --name feat-pay --parent-worktree", err)
-        self.assertIn(f"--command {PANE}ORCHE_SESSION=feat-acme-shop-pay claude --name feat-acme-shop-pay --json", err)
+        self.assertIn(f"--command {PANE}ORCHE_SESSION=feat-acme-shop-pay claude --permission-mode bypassPermissions --name feat-acme-shop-pay --json", err)
         self.assertIn("[dry-run] orca worktree set --worktree id:repo-acme::<feat-pay worktree> --unread", err)
         self.assertEqual(registry.load(), self.reg)
         self.assertEqual(self.calls, [])
@@ -597,7 +605,7 @@ class FeatNewTest(FeatCase):
         return self.save(reg)
 
     def test_a_feature_session_another_project_holds_is_refused_both_ways(self):
-        """I-1: session names are unique registry-wide (units.find_unit resolves one unit per name)."""
+        """I-1: session names are unique registry-wide (Roster.member resolves one member per name)."""
         before = self.add_project_acme(features=("shop-pay",))
         code, _, err = self.orche("feat", "new", "acme-shop", "pay", "--scope", "src/pay/**", "--reason", "r")
         self.assertEqual((code, err), (1, "orche: session feat-acme-shop-pay is taken by project acme; "
@@ -680,7 +688,7 @@ class FeatSleepWakeTest(FeatCase):
         code, out, _ = self.orche("feat", "wake", "acme", "search")
         self.assertEqual((code, out), (0, "feat-acme-shop-search active\n"))
         pane = self.orca_calls("terminal create")[0]
-        self.assertEqual(pane[pane.index("--command") + 1], f"{PANE}ORCHE_SESSION=feat-acme-shop-search claude --resume feat-acme-shop-search")
+        self.assertEqual(pane[pane.index("--command") + 1], f"{PANE}ORCHE_SESSION=feat-acme-shop-search claude --permission-mode bypassPermissions --resume feat-acme-shop-search")
         code, _, err = self.orche("feat", "sleep", "acme", "search")
         self.assertEqual(code, 3)
         self.assertIn("HANDOFF.md is stale (missing:", err)
@@ -692,7 +700,7 @@ class FeatSleepWakeTest(FeatCase):
         self.assertEqual((code, out), (0, "feat-acme-shop-checkout pane reopened\n"))
         [pane] = self.orca_calls("terminal create")
         self.assertEqual(pane[pane.index("--command") + 1],
-                         f"{PANE}ORCHE_SESSION=feat-acme-shop-checkout claude --resume feat-acme-shop-checkout")
+                         f"{PANE}ORCHE_SESSION=feat-acme-shop-checkout claude --permission-mode bypassPermissions --resume feat-acme-shop-checkout")
         self.calls.clear()
         self.terminals = [{"handle": "t-3", "title": "feat-acme-shop-checkout"}]
         code, out, _ = self.orche("feat", "wake", "acme", "checkout")
@@ -706,7 +714,7 @@ class FeatSleepWakeTest(FeatCase):
         self.assertEqual(self.orche("feat", "wake", "acme", "search")[0], 0)
         self.assertNotEqual(line.read_text(), "stale\n")
         self.assertTrue(line.read_text().startswith("R&D"), line.read_text())
-        feat = units.find_unit(registry.load(), "feat-acme-shop-search").entry
+        feat = roster.Roster(registry.load()).member("feat-acme-shop-search").entry
         self.assertGreater(units.parse_iso(feat["last_activity"]), NOW - dt.timedelta(minutes=5))
         self.assertTrue((self.home / "activity" / "feat-acme-shop-search").is_file())
 
@@ -957,7 +965,7 @@ class FeatRetireTest(FeatCase):
         reg = registry.load()
         self.assertEqual(reg["projects"]["acme-shop"]["divisions"]["build"]["features"][0]["status"], "retired")
         self.assertEqual(reg["events"][-1]["type"], "retire")
-        self.assertIn("GRAVEYARD row failed", units.hr_log_path().read_text())
+        self.assertIn("GRAVEYARD row failed", hr.log_path().read_text())
 
     def test_refuses_without_final_line(self):
         self.handoff.write_text("# HANDOFF\n\n## Next\nfinish tests\n")
@@ -1015,12 +1023,34 @@ class FeatRetireTest(FeatCase):
         reg = registry.load()
         self.assertEqual(reg["projects"]["acme-shop"]["divisions"]["build"]["features"][0]["status"], "retired")
         self.assertEqual((reg["events"][-1]["type"], reg["events"][-1]["unit"]), ("retire", "build/checkout"))
-        self.assertIn(f"retire feat-acme-shop-checkout by user (tag {self.tag})", units.hr_log_path().read_text())
+        self.assertIn(f"retire feat-acme-shop-checkout by user (tag {self.tag})", hr.log_path().read_text())
+
+    def test_retire_records_through_hr(self):  # R2
+        notes, order = [], []
+
+        def spy(name, real):
+            def call(*a, **kw):
+                order.append(name)
+                return real(*a, **kw)
+            return call
+
+        with mock.patch.object(book, "notify", spy("notify", notes.append)), \
+                mock.patch.object(registry, "append_event", spy("event", registry.append_event)), \
+                mock.patch.object(registry, "save", spy("save", registry.save)), \
+                mock.patch.object(book, "log", spy("log", book.log)), \
+                mock.patch.object(statusline, "refresh", wraps=spy("refresh", statusline.refresh)) as refresh:
+            self.assertEqual(self.orche("feat", "retire", "acme", "checkout", "--yes")[0], 0)
+        self.assertEqual(notes, ["Feature agent feat-acme-shop-checkout retired"])
+        self.assertEqual(order, ["event", "save", "log", "refresh", "notify"])
+        ev = registry.load()["events"][-1]
+        self.assertEqual((ev["type"], ev["project"], ev["unit"], ev["by"]), ("retire", "acme-shop", "build/checkout", "user"))
+        self.assertIn(f"retire feat-acme-shop-checkout by user (tag {self.tag})", book.log_path().read_text())
+        self.assertEqual(refresh.call_count, 1)
 
     def test_retire_without_transcripts_logs(self):
         self.mine.unlink()
         self.assertEqual(self.orche("feat", "retire", "acme", "checkout", "--yes")[0], 0)
-        self.assertIn("no transcripts to archive", units.hr_log_path().read_text())
+        self.assertIn("no transcripts to archive", hr.log_path().read_text())
 
 
 # ---- stage --------------------------------------------------------------------------------------
@@ -1030,7 +1060,7 @@ class StageTest(FeatCase):
         super().setUp()
         self.reg["projects"]["acme-shop"]["divisions"]["ops"] = {
             "status": "dormant", "worktree": "repo-acme::/srv/orca/acme-shop-ops", "branch": "div/ops",
-            "session": "div-acme-shop-ops", "model": "claude-opus-5-5", "effort": "high",
+            "session": "div-acme-shop-ops", "model": "claude-opus-5-5",
             "last_activity": ago(days=1), "gated_by_stage": True}
         self.save(self.reg)
 
@@ -1039,7 +1069,7 @@ class StageTest(FeatCase):
         self.save(self.reg)
         code, out, err = self.orche("stage", "set", "acme", "public", "--yes")
         self.assertEqual((code, err), (0, ""))
-        self.assertIn("ops is still onboarding; re-run orche init", out)
+        self.assertIn("onboarding unfinished: re-run `orche init acme-shop`", out)
         reg = registry.load()
         self.assertEqual((reg["projects"]["acme-shop"]["stage"], [e["type"] for e in reg["events"]]),
                          ("public", ["stage"]))
@@ -1073,12 +1103,12 @@ class StageTest(FeatCase):
         self.assertEqual((data["stage"], data["woke"], len(data["checklist"])), ("public", True, 4))
         self.assertTrue(any("docs/runbooks/" in c for c in data["checklist"]))
         pane = self.orca_calls("terminal create")[0]
-        self.assertEqual(pane[pane.index("--command") + 1], f"{PANE}ORCHE_SESSION=div-acme-shop-ops claude --name div-acme-shop-ops")
+        self.assertEqual(pane[pane.index("--command") + 1], f"{PANE}ORCHE_SESSION=div-acme-shop-ops claude --permission-mode bypassPermissions --name div-acme-shop-ops")
         reg = registry.load()
         self.assertEqual(reg["projects"]["acme-shop"]["stage"], "public")
         self.assertEqual(reg["projects"]["acme-shop"]["divisions"]["ops"]["status"], "active")
         self.assertEqual([(e["type"], e["unit"]) for e in reg["events"]], [("stage", "public"), ("wake", "ops")])
-        self.assertIn("stage acme-shop -> public", units.hr_log_path().read_text())
+        self.assertIn("stage acme-shop -> public", hr.log_path().read_text())
 
     def test_public_no_wake_dry_run_and_building(self):
         code, out, err = self.orche("--dry-run", "stage", "set", "acme", "public")
@@ -1107,7 +1137,7 @@ class StageTest(FeatCase):
         reg = registry.load()
         self.assertEqual((reg["projects"]["acme-shop"]["stage"],
                           reg["projects"]["acme-shop"]["divisions"]["ops"]["status"]), ("building", "active"))
-        handoff = units.find_unit(reg, "div-acme-shop-ops").handoff
+        handoff = roster.Roster(reg).member("div-acme-shop-ops").memory / "HANDOFF.md"
         handoff.parent.mkdir(parents=True, exist_ok=True)
         handoff.write_text("fresh\n")
         self.assertEqual(self.orche("stage", "set", "acme", "public", "--yes", "--no-wake")[0], 0)
@@ -1235,7 +1265,7 @@ class CorrectTest(FeatCase):
                                       "7. Run the tests before reporting\n"))
         self.assertEqual(self.orche("hr", "correct", "acme", "--text", "Never push")[:2], (0, "8\n"))
         self.assertTrue(path.read_text().endswith("7. Run the tests before reporting\n8. Never push\n"))
-        log = units.hr_log_path().read_text()
+        log = hr.log_path().read_text()
         self.assertIn("correct acme-shop #7 by main-acme-shop: Run the tests before reporting", log)
         code, out, err = self.orche("--dry-run", "hr", "correct", "acme", "--text", "x")
         self.assertEqual((code, out), (0, "9\n"))
@@ -1250,7 +1280,7 @@ class CorrectTest(FeatCase):
         text = (self.repo / ".orche" / "STANDING.md").read_text()
         self.assertNotIn(canary, text)
         self.assertIn("Use key", text)
-        self.assertNotIn(canary, units.hr_log_path().read_text())
+        self.assertNotIn(canary, hr.log_path().read_text())
 
 
 if __name__ == "__main__":

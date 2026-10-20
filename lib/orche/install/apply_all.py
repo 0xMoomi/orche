@@ -16,8 +16,8 @@ import shlex
 from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
 
-from .. import cmd_init, orca, registry, util
-from ..hr import EXIT_BLOCKED, EXIT_OK, EXIT_USER, PLUGIN_ROOT, fail, out
+from .. import cmd_init, hr, orca, paths, registry, util
+from ..cli import EXIT_OK, EXIT_USER, fail, out
 
 
 def _csv(text) -> list:
@@ -66,8 +66,10 @@ def run(args) -> int:
     bad = [d for d in wake if d not in registry.DIVISIONS]
     if bad:
         return fail(EXIT_USER, f"unknown division(s): {','.join(bad)} (allowed: {','.join(registry.DIVISIONS)})")
-    if "ops" in wake and args.stage == "building":
-        return fail(EXIT_BLOCKED, "ops is gated by stage: it stays dormant while stage is building")
+    try:
+        hr.stage_gate(wake, args.stage)
+    except hr.Refused as exc:
+        return fail(exc.code, exc.msg)
     try:
         orca.status(timeout=10)
     except orca.OrcaError as exc:
@@ -79,10 +81,10 @@ def run(args) -> int:
     repos = [r for r in (result.get("repos", []) if isinstance(result, dict) else result or [])
              if isinstance(r, dict) and r.get("id")]
     reg = registry.load()
-    limit = reg["limits"]["max_awake_sessions"]
-    budget = limit - len(registry.awake_sessions(reg))
+    count, limit = hr.awake(reg)
+    budget = limit - count
     rows, failed = [], 0
-    plugin_root = os.path.realpath(PLUGIN_ROOT)
+    plugin_root = os.path.realpath(paths.PLUGIN_ROOT)
     for repo in repos:
         name = repo.get("displayName") or repo["id"]
         key = util.slugify(repo.get("displayName") or Path(repo.get("path") or repo["id"]).name)
@@ -96,7 +98,8 @@ def run(args) -> int:
             rows.append({"repo": name, "key": owner, "result": "already registered"})
             continue
         if not args.dry_run:
-            budget = limit - len(registry.awake_sessions(registry.load()))
+            count, limit = hr.awake(registry.load())
+            budget = limit - count
         woken = wake if len(wake) <= budget else []
         note = "" if woken == wake else f"--wake {','.join(wake)} dropped (awake limit {limit})"
         # The standard set, never the setup screen; never the paid intake (one per project, by hand).

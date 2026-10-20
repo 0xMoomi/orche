@@ -1,13 +1,10 @@
-"""Small shared helpers: slugs, timestamps, atomic JSON IO, dispatch-block parsing."""
+"""Small shared helpers: slugs, timestamps, atomic JSON IO, fenced-block spans."""
 import datetime as _dt
 import json
 import os
 import re
 import tempfile
 from pathlib import Path
-
-DISPATCH_KEYS = ("TO", "GOAL", "SCOPE", "CONTEXT", "ACCEPT", "VERIFY", "TIMEBOX", "FORBID",
-                 "REPORT", "TIER", "ROLLBACK", "AMEND", "STOP")
 
 
 def slugify(text: str) -> str:
@@ -117,38 +114,6 @@ def write_json(path, data) -> None:
     atomic_write(path, json.dumps(data, indent=2, ensure_ascii=False) + "\n")
 
 
-def unit_id(proj: str, slug: str, n: int, date=None) -> str:
-    date = date or _dt.date.today()
-    return f"{slugify(proj)}-{slugify(slug)}-{date.strftime('%Y%m%d')}-{int(n)}"
-
-
-def parse_kv_block(text: str):
-    """Parse a dispatch block body. Returns (fields, unknown).
-
-    `KEY<spaces>VALUE` starts a field; a line starting with two spaces continues
-    the previous field (joined with a newline). Keys outside DISPATCH_KEYS are
-    returned in `unknown` (in order) and their continuation lines are dropped.
-    """
-    fields, unknown = {}, []
-    current = None
-    for raw in text.splitlines():
-        if not raw.strip():
-            continue
-        if raw.startswith("  "):
-            if current is not None:
-                piece = raw[2:].rstrip()
-                fields[current] = f"{fields[current]}\n{piece}" if fields[current] else piece
-            continue
-        key, _, value = raw.strip().partition(" ")
-        if key in DISPATCH_KEYS:
-            current = key
-            fields[key] = value.strip()
-        else:
-            current = None
-            unknown.append(key)
-    return fields, unknown
-
-
 _FENCE_LINE = re.compile(r"^([ \t]*)(`{3,}|~{3,})(.*)$")
 # Blocks whose continuation lines may hold their own fenced snippets (the dispatch grammar indents them).
 TRAILER_INFOS = ("dispatch", "amend", "stop")
@@ -182,16 +147,3 @@ def fence_spans(lines, nest=TRAILER_INFOS) -> list:
     if cur is not None:
         spans.append((cur[0], None, cur[4]))
     return spans
-
-
-def fenced_bodies(text: str, lang: str) -> list:
-    """Bodies of the closed fenced blocks (``` or ~~~) whose info string is exactly `lang`, in order."""
-    lines = (text or "").splitlines()
-    return ["\n".join(lines[s + 1:e]).rstrip("\n") for s, e, info in fence_spans(lines)
-            if e is not None and info == lang]
-
-
-def find_fenced_block(text: str, lang: str):
-    """Body of the last ```<lang> (or ~~~<lang>) fenced block in `text`, or None."""
-    bodies = fenced_bodies(text, lang)
-    return bodies[-1] if bodies else None

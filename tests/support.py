@@ -12,7 +12,7 @@ if str(ROOT / "lib") not in sys.path:
 
 # Process-wide default for every test module (TempHomeCase re-applies it per test): the Jev key
 # store never touches the real keychain and no real dialog opens.
-from orche import jev_setup as _jev_setup, jevkey as _jevkey  # noqa: E402
+from orche import headless, jev_setup as _jev_setup, jevkey as _jevkey  # noqa: E402
 
 _jevkey.PLATFORM = "linux"
 _jevkey.SECURITY = "/nonexistent/orche-test/security"
@@ -119,13 +119,7 @@ if [ -f "$d/sleep" ]; then echo $$ > "$d/pid"; sleep "$(cat "$d/sleep")"; fi
 if [ -f "$d/reply.json" ]; then cat "$d/reply.json"; fi
 exit "$(cat "$d/exit" 2>/dev/null || echo 0)"
 """
-HELP_FULL = ("Usage: claude [options]\n  --setting-sources <s>\n  --append-system-prompt-file <f>\n"
-             "  --disallowedTools, --disallowed-tools <tools...>\n  --tools <tools...>\n")
-HELP_OLD = "Usage: claude [options]\n  --setting-sources <s>\n  --append-system-prompt <p>\n"
-# claude 2.1.302: the file form only appears inside another option's description.
-HELP_BRACKET = ("Usage: claude [options]\n  --append-system-prompt <prompt>  Append a system prompt\n"
-                "  --bare  Minimal mode: ... --system-prompt[-file],\n"
-                "          --append-system-prompt[-file], --add-dir\n  --setting-sources <s>\n")
+HELP_FULL = "Usage: claude [options]\n" + "".join(f"  {flag} <x>\n" for flag in headless.FLAGS)
 
 
 def write_fake_claude(folder: Path, help_text=HELP_FULL) -> Path:

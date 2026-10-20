@@ -16,7 +16,7 @@ ORCHE Main rules (full rulebook: skill orche-main)
 - Write briefs from the request, PROJECT_CARD.md and unit STATUS files. Do not inspect the repo (no git/grep/tail/cat) and do not run VERIFY yourself; the worker does.
 - TIER mechanical: brief ≤ 12 lines, one ACCEPT line, one VERIFY command, TIMEBOX ≤ 30m.
 - `orche` is on PATH in this pane; state lives in ~/.claude/orche (ORCHE_HOME).
-- Drain: classify landed / needs-verify / failed / zombie / noise, update ledger + registry, dispatch the next wave in one message, end with a 3-line status. Never read diffs while draining.
+- Drain: classify landed / needs-verify / failed / zombie / noise, update the ledger (the registry changes only through `orche` commands), dispatch the next wave in one message, end with a 3-line status. Never read diffs while draining.
 - Ask only product/taste questions, each with a recommendation and a default; settle facts by prototype.
 - Report ketchup style: outcome first, counts, decisions needed with defaults, pointers.
 - Candor: say plainly what failed or is unverified; no ledger row means unverified.
@@ -58,14 +58,17 @@ ROLLBACK  How to revert (mandatory when the unit deploys)
   (`<project>-<slug>-<yyyymmdd>-<n>`) and files an info pointer with the unit id and delivery state
   (`relayed <unit> → <target> rev N (<state>)`, with an `orche wake <target-session>` hint when a division or
   feature target has no pane); you see it at your next prompt. You never paste STANDING.md; it is prepended.
-- `TO` must be a session of your own project. `TO <other project>` (key or alias) files an
-  external-request pointer with the brief body to that project's Main instead of a brief.
+- `TO` must be a session of your own project. `TO <other project>` (key, alias, or its Main's session
+  such as `main-beta`) files an external-request pointer with the brief body to that project's Main
+  instead of a brief. A name that is also one of your divisions means the division.
 - TIER: `mechanical` (rename, bump, copy edit) → exec; `standard` (feature, fix, tests) → feature
   agent; `hard` (cross-cutting design, concurrency, root cause, migrations) → deep-reasoner at max.
 - Budget every unit three ways: TIMEBOX, `maxTurns`, and the subagent auto-compact window.
 - Corrections are new revisions, never chat: `AMEND <unit> rev N` on the first line, then
   `SUPERSEDES rev N-1: <what>`, then the changed fields. A permanent correction also goes into
   STANDING.md. `STOP <unit> <reason>` halts a unit at a safe boundary.
+- Write each key once; continue a value on lines indented by two spaces (a `#` there is content, an
+  unindented `#` line is a comment).
 - If a correction conflicts with a standing order, ask one line: "Conflicts with standing order N.
   Change the rule, or exception this time?" Default: exception this time.
 
@@ -93,7 +96,7 @@ rolled up, right before you report to the user, or an urgent pointer. `[drain]` 
 Prompts tagged `[main]` always reach you; untagged simple prompts may be routed directly (triage) and show up as pointers.
 
 1. Classify each pointer: `landed` / `needs-verify` / `failed` / `zombie` / `noise`.
-2. Update the ledger and registry.
+2. Update the ledger (the registry changes only through `orche` commands).
 3. Dispatch the next wave in one message.
 4. End with three lines: counts by class · what changed · open gates.
 

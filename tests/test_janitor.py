@@ -30,7 +30,7 @@ def iso(days_ago):
 
 def div(status, wt, session, days_ago, **extra):
     return {"status": status, "worktree": f"repo-acme::{wt}", "branch": f"div/{session}", "session": session,
-            "model": "claude-opus-5-5", "effort": "medium", "last_activity": iso(days_ago), **extra}
+            "model": "claude-opus-5-5", "last_activity": iso(days_ago), **extra}
 
 
 class JanitorCase(support.TempHomeCase):
@@ -348,6 +348,30 @@ class DiscardTest(JanitorCase):
         self.run_json()
         self.assertFalse(stray.exists())
         self.assertTrue(list((self.home / "archive/one-off-session").glob("*.tar.gz")))
+
+    def test_one_roster_per_discard(self):
+        from orche import roster
+        built, orig = [], roster.Roster
+
+        class Counting(orig):
+            def __init__(self, *a, **k):
+                built.append(1)
+                super().__init__(*a, **k)
+
+        roster.Roster = Counting
+        self.addCleanup(setattr, roster, "Roster", orig)
+        junk = self.touch("acme/tmp-export/data.csv").parent
+        code, _, err = self.orche("discard", str(junk), "--why", "one-off export", "--by", "main-acme")
+        self.assertEqual(code, 0, err)
+        self.assertIn("| path:tmp-export | one-off export |", (self.proj / "docs/GRAVEYARD.md").read_text())
+        self.assertEqual(len(built), 1)
+        self.transcript(self.proj, "9a8b7c6d-main-uuid.jsonl")
+        self.transcript(self.proj / "sub", "9a8b7c6d-main-uuid.jsonl")
+        built.clear()
+        code, _, err = self.orche("discard", "9a8b7c6d-main-uuid", "--why", "x", "--project", "acme")
+        self.assertEqual(code, 3)
+        self.assertIn("Main/Liaison transcript", err)
+        self.assertEqual(len(built), 1)
 
     def test_main_transcripts_protected_from_session_pointers(self):
         main = self.transcript(self.proj, "9a8b7c6d-main-uuid.jsonl")

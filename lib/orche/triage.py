@@ -9,9 +9,9 @@ Runs inside the UserPromptSubmit hook (hooks/report_inject.py) of a Main session
    ("응", "그걸로", "yes", "go ahead", …), a reply to a question Main just asked (its last text,
    trailing fenced blocks and STATUS lines stripped, ends with `?` or a confirmation request).
 3. heuristics (no model): a candidate is an imperative that names a concrete target and no negation.
-4. classifier (candidates only): Jev (`jev.JevClient`, 1 s) or `claude -p` Haiku
-   (`triage.max_latency_s`, from a fresh temp dir outside $HOME, no tools, the runner's filtered
-   environment, its own process group); direct only when route == direct, confidence >=
+4. classifier (candidates only): Jev (`jev.JevClient`, 1 s) or `claude -p` Haiku, the blank
+   headless call (`headless.py`: a fresh temp dir outside $HOME, no tools, no inherited identity),
+   killed at `triage.max_latency_s`; direct only when route == direct, confidence >=
    triage.min_confidence and tier != hard.
 5. action: a brief relayed through the same path as a Main dispatch (dispatch.relay_detail,
    `by=triage`), then the hook blocks the prompt so Main spends no turn (Main's activity is touched,
@@ -28,25 +28,19 @@ import itertools
 import json
 import os
 import re
-import shutil
-import signal
-import subprocess
-import tempfile
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from . import config, log, mask, paths, registry, units, util
+from . import brief, config, headless, log, mask, paths, registry, units, util
 
 DIVISION_TAGS = registry.DIVISIONS                   # rnd research build gtm ops
-TIERS = ("mechanical", "standard", "hard")           # mirrors dispatch.TIERS
 ROUTES = ("main", "direct")
 BACKENDS = ("auto", "jev", "claude-haiku")
 HAIKU_MODEL = "claude-haiku-5-5"
 MIN_CHARS = 12
 TAIL_BYTES = (64 * 1024, 512 * 1024)                 # transcript tail read for "did Main ask?"
 MAX_SCOPE = 20
-PROBE_S = 2.0                                        # cap per `claude --version`/`--help` call on this path
 
 CONTEXT = "routed by triage from a Main prompt; the prompt is the whole instruction"
 CONTEXT_QUOTED = "routed by triage from a Main prompt; the prompt, quoted below, is the whole instruction"
@@ -67,7 +61,7 @@ SCOPE_PATH = re.compile(r"[A-Za-z0-9_./-]+")         # a SCOPE entry: path chara
 # A glob never reaches VERIFY (refused); the commit clause tells the worker never to `git add` one.
 SCOPE_GLOB = re.compile(r"(?:[A-Za-z0-9_./-]|\*|\?)+")
 GLOB_CHARS = "*?["
-# What the classifier may say: a one-line VERIFY a mechanical worker can run (runner.MECH_TOOLS).
+# What the classifier may say: a one-line VERIFY a mechanical worker can run (MECH_TOOLS in runs/job.py).
 VERIFY_OK = re.compile(r"^(?:ls|test|git\s+(?:status|diff))(?:\s|$)")
 VERIFY_SHELL = re.compile(r"[;&|<>`$\\\n\r*?\[\]]")   # shell syntax, and globs (SCOPE-only)
 # `git status`/`git diff` options a VERIFY may use; any other option (`--output`, `--ext-diff`,
@@ -401,7 +395,7 @@ def normalize(data, divisions):
     if not isinstance(data, dict):
         return None
     route, tier, conf = data.get("route"), data.get("tier"), data.get("confidence")
-    if route not in ROUTES or tier not in TIERS:
+    if route not in ROUTES or tier not in brief.TIERS:
         return None
     if isinstance(conf, bool) or not isinstance(conf, (int, float)) or not 0.0 <= conf <= 1.0:
         return None
@@ -434,97 +428,18 @@ def parse_json_object(text):
     return None
 
 
-def parse_claude(stdout, divisions):
-    """Typed decision from `claude -p --output-format json` stdout, or None."""
-    outer = parse_json_object(stdout)
-    if outer is None:
-        return None, None
-    if outer.get("type") == "result":
-        if outer.get("is_error"):
-            return None, outer.get("total_cost_usd")
-        return normalize(parse_json_object(outer.get("result")), divisions), outer.get("total_cost_usd")
-    return normalize(outer, divisions), None
-
-
-def mcp_config():
-    path = paths.orche_home() / "triage" / "mcp-empty.json"
-    if not path.exists():
-        util.write_json(path, {"mcpServers": {}})
-    return path
-
-
-def haiku_argv(cfg, divisions, flags=None) -> list:
-    """`--tools ""` (no tool schemas at all) when this claude lists `--tools`, else `--allowedTools ""`."""
-    no_tools = ["--tools", ""] if (flags or {}).get("tools") else ["--allowedTools", ""]
-    return [cfg.get("claude_bin") or "claude", "-p", "--model", HAIKU_MODEL, "--output-format", "json",
-            "--max-turns", "1", "--setting-sources", "project", "--strict-mcp-config",
-            "--mcp-config", str(mcp_config()), *no_tools, "--no-session-persistence",
-            "--system-prompt", SYSTEM_PROMPT.format(divisions=", ".join(divisions))]
-
-
-def scratch_dir() -> str:
-    """A fresh empty directory under the system temp dir and outside $HOME, so Claude Code's upward
-    CLAUDE.md discovery finds nothing (`~/.claude/CLAUDE.md` would load under $HOME)."""
-    base = tempfile.gettempdir()
-    if units.is_within(base, Path.home()):
-        base = "/tmp"
-    return tempfile.mkdtemp(prefix="orche-triage-", dir=base)
-
-
-def haiku_env() -> dict:
-    """The runner's filtered environment (runner._dropped) without ORCHE_SESSION."""
-    from . import runner
-    return {k: v for k, v in os.environ.items() if not runner._dropped(k) and k != "ORCHE_SESSION"}
-
-
 def classify_haiku(prompt, divisions, cfg, timeout):
-    """(decision or None, cost_usd). `claude -p` from a fresh temp dir outside $HOME (no project
-    settings, no CLAUDE.md), no tools, the masked prompt on stdin; its own session, whose process
-    group is killed at `timeout`. The `claude --version`/`--help` probe (cached by runner.claude_flags)
-    counts against `timeout`, each call capped at PROBE_S and half of it; a failed probe means no
-    classifier this time (one log line)."""
-    from . import runner
-    started = time.monotonic()
-    flags = runner.claude_flags(cfg, timeout=min(PROBE_S, timeout / 2))
-    if not flags.get("ok") or not flags.get("version"):
-        log.log("hooks", "triage: claude --version/--help probe failed; no classifier this time")
+    """(decision or None, cost_usd). The blank headless call (headless.py) on the masked prompt,
+    killed at `timeout`; a launch failure, a timeout or a non-zero exit is one log line and None."""
+    call = headless.Call("blank", HAIKU_MODEL, 1, timeout,
+                         system=SYSTEM_PROMPT.format(divisions=", ".join(divisions)))
+    res = headless.run(call, "Request:\n" + mask.redact(prompt)[0], cfg)
+    if res.error or res.code:
+        log.log("hooks", f"triage: claude-haiku {res.error or f'exit {res.code}'}")
         return None, None
-    timeout -= time.monotonic() - started
-    if timeout <= 0:
-        log.log("hooks", "triage: the claude probe used the whole triage.max_latency_s; no classifier this time")
-        return None, None
-    argv = haiku_argv(cfg, divisions, flags)
-    cwd = scratch_dir()
-    try:
-        proc = subprocess.Popen(argv, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                                text=True, errors="replace", cwd=cwd, env=haiku_env(), start_new_session=True)
-        try:
-            stdout, _err = proc.communicate("Request:\n" + mask.redact(prompt)[0], timeout=timeout)
-        except subprocess.TimeoutExpired:
-            _kill_group(proc)
-            log.log("hooks", f"triage: claude-haiku timed out after {timeout}s")
-            return None, None
-    except OSError as exc:
-        log.log("hooks", f"triage: claude-haiku: {type(exc).__name__}: {exc}")
-        return None, None
-    finally:
-        shutil.rmtree(cwd, ignore_errors=True)
-    if proc.returncode != 0:
-        log.log("hooks", f"triage: claude-haiku exit {proc.returncode}")
-        return None, None
-    return parse_claude(stdout, divisions)
-
-
-def _kill_group(proc):
-    """SIGKILL the classifier's whole process group (a wrapper's children too), then reap it."""
-    try:
-        os.killpg(proc.pid, signal.SIGKILL)
-    except OSError:
-        proc.kill()
-    try:
-        proc.communicate(timeout=1)
-    except (subprocess.TimeoutExpired, OSError, ValueError):
-        pass
+    if res.is_error:
+        return None, res.cost_usd
+    return normalize(parse_json_object(res.text), divisions), res.cost_usd
 
 
 def classify_jev(client, prompt, divisions, deadline):
@@ -681,15 +596,17 @@ def block_reason(to, unit, state, tier, goal="") -> str:
             f"prefix the prompt with [main] to talk to Main instead (to cancel: [main] STOP {unit}).")
 
 
-def act(d: Decision, reg, me, proj, deadline=None) -> Outcome:
-    """Relay the brief like a Main dispatch; block the prompt only when the runner started."""
+def act(d: Decision, r, me, deadline=None) -> Outcome:
+    """Relay decision `d` as a brief to its division, exactly like a Main dispatch, and block the
+    prompt only when the runner started. `r` is the hook's Roster, `me` the Main's roster.Member
+    (the sender, so `me.project` picks the division worktree), `deadline` the hook's monotonic
+    deadline passed on to `dispatch.relay_detail`. Any refusal or error returns a note instead."""
     from . import dispatch
     try:
-        fields = brief_fields(d, target_root(reg, proj, d.division))
-        [res] = dispatch.relay_detail(reg, [dispatch.Block("brief", fields)], proj, me, deadline,
-                                      identified=True, by="triage")
+        fields = brief_fields(d, target_root(r.reg, me.project, d.division))
+        [res] = dispatch.relay_detail(r, [brief.Block("brief", fields)], me, deadline, by="triage")
     except Exception as exc:  # noqa: BLE001 - Refusal or anything else: the prompt goes to Main
-        reason = " ".join(str(exc).replace(dispatch.REFUSE, "").split()) or type(exc).__name__
+        reason = " ".join(str(exc).replace(brief.REFUSE, "").split()) or type(exc).__name__
         return Outcome(note=f"[orche] triage could not route this prompt: {reason}")
     d.unit = res["unit"]
     if res["state"] != "runner-started":
@@ -751,38 +668,36 @@ def project_divisions(reg, proj) -> list:
     return [d for d in registry.divisions_of(entry) if (divs.get(d) or {}).get("session")]
 
 
-def handle(payload, started=None) -> Outcome:
-    """The UserPromptSubmit triage of a Main pane. Never raises; Outcome() means "go to Main as is"."""
+def handle(payload, started, r, who) -> Outcome:
+    """The UserPromptSubmit triage of a Main pane (`r`: roster.Roster, `who`: its Identity for this
+    session). Never raises; Outcome() means "go to Main as is"."""
     t0 = time.monotonic()
     try:
         cfg = config.load()
-        me = os.environ.get("ORCHE_SESSION") or ""
-        if not settings(cfg).get("enabled") or not me.startswith("main-"):
+        me = who.member
+        if not settings(cfg).get("enabled") or me is None or me.kind != "main":
             return Outcome()
         if cfg.get("delivery", "runner") != "runner":
             return Outcome()                    # triage routes through the runner only
-        reg = registry.load()
-        proj = next((k for k, p in reg.get("projects", {}).items() if p.get("main_session") == me), None)
-        if proj is None:
-            return Outcome()
-        d = decide(payload.get("prompt") or "", project_divisions(reg, proj), cfg, payload.get("transcript_path"))
+        d = decide(payload.get("prompt") or "", project_divisions(r.reg, me.project), cfg,
+                   payload.get("transcript_path"))
         out = Outcome(model_s=d.model_s)
         if d.decision == "direct":
             from . import orca
             base = started if started is not None else t0
-            out = act(d, reg, me, proj, orca.hook_deadline(base + d.model_s))
+            out = act(d, r, me, orca.hook_deadline(base + d.model_s))
             out.model_s = d.model_s
             if out.block is None:
                 d.decision, d.stage, d.reason = "main", 5, out.note
             else:
                 # The blocked prompt skips inbox.handle_prompt, which touches Main's activity on every
                 # other prompt: touch it here so `orche depts` and the status line do not show Main idle.
-                units.touch_activity(me)
+                units.touch_activity(me.session)
     except Exception as exc:  # noqa: BLE001 - fail-open
         log.log("hooks", f"triage: {type(exc).__name__}: {exc}")
         return Outcome()
     try:                                        # best-effort: never changes the decision made above
-        record(me, d, int((time.monotonic() - t0) * 1000), cfg)
+        record(me.session, d, int((time.monotonic() - t0) * 1000), cfg)
     except Exception as exc:  # noqa: BLE001
         log.log("hooks", f"triage: cannot record the decision: {type(exc).__name__}: {exc}")
     return out

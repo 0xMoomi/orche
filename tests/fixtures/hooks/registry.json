@@ -26,7 +26,6 @@
           "branch": "div/rnd",
           "session": "div-acme-rnd",
           "model": "claude-opus-5-5",
-          "effort": "high",
           "last_activity": "2026-10-01T09:00:00+09:00"
         },
         "build": {
@@ -35,7 +34,6 @@
           "branch": "div/build",
           "session": "div-acme-build",
           "model": "claude-opus-5-5",
-          "effort": "high",
           "last_activity": "2026-10-15T18:30:00+09:00",
           "features": [
             {

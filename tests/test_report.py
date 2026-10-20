@@ -84,6 +84,14 @@ class ReportTest(support.TempHomeCase):
                          ("acme-shop-coupon-20261016-1", "div-acme-shop-build", "main-acme-shop", "done", 3, SHA,
                           True, False, "coupon field landed", str(folder / "REPORT.md")))
 
+    def test_newest_skips_folders_that_are_not_unit_ids(self):
+        self.as_session("div-acme-shop-build")
+        self.brief("acme-shop-real-20261016-1", "div-acme-shop-build", age=100)
+        self.brief("scratch", "div-acme-shop-build")
+        code, out, err = self.orche("report", "info", "--summary", "progress")
+        self.assertEqual((code, err), (0, ""))
+        self.assertIn("reported acme-shop-real-20261016-1 info", out)
+
     def test_feature_reports_to_build_and_overrides(self):
         self.as_session("feat-acme-shop-search")
         self.brief("acme-shop-search-20261016-1", "feat-acme-shop-search", rev=2)
@@ -140,6 +148,33 @@ class ReportTest(support.TempHomeCase):
         self.assertEqual((code, err), (0, ""))
         self.assertTrue(json.loads(out)["ledger_row"])
 
+    def test_done_from_build_in_the_main_checkout_proves_builds_worktree_head(self):
+        """D11 (Q5): Build reporting from the main checkout is judged on its own worktree's HEAD."""
+        build_sha = "b" * 40
+        real = self.fake_runner
+
+        def per_path(argv, *, timeout, input):
+            if argv[:3] == ["git", "-C", "/srv/orca/acme-shop-build"] and argv[-2:] == ["rev-parse", "HEAD"]:
+                self.calls.append(argv)
+                return shell.Result(0, build_sha + "\n", "", argv)
+            return real(argv, timeout=timeout, input=input)
+        shell.RUNNER = per_path
+        self.as_session("div-acme-shop-build")
+        self.brief("acme-shop-gate-20261016-2", "div-acme-shop-build")
+        ledger = self.home / "ledger" / "acme-shop.tsv"
+        ledger.parent.mkdir()
+        ledger.write_text("pr\tsha\tverdict\tevidence\tverifier\tts\n"
+                          f"7\t{build_sha}\ttype-check-only\tlog\tverifier-1\t2026-10-16T00:00:00Z\n")
+        code, out, err = self.orche("--json", "report", "done", "--summary", "landed")
+        self.assertEqual((code, err), (0, ""))
+        ptr = json.loads(out)
+        self.assertEqual((ptr["head_sha"], ptr["ledger_row"]), (build_sha, True))
+        ledger.write_text("pr\tsha\tverdict\tevidence\tverifier\tts\n"
+                          f"7\t{SHA}\ttype-check-only\tlog\tverifier-1\t2026-10-16T00:00:00Z\n")
+        code, _, err = self.orche("report", "done", "--summary", "landed")
+        self.assertEqual(code, 3)
+        self.assertIn("LEDGER row for HEAD bbbbbbbbbbbb", err)
+
     def test_done_from_main_is_not_gated(self):
         self.as_session("main-acme-shop")
         self.brief("acme-shop-plan-20261016-1", "main-acme-shop")
@@ -167,6 +202,30 @@ class ReportTest(support.TempHomeCase):
         code, _, err = self.orche("report", "info", "--summary", "x", "--to", feat["session"])
         self.assertEqual(code, 1)
         self.assertIn(f"target session {feat['session']!r} is retired", err)
+
+    def test_feature_of_sessionless_division_reports_to_main(self):
+        reg = registry.load()
+        reg["projects"]["acme-shop"]["divisions"]["build"]["session"] = ""
+        registry.save(reg)
+        self.as_session("feat-acme-shop-search")
+        self.brief("acme-shop-search-20261016-1", "feat-acme-shop-search")
+        code, out, err = self.orche("report", "blocked", "--summary", "stuck")
+        self.assertEqual((code, err), (0, ""))
+        self.assertIn("-> main-acme-shop", out)
+        self.assertEqual(len(self.pointers("main-acme-shop")), 1)
+
+    def test_project_without_main_has_no_default_recipient(self):
+        reg = registry.load()
+        reg["projects"]["acme-shop"]["main_session"] = ""
+        registry.save(reg)
+        self.as_session("div-acme-shop-rnd")
+        self.brief("acme-shop-probe-20261016-1", "div-acme-shop-rnd")
+        code, _, err = self.orche("report", "info", "--summary", "x")
+        self.assertEqual(code, 1)
+        self.assertIn("no recipient for div-acme-shop-rnd; pass --to", err)
+        code, out, _ = self.orche("report", "info", "--summary", "x", "--to", "div-acme-shop-build")
+        self.assertEqual(code, 0)
+        self.assertIn("-> div-acme-shop-build", out)
 
     def test_unidentified_main_checkout_refused(self):
         os.environ.pop("ORCHE_SESSION", None)

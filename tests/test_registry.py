@@ -69,6 +69,13 @@ class ValidateTest(unittest.TestCase):
         for needle in ("rnd.status", "limits.max_awake_sessions", "frozen", "events[0].type", "version"):
             self.assertTrue(any(needle in e for e in errors), (needle, errors))
 
+    def test_division_effort_is_neither_required_nor_refused(self):
+        reg = sample()   # the sample's records carry no effort (C2 T6); one written before still validates
+        self.assertFalse([d for d, v in reg["projects"]["acme-shop"]["divisions"].items() if "effort" in v])
+        self.assertEqual(registry.validate(reg), [])
+        reg["projects"]["acme-shop"]["divisions"]["build"]["effort"] = "high"
+        self.assertEqual(registry.validate(reg), [])
+
     def test_non_object(self):
         self.assertEqual(registry.validate([]), ["registry: must be an object"])
 
@@ -82,7 +89,7 @@ def with_custom(reg, name="design", spec=None, record=True):
     if record:
         proj["divisions"][name] = {"status": "dormant", "worktree": f"repo-acme::/srv/orca/acme-shop-{name}",
                                    "branch": f"div/{name}", "session": f"div-acme-shop-{name}",
-                                   "model": "claude-opus-5-5", "effort": "high",
+                                   "model": "claude-opus-5-5",
                                    "last_activity": "2026-10-16T09:00:00+09:00"}
     return reg
 
@@ -211,7 +218,7 @@ class CliTest(support.TempHomeCase):
         return cp.returncode, cp.stdout, cp.stderr
 
     def test_version(self):
-        self.assertEqual(self.orche("version"), (0, "orche 0.3.5\n", ""))
+        self.assertEqual(self.orche("version"), (0, "orche 0.4.0\n", ""))
 
     def test_projects_json_empty_home(self):
         self.assertEqual(self.orche("projects", "--json"), (0, "[]\n", ""))

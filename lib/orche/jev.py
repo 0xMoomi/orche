@@ -64,14 +64,10 @@ CONFIRM = 0.6
 ROUTINE_KINDS = ("status", "resume-nudge", "confirm", "revision", "new request")
 # Score rubrics (TypeSafe Score `criteria`, low to high); answers come back as 1-5.
 URGENCY_LEVELS = ("1: can wait for days", "2: this week", "3: today", "4: within the hour", "5: right now")
-COMPLEXITY_LEVELS = ("1: trivial, fully specified edit", "2: small contained change",
-                     "3: moderate change across a few files", "4: needs design or root-cause work",
-                     "5: large cross-cutting work")
-TIERS = ("mechanical", "standard", "hard")  # mirrors dispatch.TIERS
 OTHER = "other"
 
 # Test seam: an `(request, timeout) -> bytes | file-like` callable used by the module-level
-# helpers (`classify_*`, `suggest_tier`, ...). None means `urllib.request.urlopen`.
+# helpers (`classify_*`, `match_scope`, ...). None means `urllib.request.urlopen`.
 OPENER = None
 
 
@@ -556,25 +552,6 @@ def classify_pointers(pointers, *, deadline=None):
             row["wake_now"] = max(row["wake_now"], wake or 0.0)
             row["user_now"] = max(row["user_now"], user or 0.0)
         return out or None
-    except Exception as exc:  # noqa: BLE001
-        log.log("jev", f"ms=0 q=0 error:{type(exc).__name__}")
-        return None
-
-
-def suggest_tier(brief_text, *, deadline=None):
-    """{"tier": mechanical|standard|hard, "confidence"} or None."""
-    try:
-        a = _ask(brief_text, [score("complexity", "How complex is this task?", 1, 5, COMPLEXITY_LEVELS),
-                              noul("needs_design", "Does this task need design work or root-cause analysis?")],
-                 deadline)
-        if not a or "complexity" not in a:
-            return None
-        cx = a["complexity"]["value"]
-        if isinstance(cx, bool) or not isinstance(cx, (int, float)):
-            return None
-        design = prob(a.get("needs_design")) or 0.0
-        tier = "hard" if cx >= 4 or design >= 0.5 else "mechanical" if cx <= 2 else "standard"
-        return {"tier": tier, "confidence": _min_conf(a)}
     except Exception as exc:  # noqa: BLE001
         log.log("jev", f"ms=0 q=0 error:{type(exc).__name__}")
         return None

@@ -3,6 +3,172 @@
 All notable changes to ORCHE are listed here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow semantic versioning.
 
+## 0.4.0 — 2026-10-20
+
+### Added
+
+- `orche init` with no argument installs on the repository holding the current directory (exit 1
+  "not inside a git repository: pass the project path (orche init <path>)" outside one); the orche-apply
+  skill runs it at once on a bare `orche init`.
+- `orche wake main-<proj>` / `liaison-<proj>` opens the project pane in the main checkout, or switches
+  Orca to it when it is already open.
+- `orche init <path>` adds a git repository Orca does not list yet (`orca repo add --path`) once the
+  checklist is confirmed, right before its first write (an abort or a dry run never adds; a linked git
+  worktree is refused with the main checkout's path), and ends by switching Orca to the `main-<proj>` tab ("Main is open in the main-<proj>
+  tab; type a request there."); `--json` reports `switched`, dry-run prints what it would add and switch.
+- A settings-mode install links each plugin skill into `~/.claude/skills/<name>`; plugin mode and
+  `orche uninstall` remove those links, and foreign entries with the same name are skipped and reported.
+
+### Changed
+
+- **One Roster answers who, where and to whom.** Identity, place, attribution, recipients and `TO`
+  resolution now follow SPEC §14.9 everywhere; the user-visible effects are listed below.
+- Orca pane titles no longer identify a session; only `ORCHE_SESSION` or a member's worktree does.
+- An `ORCHE_SESSION` naming no registered session gets a SessionStart note and keeps its own inbox;
+  the cwd is no longer used as a fallback.
+- A session with no identity writes its dispatch refusals to `hooks.log` only and skips the night check.
+- Secret requests made without a session are credited to `user`.
+- `orche decide` writes the session's own `DECISIONS.tsv` and refuses without a session unless `--file` is given.
+- A live division or feature record beats a retired one at the same worktree path.
+- `TO main-<other>` files an external request to that project's Main.
+- In `TO`, a division name of the sender's project beats another project's key or alias.
+- `bin/log.sh` is removed; `orche decide` is the only `DECISIONS.tsv` writer.
+- The SessionStart note in a project's main checkout reads `[orche] this is not an ORCHE pane: Main's
+  rules apply in the main-<proj> tab — you can run: orche wake main-<proj>`.
+- The SessionStart hook appends `export PATH=<shlex-quoted plugin bin>:"$PATH"` to `$CLAUDE_ENV_FILE`
+  (when the plugin bin is not already on PATH and the file does not already hold that line, adding a
+  newline first when the file lacks one) so a session's Bash finds `orche`.
+- Division and feature panes start with `--permission-mode bypassPermissions`; Main and Liaison panes
+  are unchanged.
+- When a live `orche init` cannot find or switch to the `main-<proj>` tab it warns `could not switch to
+  main-<proj>; open that tab in Orca` and does not print the "Main is open" line.
+- A settings-mode install links only `skills/` folders that hold a `SKILL.md`.
+- **One module starts every headless `claude -p`** (`lib/orche/headless.py`: the unit worker, the
+  intake sweep and the triage classifier; SPEC §14.10).
+- **Unit workers take `--effort` from TIER** (mechanical low, standard medium, hard high) **and run
+  the target's registry model at every TIER.** Mechanical units on the built-in divisions move from
+  Sonnet to Opus at low effort; Research's standard and hard units move from Opus to Sonnet.
+  RUN.json records `effort`.
+- **Unit workers run ORCHE's secret-read and scope gates** (PreToolUse, through `--settings`).
+  Before, no ORCHE hook ran in a headless call.
+- **`orche doctor` checks every flag ORCHE passes** (row `claude flags` from `headless.check`,
+  replacing `claude --setting-sources`). Claude Code must list all 15: there is no fallback for an
+  older claude.
+- **Headless unit workers start with `--permission-mode bypassPermissions`**; the PreToolUse gates
+  and the deny list still block; the sealed intake call is unchanged (`--restricted` refuses bypass).
+- **Headless calls no longer inherit the caller's identity or session state.** The intake worker no
+  longer gets the caller's `ORCHE_SESSION`. ORCHE's, Orca's, Claude Code's and Jev's own variables
+  reach a worker only when named; `ORCHE_KEYMASTER`, `CLAUDE_EFFORT` and Orca's pane variables used
+  to leak. The Jev key variable (`jev.api_key_env`) never reaches a worker; the triage classifier
+  used to get it.
+- **A non-UTF-8 byte in claude's output no longer fails a run or an intake** (it is decoded with
+  replacement).
+- **One brief module.** `lib/orche/brief.py` parses ```dispatch blocks, allocates unit ids and
+  writes and reads every BRIEF.md revision; the Stop hook, `orche run` and `orche report` go through
+  it. BRIEF.md's bytes are unchanged.
+- **A `#` line inside a field value is kept** (a shell comment in VERIFY, a markdown heading in
+  CONTEXT); before, it was dropped silently. A `#` line outside a value is still a comment.
+- **A key written twice is refused** (`duplicate keys …`); before, the last value won.
+- **Refusal wording.** Unknown keys are listed in the order written, each once; a malformed AMEND or
+  STOP unit id reads `bad unit id …`.
+- A brief's target comes only from its `## Brief` TO field. `orche report` without `--unit` picks the
+  newest brief, ties broken by date, then by the numeric n (`-10` beats `-9`).
+- **One done gate and one claim grammar** (SPEC §14.11). The Stop hook, `orche report` and `orche
+  run` read the same STATUS line, with these user-visible effects:
+- The Stop hook reads the last STATUS line, not the first: `STATUS: done` followed later by
+  `STATUS: blocked` is not a completion claim.
+- A template echo (`STATUS: done|blocked|failed`, spaced or not) is never a claim, in the Stop hook
+  or the runner. Before, the Stop hook gated it and the runner filed the persona's spaced echo as
+  `done`.
+- The Stop hook accepts headings, emoji and other symbol prefixes (`## STATUS: done`). The runner
+  accepts numbered lists, emphasis around the word, `STATUS :` and `STATUS: 완료`.
+- The Stop gate follows the session's identity: a feature agent outside its worktree is gated, and
+  Main standing in a feature worktree is not. HEAD is read in the claimant's worktree, also for the
+  `head_sha` of an `orche report` pointer.
+- `orche run` judges `STATUS: release-ready` (>= unit-test-verified from a verifier other than the
+  target) and files it as `done`; before, it was always `info`.
+- `orche wake`'s awake-limit refusal names the unit to put to sleep (`orche sleep <unit>`).
+- `orche stage set <proj> public` notes an onboarding Ops with wake's onboarding text.
+- `orche hr audit` reads the Liaison's decisions too.
+- The project's status line is rewritten by every HR record, so also after a janitor retirement and
+  per division during `orche init`; a `stage set` to the current stage writes none.
+- **A lost run reports what ran.** Reconcile files it from its lock: the pointer's `brief_rev` is the
+  revision that ran, and RUN.json's `tier`, `model`, `effort`, `worktree` and `branch` are the run's,
+  no longer re-resolved from today's BRIEF.md and registry (a lock written before this version gives
+  `null` and the brief's current revision). This extends "A run's pointer names the revision it ran"
+  (Fixed) to lost runs.
+- `orche metrics` adds one Runner line per model and effort (`--json`: `runner.by_model_effort`).
+- `orche init` no longer writes `effort` into division records.
+
+### Fixed
+
+- **A run's pointer names the revision it ran**: `brief_rev` and the prompt come from the BRIEF.md the
+  run resolved, so an AMEND landing mid-run no longer relabels it.
+- **An AMEND or STOP of a unit without a readable BRIEF.md is refused** (`unknown unit …`); before,
+  an AMEND wrote and relayed a partial brief and a STOP was relayed.
+- **A dispatch, AMEND or STOP to a retired target is refused before anything is written**
+  (`target <session> is retired.`); before, it was relayed and the runner refused it later.
+- **A STOP files its pointer for the `rev:` in BRIEF.md**; before, it counted `BRIEF.rev*.md` files.
+- **`orche report` no longer crashes** on a folder under `.orche/units/` that is not a unit id; an
+  unreadable or non-UTF-8 BRIEF.md reads as missing.
+- **The Fable block's AMEND/STOP line matches the grammar**; run `orche install` to refresh it.
+- A run whose lock or STOP-marker cleanup fails after its pointer was filed no longer files a second
+  `failed` pointer or overwrites RUN.json; reconcile clears the stale lock.
+
+### Removed
+
+- The identity and routing helpers the Roster replaced: `units.Unit`, `units.find_unit`,
+  `units.project_from_cwd`, `units.unit_from_cwd`, `units.session_from_cwd`, `units.all_sessions`,
+  `units.actor`, `inbox.identify` and its pane-title cache, `dispatch.resolve_target`,
+  `dispatch.sender_role`, `cmd_report.route`, `cmd_report.identified_session`.
+- **The `claude --version`/`--help` probe and its cache** (`ORCHE_HOME/runner/probe.json`; delete it
+  by hand if present).
+- **The inline `--append-system-prompt`, `--setting-sources` and `--allowedTools ""` fallbacks.**
+- **`runner.model_mechanical`.**
+- **`ORCHE_HOME/triage/mcp-empty.json`** (no longer written; delete it by hand if present).
+- The runner's and triage's own claude code that `headless` replaced: `runner.probe`,
+  `runner.claude_version`, `runner.probe_path`, `runner.claude_flags`, `runner.build_argv`,
+  `runner.model_for`, `runner.worker_env`, `runner.env_for`, `runner.execute`, `runner.run_claude`,
+  `runner.sigterm_guard`, `runner.sweep_group`, `runner.sweep_run`, `runner.parse_output`,
+  `runner.STOP_POLL_S`, `runner.DROPPED_ENV`, `runner.AUTH_ENV`, `runs.mcp_config_path`,
+  `triage.haiku_argv`, `triage.haiku_env`, `triage.mcp_config`, `triage.scratch_dir`.
+- **`ORCHE_HOME/briefs/`** is no longer created or checked (nothing wrote to it; existing folders
+  are left alone).
+- **R-DISPATCH-3 (Jev fills an empty TIER) and R-DISPATCH-4 (small units fold fields)** are dropped
+  from SPEC; neither was built.
+- **`jev.suggest_tier`**: Jev no longer suggests tiers (ruling 2026-10-19: Jev does not pick tiers or
+  models).
+- The grammar, unit-id and BRIEF.md helpers `brief` replaced: `util.DISPATCH_KEYS`, `util.unit_id`,
+  `util.parse_kv_block`, `util.fenced_bodies`, `util.find_fenced_block`, `dispatch.parse_block`,
+  `dispatch.find_blocks`, `dispatch.render_brief`, `dispatch.write_brief`, `dispatch.read_brief_fields`,
+  `dispatch.current_rev`, `dispatch.allocate_unit_id`, `dispatch.unit_dir`, `dispatch.where`,
+  `cmd_report.newest_brief`, `cmd_report.brief_rev`, `jev.TIERS`, `jev.COMPLEXITY_LEVELS`,
+  `triage.TIERS`.
+- The claim and completion checks `donegate` replaced: `dispatch.CLAIM`, `dispatch.git_head`,
+  `dispatch.GATE_PREFIX`, `dispatch.GATE_SUFFIX`, `dispatch.ledger_missing`, `dispatch.gated_sender`,
+  `dispatch.completion_gate`, `dispatch.night_predicate`, `cmd_report.done_gate`, `runner._STATUS`,
+  `runner.worktree_clean`, `runner.gated`, `runner.history_rewritten`, `runner.done_problem`, and
+  `tests/test_dispatch.py` (its cases live in `tests/test_donegate.py`). `cmd_feat.orche_owned` and
+  `janitor.discover.porcelain_path` moved to `units`; `git_head` to `shell`.
+- The division record's `effort` in `registry.json`: nothing read it. A pane's effort is its
+  persona's `effort:` line, a headless run's its TIER. Existing keys are ignored and no longer
+  required.
+
+### Internal
+
+- `lib/orche/roster.py` (`Roster`, `Member`, `Place`, `Identity`) is the single read model over `registry.json`.
+- `lib/orche/headless.py` (`Call`, `run`, `argv`, `env`, `Stop`, `check`, `marker`) is the single way
+  ORCHE starts `claude -p`; `call_for` in `runs/job.py` builds the unit worker's `Call`.
+- `lib/orche/donegate.py` (`claim`, `Claim`, `Proof`, `may_stop`, `for_report`, `after_run`) holds the
+  one claim grammar and every completion check (the Stop hook, `orche report`, the runner).
+- `lib/orche/hr/` (book, limits, panes, onboarding, transitions, create, retire, audit) performs
+  every unit transition and is the only writer of `registry.json` (SPEC §14.12); `lib/orche/cli.py`
+  holds the shared exit codes and `fail`.
+- `lib/orche/runs/` (the Run module: a light `__init__` with the interface, `filing`, `job`) replaces
+  `runner.py` and `runs.py`; `cmd_run` is a thin CLI over `runs.execute` / `runs.preview`; the Stop
+  hook calls `runs.start` / `stop` / `restart`; `procs.spawn_detached`, `inbox.about`, `inbox.clip`
+  and `intake.read_context` take over helpers from dispatch, cmd_report and the runner (SPEC §14.13).
+
 ## 0.3.5 — 2026-10-19
 
 ### Fixed

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """SessionStart hook: on startup/resume/clear, print the unit's role + STANDING, CHARTER, STATUS,
 HANDOFF and the last 20 DECISIONS rows (main worktree: role + STANDING + principles pointer).
-The role comes from $ORCHE_SESSION when set (the liaison shares the main checkout), else from cwd.
+The role comes from the Roster's identity: $ORCHE_SESSION when set (never the cwd), else the cwd's unit.
 Right after the role comes a "Role rules" card: the inject-marked block of skills/orche-main (main
 checkout), skills/orche-build (the div-*-build worktree) or skills/orche (every other unit).
 Total output stays under 6,000 characters; the card is trimmed first. Fail-open."""
@@ -61,23 +61,23 @@ def _memory(unit_dir):
     return out
 
 
-def _unit_sections(reg, unit):
+def _unit_sections(reg, m):
+    """A division or feature member: its role, card, STANDING and memory from its worktree."""
     from orche import dispatch
-    proj = reg["projects"][unit.project]
-    root = os.path.realpath(unit.worktree_path)
-    label = "division" if unit.kind == "div" else "feature"
-    role = (f"session: {unit.session}\n{label}: {unit.event_unit}\nproject: {unit.project}\n"
+    proj = reg["projects"][m.project]
+    root = os.path.realpath(m.worktree or ".")
+    role = (f"session: {m.session}\n{m.role}: {m.event_unit}\nproject: {m.project}\n"
             f"stage: {proj.get('stage', '?')}")
-    standing = _read(os.path.join(root, proj.get("standing", ".orche/STANDING.md")))
-    skill = "orche-build" if unit.kind == "div" and unit.name == "build" else "orche"
+    standing = _read(os.path.join(root, proj["standing"]))
+    skill = "orche-build" if m.kind == "div" and m.name == "build" else "orche"
     return [("ORCHE role", role), *_role_card(skill),
-            ("STANDING.md", standing or dispatch.standing_text(reg, unit.project)),
-            *_memory(os.path.join(root, ".orche", unit.kind, unit.name))]
+            ("STANDING.md", standing or dispatch.standing_text(reg, m.project)),
+            *_memory(str(m.memory))]
 
 
-def _project_sections(reg, key, liaison=False, identified=True):
+def _project_sections(reg, key, liaison=False, note=None):
     """Main checkout: Main's role + card, (liaison=True) the Liaison's role, generic card and memory,
-    or (identified=False, no ORCHE_SESSION) a note + the generic card — never Main's rules by guess."""
+    or (note) the note + the generic card — never Main's rules by guess."""
     from orche import dispatch, units
     proj = reg["projects"][key]
     stage = proj.get("stage", "?")
@@ -87,32 +87,37 @@ def _project_sections(reg, key, liaison=False, identified=True):
         root = units.project_root(reg, key)
         memory = _memory(os.path.join(str(root), ".orche", "liaison")) if root else []
         return [("ORCHE role", role), *_role_card("orche"), standing, *memory]
-    main = proj.get("main_session", "main-" + key)
-    if not identified:
-        note = (f"[orche] unidentified session in main checkout — set ORCHE_SESSION={main} for Main's rules\n"
-                f"project: {key}\nstage: {stage}")
-        return [("ORCHE role", note), *_role_card("orche"), standing]
-    role = f"session: {main}\nproject: {key}\nstage: {stage}"
+    if note:
+        return [("ORCHE role", f"{note}\nproject: {key}\nstage: {stage}"), *_role_card("orche"), standing]
+    role = f"session: {proj.get('main_session', 'main-' + key)}\nproject: {key}\nstage: {stage}"
     return [("ORCHE role", role), *_role_card("orche-main"), standing, ("Principles", PRINCIPLES)]
 
 
-def _sections(reg, cwd, session=None):
-    """[(title, body)] for the session (ORCHE_SESSION) or else the cwd's unit / main worktree; [] if unmanaged."""
-    from orche import units
-    if session:
-        for key, proj in reg.get("projects", {}).items():
-            if session == proj.get("liaison_session"):
-                return _project_sections(reg, key, liaison=True)
-            if session == proj.get("main_session"):
-                return _project_sections(reg, key)
-        unit = units.find_unit(reg, session)
-        if unit is not None:
-            return _unit_sections(reg, unit)
-    unit = units.unit_from_cwd(reg, cwd)
+def _note(r, who):
+    """The role note for a session with no member: unregistered (L6), or unidentified (L7 / main checkout)."""
+    if who.session:
+        return (f"[orche] session {who.session} is not registered — check ORCHE_SESSION "
+                "(`orche depts` lists the sessions)")
+    unit = who.place.unit
     if unit is not None:
-        return _unit_sections(reg, unit)
-    key = units.project_from_cwd(reg, cwd)
-    return _project_sections(reg, key, identified=False) if key is not None else []
+        return f"[orche] unidentified session in the {unit.event_unit} worktree — its registry record has no session"
+    main = r.main(who.place.project)
+    main = main.session if main else "main-" + who.place.project
+    return (f"[orche] this is not an ORCHE pane: Main's rules apply in the {main} tab "
+            f"— you can run: orche wake {main}")
+
+
+def _sections(r, who):
+    """[(title, body)] for the identified member, else a note keyed by the cwd's project; [] if unmanaged."""
+    m = who.member
+    if m is not None:
+        if m.kind == "main":
+            return _project_sections(r.reg, m.project)
+        if m.kind == "liaison":
+            return _project_sections(r.reg, m.project, liaison=True)
+        return _unit_sections(r.reg, m)
+    key = who.place.project
+    return _project_sections(r.reg, key, note=_note(r, who)) if key is not None else []
 
 
 DATA_SECTIONS = ("STATUS.md", "HANDOFF.md", "DECISIONS.tsv (last 20)")
@@ -158,13 +163,53 @@ def build(sections):
     return (_render(sections) + "\n\n" + note())[:CAP]
 
 
+ENV_READ_CAP = 64 * 1024   # characters of $CLAUDE_ENV_FILE read to find an earlier PATH line
+
+
+def _write_path():
+    """Append `export PATH=<plugin>/bin:"$PATH"` to $CLAUDE_ENV_FILE so the session's Bash finds `orche`.
+
+    Skipped when $CLAUDE_ENV_FILE is unset or empty, the bin is already on PATH, or the file's first
+    ENV_READ_CAP characters already hold the line (resume, clear and compact fire the hook again). A
+    file that does not end with a newline gets one first. Any failure is one hooks.log line."""
+    try:
+        import shlex
+        from orche import paths
+        env_file = os.environ.get("CLAUDE_ENV_FILE", "")
+        bin_dir = str(paths.PLUGIN_ROOT / "bin")
+        if not env_file or bin_dir in os.environ.get("PATH", "").split(os.pathsep):
+            return
+        line = f'export PATH={shlex.quote(bin_dir)}:"$PATH"\n'
+        lead = ""
+        if os.path.exists(env_file):
+            with open(env_file, encoding="utf-8") as fh:
+                if line in fh.read(ENV_READ_CAP):
+                    return
+            with open(env_file, "rb") as fh:
+                if fh.seek(0, os.SEEK_END):
+                    fh.seek(-1, os.SEEK_END)
+                    lead = "" if fh.read(1) == b"\n" else "\n"
+        with open(env_file, "a", encoding="utf-8") as fh:
+            fh.write(lead + line)
+    except Exception as exc:  # noqa: BLE001 - fail-open: the role card still goes out
+        try:
+            from orche import log
+            log.log("hooks", f"session_start: CLAUDE_ENV_FILE: {type(exc).__name__}: {exc}")
+        except Exception:  # noqa: BLE001
+            pass
+
+
 def main():
     try:
         payload = json.load(sys.stdin)
-        if not isinstance(payload, dict) or payload.get("agent_id") or payload.get("source") not in SOURCES:
+        if not isinstance(payload, dict):
             return 0
-        from orche import registry
-        sections = _sections(registry.load(), payload.get("cwd") or os.getcwd(), os.environ.get("ORCHE_SESSION"))
+        _write_path()
+        if payload.get("agent_id") or payload.get("source") not in SOURCES:
+            return 0
+        from orche import registry, roster
+        r = roster.Roster(registry.load())
+        sections = _sections(r, r.identify(payload.get("cwd") or os.getcwd()))
         text = build(sections) if sections else ""
     except Exception as exc:  # noqa: BLE001 - fail-open
         try:

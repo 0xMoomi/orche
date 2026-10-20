@@ -12,13 +12,20 @@ Install ORCHE on this Mac and set it up on one of my projects. Do exactly these 
 1. Run: curl -fsSL https://raw.githubusercontent.com/0xMoomi/orche/main/install.sh | bash -s -- --yes
 2. Run: export PATH="$HOME/orche/bin:$PATH" && orche doctor
    Every line must be OK or WARN. If any line says FAIL, show it to me and stop.
-3. Ask me for the folder of the project to set up (a git repository that already appears in Orca). Then run: export PATH="$HOME/orche/bin:$PATH" && orche init <that folder>
-   Without a terminal it takes the defaults and asks nothing. If it says the repository is not known to Orca, tell me to add the folder in Orca first, then stop.
+3. If this Claude Code session is already inside the project to set up (a git repository), run: export PATH="$HOME/orche/bin:$PATH" && orche init
+   Otherwise ask me for the project's folder, then run: export PATH="$HOME/orche/bin:$PATH" && orche init <that folder>
+   Allow it up to 10 minutes (set the command timeout to 600000 ms): it reads the codebase once at the end.
+   Without a terminal it takes the defaults and asks nothing. If Orca does not list the repository yet, init adds it to Orca first; at the end it switches Orca to the main-<project> tab.
 4. Run: export PATH="$HOME/orche/bin:$PATH" && orche status
-5. Report in five lines: the version (orche version); whether the Claude Code plugin was installed or the hooks went into settings.json; the two Orca panes that were created (main-<project> and liaison-<project>); that I should restart Claude Code once so the plugin loads; and the one next step: open the main-<project> tab in Orca and type a request in plain language.
+5. Report in five lines: the version (orche version); whether the Claude Code plugin was installed or the hooks went into settings.json; the two Orca panes that were created (main-<project> and liaison-<project>); that I should restart Claude Code once so the plugin loads; and the one next step: type a request in plain language in the main-<project> tab that Orca now shows.
 ```
 
 The installer checks the requirements for you (macOS, git, Python 3.11+, Claude Code, Orca) and stops with a hint when one is missing. This prompt skips Jev (optional, faster routing of simple requests); add it any time with `orche jev setup`. Run the same prompt again later to update.
+
+Already installed? In a Claude Code session inside the project, say `orche init`: the `orche-apply`
+skill runs it at once with the defaults and Orca lands on the `main-<project>` tab. For another folder,
+say `orche init ~/path/to/repo` or `put ~/path/to/repo under ORCHE`. In a terminal, `orche init` with no
+argument inside the project does the same.
 
 Everything else is below, folded. Click a heading to open it.
 
@@ -37,15 +44,17 @@ curl -fsSL https://raw.githubusercontent.com/0xMoomi/orche/main/install.sh | bas
 It asks one optional question (a Jev key; press Enter to skip). When it finishes, open a new
 Terminal window so the `orche` command is found.
 
-**2. Put ORCHE on one project** (a git repository that Orca already shows; its name or its path):
+**2. Put ORCHE on one project** (a git repository, by its path or by the name Orca shows; a git
+folder Orca does not list yet is added to Orca first):
 
 ```sh
-orche init ~/path/to/your/project
+orche init ~/path/to/your/project   # or, inside the project: orche init
 ```
 
 Press Enter at every question to take the defaults. This creates the project's divisions, two Orca
 panes (`main-<project>` and `liaison-<project>`), and reads the codebase once so each division knows
-it (about $0.1–0.3).
+it (about $0.1–0.3). If you close the Main pane later, `orche wake main-<project>` opens a new Main
+session there (`claude --name`; it does not resume the old one), or switches to the pane when it is open.
 
 **3. Check:**
 
@@ -55,7 +64,8 @@ orche doctor
 
 Every line should say OK or WARN, never FAIL.
 
-**Then use it.** In Orca, open the `main-<project>` tab and ask in plain language, for example
+**Then use it.** `orche init` ends by switching Orca to the `main-<project>` tab; ask there in plain
+language, for example
 `Add a date filter to the history API.` Main plans, confirms with you, hands the work to a division,
 and the result comes back in the same tab. Type `[drain]` any time to read everything that is
 waiting.
@@ -192,7 +202,7 @@ export PATH="$HOME/orche/bin:$PATH"
 orche version
 ```
 
-Success: `orche 0.3.5` (or the version you cloned).
+Success: `orche 0.4.0` (or the version you cloned).
 
 To make it permanent, add the same line to your login profile. ORCHE's panes and `orche doctor` use a
 login shell (`$SHELL -lc`), and a zsh login shell does not read `~/.zshrc`, so use:
@@ -218,7 +228,7 @@ step 5. On a fresh machine it looks like this (your paths differ):
 
 ```
 dry run: nothing written (home /Users/you)
-orche_home: would create /Users/you/.claude/orche (dirs logs,status,inbox,cards,secrets,briefs,jev-eval,archive,trash)
+orche_home: would create /Users/you/.claude/orche (dirs logs,status,inbox,cards,secrets,jev-eval,archive,trash)
 settings: would set (cleanupPeriodDays (absent) -> 3650)
 settings: would set (env.CLAUDE_AUTOCOMPACT_PCT_OVERRIDE (absent) -> 50)
 agents: would symlink /Users/you/.claude/agents/hr.md (-> /Users/you/orche/agents/hr.md)
@@ -239,7 +249,8 @@ What it changes:
 - creates `~/.claude/orche` (ORCHE's own state: registry, inbox, ledger, logs);
 - patches `~/.claude/settings.json` (for example `cleanupPeriodDays` 3650);
 - adds an ORCHE block to your status-line script (`~/.claude/statusline-command.sh`) when you have one;
-- symlinks ORCHE's agents into `~/.claude/agents/`;
+- symlinks ORCHE's agents into `~/.claude/agents/` (and, in settings mode, each ORCHE skill in
+  `skills/` into `~/.claude/skills/`);
 - also patches two operator-specific files when they are present (`~/.claude/fable/*` and
   `~/.codex/AGENTS.md`) and skips them when they are absent. `orche install --dry-run` previews every
   change, these included.
@@ -287,7 +298,7 @@ OK	python3 (login shell)	/opt/homebrew/bin/python3 3.13.1
 OK	orche on PATH	/Users/you/orche/bin/orche
 OK	orca	orca status answered
 OK	claude	/Users/you/.local/bin/claude 2.1.302 (Claude Code)
-OK	claude --setting-sources	supported
+OK	claude flags	all 15 listed in claude --help
 OK	tool gh	/opt/homebrew/bin/gh
 WARN	tool age	not found on PATH
 WARN	jev	not configured (Haiku fallback)
@@ -334,7 +345,7 @@ These need a fix:
 ## Apply ORCHE to a project
 
 ORCHE joins one project at a time, when you name it (`orche apply-all` exists but is not the way to
-start). The project must be a git repository that Orca already knows. You can name it by its Orca
+start). The project must be a git repository; init adds it to Orca when needed. You can name it by its Orca
 display name, repo id or path.
 
 ### Step 1. Run `orche init`
@@ -386,7 +397,12 @@ For that project only:
    files. Every division starts dormant (no pane, no cost).
 3. Two Orca panes in the main checkout: `main-<proj>` (you talk here) and `liaison-<proj>` (answers
    other projects' questions, keeps `PROJECT_CARD.md` fresh). No division pane opens unless you pass
-   `--wake`.
+   `--wake`. With no such pane open, `orche wake main-<proj>` (or `liaison-<proj>`) opens a new
+   session (`claude --name`; it does not resume the old one); with one open it switches to it. The
+   last thing init does is switch Orca to `main-<proj>`. Division and feature panes start with
+   `--permission-mode bypassPermissions`; Main and Liaison panes ask as usual. On a machine without
+   `skipDangerousModePermissionPrompt`, the first division pane shows Claude Code's one-time bypass
+   confirmation.
 4. An entry in `~/.claude/orche/registry.json`. Two weekly Orca automations are printed, not
    created, unless you pass `--automations`.
 5. The project intake (see below): `.orche/div/<division>/CONTEXT.md` per division, the first
@@ -435,17 +451,17 @@ orche --dry-run intake my-app        # print the exact claude command; writes no
 
 `orche janitor run` refreshes it with `--if-stale` for projects that already had one (this runs even
 while the janitor itself is still a dry run; `"intake": {"enabled": false}` in the config turns it
-off). An agent never waits on the sweep through its Bash tool: `/orche-apply` runs `orche init …
---no-intake` and then `orche intake <proj>` with a 10-minute tool timeout (the sweep's own limit is 9
-minutes), and the liaison starts `--if-stale` refreshes only with `--background`. `orche apply-all`
+off). `/orche-apply` runs one `orche init` with a 10-minute tool timeout (the intake runs last; the
+sweep's own limit is 9 minutes), and the liaison starts `--if-stale` refreshes only with
+`--background`. `orche apply-all`
 never runs the intake.
 
 Secrets: the worker cannot run commands, so it cannot print a file or old diffs through `git`. It may
 not read `.env*` files, anything under `secrets/`, keys (`*.pem`, `*.key`, `*.p12`, `id_rsa*`, …),
 keystores, `.npmrc`/`.netrc` or credential JSON files, in the repo or by absolute path, nor `~/.ssh`,
-`~/.aws` and the other credential stores in your home directory (Claude Code deny rules). When the
-installed `claude` has `--restricted` (2.1.302 does), the worker also ignores the project's
-settings and hooks and its file tools stay inside the checkout. Its instructions forbid quoting
+`~/.aws` and the other credential stores in your home directory (Claude Code deny rules). The
+worker runs with `--restricted`: it ignores the project's settings and hooks, and its file
+tools stay inside the checkout. Its instructions forbid quoting
 anything that looks like a credential, and ORCHE masks keys, tokens, JWTs, passwords
 (`DB_PASSWORD=…`, `postgres://user:…@`) and `Authorization` headers in the answer before writing a
 single file. The same masking module (`lib/orche/mask.py`) covers everything else ORCHE writes or
@@ -506,7 +522,8 @@ prose (`password: correcthorse`) is not masked.
 ### In chat instead
 
 In Claude Code, `/orche-apply <project>` walks through the same choices in chat and applies them with
-`--setup-file` after a dry-run preview.
+`--setup-file` after a dry-run preview. A bare `orche init` said in a session inside the project skips
+the choices: the skill runs `orche init` at once with the defaults.
 
 ### Check it
 
@@ -703,7 +720,7 @@ orche uninstall
 
 `orche uninstall` removes ORCHE's block from your status-line script (and from `~/.claude/fable/*`
 when present), removes ORCHE's hook entries from `~/.claude/settings.json` and restores the original
-values recorded in `install-state.json`, and removes the agent symlinks. It keeps the backups (`*.bak-*`), ORCHE_HOME
+values recorded in `install-state.json`, and removes the agent symlinks and the `~/.claude/skills/` links a settings-mode install made. It keeps the backups (`*.bak-*`), ORCHE_HOME
 (`~/.claude/orche`) and a stored Jev key; it prints how to delete the key (`orche jev key rm`).
 
 Then, inside Claude Code, remove the plugin with `/plugin` (uninstall `orche@orche`). Finally delete
@@ -719,16 +736,18 @@ the clone (`~/orche`) and the PATH line from your login profile.
 By default (config `delivery: runner`) every new brief to a division or feature agent runs as a
 lean headless worker: the Stop hook spawns `orche run <unit>` detached and returns at once, and
 the runner calls `claude -p --output-format json` in the unit's worktree with project settings
-only (`--setting-sources project`), no MCP servers (its own empty `--mcp-config`,
+only (`--setting-sources project`), ORCHE's secret-read and scope gates (passed with
+`--settings`; no other ORCHE hook runs there), no MCP servers (its own empty `--mcp-config`,
 `~/.claude/orche/runner/mcp/<unit>@<started_ns>.json`, written at run start and removed on every
-exit path, by reconcile and by log pruning; `--dry-run` prints the placeholder path), and a
-TIER-sized budget:
+exit path, by reconcile and by log pruning; `--dry-run` prints the placeholder path), the
+target's model from the registry (a feature agent: its division's; Main and Liaison:
+`claude-opus-5-5`), and a TIER-sized effort and budget:
 
-| TIER | Model | Max turns | Allowed tools |
+| TIER | Effort | Max turns | Allowed tools |
 |---|---|---|---|
-| mechanical | `runner.model_mechanical` (default `claude-sonnet-5-5`) | `runner.max_turns` (20) | Read, Write, Edit, Glob, Grep, `ls`, `test`, `git status`, `git diff`, `git add`, `git commit`; denied (best-effort prefix rules): `git commit --amend`, `-n`, `--no-verify`, `git push` |
-| standard | `claude-opus-5-5` | `runner.max_turns` (20) | the same allowed tools plus Bash (no deny list) |
-| hard | `claude-opus-5-5` | 40 | the same allowed tools plus Bash (no deny list) |
+| mechanical | `low` | `runner.max_turns` (20) | Read, Write, Edit, Glob, Grep, `ls`, `test`, `git status`, `git diff`, `git add`, `git commit`; denied (best-effort prefix rules): `git commit --amend`, `-n`, `--no-verify`, `git push` |
+| standard | `medium` | `runner.max_turns` (20) | the same allowed tools plus Bash (no deny list) |
+| hard | `high` | 40 | the same allowed tools plus Bash (no deny list) |
 
 A mechanical worker may commit, but the runner footer still says "do not commit, push, merge or
 rebase unless the brief allows it", so it is told to commit only when the brief says so (a triage
@@ -739,10 +758,11 @@ ancestor of the new HEAD (or is unknown), the pointer is `info` "unverified: STA
 rewritten …)", never `done`. Skipping the hooks (`--no-verify`) is a documented gap no post-hoc
 check sees: it is forbidden by the brief and the footer, and the ledger verifier reviews the diff.
 
-The persona goes in as `--append-system-prompt-file` (inline `--append-system-prompt` only
-for a `claude` without the file flag; the `--help` probe is cached per `claude --version`). The
-worker gets Main's environment minus `CLAUDE_PROJECT_DIR`, Orca's `ORCA_TERMINAL_HANDLE` and
-Claude Code's own `CLAUDE_CODE_*` session variables (authentication and mTLS variables stay). The timeout is the brief's TIMEBOX plus 60 s
+The persona goes in as `--append-system-prompt-file`. The worker gets your environment without
+ORCHE's, Orca's, Claude Code's and Jev's own variables (names starting `ORCHE_`, `ORCA_`,
+`CLAUDE`, `JEV_`). Of those only `ORCHE_HOME`, `CLAUDE_CONFIG_DIR`,
+`CLAUDE_AUTOCOMPACT_PCT_OVERRIDE`, ORCHE's hook settings and the authentication and mTLS
+variables pass, plus its own `ORCHE_SESSION=<target>` and `ORCHE_RUNNER=1` (SPEC §14.10). The timeout is the brief's TIMEBOX plus 60 s
 (30 min when it has none, `1h30m` adds up, at most 4 h). At most `runner.max_parallel` (4) units
 run per project and one per target session: a target's units share its worktree, so parallelism
 is across targets (and feature agents, each with its own worktree), never inside one worktree. A
@@ -752,7 +772,8 @@ run ends with one pointer — a runner error or SIGTERM files `failed`, a duplic
 a live unit files `info` "already running (pid N, started HH:MM)" and exits 4 while the live run
 still files its own. Measured on
 2026-10-18 with 12 small units: pane workers cost $9.77 and took 22 minutes; runner workers cost
-$3.75 (about $0.31 per unit) and took 2 minutes. `orche metrics` sums the runs it recorded.
+$3.75 (about $0.31 per unit) and took 2 minutes. `orche metrics` sums the runs it recorded,
+also per model and effort.
 
 `delivery: pane` restores the older path (the hook types `[orche] inbox: <unit> rev <N>` into the
 worker's Orca pane). Main targets always use the pane, because a person reads them, and so do
@@ -788,10 +809,10 @@ exits); while that shell still sits under the outer run, the nested run ends wit
 hook spawns the run with its own Python (`<python> bin/orche.py run <unit>`); `bin/orche` is for
 people. Config lives in
 `~/.claude/orche/config.json` (see `config/orche.example.json`): `claude_bin`, `delivery`,
-`runner.model_mechanical`, `runner.max_turns`, `runner.max_parallel`, `runner.hard_in_pane`,
+`runner.max_turns`, `runner.max_parallel`, `runner.hard_in_pane`,
 `runner.queue_wait_s`, `runner.log_keep_days` (14: older `logs/runs/*.log` are deleted at each
 `orche run` and by `orche janitor run`; RUN.json records stay). `orche doctor` checks that
-`claude` is found and supports `--setting-sources`, warns under 1 GiB free disk for
+`claude` is found and lists the 15 flags ORCHE passes (`claude flags`), warns under 1 GiB free disk for
 `~/.claude/orche` and over 200 MiB of run logs, warns when the process table (`ps`) cannot be
 read and for every lost run whose leftovers are not swept yet, and reconciles lost runs (one
 WARN row each).
@@ -801,8 +822,9 @@ memory, a shutdown, a power cut) or cannot write its result (a full disk), the r
 vanish silently: ORCHE notices the dead run the next time anyone looks — the next prompt in any
 of the project's sessions, the next `orche run` in that project, or `orche status` (also `depts`,
 `doctor`, `metrics`, `janitor run`). It then writes `RUN.json` with `stop_reason: lost` (a
-RUN.json the run already wrote is kept), files `failed` "runner died: <unit> (pid N, started
-HH:MM); re-run with `orche run <unit>`" to Main, stops the claude that run left behind, and frees
+RUN.json the run already wrote is kept), naming what ran — the brief revision, TIER, model and
+effort recorded in the run's lock — files `failed` "runner died: <unit> (pid N, started HH:MM);
+re-run with `orche run <unit>`" to Main, stops the claude that run left behind, and frees
 its slot (events line `run unit=<unit> to=<target> runner-reconciled pid=<pid>`). What the worker
 did is not reported: Main sees `failed` "runner died" even when the work itself finished (the
 run's own RUN.json may say `blocked` or `done`), so check it before re-running. When the run or
@@ -833,14 +855,17 @@ brief as its prompt; the worker runs VERIFY, ends with `STATUS: done|blocked|fai
 runner files one pointer to Main (a feature reports to Build) plus `RUN.json` and `REPORT.md`
 next to the brief (the worker itself never runs `orche report` under the runner). A worker
 never records its own verdict (writer ≠ judge). From Build or a feature agent (the targets
-`orche report done` gates) the pointer is `done` only when the final `STATUS: done` comes
-with a new commit made during the run, a clean worktree, and a ledger row for that commit;
-otherwise it arrives as `info` "unverified: STATUS: done (no commit)", "(uncommitted
-changes)" or "(no ledger row for <sha>)" — a committed unit stays `info` "(no ledger row
+`orche report done` gates) the pointer is `done` only when the final STATUS line (SPEC
+§14.11) says `done` or `release-ready` and comes with a new commit made during the run that
+keeps the old HEAD as an ancestor, a clean worktree, and a ledger row for that commit (for
+`release-ready`: >= unit-test-verified from a verifier other than the target); otherwise it
+arrives as `info` "unverified: STATUS: done (no commit)", "(uncommitted changes)", "(no
+ledger row for <sha>)", "(ledger verdict <v> for <sha>)" or "(ledger verifier <v> is the
+claimant for <sha>)" — a committed unit stays `info` "(no ledger row
 for <sha>)" until a verifier records the row, and Main decides. Writer ≠ judge is enforced when the row is
 recorded: `orche ledger record` refuses a `--verifier` equal to the producer (`--producer`,
-else the recording session's `ORCHE_SESSION`); the runner only checks that a row exists and
-does not re-check who recorded it. From any other target (Research, R&D, GTM, Ops, Main) a
+else the recording session's `ORCHE_SESSION`); for `done` the runner only checks that a row
+exists and does not re-check who recorded it. From any other target (Research, R&D, GTM, Ops, Main) a
 final `STATUS: done` files `done`, as `orche report done` would. Among runner runs there is
 one run per target at a time, so "a new commit made during the run" is this unit's; a pane
 worker (`delivery: pane`, `runner.hard_in_pane`) or a person working in that worktree is not
@@ -919,8 +944,7 @@ the prompt to Main unchanged):
    `git status` or `git diff` command a mechanical worker can run (`git` with plain paths and
    only `--short`, `--stat`, `--name-only`, `--name-status`, `--cached` or `--porcelain`), else
    `ls -l <scope files>` (plain paths only) when that passes the same check, else
-   `git status --short` (also with no files). The `claude --version`/`--help` probe counts against `triage.max_latency_s` (each
-   call capped at 2 s); a failed probe means no classifier this time. The prompt is then blocked with "[orche] routed to <division>
+   `git status --short` (also with no files). The prompt is then blocked with "[orche] routed to <division>
    as <unit> (runner-started, TIER <t>): "<the GOAL's first 60 characters, masked>" … (to cancel:
    [main] STOP <unit>)", and Main's activity is touched as on any Main prompt, so `orche depts`
    and the status line do not show Main idle. Once the runner
@@ -945,8 +969,6 @@ file still exists. With triage enabled on Jev and no Jev eval on file, `orche tr
 `orche triage enable` and `orche status` print a warning: run an eval first. `orche status`
 prints one triage line while triage is enabled. `orche metrics` has a Triage section. Config: `triage.enabled`, `triage.backend` (`auto`, `jev`,
 `claude-haiku`), `triage.min_confidence` (default 0.8), `triage.max_latency_s`, `triage.keep_prompts`.
-Below about 1 s, `triage.max_latency_s` usually skips the classifier on a busy machine: each
-`claude --version`/`--help` probe gets at most half the budget, so the probe alone can use it up.
 Triage needs `delivery: runner`, and only Main sessions are triaged.
 
 </details>
@@ -978,8 +1000,8 @@ HR (one global) ── registry.json ── create · sleep · retire · rate li
 
 | Piece | What it does |
 |---|---|
-| Dispatch relay (Stop hook) | Parses `dispatch` blocks, refuses incomplete ones, writes `BRIEF.md` revisions, starts the runner (or nudges the target pane); gates `STATUS: done` claims on a ledger row |
-| Runner | `orche run <unit>`: one headless `claude -p` worker per unit in its worktree; records `RUN.json`, files the pointer through the ledger gate |
+| Dispatch relay (Stop hook) | Parses `dispatch` blocks, refuses incomplete ones, writes `BRIEF.md` revisions, starts the runner (or nudges the target pane); gates completion claims (`STATUS: done` / `release-ready`) through the done gate |
+| Runner | `orche run <unit>`: one headless `claude -p` worker per unit in its worktree; records `RUN.json`, files the pointer through the done gate |
 | Report inject (UserPromptSubmit hook) | Injects inbox pointers at drain points; urgent ones first |
 | Verification ledger | `orche ledger record/check`; verdicts `live-ui-verified`, `unit-test-verified`, `type-check-only`, `verifier-blocked`, `verifier-failed`. CI green is not a verdict |
 | HR | `orche feat new/sleep/wake/retire`, rate limits, creation freeze, weekly audit, `orche hr correct` for standing orders |

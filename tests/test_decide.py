@@ -1,18 +1,17 @@
-"""`orche decide` and bin/log.sh: escaping, unit resolution, identical rows."""
+"""`orche decide`: escaping, unit resolution."""
 import io
 import os
 import re
 import stat
-import subprocess
 from contextlib import redirect_stderr, redirect_stdout
+from unittest import mock
 
 import support
 from orche import cmd_decide
 from test_ledger import make_registry
 from test_registry import load_cli
 
-LOG_SH = support.ROOT / "bin" / "log.sh"
-TS = re.compile(r"^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ$")
+TS =re.compile(r"^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ$")
 HEADER = "ts\tphase\tdecision\twhy\tevidence\tresult"
 CELLS = ("plan", "=SUM(A1:A2)", "line one\nline\ttwo\r\nend", "-flag", "@mention")
 
@@ -59,30 +58,32 @@ class DecideTest(support.TempHomeCase):
         self.assertTrue((self.root / "acme-checkout" / ".orche" / "feat" / "checkout" / "DECISIONS.tsv").is_file())
         self.assertEqual(self.orche("decide", "p", "d", "w", "e", "r", cwd=self.root / "acme-build")[0], 0)
         self.assertTrue((self.root / "acme-build" / ".orche" / "div" / "build" / "DECISIONS.tsv").is_file())
-        self.assertEqual(self.orche("decide", "p", "d", "w", "e", "r", cwd=self.root / "acme")[0], 0)
+        with mock.patch.dict(os.environ, {"ORCHE_SESSION": "main-acme"}):
+            self.assertEqual(self.orche("decide", "p", "d", "w", "e", "r", cwd=self.root / "acme")[0], 0)
         self.assertTrue((self.root / "acme" / ".orche" / "DECISIONS.tsv").is_file())
         code, _, err = self.orche("decide", "p", "d", "w", "e", "r", cwd=self.home)
         self.assertEqual(code, 1)
         self.assertIn("--file", err)
 
+    def test_writes_the_sessions_own_file(self):
+        """L14: ORCHE_SESSION picks the member's memory dir; no session in the main checkout is refused."""
+        with mock.patch.dict(os.environ, {"ORCHE_SESSION": "liaison-acme"}):
+            self.assertEqual(self.orche("decide", "p", "d", "w", "e", "r", cwd=self.root / "acme")[0], 0)
+        self.assertTrue((self.root / "acme" / ".orche" / "liaison" / "DECISIONS.tsv").is_file())
+        with mock.patch.dict(os.environ, {"ORCHE_SESSION": "main-acme"}):
+            self.assertEqual(self.orche("decide", "p", "d", "w", "e", "r", cwd=self.root / "acme-build")[0], 0)
+        self.assertEqual(len((self.root / "acme" / ".orche" / "DECISIONS.tsv").read_text().splitlines()), 2)
+        self.assertFalse((self.root / "acme-build" / ".orche").exists())
+        code, _, err = self.orche("decide", "p", "d", "w", "e", "r", cwd=self.root / "acme")
+        self.assertEqual(code, 1)
+        self.assertIn("--file", err)
+        with mock.patch.dict(os.environ, {"ORCHE_SESSION": "ghost-acme"}):
+            code, _, err = self.orche("decide", "p", "d", "w", "e", "r", cwd=self.root / "acme-build")
+        self.assertEqual(code, 1)
+        self.assertIn("--file", err)
+        self.assertFalse((self.root / "acme-build" / ".orche").exists())
+
     def test_dry_run_writes_nothing(self):
         target = self.home / "DECISIONS.tsv"
         self.assertEqual(self.orche("--dry-run", "decide", "a", "b", "c", "d", "e", "--file", str(target))[0], 0)
         self.assertFalse(target.exists())
-
-    def test_log_sh_matches_decide(self):
-        py_file, sh_file = self.home / "py.tsv", self.home / "sh.tsv"
-        self.orche("decide", "--file", str(py_file), "--", *CELLS)
-        res = subprocess.run(["bash", str(LOG_SH), "-f", str(sh_file), *CELLS],
-                             capture_output=True, text=True, timeout=10)
-        self.assertEqual((res.returncode, res.stderr), (0, ""))
-        py_lines, sh_lines = py_file.read_text().split("\n"), sh_file.read_text().split("\n")
-        self.assertEqual(sh_lines[0], HEADER)
-        self.assertEqual(len(sh_lines), len(py_lines))
-        self.assertRegex(sh_lines[1].split("\t")[0], TS)
-        self.assertEqual(sh_lines[1].split("\t")[1:], py_lines[1].split("\t")[1:])
-        self.assertEqual(res.stdout, sh_lines[1] + "\n")
-        self.assertTrue(os.access(LOG_SH, os.X_OK))
-        bad = subprocess.run(["bash", str(LOG_SH), "-f", str(sh_file), "only-one"], capture_output=True, text=True)
-        self.assertEqual(bad.returncode, 1)
-        self.assertEqual(len(sh_file.read_text().split("\n")), 3)

@@ -13,6 +13,7 @@ import sys
 import unittest
 from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
+from unittest import mock
 
 import support
 from orche import registry, shell
@@ -269,6 +270,27 @@ class RequestTest(SecretCase):
                                     "--project", "acme")[0], 1)
         self.assertEqual(self.orche("secret", "request", "API_TOKEN", "--env", "dev", "--why", "x",
                                     "--project", "nope")[0], 2)
+
+    def test_request_credits_the_session_name_or_user(self):
+        """L11: no ORCHE_SESSION in the main checkout -> "user", never a guessed Main."""
+        checkout = self.home / "shop"
+        checkout.mkdir()
+        reg = registry.load()
+        reg["projects"]["acme-shop"]["path"] = str(checkout)
+        registry.save(reg)
+        old = os.getcwd()
+        self.addCleanup(os.chdir, old)
+        os.chdir(checkout)
+        requests = self.home / "secrets" / "requests"
+        self.assertEqual(self.orche("secret", "request", "API_TOKEN", "--env", "dev", "--why", "x",
+                                    "--no-dialog")[0], 0)
+        (path,) = requests.glob("*-API_TOKEN.json")
+        self.assertEqual(json.loads(path.read_text())["requested_by"], "user")
+        with mock.patch.dict(os.environ, {"ORCHE_SESSION": "main-acme-shop"}):
+            self.assertEqual(self.orche("secret", "request", "GITHUB_TOKEN", "--env", "dev", "--why", "x",
+                                        "--no-dialog")[0], 0)
+        (path,) = requests.glob("*-GITHUB_TOKEN.json")
+        self.assertEqual(json.loads(path.read_text())["requested_by"], "main-acme-shop")
 
 
     def test_dialog_script_runs_standalone(self):

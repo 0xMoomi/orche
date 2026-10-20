@@ -1,4 +1,5 @@
 """The only place ORCHE shells out. Tests replace `RUNNER` with a fake."""
+import re
 import shutil
 import subprocess
 from dataclasses import dataclass
@@ -50,3 +51,10 @@ def run(argv, *, timeout=20, dry_run=False, input=None, check=False) -> Result:
 
 def which(name: str):
     return shutil.which(name)
+
+
+def git_head(path, timeout=2):
+    """HEAD of the git checkout at `path` (7-64 lower-case hex), else None."""
+    res = run(["git", "-C", str(path), "rev-parse", "HEAD"], timeout=timeout)
+    out = res.out.strip()
+    return out if res.ok and re.fullmatch(r"[0-9a-f]{7,64}", out) else None

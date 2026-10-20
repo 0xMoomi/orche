@@ -19,36 +19,23 @@ dies without filing (SIGKILL, OOM, power loss) is filed later by runs.reconcile(
 recipient gets no pointer (logged; RUN.json `pointer_filed: false`).
 
 A run started inside another run's worker drops the ORCHE_RUN_ID it inherited (re-exec), so the
-other run's end-of-run sweep never kills it; its own claude gets its own tag (runner.env_for).
+other run's end-of-run sweep never kills it; its own claude gets its own tag (headless.env).
 """
 import json
 import os
 import shlex
 import sys
-import traceback
 from pathlib import Path
 
-from . import config, procs, registry, runner, runs
+from . import config, procs, registry, runs
 
-EXIT_OK, EXIT_USER, EXIT_BLOCKED, EXIT_DUPLICATE, EXIT_UNFILED = 0, 1, 3, 4, 5
+EXIT_OK, EXIT_USER = 0, 1
 
 
 def register(subparsers):
     p = subparsers.add_parser("run", help="run one unit headless with claude -p (the runner; manual re-run)")
     p.add_argument("unit", help="unit id <proj>-<slug>-<yyyymmdd>-<n>")
     p.set_defaults(func=cmd_run)
-
-
-def _unrun(reg, job, model, status, summary, error, stop_reason, code, record=True):
-    print(f"orche: {error}", file=sys.stderr)
-    runner.file_unrun(reg, job, model, status, summary, error, stop_reason, record)
-    return code
-
-
-def _runner_error(reg, job, model, exc):
-    traceback.print_exc(file=sys.stderr)
-    error = f"runner error: {type(exc).__name__}: {exc}"
-    return _unrun(reg, job, model, "failed", f"run failed: {error}", error, "error", EXIT_USER)
 
 
 SCRIPT = Path(__file__).resolve().parents[2] / "bin" / "orche.py"
@@ -59,7 +46,7 @@ def _drop_inherited_tag():
     run's ORCHE_RUN_ID, and the other run's end-of-run sweep would kill it. `ps -E` and
     /proc/<pid>/environ show the environment the process was exec'd with, which unsetenv does not
     change, so a process started as the CLI re-execs itself without the tag; in-process (tests) the
-    variable is only removed from os.environ (env_for never passes it on either way)."""
+    variable is only removed from os.environ (headless.env never passes it on either way)."""
     if procs.ENV not in os.environ:
         return
     env = {k: v for k, v in os.environ.items() if k != procs.ENV}
@@ -81,58 +68,38 @@ def cmd_run(args):
     _drop_inherited_tag()
     reg = registry.load()
     cfg = config.load()
-    try:
-        job = runner.resolve(reg, args.unit)
-    except runner.RunError as exc:
-        print(f"orche: {exc}", file=sys.stderr)
-        if exc.job is not None and not args.dry_run:
-            runner.file_unrun(reg, exc.job, None, "failed", f"run failed: {exc}", str(exc), "error")
-        return exc.code
-    try:
-        argv = runner.build_argv(job, cfg, runner.claude_flags(cfg, write=not args.dry_run))
-    except Exception as exc:  # noqa: BLE001 - bad config / unreadable persona: still a pointer
-        if args.dry_run:
-            print(f"orche: runner error: {type(exc).__name__}: {exc}", file=sys.stderr)
-            return EXIT_USER
-        try:
-            model = runner.model_for(job.tier, cfg)
-        except Exception:  # noqa: BLE001
-            model = None
-        return _runner_error(reg, job, model, exc)
-    model = argv[argv.index("--model") + 1]
     if args.dry_run:
-        timeout = job.timebox_s + runner.GRACE_S
+        return _dry_run(args, reg, cfg)
+    out = runs.execute(reg, args.unit, cfg)
+    for line in out.stderr:
+        print(line, file=sys.stderr)
+    if out.record is not None:
+        rec = out.record
         if args.json:
-            print(json.dumps({"unit": job.unit, "to": job.to, "cwd": str(job.worktree), "tier": job.tier,
-                              "timeout_s": timeout, "argv": argv}, indent=2, ensure_ascii=False))
+            print(json.dumps(rec, indent=2, ensure_ascii=False))
         else:
-            print(shlex.join(argv))
-            context = f" + project context {job.context}" if job.context is not None else ""
-            print(f"[dry-run] cwd {job.worktree}; ORCHE_SESSION={job.to}; stdin {job.brief}{context} + runner "
-                  f"footer; timeout {timeout}s", file=sys.stderr)
-        return EXIT_OK
-    runs.prune_logs((cfg.get("runner") or {}).get("log_keep_days"))
+            print(f"ran {args.unit} -> {rec['status']} (model {rec['model']}, cost {rec['cost_usd']}, "
+                  f"turns {rec['num_turns']})")
+    return out.code
+
+
+def _dry_run(args, reg, cfg):
     try:
-        record = runner.run(reg, job, argv, cfg)
-    except runner.FilingError as exc:
-        # Nothing more can be written; the lock stays and, once this process is gone, reconcile
-        # files `failed` "runner died" (the next `orche` command or Main's next prompt).
-        print(f"orche: cannot file the result of {job.unit}: {exc}; the run's lock stays for reconcile",
-              file=sys.stderr)
-        return EXIT_UNFILED
-    except runs.Busy as exc:
-        return _unrun(reg, job, model, "info", f"{exc}, retry with `orche run {job.unit}`", str(exc), "busy",
-                      EXIT_BLOCKED)
-    except runs.Duplicate as exc:
-        # The live run files its own result (its snapshot ignores this `via: runner` pointer) and
-        # writes its own RUN.json; Main, who asked, still gets an answer.
-        return _unrun(reg, job, model, "info", f"not started: {exc}; that run files its own result",
-                      str(exc), "duplicate", EXIT_DUPLICATE, record=False)
-    except Exception as exc:  # noqa: BLE001 - never end a spawned run without a pointer
-        return _runner_error(reg, job, model, exc)
+        p = runs.preview(reg, args.unit, cfg)
+    except runs.RunError as exc:
+        print(f"orche: {exc}", file=sys.stderr)
+        return exc.code
+    except Exception as exc:  # noqa: BLE001 - bad config / unreadable persona
+        print(f"orche: runner error: {type(exc).__name__}: {exc}", file=sys.stderr)
+        return EXIT_USER
+    job, call = p.job, p.call
     if args.json:
-        print(json.dumps(record, indent=2, ensure_ascii=False))
+        print(json.dumps({"unit": job.unit, "to": job.to, "cwd": str(job.worktree), "tier": job.tier,
+                          "timeout_s": call.timeout, "argv": p.argv}, indent=2, ensure_ascii=False))
     else:
-        print(f"ran {job.unit} -> {record['status']} (model {record['model']}, cost {record['cost_usd']}, "
-              f"turns {record['num_turns']})")
-    return EXIT_USER if record["status"] == "failed" else EXIT_OK
+        print(shlex.join(p.argv))
+        context = f" + project context {job.context}" if job.context is not None else ""
+        env = " ".join(f"{k}={v}" for k, v in call.env.items())
+        print(f"[dry-run] cwd {job.worktree}; {env}; stdin {job.brief}{context} + runner "
+              f"footer; timeout {call.timeout}s", file=sys.stderr)
+    return EXIT_OK

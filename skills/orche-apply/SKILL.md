@@ -1,6 +1,6 @@
 ---
 name: orche-apply
-description: Apply ORCHE to one project on request. Use when the user names a project and asks to put it under ORCHE ("put X under ORCHE", "/orche-apply X"), to choose or customise its divisions (including a custom division of their own), to add a division to an already-registered project, or asks what applying ORCHE to a project does. Never apply to every repo at once.
+description: Apply ORCHE to one project on request. Use when the user names a project and asks to put it under ORCHE ("put X under ORCHE", "/orche-apply X"), or says `orche init` (or `/orche-apply`) with no project named, which means the project of the current directory; to choose or customise its divisions (including a custom division of their own), to add a division to an already-registered project, or asks what applying ORCHE to a project does. Never apply to every repo at once.
 ---
 
 # Apply ORCHE to one project
@@ -34,15 +34,27 @@ user names it. `orche apply-all` is never used: some repos are dormant and some 
 Units run headless through the runner (`orche run`), so no division pane is needed for work to happen;
 results arrive as pointers in Main's inbox.
 
-## Procedure
+## Bare `orche init` (no project named)
 
-In chat there is no terminal, so the setup goes through a JSON file. (A user at a terminal can run
+When the user says just `orche init` (or `/orche-apply`) and names no project, the project is the git
+repository holding the current directory, with the defaults. Run `orche init` at once, with no argument:
+no checklist, no dry-run, no question. Pass timeout 600000 (the intake runs last). Then report three
+lines from its output: the `Summary:` line, the intake's one-line result (or `intake skipped: …`), and
+the last line, `Main is open in the main-<proj> tab; type a request there.` If it fails with `not inside
+a git repository`, ask for the project path. A path or a project name means that project.
+
+## Procedure (choosing divisions)
+
+Use this only when the user names divisions, a custom division, a stage or aliases, or asks to choose or
+customise. In chat there is no terminal, so the setup goes through a JSON file. (A user at a terminal can run
 `orche init <project>` themselves and get the same choices as an interactive checklist.)
 
 1. Resolve the project and read its setup: `orche init --print-setup <name>` accepts the Orca display
    name, repo id, path or a registry alias, and prints `{"divisions", "custom", "stage", "aliases"}` — the
-   defaults for a new project, what it has for a registered one. If the name is ambiguous or unknown, list
-   candidates with `orca repo list` and ask.
+   defaults for a new project, what it has for a registered one. A path to a git repository that Orca
+   does not list yet also gets the defaults: `orche init` adds it to Orca (`orca repo add`) before it
+   onboards, so do not ask the user to add it in Orca first. If the name is ambiguous or unknown (not a
+   git path), list candidates with `orca repo list` and ask.
 2. Show the setup as a checklist, defaults filled in, and ask one question:
    ```
    Divisions for <proj>
@@ -67,16 +79,15 @@ In chat there is no terminal, so the setup goes through a JSON file. (A user at 
    "stage": "building", "aliases": ["dw"]}`.
 4. Preview: `orche --dry-run init <name> --setup-file <path>`. Show the user its `Summary:` line (divisions,
    stage, worktree count, panes) and the files, worktrees and panes it would create. Wait for a yes.
-5. Apply in two steps, so no Bash call waits on the intake under the default 2-minute tool timeout:
-   - `orche init <name> --setup-file <path> --no-intake` (the same command as the preview, without
-     `--dry-run`, plus `--no-intake`). Verify with `orche status <proj>` (the project appears with
-     its division names, custom ones included, `○` = dormant) and `orche depts <proj>` (one row per
-     division, also by name). Only the status-line cell uses the label (`Design` → `DES○`).
-   - `orche intake <proj>` with the Bash tool's `timeout` raised to 600000 ms (10 minutes; the sweep
-     stops itself after 9 and prints nothing until it ends). Tell the user its one-line result, e.g.
-     `intake <proj>: 4 divisions, $0.42, 38 s (claude-sonnet-5-5)`, or the failure line and that
-     `orche intake <proj>` can be re-run.
-6. Hand over in three lines: where the Main pane is (Orca tab `main-<proj>`), that the first request goes
+5. Apply with one call: `orche init <name> --setup-file <path>` (the same command as the preview,
+   without `--dry-run`). Pass timeout 600000 — the intake can take up to 9 minutes (it runs last and
+   prints nothing until it ends). Tell the user the intake's one-line result, e.g.
+   `intake <proj>: 4 divisions, $0.42, 38 s (claude-sonnet-5-5)`, or the `intake skipped: …` line and
+   that `orche intake <proj>` can be re-run. Verify with `orche status <proj>` (the project appears with
+   its division names, custom ones included, `○` = dormant) and `orche depts <proj>` (one row per
+   division, also by name). Only the status-line cell uses the label (`Design` → `DES○`).
+6. Hand over in three lines: Orca has switched to the Main tab (`main-<proj>`; if init warned that it could
+   not switch, `orche wake main-<proj>` opens or switches to it), that the user types the first request
    there in plain language (Main echoes `Understood: source = <proj>, output = <proj>` and ends with a
    dispatch block), and that `[drain]` shows finished work.
 
@@ -97,6 +108,7 @@ In chat there is no terminal, so the setup goes through a JSON file. (A user at 
 
 ## Do not
 
-- Do not run `orche apply-all`, and do not apply to a project the user did not name in this request.
+- Do not run `orche apply-all`, and do not apply to a project the user did not name in this request (a
+  bare `orche init` names the repository holding the current directory).
 - Do not wake divisions or create feature agents during apply unless asked.
 - Do not commit the generated files; the user decides whether they belong in the repo.

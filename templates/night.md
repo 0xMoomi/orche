@@ -5,6 +5,8 @@ Autonomous-run contract. Duration is never a completion condition: the run ends 
 predicate exits 0 or the escape hatch fires. Launch runs through an Orca automation.
 The Stop hook runs `.orche/night/<session>.predicate.sh` after each turn: non-zero -> keep going,
 zero -> stop and report. Never weaken the predicate during the run.
+The run must be identified (ORCHE_SESSION=<session>, or the member's own worktree); an unidentified
+session runs no predicate.
 -->
 
 ## GOAL

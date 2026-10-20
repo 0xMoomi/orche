@@ -5,7 +5,7 @@ Canonical ledger: ORCHE_HOME/ledger/<proj>.tsv, one file per project, columns
 append-only and file order is chronological, so the newest row (last in the file)
 wins for a key. `<repo>/docs/LEDGER.tsv` is only an export of this file.
 
-The Stop hook's completion gate uses `row_for_sha` and `satisfies`.
+The done gate (donegate.py) uses `row_for_sha` and `satisfies`.
 """
 import datetime as _dt
 import re
@@ -125,7 +125,7 @@ def _same_commit(a: str, b: str) -> bool:
 def row_for_sha(proj, sha):
     """Newest row whose sha matches `sha` (either may be abbreviated, >= 7 chars), else None.
 
-    Used by the completion gate, which always passes a full HEAD sha.
+    Used by the done gate, which always passes a full HEAD sha.
     """
     if not sha:
         return None

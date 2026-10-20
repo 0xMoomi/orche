@@ -9,7 +9,7 @@ import sys
 
 from pathlib import Path
 
-from . import janitor, registry, units, util
+from . import janitor, registry, roster, units, util
 from .janitor import graveyard, rules
 
 EXIT_OK, EXIT_USER, EXIT_NOT_FOUND, EXIT_BLOCKED = 0, 1, 2, 3
@@ -29,14 +29,14 @@ def _fail(code, msg):
     return code
 
 
-def _resolve_project(reg, explicit, where):
+def _resolve_project(reg, r, explicit, where):
     if explicit:
         found = registry.project(reg, explicit)
         return found[0] if found else None
-    return units.project_from_cwd(reg, where)
+    return r.place(where).project
 
 
-def _main_transcript_project(reg, session):
+def _main_transcript_project(reg, r, session):
     """Project key when `<claude_projects>/*/<session>.jsonl` starts in a registered main checkout."""
     from .janitor import discover
     root = janitor.configured_dir(janitor.settings()["claude_projects"])
@@ -46,7 +46,7 @@ def _main_transcript_project(reg, session):
     for path in sorted(Path(root).glob(f"*/{session}.jsonl")):
         cwd = discover.first_cwd(path)
         if cwd and rules.main_checkout_cwd(reg, recs, cwd):
-            return units.project_from_cwd(reg, cwd) or "a registered project"
+            return r.place(cwd).project or "a registered project"
     return None
 
 
@@ -54,15 +54,16 @@ def cmd_discard(args):
     reg = registry.load()
     target = args.target
     explicit_session = None
-    unit = units.find_unit(reg, target)
+    r = roster.Roster(reg)
+    unit = m if (m := r.member(target)) and m.owns_worktree else None
     if unit is not None:
-        if unit.entry.get("status") != "retired":
-            return _fail(EXIT_BLOCKED, f"{target} is {unit.entry.get('status')}; retire the unit first")
+        if unit.status != "retired":
+            return _fail(EXIT_BLOCKED, f"{target} is {unit.status}; retire the unit first")
         key, ptr = unit.project, f"session:{target}"
     elif os.path.lexists(target):
         path = os.path.join(os.path.realpath(os.path.dirname(os.path.abspath(target))),
                             os.path.basename(os.path.abspath(target)))
-        key = _resolve_project(reg, args.project, path)
+        key = _resolve_project(reg, r, args.project, path)
         if key is None:
             return _fail(EXIT_USER, f"cannot tell which project owns {path}; pass --project")
         root = units.project_root(reg, key)
@@ -71,16 +72,16 @@ def cmd_discard(args):
         rel = os.path.relpath(path, root) if root and units.is_within(path, root) else path
         key, ptr = key, f"path:{rel}"
     else:
-        if target in units.all_sessions(reg):
+        if r.member(target) is not None:
             return _fail(EXIT_BLOCKED, f"{target} is a registered project session")
         if any(ch.isspace() for ch in target) or "/" in target:
             return _fail(EXIT_NOT_FOUND, f"no such path or session: {target}")
-        owner = _main_transcript_project(reg, target)
+        owner = _main_transcript_project(reg, r, target)
         if owner:
             return _fail(EXIT_BLOCKED, f"{target} is a Main/Liaison transcript (its cwd is {owner}'s main "
                                        "checkout); refusing")
         explicit_session = target
-        key = _resolve_project(reg, args.project, os.getcwd())
+        key = _resolve_project(reg, r, args.project, os.getcwd())
         if key is None:
             return _fail(EXIT_USER, "cannot tell the project; pass --project")
         ptr = f"session:{target}"
@@ -89,7 +90,7 @@ def cmd_discard(args):
     root = units.project_root(reg, key)
     if root is None or not root.is_dir():
         return _fail(EXIT_NOT_FOUND, f"project {key} has no checkout on disk")
-    actor = args.by or units.actor()
+    actor = args.by or roster.actor()
     recovery = "pending: next `orche janitor run`"
     line = graveyard.row(units.now().date().isoformat(), ptr, args.why, recovery, actor)
     if not args.dry_run:

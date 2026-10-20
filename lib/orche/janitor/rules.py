@@ -105,11 +105,11 @@ def _wip(ctx, root, ignore=None):
     lines = ctx.wip[root]
     if lines is None:
         return "git-unknown"
-    lines = [ln for ln in lines if not is_record_file(discover.porcelain_path(ln))]
+    lines = [ln for ln in lines if not is_record_file(units.porcelain_path(ln))]
     if ignore:
         ign = ignore.rstrip("/")
-        lines = [ln for ln in lines if not (discover.porcelain_path(ln) == ign
-                                            or discover.porcelain_path(ln).startswith(ign + "/"))]
+        lines = [ln for ln in lines if not (units.porcelain_path(ln) == ign
+                                            or units.porcelain_path(ln).startswith(ign + "/"))]
     return f"wip:{len(lines)}" if lines else None
 
 

@@ -2,6 +2,7 @@
 import datetime as dt
 import io
 import json
+import os
 import shutil
 import tempfile
 import unittest
@@ -9,7 +10,7 @@ from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
 
 import support
-from orche import metrics
+from orche import metrics, runs
 from test_registry import load_cli
 
 TRANSCRIPTS = support.FIXTURES / "transcripts"
@@ -109,21 +110,48 @@ class MetricsTest(support.TempHomeCase):
         self.assertIn("AskUserQuestion: 1", out.getvalue())
 
     def run_records(self, repo, now):
-        """Three RUN.json records in the window (one failed) and one older than 30 days."""
-        for i, (status, cost, age) in enumerate((("done", 0.2, 1), ("failed", 1.0, 2), ("info", 0.4, 3),
-                                                 ("done", 9.0, 40))):
+        """Three RUN.json records in the window (one failed; two Opus medium, one Sonnet without an
+        effort) and one older than 30 days."""
+        opus, sonnet = ("claude-opus-5-5", "medium"), ("claude-sonnet-5-5", None)
+        for i, (status, cost, age, (model, effort)) in enumerate((
+                ("done", 0.2, 1, opus), ("failed", 1.0, 2, opus), ("info", 0.4, 3, sonnet),
+                ("done", 9.0, 40, opus))):
             folder = repo / ".orche" / "units" / f"acme-u-20261016-{i + 1}"
             folder.mkdir(parents=True)
             (folder / "RUN.json").write_text(json.dumps({
-                "status": status, "cost_usd": cost, "finished": (now - dt.timedelta(days=age)).isoformat()}))
+                "status": status, "cost_usd": cost, "model": model, "effort": effort,
+                "finished": (now - dt.timedelta(days=age)).isoformat()}))
 
     def test_runner_summary_sums_run_records_in_the_window(self):
         repo = self.root.parent / "acme"
         self.run_records(repo, NOW)
-        self.assertEqual(metrics.runner_summary([repo], days=30, now=NOW),
+        self.assertEqual(metrics.runner_summary(runs.records([repo]), days=30, now=NOW),
                          {"units": 3, "cost_usd": 1.6, "median_cost_usd": 0.4, "failures": 1,
-                          "by_status": {"done": 1, "failed": 1, "info": 1}})
-        self.assertEqual(metrics.runner_summary([repo / "nope"], days=30, now=NOW)["units"], 0)
+                          "by_status": {"done": 1, "failed": 1, "info": 1},
+                          "by_model_effort": {
+                              "claude-opus-5-5 medium": {"units": 2, "cost_usd": 1.2, "median_cost_usd": 0.6,
+                                                         "failures": 1},
+                              "claude-sonnet-5-5 ?": {"units": 1, "cost_usd": 0.4, "median_cost_usd": 0.4,
+                                                      "failures": 0}}})
+        self.assertEqual(metrics.runner_summary(runs.records([repo / "nope"]), days=30, now=NOW)["units"], 0)
+
+    def test_records_skips_an_unreadable_run_json(self):
+        """A RUN.json that is a directory or cannot be read is skipped, as the old metrics scan did."""
+        repo = self.root.parent / "acme"
+        self.run_records(repo, NOW)
+        units = repo / ".orche" / "units"
+        (units / "acme-u-20261016-8" / "RUN.json").mkdir(parents=True)
+        unreadable = units / "acme-u-20261016-9" / "RUN.json"
+        unreadable.parent.mkdir()
+        unreadable.write_text(json.dumps({"status": "done", "cost_usd": 5.0, "finished": NOW.isoformat()}))
+        os.chmod(unreadable, 0)
+        try:
+            found = runs.records([repo])
+            blocked = not os.access(unreadable, os.R_OK)
+        finally:
+            os.chmod(unreadable, 0o644)
+        self.assertEqual(sorted(rec["cost_usd"] for rec in found),
+                         [0.2, 0.4, 1.0, 9.0] if blocked else [0.2, 0.4, 1.0, 5.0, 9.0])
 
     def test_cli_runner_section_from_registered_projects(self):
         from orche import registry
@@ -140,8 +168,10 @@ class MetricsTest(support.TempHomeCase):
         out = io.StringIO()
         with redirect_stdout(out):
             cli.main(["metrics", "--root", str(self.root)])
-        self.assertEqual(out.getvalue().splitlines()[-2:], [
-            "Runner (orche run, RUN.json):", "  units 3, cost $1.60, median $0.40/unit, failures 1"])
+        self.assertEqual(out.getvalue().splitlines()[-4:], [
+            "Runner (orche run, RUN.json):", "  units 3, cost $1.60, median $0.40/unit, failures 1",
+            "  claude-opus-5-5 medium: units 2, cost $1.20, median $0.60/unit, failures 1",
+            "  claude-sonnet-5-5 ?: units 1, cost $0.40, median $0.40/unit, failures 0"])
 
     def test_missing_root_is_empty(self):
         m = metrics.compute(self.root / "nope", days=30, now=NOW)

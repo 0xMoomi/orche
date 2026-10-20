@@ -20,7 +20,7 @@ import sys
 from contextlib import contextmanager
 from pathlib import Path
 
-from .. import config, log, mask, paths, registry, shell, units, util
+from .. import config, log, mask, paths, registry, roster, shell, util
 from . import ENVS, VALUE_PLACEHOLDER, SecretError, backends_gcp, backends_gh, backends_keychain, backends_vercel
 
 NAME_RX = re.compile(r"^[A-Z][A-Z0-9_]*$")
@@ -122,7 +122,7 @@ def resolve_project(reg, name=None, cwd=None) -> str:
         if hit is None:
             raise SecretError(f"unknown project {name!r}", code=2)
         return hit[0]
-    key = units.project_from_cwd(reg, cwd or os.getcwd())
+    key = roster.Roster(reg).place(cwd or os.getcwd()).project
     if not key:
         raise SecretError("cannot tell the project from cwd; pass --project")
     return key
@@ -236,7 +236,7 @@ def mark_filled(rid: str) -> dict:
 
 
 def audit(action, project="", name="", env="", backend="", actor=None, request_id="") -> None:
-    row = [util.now_iso(), action, project, name, env, backend, actor or units.actor(), request_id]
+    row = [util.now_iso(), action, project, name, env, backend, actor or roster.actor(), request_id]
     line = "\t".join(str(v or "-").translate(_BREAKS) for v in row)
     with open(audit_path(), "a", encoding="utf-8") as fh:
         fh.write(line + "\n")

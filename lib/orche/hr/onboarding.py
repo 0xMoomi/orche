@@ -9,8 +9,9 @@ import json
 import os
 from pathlib import Path
 
-from .. import cmd_sleep_wake, log, orca, shell, templates, units, util
-from . import dry
+from .. import brief, log, orca, paths, registry, shell, templates, units, util
+from ..cli import dry
+from . import book, panes
 
 DIVISION_MODELS = {
     "rnd": ("claude-opus-5-5", "high"),
@@ -29,8 +30,8 @@ ROLE_TEXT = {
 }
 
 
-EXCLUDE_LINE = ".claude/settings.local.json"
-UNITS_EXCLUDE = ".orche/units/"   # briefs/reports: never tracked, never keep the main checkout dirty
+EXCLUDE_LINE = units.SETTINGS_LOCAL
+UNITS_EXCLUDE = brief.UNITS + "/"   # briefs/reports: never tracked, never keep the main checkout dirty
 EXCLUDE_LINES = (EXCLUDE_LINE, UNITS_EXCLUDE)
 
 
@@ -172,7 +173,7 @@ def write_persona(dirs, agent, role, *, project, name, session, model, effort, m
     text, from_template = persona_text(role, project=project, name=name, session=session, model=model,
                                        effort=effort, custom=custom)
     if not from_template and not dry_run:
-        units.hr_log(f"persona template missing for {role} {name}; wrote a minimal persona for {agent}")
+        book.log(f"persona template missing for {role} {name}; wrote a minimal persona for {agent}")
     written = []
     for d in dirs:
         target = Path(d) / ".claude" / "agents" / f"{agent}.md"
@@ -188,20 +189,56 @@ def write_persona(dirs, agent, role, *, project, name, session, model, effort, m
     return written
 
 
-def open_pane(worktree_id, session, command, *, dry_run=False):
-    return orca.terminal("create", "--worktree", f"id:{worktree_id}", "--title", session,
-                         "--command", command, dry_run=dry_run)
+def session_name(kind, key, name="") -> str:
+    """The session of a unit or project pane (SPEC §14.8): div-<key>-<name>, feat-<key>-<name>,
+    main-<key>, liaison-<key>."""
+    return f"{kind}-{key}" if kind in ("main", "liaison") else f"{kind}-{key}-{name}"
 
 
-def onboard(*, project, repo_root, repo_id, kind, name, session, worktree_name, branch, model, effort,
-            wake, parent=None, existing=None, on_created=None, dry_run=False, custom=None) -> dict:
+def session_owner(reg: dict, key: str, session: str):
+    """The other project that has `session`, or reserves it, else None. Session names are unique
+    registry-wide (Roster.member resolves a name to one member): another project holds every session
+    it has (main, liaison, divisions, features, retired ones too) and reserves `div-<other>-<d>` for
+    each standard division and each custom definition, onboarded or not."""
+    for other, proj in reg.get("projects", {}).items():
+        if other == key:
+            continue
+        held = {session_name("div", other, d) for d in (*registry.DIVISIONS, *(proj.get("custom_divisions") or {}))}
+        held.update(s for s in (proj.get("main_session"), proj.get("liaison_session")) if s)
+        for div in (proj.get("divisions") or {}).values():
+            held.update(s for s in [div.get("session")] + [f.get("session") for f in div.get("features", [])] if s)
+        if session in held:
+            return other
+    return None
+
+
+def write_project_marker(key, repo_root, *, dry_run):
+    """`<repo>/.orche/project` = the project key (one line): the status line's fast path walks up to it."""
+    marker = paths.project_local(repo_root) / "project"
+    if dry_run:
+        dry(f"write {marker} ({key})")
+        return marker
+    try:
+        current = marker.read_text(encoding="utf-8") if marker.is_file() else None
+    except OSError:
+        current = None
+    if current != key + "\n":
+        util.atomic_write(marker, key + "\n")
+    return marker
+
+
+def onboard(*, project, repo_root, repo_id, kind, name, model, effort, wake, parent=None, existing=None,
+            on_created=None, dry_run=False, custom=None) -> dict:
     """Create one unit's worktree, files and (if `wake`) pane. Returns the partial registry entry.
 
+    The session is session_name(kind, project, name), the worktree name `<kind>-<name>` and the
+    fallback branch `<kind>/<name>`.
     `custom` ({"label", "charter"}) marks a custom division: its persona comes from `div-custom.md`.
     `existing` (an `onboarding` registry entry) resumes: only the file steps and the pane run.
-    Otherwise an Orca worktree already named `worktree_name` is adopted, else one is created,
+    Otherwise an Orca worktree already named `<kind>-<name>` is adopted, else one is created,
     and `on_created({"worktree", "branch"})` lets the caller save a provisional entry at once.
     """
+    session, worktree_name, branch = session_name(kind, project, name), f"{kind}-{name}", f"{kind}/{name}"
     if existing:
         wt_id, branch = existing["worktree"], existing["branch"]
         wt_path = units.worktree_path(wt_id)
@@ -229,7 +266,7 @@ def onboard(*, project, repo_root, repo_id, kind, name, session, worktree_name, 
     write_persona([repo_root, wt_path], session, role, project=project, name=name, session=session,
                   model=model, effort=effort, main_root=repo_root, dry_run=dry_run, custom=custom)
     if wake:
-        open_pane(wt_id, session, cmd_sleep_wake.pane_command(session, resume=False), dry_run=dry_run)
+        panes.open_pane(wt_id, session, panes.pane_command(session, resume=False), dry_run=dry_run)
     now = util.now_iso()
     return {"status": "active" if wake else "dormant", "worktree": wt_id, "branch": branch,
-            "session": session, "model": model, "effort": effort, "last_activity": now}
+            "session": session, "model": model, "last_activity": now}

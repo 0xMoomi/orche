@@ -14,7 +14,9 @@ from pathlib import Path
 from unittest import mock
 
 import support
-from orche import dispatch, procs, runner, runs, shell
+from orche import headless, inbox, procs, runs, shell
+from orche.runs import filing
+from orche.runs import job as runner
 from test_runner import REAL_POPEN, RunnerCase, alive
 
 LIB = str(support.ROOT / "lib")
@@ -302,8 +304,8 @@ class EnvSweepTest(SweepCase):
     def test_the_hook_spawn_never_hands_its_run_id_to_a_new_run(self):
         seen = []
         with mock.patch.dict(os.environ, {procs.ENV: rid("outer")}), \
-                mock.patch.object(dispatch.subprocess, "Popen", lambda argv, **kw: seen.append(kw["env"])):
-            dispatch.spawn_run("acme-coupon-field-20261018-1")
+                mock.patch.object(procs.subprocess, "Popen", lambda argv, **kw: seen.append(kw["env"])):
+            runs.start("acme-coupon-field-20261018-1")
         self.assertNotIn(procs.ENV, seen[0])
 
 
@@ -390,8 +392,8 @@ class ReconcileTest(SweepCase):
         unit = self.brief()
         pid = self.dead_pid()
         self.put_lock(unit,pid, child_pid=pid)
-        runner.inbox.write(runner.inbox.make(unit, "div-acme-build", "main-acme", "blocked", summary="real",
-                                             via="runner"))
+        inbox.write(inbox.make(unit, "div-acme-build", "main-acme", "blocked", summary="real",
+                               via="runner"))
         [act] = self.reconcile()
         self.assertEqual((act["action"], act["removed"]), ("stale-lock", True))
         self.assertEqual(self.locks(), [])
@@ -402,15 +404,15 @@ class ReconcileTest(SweepCase):
     def test_an_older_runner_pointer_does_not_count(self):
         """A runner pointer from before the lock's `started` belongs to an earlier run."""
         unit = self.brief()
-        old = runner.inbox.make(unit, "div-acme-build", "main-acme", "blocked", summary="earlier run", via="runner")
+        old = inbox.make(unit, "div-acme-build", "main-acme", "blocked", summary="earlier run", via="runner")
         old["at"] = "2026-01-01T09:04:59+00:00"
-        runner.inbox.write(old)
+        inbox.write(old)
         self.put_lock(unit,self.dead_pid())
         self.assertEqual([a["action"] for a in self.reconcile()], ["reconciled"])
         self.assertEqual(sorted(p["status"] for p in self.from_target()), ["blocked", "failed"])
 
     def test_a_live_verified_run_is_left_alone_and_another_program_is_lost(self):
-        unit, other = self.brief(n=1), self.brief(n=2)
+        unit, other = self.brief(), self.brief()
         live = self.fake_run(unit)
         self.put_lock(unit,live.pid)
         stranger = self.sleeper()
@@ -427,7 +429,7 @@ class ReconcileTest(SweepCase):
         """The prompt hook's cheap path: no `ps` at all. A dead run is filed now (the pointer is what
         Main must see) and frees its slot and target at once; its sweep waits, as `<run_id>.sweep`,
         for a reconcile with time."""
-        unit, other = self.brief(n=1), self.brief(n=2)
+        unit, other = self.brief(), self.brief()
         pid = self.dead_pid()
         run = rid(unit)
         self.put_lock(unit, pid, run_id=run, child_pid=pid)
@@ -454,7 +456,7 @@ class ReconcileTest(SweepCase):
         SWEEP_TRIES in a row (logged) it is settled by kill -0: kept while its claude's pid lives
         (doctor warns), dropped once it is gone. Nothing is ever signalled without a table."""
         from orche.install import doctor
-        unit, other = self.brief(n=1), self.brief(n=2)
+        unit, other = self.brief(), self.brief()
         claude = self.sleeper()
         run = rid(unit)
         self.put_lock(unit, self.dead_pid(), run_id=run, child_pid=claude.pid, pgid=claude.pid)
@@ -500,7 +502,7 @@ class ReconcileTest(SweepCase):
     def test_a_filed_lock_left_behind_holds_no_slot(self):
         """A dead lock already marked filed (its rename failed earlier) never makes a run wait: the
         run settles it (into its pending sweep) and takes the slot and the target."""
-        unit, other = self.brief(n=1), self.brief(n=2)
+        unit, other = self.brief(), self.brief()
         run = rid(unit)
         self.put_lock(unit, self.dead_pid(), run_id=run, reconciled="reconciled")
         with mock.patch.object(runs, "reconcile", return_value=[]):       # only _try_acquire looks
@@ -551,7 +553,7 @@ class ReconcileTest(SweepCase):
         unit = self.brief()
         run = rid(unit)
         since = time.time_ns()
-        claude = self.hidden_claude(runs.mcp_config_path(run))
+        claude = self.hidden_claude(headless.marker_path(run))
         self.put_lock(unit, self.dead_pid(), run_id=run, child_pid=claude.pid, pgid=claude.pid, started_ns=since)
         [act] = self.reconcile()
         self.assertIn(claude.pid, act["killed"])
@@ -564,14 +566,14 @@ class ReconcileTest(SweepCase):
         the lock's pgid AND started at or after the lock's `started_ns`. The old shared path
         (`runner/empty-mcp.json`) or another run's path, with a matching pgid and start time, is
         never enough; the real lost claude is killed."""
-        units = [self.brief(n=n) for n in range(1, 7)]
+        units = [self.brief() for _ in range(1, 7)]
         rids = [rid(unit) for unit in units]
-        mine = [runs.mcp_config_path(r) for r in rids]
-        other_run = self.execd(self.child([sys.executable, *SLEEP, *runner.claude_marker(rids[0]).split(" ", 1)],
+        mine = [headless.marker_path(r) for r in rids]
+        other_run = self.execd(self.child([sys.executable, *SLEEP, *headless.marker(rids[0]).split(" ", 1)],
                                           start_new_session=True, env=untagged_env(**{procs.ENV: rid("other")})))
         older, foreign = self.hidden_claude(mine[1]), self.hidden_claude(mine[2])
         shared = self.hidden_claude(self.home / "runner" / "empty-mcp.json")
-        elsewhere = self.hidden_claude(runs.mcp_config_path(rid(units[4])))     # another run of the unit
+        elsewhere = self.hidden_claude(headless.marker_path(rid(units[4])))     # another run of the unit
         cases = [(other_run, {"pgid": other_run.pid, "started_ns": 1}),
                  (older, {"pgid": older.pid, "started_ns": time.time_ns() + 60 * 10 ** 9}),
                  (foreign, {"pgid": foreign.pid + 1, "started_ns": 1}),
@@ -650,7 +652,7 @@ class ReconcileTest(SweepCase):
         """M-5 for a run that executed: nothing is filed, so RUN.json never says it was."""
         unit = self.brief()
         self.reply("STATUS: blocked\nx")
-        with mock.patch.object(runner, "_recipient", return_value=None):
+        with mock.patch.object(filing, "recipient", return_value=None):
             self.assertEqual(self.orche("run", unit)[0], 0)
         self.assertEqual((self.run_record(unit)["status"], self.run_record(unit)["pointer_filed"]), ("blocked", False))
         self.assertEqual(self.pointers("main-acme"), [])
@@ -661,7 +663,7 @@ class ReconcileTest(SweepCase):
         """M-6: the worker ran `orche report` (no `via: runner`) and then `orche run` was killed:
         Main already has this run's pointer, so no second `failed` "runner died"."""
         unit = self.brief()
-        runner.inbox.write(runner.inbox.make(unit, "div-acme-build", "main-acme", "done", summary="mine"))
+        inbox.write(inbox.make(unit, "div-acme-build", "main-acme", "done", summary="mine"))
         self.put_lock(unit, self.dead_pid())
         [act] = self.reconcile()
         self.assertEqual((act["action"], act["filed"]), ("stale-lock", True))
@@ -687,7 +689,7 @@ class ReconcileTest(SweepCase):
 
     def test_a_dead_lock_met_while_waiting_is_filed_before_its_slot_is_taken(self):
         """acquire(): a run that died while another waited is reconciled, not dropped unfiled."""
-        unit, waiting = self.brief(n=1), self.brief(n=2)
+        unit, waiting = self.brief(), self.brief()
         holder = self.fake_run(unit)
         self.put_lock(unit,holder.pid)
         polls = []
@@ -713,16 +715,16 @@ class ReconcileTest(SweepCase):
         lock = runs.acquire("acme", unit, {"to": "div-acme-build"}, 1, wait_s=0)
         runs.release(lock)
         self.assertEqual(self.locks(), [])
-        a, b = self.brief(n=2), self.brief(n=3)
+        a, b = self.brief(), self.brief()
         self.put_lock(a, self.dead_pid())
         self.put_lock(b, self.dead_pid())
-        real = runner.file_lost
+        real = filing.lost
 
-        def file_lost(reg, data):
+        def lost(reg, proj, data):
             if data["unit"] == a:
                 raise RuntimeError("boom")
-            return real(reg, data)
-        with mock.patch.object(runner, "file_lost", file_lost), \
+            return real(reg, proj, data)
+        with mock.patch.object(filing, "lost", lost), \
                 mock.patch.object(runs, "_drop_target", side_effect=[ValueError("bad"), None]):
             acts = self.reconcile()
         self.assertEqual([(x["unit"], x["action"]) for x in acts], [(b, "reconciled")])
@@ -731,7 +733,7 @@ class ReconcileTest(SweepCase):
     def test_status_and_the_other_commands_reconcile_but_never_on_a_dry_run(self):
         for n, argv in enumerate((["status"], ["depts"], ["metrics", "--root", str(self.root)],
                                   ["janitor", "run"]), start=1):
-            unit = self.brief(n=n)
+            unit = self.brief()
             pid = self.dead_pid()
             self.put_lock(unit,pid)
             code, _, err = self.orche("--dry-run", *argv)
@@ -755,7 +757,7 @@ class ReconcileTest(SweepCase):
         self.assertEqual(self.locks(), [])            # budget left for the sweep: dropped too
         self.assertEqual(list(self.folder().glob("*.sweep")), [])
         # No budget at all: still filed and shown (kill -0 + file writes); the slot is free, the sweep waits.
-        other = self.brief(n=2)
+        other = self.brief()
         run = rid(other)
         self.put_lock(other, self.dead_pid(), run_id=run)
         res = self.run_hook("report_inject.py", self.payload("prompt.json"), ORCHE_SESSION="main-acme",
@@ -794,7 +796,7 @@ class ReconcileTest(SweepCase):
         """M-1: every `ps` hangs (Linux: and the /proc walk blocks). A live lock (unverifiable: left
         alone) and a dead one (filed, its sweep pending): the hook still answers within its 3 s and
         shows the lost run."""
-        unit, other = self.brief(n=1), self.brief(n=2)
+        unit, other = self.brief(), self.brief()
         live = self.fake_run(other)
         self.put_lock(other, live.pid, to="div-other")
         pid = self.dead_pid()
@@ -811,7 +813,7 @@ class ReconcileTest(SweepCase):
     def test_a_slow_ps_and_a_child_that_ignores_sigterm_stay_inside_the_hook_budget(self):
         """M-1 (the review's 2.98 s case): `ps` takes 0.8 s, one live lock, one dead lock whose tagged
         leftover ignores SIGTERM. The wait before SIGKILL gets only what the table read left."""
-        unit, other = self.brief(n=1), self.brief(n=2)
+        unit, other = self.brief(), self.brief()
         live = self.fake_run(other)
         self.put_lock(other, live.pid, to="div-other")
         run = rid(unit)
@@ -846,7 +848,7 @@ class DiskTest(RunnerCase):
 
     def test_a_run_prunes_only_old_run_logs(self):
         folder = self.logs(old_log=20, new_log=2, old_txt=20)
-        mcp = {name: runs.mcp_config_path(rid(name)) for name in ("old", "new")}   # leaked by unreconciled runs
+        mcp = {name: headless.marker_path(rid(name)) for name in ("old", "new")}   # leaked by unreconciled runs
         for name, days in (("old", 20), ("new", 2)):
             mcp[name].parent.mkdir(parents=True, exist_ok=True)
             mcp[name].write_text('{"mcpServers": {}}')

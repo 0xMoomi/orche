@@ -32,18 +32,17 @@ NotebookEdit, WebFetch, WebSearch, Task and Agent, plus Read deny rules (they co
 Glob) for `.env*`, `secrets/`, keys and credential files, relative to the working directory and as
 `//**/…` absolute twins, and for the credential stores under `~` (`~/.ssh/**`, `~/.aws/**`, …). A
 blanket `Read(~/**)` or `Read(//**)` would also deny the repository itself (deny beats allow, and a
-rule has no "except"), so confinement to the checkout comes from `--restricted` instead, when the
-installed claude lists it (`--help`: removes the code-running tools and WebFetch, ignores
-user/project/local settings, confines the file tools to the working directories); `--tools
-Read,Glob,Grep` likewise when listed. Then the persona's hard rules (never open them, never quote a
-credential, env variable names only) and mask.redact over every string of the result before
-anything is written.
+rule has no "except"), so confinement to the checkout comes from `--restricted` instead, always
+passed (removes the code-running tools and WebFetch, ignores user/project/local settings, confines
+the file tools to the working directories), with `--tools Read,Glob,Grep`. Then the persona's
+hard rules (never open them, never quote a credential, env variable names only) and mask.redact
+over every string of the result before anything is written.
 
-The worker runs through runner.run_claude (filtered environment, per-run empty `--mcp-config`,
-timeout, process-group kill, sweeps), one intake per project at a time (an flock on
-ORCHE_HOME/intake/<proj>.lock). `stale()` decides `--if-stale`: no stamp, HEAD moved at least
-`intake.refresh_commits` commits past the stamp's (or the stamp's head is no ancestor), or the
-stamp is `intake.refresh_days` old.
+The worker runs through headless.run (sealed context: filtered environment without the caller's
+identity, per-run empty `--mcp-config`, timeout, process-group kill, sweeps), one intake per
+project at a time (an flock on ORCHE_HOME/intake/<proj>.lock). `stale()` decides `--if-stale`: no
+stamp, HEAD moved at least `intake.refresh_commits` commits past the stamp's (or the stamp's head
+is no ancestor), or the stamp is `intake.refresh_days` old.
 """
 import contextlib
 import datetime as _dt
@@ -58,7 +57,7 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 
-from . import dispatch, log, mask, paths, procs, registry, runner, runs, shell, templates, util
+from . import headless, log, mask, paths, procs, registry, shell, templates, util
 
 EXIT_OK, EXIT_USER, EXIT_NOT_FOUND, EXIT_BLOCKED = 0, 1, 2, 3
 PERSONA = paths.PLUGIN_ROOT / "templates" / "personas" / "intake.md"
@@ -175,6 +174,29 @@ def context_path(root, name) -> Path:
     return paths.project_local(root) / "div" / name / "CONTEXT.md"
 
 
+_CONTEXT_HEAD = re.compile(r"^# Context for .*? — intake at (\S+), (\S+)\s*$")
+CONTEXT_SLACK = 200        # a CONTEXT.md body is read up to max_chars + this (a hand-edited file)
+
+
+def read_context(path, cfg):
+    """(sha7, date, body) of a CONTEXT.md (write_files' header; '?' each when it is missing), the body
+    cut at max_chars + CONTEXT_SLACK and marked "\n… (truncated)"; None when unreadable or empty."""
+    try:
+        text = Path(path).read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError):
+        return None
+    lines = text.splitlines()
+    m = _CONTEXT_HEAD.match(lines[0]) if lines else None
+    sha, date = (m.group(1), m.group(2)) if m else ("?", "?")
+    body = "\n".join(lines[1:] if m else lines).strip("\n")
+    if not body.strip():
+        return None
+    limit = int(settings(cfg).get("max_chars") or 2000) + CONTEXT_SLACK
+    if len(body) > limit:
+        body = body[:limit].rstrip() + "\n… (truncated)"
+    return sha, date, body
+
+
 def read_stamp(root):
     try:
         data = util.read_json(stamp_path(root), default=None)
@@ -239,30 +261,8 @@ class Plan:
     root: Path
     head: str
     divisions: list
-    argv: list
+    call: headless.Call
     stdin: str
-    timeout: int
-    model: str
-    run_id: str
-
-
-def build_argv(cfg, flags, run_id) -> list:
-    """claude's argv. `--restricted` (when this claude lists it) replaces `--setting-sources
-    project`: it ignores the user/project/local settings files (so no project hook runs during the
-    sweep) and confines the file tools to the checkout."""
-    s = settings(cfg)
-    argv = [cfg.get("claude_bin") or "claude", "-p", "--model", s.get("model") or "claude-sonnet-5-5",
-            "--output-format", "json", "--max-turns", str(int(s.get("max_turns") or 30))]
-    argv += ["--restricted"] if flags.get("restricted") else ["--setting-sources", "project"]
-    if flags.get("tools"):
-        argv += ["--tools", TOOLS]
-    argv += ["--strict-mcp-config", runner.MCP_FLAG, str(runs.mcp_config_path(run_id)),
-             "--allowedTools", TOOLS, "--disallowedTools", DENIED, "--no-session-persistence"]
-    if flags.get("system_prompt_file"):
-        argv += ["--append-system-prompt-file", str(PERSONA)]
-    else:   # a claude without the file flag: the persona goes inline
-        argv += ["--append-system-prompt", PERSONA.read_text(encoding="utf-8")]
-    return argv
 
 
 # ---- repository facts (what a shell would have told the worker) -------------
@@ -394,19 +394,21 @@ def request(key, root, head, divs, max_chars, today) -> str:
     return head_text + facts + "\n" + tail_text
 
 
-def plan(reg, name, cfg, flags, started_ns="<started_ns>") -> Plan:
+def plan(reg, name, cfg, started_ns="<started_ns>") -> Plan:
     """Everything a run needs, without side effects (what `--dry-run` prints)."""
     key, proj, root = resolve(reg, name)
-    head = dispatch.git_head(root, timeout=10)
+    head = shell.git_head(root, timeout=10)
     if not head:
         raise IntakeError(f"{root} is not a git checkout with a commit")
     s = settings(cfg)
     divs = divisions(proj)
-    rid = procs.run_id(f"intake-{key}", started_ns)
     today = _dt.date.today().isoformat()
-    return Plan(key, root, head, divs, build_argv(cfg, flags, rid),
-                request(key, root, head, divs, int(s.get("max_chars") or 2000), today),
-                int(s.get("timeout_s") or 540), s.get("model") or "claude-sonnet-5-5", rid)
+    call = headless.Call("sealed", s.get("model") or "claude-sonnet-5-5",
+                         int(s.get("max_turns") or 30), int(s.get("timeout_s") or 540),
+                         cwd=root, allowed=TOOLS, denied=DENIED, append_file=PERSONA,
+                         tag=procs.run_id(f"intake-{key}", started_ns))
+    return Plan(key, root, head, divs, call,
+                request(key, root, head, divs, int(s.get("max_chars") or 2000), today))
 
 
 @contextlib.contextmanager
@@ -528,16 +530,13 @@ def write_files(plan_, result, cfg, date) -> list:
 
 # ---- run -------------------------------------------------------------------
 
-def _failure(code, out, err, error, data) -> str:
-    if error:
-        return error
-    if not data:
-        tail = ((err or out or "no output").strip().splitlines() or ["no output"])[-1][:300]
-        return f"claude exit {code}: {tail}"
-    if data.get("is_error"):
-        return f"claude reported an error ({data.get('subtype') or 'is_error'})"
-    if code:
-        return f"claude exited {code}"
+def _failure(res) -> str:
+    if res.failure:
+        return res.failure
+    if res.is_error:
+        return f"claude reported an error ({res.data.get('subtype') or 'is_error'})"
+    if res.code:
+        return f"claude exited {res.code}"
     return ""
 
 
@@ -545,36 +544,32 @@ def run(reg, name, cfg) -> dict:
     """Run the intake of project `name` now: the stamp plus `project`, `files`, `notes`.
     IntakeError (masked message, `code`) on any failure; nothing is written then."""
     key = resolve(reg, name)[0]
-    with lock(key), runner.sigterm_guard() as sig:
-        flags = runner.claude_flags(cfg)
-        p = plan(reg, key, cfg, flags, started_ns=time.time_ns())
-        if sig.signum is not None:          # a SIGTERM during the probe or the plan: never start claude
+    with lock(key), headless.Stop() as stop:
+        p = plan(reg, key, cfg, started_ns=time.time_ns())
+        if stop.signum is not None:         # a SIGTERM during the plan: never start claude
             raise Interrupted("terminated before start")
         started = time.monotonic()
-        code, out, err, error = runner.run_claude(p.argv, p.stdin, p.root, runner.worker_env(p.run_id),
-                                                  p.timeout)
+        res = headless.run(p.call, p.stdin, cfg, stop=stop)
         wall = time.monotonic() - started
-        if sig.killed:                      # SIGTERM while claude ran: its group was killed
-            log.log("events", f"intake project={key} interrupted: {error}")
-            raise Interrupted(error or "terminated")
-        data = runner.parse_output(out)
+        if res.killed:                      # SIGTERM while claude ran: its group was killed
+            log.log("events", f"intake project={key} interrupted: {res.error}")
+            raise Interrupted(res.error or "terminated")
         try:
-            why = _failure(code, out, err, error, data)
+            why = _failure(res)
             if why:
                 raise IntakeError(why)
-            result = parse_result(data.get("result"))
+            result = parse_result(res.text)
         except IntakeError as exc:
             log.log("events", f"intake project={key} failed: {exc}")
             raise
         date = _dt.date.today().isoformat()
         files = write_files(p, result, cfg, date)
-        ms = data.get("duration_ms")
-        stamp = {"head": p.head, "date": util.now_iso(), "model": p.model,
-                 "cost_usd": data.get("total_cost_usd", data.get("cost_usd")),
+        ms = res.data.get("duration_ms")
+        stamp = {"head": p.head, "date": util.now_iso(), "model": p.call.model, "cost_usd": res.cost_usd,
                  "duration_s": round(ms / 1000, 1) if isinstance(ms, (int, float)) else round(wall, 1),
-                 "divisions": [d[0] for d in p.divisions], "turns": data.get("num_turns")}
+                 "divisions": [d[0] for d in p.divisions], "turns": res.turns}
         util.write_json(stamp_path(p.root), stamp)
-        log.log("events", f"intake project={key} head={p.head[:7]} model={p.model} cost={stamp['cost_usd']} "
+        log.log("events", f"intake project={key} head={p.head[:7]} model={p.call.model} cost={stamp['cost_usd']} "
                           f"turns={stamp['turns']} divisions={len(p.divisions)}")
     return {"project": key, **stamp, "files": files + [str(stamp_path(p.root))], "notes": result["notes"]}
 

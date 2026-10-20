@@ -13,7 +13,7 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from types import SimpleNamespace
 
-from .. import config, log, paths, registry, units, util
+from .. import config, log, paths, registry, roster, units, util
 
 DEFAULTS = {
     # Opt-in: set config `janitor.codex_tmp` to an absolute path, e.g.
@@ -95,7 +95,7 @@ def context(reg, *, apply_removed=False, claude_projects=None):
     st = settings(claude_projects)
     recs = discover.unit_records(reg)
     retired = {u.session for u in recs if u.status == "retired"}
-    every = set(units.all_sessions(reg))
+    every = set(roster.Roster(reg).sessions())
     return SimpleNamespace(
         reg=reg, st=st, now=units.now(), units=recs, retired=retired, all_sessions=every,
         worktrees=discover.orca_worktrees(), terminals=discover.orca_terminals(),
@@ -150,15 +150,16 @@ def _recorder(ctx, cand, what, recovery_fn):
 
 
 def _retire(ctx, cand):
+    from .. import hr                      # function level: hr/retire.py imports the janitor's modules
     from . import archive, graveyard
     rec = next(u for u in ctx.units if u.session == cand.unit)
+    unit = roster.Roster(ctx.reg).member(rec.session)
+    if unit is None or unit.entry is not rec.entry:
+        raise ValueError(f"no registered unit for {rec.session!r}")
     graveyard.record(_project_root(ctx, rec.project), f"unit {rec.session} (worktree {rec.raw_worktree})",
                      f"{cand.trigger}: {cand.reason}", f"session archive: {archive.unit_dir(rec.session)}",
                      ACTOR, project=rec.project, date=ctx.now.date())
-    rec.entry["status"] = "retired"
-    registry.append_event(ctx.reg, type="retire", project=rec.project, unit=rec.event_unit, by=ACTOR)
-    registry.save(ctx.reg)
-    units.hr_log(f"retire {rec.session} by {ACTOR} (worktree gone from Orca)")
+    hr.retire_gone(ctx.reg, unit, by=ACTOR)
     return "retired"
 
 

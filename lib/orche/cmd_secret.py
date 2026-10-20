@@ -12,7 +12,7 @@ import sys
 import time
 from pathlib import Path
 
-from . import log, registry, units, util
+from . import log, registry, roster, units, util
 from .secrets import ENVS, SecretError, parse_envs, share, store
 from .secrets import dialog
 
@@ -127,10 +127,6 @@ def _example_names(repo) -> list:
     return store.env_example_names(path) if path and path.is_file() else []
 
 
-def _requester(reg):
-    return os.environ.get("ORCHE_SESSION") or units.session_from_cwd(reg, os.getcwd()) or "user"
-
-
 def _plan_lines(ex):
     return [f"would run: {line}" for line in ex.planned]
 
@@ -139,10 +135,10 @@ def _plan_lines(ex):
 
 
 def cmd_request(args):
-    reg, key, _ = _context(args)
+    _, key, _ = _context(args)
     name, envs = store.check_name(args.name), parse_envs(args.env)
     ex = store.Exec(args.dry_run)
-    rid, req, created = store.new_request(key, name, envs, args.why, args.how, _requester(reg),
+    rid, req, created = store.new_request(key, name, envs, args.why, args.how, roster.actor(),
                                           dry_run=args.dry_run)
     store.notify(ex, f"{name} needed for {key} ({','.join(req['envs'])}): {req['why']}")
     spawned = False
@@ -234,10 +230,9 @@ def cmd_missing(args):
 
 def rotate_requests(args, key, items, why):
     """Enqueue rotate requests [(name, envs)]; returns [(id, request)]."""
-    reg = registry.load()
     out = []
     for name, envs in items:
-        rid, req, _ = store.new_request(key, name, envs, why, "", _requester(reg), mode="rotate",
+        rid, req, _ = store.new_request(key, name, envs, why, "", roster.actor(), mode="rotate",
                                         dry_run=args.dry_run)
         if not args.dry_run:
             store.audit("rotate-request", key, name, ",".join(envs), "-", None, rid)

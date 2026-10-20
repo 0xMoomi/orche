@@ -3,7 +3,6 @@ import json
 import os
 import stat
 import unittest
-from pathlib import Path
 
 import support
 from orche import config, log, paths, util
@@ -13,10 +12,6 @@ class SlugAndIdsTest(unittest.TestCase):
     def test_slugify(self):
         self.assertEqual(util.slugify("Acme Shop!"), "acme-shop")
         self.assertEqual(util.slugify("  --Foo__Bar 2.0-- "), "foo-bar-2-0")
-
-    def test_unit_id(self):
-        self.assertEqual(util.unit_id("Acme Shop", "Fix Login", 3, date=dt.date(2026, 10, 16)),
-                         "acme-shop-fix-login-20261016-3")
 
     def test_now_iso_has_offset(self):
         parsed = dt.datetime.fromisoformat(util.now_iso())
@@ -63,62 +58,6 @@ class JsonIoTest(support.TempHomeCase):
         self.assertEqual(util.read_json(self.home / "missing.json", default={}), {})
 
 
-class ParseKvBlockTest(unittest.TestCase):
-    BLOCK = (
-        "TO        div-acme-build\n"
-        "GOAL      Ship checkout retry\n"
-        "SCOPE     src/checkout/**\n"
-        "ACCEPT    retries 3 times\n"
-        "  surfaces error after the third\n"
-        "  logs each attempt\n"
-        "TIER      standard\n"
-    )
-
-    def test_keys_and_continuations(self):
-        fields, unknown = util.parse_kv_block(self.BLOCK)
-        self.assertEqual(unknown, [])
-        self.assertEqual(fields["TO"], "div-acme-build")
-        self.assertEqual(fields["GOAL"], "Ship checkout retry")
-        self.assertEqual(fields["ACCEPT"],
-                         "retries 3 times\nsurfaces error after the third\nlogs each attempt")
-        self.assertEqual(fields["TIER"], "standard")
-
-    def test_key_with_value_only_on_continuation(self):
-        fields, _ = util.parse_kv_block("CONTEXT\n  line one\n  line two\n")
-        self.assertEqual(fields["CONTEXT"], "line one\nline two")
-
-    def test_unknown_keys_collected_not_raised(self):
-        fields, unknown = util.parse_kv_block("TO x\nPRIORITY high\n  ignored continuation\nGOAL y\n")
-        self.assertEqual(unknown, ["PRIORITY"])
-        self.assertEqual(fields, {"TO": "x", "GOAL": "y"})
-
-    def test_amend_and_stop(self):
-        fields, unknown = util.parse_kv_block("AMEND acme-x-20261016-1 rev 2\nTO div-acme-build\n")
-        self.assertEqual((fields["AMEND"], unknown), ("acme-x-20261016-1 rev 2", []))
-        fields, _ = util.parse_kv_block("STOP acme-x-20261016-1\n")
-        self.assertEqual(fields["STOP"], "acme-x-20261016-1")
-
-
-class FindFencedBlockTest(unittest.TestCase):
-    def test_last_block_wins(self):
-        text = ("intro\n```dispatch\nTO a\n```\nmiddle\n```python\nprint(1)\n```\n"
-                "```dispatch\nTO b\nGOAL g\n```\nend")
-        self.assertEqual(util.find_fenced_block(text, "dispatch"), "TO b\nGOAL g")
-        self.assertEqual(util.find_fenced_block(text, "python"), "print(1)")
-
-    def test_none_when_absent(self):
-        self.assertIsNone(util.find_fenced_block("no fences here", "dispatch"))
-        self.assertIsNone(util.find_fenced_block("```dispatchx\nTO a\n```", "dispatch"))
-        self.assertIsNone(util.find_fenced_block("~~~dispatchx\nTO a\n~~~", "dispatch"))
-
-    def test_tilde_fences_mirror_the_backtick_tests(self):
-        text = ("intro\n~~~dispatch\nTO a\n~~~\nmiddle\n~~~python\nprint(1)\n~~~\n"
-                "~~~dispatch\nTO b\nGOAL g\n~~~\nend")
-        self.assertEqual(util.find_fenced_block(text, "dispatch"), "TO b\nGOAL g")
-        self.assertEqual(util.find_fenced_block(text, "python"), "print(1)")
-        self.assertEqual(util.fenced_bodies(text, "dispatch"), ["TO a", "TO b\nGOAL g"])
-
-
 class FenceSpansTest(unittest.TestCase):
     """util.fence_spans: ``` and ~~~ fences close with the same character and at least the same length."""
 
@@ -146,16 +85,19 @@ class FenceSpansTest(unittest.TestCase):
             # A plain block has no such rule: an indented bare fence closes it.
             self.assertEqual(self.spans(f"{f}\n  {f}\nx\n{f}"), [(0, 1, ""), (3, None, "")], f)
 
-    def test_dispatch_find_blocks_reads_tilde_blocks_and_nested_snippets(self):
-        from orche import dispatch
+    def test_brief_scan_reads_tilde_blocks_and_nested_snippets(self):
+        from orche import brief
+
+        def find_blocks(text):
+            return list(brief.scan(text).bodies)
         nested = ("CONTEXT see:\n  ```py\n  parse(x)\n  ```\n  ~~~\n  y\n  ~~~\nTIER standard")
         for f in ("```", "~~~", "````", "~~~~"):
             text = f"Done.\n\n{f}dispatch\nTO build\nGOAL g\n{nested}\n{f}\n\nSTATUS: waiting"
-            self.assertEqual(dispatch.find_blocks(text), [f"TO build\nGOAL g\n{nested}"], f)
-        self.assertEqual(dispatch.find_blocks("~~~dispatch\nTO a\n```\n~~~dispatch\nTO b\n~~~"),
+            self.assertEqual(find_blocks(text), [f"TO build\nGOAL g\n{nested}"], f)
+        self.assertEqual(find_blocks("~~~dispatch\nTO a\n```\n~~~dispatch\nTO b\n~~~"),
                          ["TO a\n```\n~~~dispatch\nTO b"])                              # inner lines are content
-        self.assertEqual(dispatch.find_blocks("```dispatch\nTO a\n```\n~~~dispatch\nTO b\n~~~"), ["TO a", "TO b"])
-        self.assertEqual(dispatch.find_blocks("```dispatch\nTO a\n~~~"), [])                 # never closed
+        self.assertEqual(find_blocks("```dispatch\nTO a\n```\n~~~dispatch\nTO b\n~~~"), ["TO a", "TO b"])
+        self.assertEqual(find_blocks("```dispatch\nTO a\n~~~"), [])                 # never closed
 
 
 class PathsLogConfigTest(support.TempHomeCase):
@@ -201,21 +143,3 @@ class PathsLogConfigTest(support.TempHomeCase):
 
 if __name__ == "__main__":
     unittest.main()
-
-
-class ProjectFromCwdTest(unittest.TestCase):
-    def test_symlinked_cwd_and_registry_path_resolve(self):
-        import tempfile
-        from orche import units
-        with tempfile.TemporaryDirectory() as tmp:
-            real = Path(tmp) / "real" / "acme"
-            (real / "src").mkdir(parents=True)
-            wt = Path(tmp) / "real" / "acme-build"
-            wt.mkdir()
-            link = Path(tmp) / "link"
-            link.symlink_to(Path(tmp) / "real")
-            reg = {"projects": {"acme": {"path": str(link / "acme"), "divisions": {
-                "build": {"worktree": f"repo::{wt}", "features": []}}}}}
-            self.assertEqual(units.project_from_cwd(reg, real / "src"), "acme")
-            self.assertEqual(units.project_from_cwd(reg, link / "acme-build"), "acme")
-            self.assertIsNone(units.project_from_cwd(reg, Path(tmp)))

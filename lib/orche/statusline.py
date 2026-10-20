@@ -5,7 +5,7 @@ No orca calls here: `orche statusline` runs on every prompt render and must stay
 import datetime as _dt
 import json
 
-from . import paths, registry, runs, units, util
+from . import paths, registry, roster, runs, units, util
 
 ACTIVE, ASLEEP, ONBOARDING = "●", "○", "◐"
 SHORT = {"rnd": "R&D", "research": "RS", "build": "BUILD", "gtm": "GTM", "ops": "OPS"}
@@ -22,23 +22,9 @@ def _json_files(pattern):
             yield path, data
 
 
-def session_owners(reg: dict) -> dict:
-    """Map every registered session name to its project key."""
-    out = {}
-    for key, proj in reg.get("projects", {}).items():
-        for name in ("main_session", "liaison_session"):
-            if proj.get(name):
-                out[proj[name]] = key
-        for div in proj.get("divisions", {}).values():
-            out[div.get("session")] = key
-            for feat in div.get("features", []):
-                out[feat.get("session")] = key
-    return out
-
-
-def counts(reg: dict, key: str, now=None) -> dict:
+def counts(reg: dict, key: str, now=None, r=None) -> dict:
     """{awake, active_features, new, keys, unverified, running} for project `key` (running = live
-    `orche run` lock files)."""
+    `orche run` lock files). `r` is the caller's Roster of `reg`, built here when absent."""
     now = now or units.now()
     proj = reg["projects"][key]
     build = proj.get("divisions", {}).get("build", {})
@@ -49,10 +35,15 @@ def counts(reg: dict, key: str, now=None) -> dict:
             new += 1
     keys = sum(1 for _, req in _json_files("secrets/requests/*.json")
                if req.get("status") == "pending" and req.get("project", key) == key)
-    owners = session_owners(reg)
+    r = r if r is not None else roster.Roster(reg)
+
+    def owner(session):
+        member = r.member(session)
+        return member.project if member else None
+
     unverified = 0
     for path, ptr in _json_files("inbox/*/*.json"):
-        target = owners.get(path.parent.name) or owners.get(ptr.get("to")) or owners.get(ptr.get("from"))
+        target = owner(path.parent.name) or owner(ptr.get("to")) or owner(ptr.get("from"))
         if target == key and ptr.get("status") == "done" and ptr.get("ledger_row") is False:
             unverified += 1
     return {
@@ -108,9 +99,9 @@ def division_cells(proj: dict, active_features: int, short=False) -> list:
     return cells
 
 
-def segment(reg: dict, key: str, now=None) -> str:
+def segment(reg: dict, key: str, now=None, r=None) -> str:
     """`R&D● RS○ BUILD●3 GTM● OPS○ · run2 · new1 · 🔑2 · unverified1` (zero trailing cells omitted)."""
-    c = counts(reg, key, now)
+    c = counts(reg, key, now, r)
     cells = division_cells(reg["projects"][key], c["active_features"], short=True)
     parts = [" ".join(cells)] if cells else []
     for label, n in (("run", c["running"]), ("new", c["new"]), ("🔑", c["keys"]),
@@ -138,10 +129,11 @@ def run(cwd, as_json=False) -> int:
         reg = registry.load()
     except registry.RegistryError:
         return 0
-    key = units.project_from_cwd(reg, cwd)
+    r = roster.Roster(reg)
+    key = r.place(cwd).project
     if key is None:
         return 0
-    line = segment(reg, key)
+    line = segment(reg, key, r=r)
     try:
         util.atomic_write(paths.orche_home() / "status" / f"{key}.line", line + "\n")
     except OSError:

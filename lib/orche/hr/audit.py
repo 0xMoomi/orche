@@ -16,8 +16,8 @@ import re
 from collections import Counter
 from pathlib import Path
 
-from .. import cmd_depts, cmd_sleep_wake, janitor, log, metrics, paths, registry, shell, units, util
-from . import limits
+from .. import janitor, log, metrics, paths, registry, roster, shell, units, util
+from . import book, limits, transitions
 
 WINDOW = _dt.timedelta(days=7)
 _NUM = re.compile(r"^\s*\d+\.\s*")
@@ -56,7 +56,8 @@ def standing_additions(root, rel) -> list:
 
 
 def _decision_files(proj) -> list:
-    files = [Path(proj["path"]) / ".orche" / "DECISIONS.tsv"]
+    files = [Path(proj["path"]) / ".orche" / "DECISIONS.tsv",
+             Path(proj["path"]) / ".orche" / "liaison" / "DECISIONS.tsv"]
     for dname, div in proj.get("divisions", {}).items():
         files.append(Path(units.worktree_path(div.get("worktree", ""))) / ".orche" / "div" / dname / "DECISIONS.tsv")
         for feat in div.get("features", []):
@@ -85,7 +86,7 @@ def rev_rows(proj, now) -> list:
 def corrections(reg, now) -> list:
     found = []
     for key, proj in sorted(reg.get("projects", {}).items()):
-        counts = Counter(standing_additions(proj["path"], proj.get("standing", ".orche/STANDING.md")))
+        counts = Counter(standing_additions(proj["path"], proj["standing"]))
         found += [{"project": key, "source": "STANDING.md", "text": text, "count": n}
                   for text, n in sorted(counts.items()) if n >= 2]
         found += [{"project": key, "source": "DECISIONS.tsv", "text": r["text"], "why": r["why"], "count": 1}
@@ -115,20 +116,41 @@ def metrics_line(now) -> str:
             f"main wake-ups {m['wake']['user']}, routine {m['routine']['share']:.0%}")
 
 
+def _active(reg, now) -> list:
+    """{session, at, idle_days} of every active division and feature, in `orche depts` order: project
+    keys sorted, divisions in divisions_of order, each followed by its features. `at` =
+    units.last_active (max of registry last_activity and the activity file)."""
+    rows = []
+    for key in sorted(reg["projects"]):
+        proj = reg["projects"][key]
+        divisions = proj.get("divisions", {})
+        for name in registry.divisions_of(proj):
+            if name not in divisions:
+                continue
+            for entry in [divisions[name], *divisions[name].get("features", [])]:
+                if entry.get("status", "dormant") == "active":
+                    at = units.last_active(entry)
+                    rows.append({"session": entry.get("session", ""), "at": at,
+                                 "idle_days": None if at is None else max(0, (now - at).days)})
+    return rows
+
+
 def proposals(reg, now) -> list:
     """Sleep proposals: idle active units first, then the oldest-idle extras over the awake limit."""
-    lim = reg["limits"]
-    rows = [r for r in cmd_depts.rows(reg, sorted(reg["projects"]), now) if r["status"] == "active"]
-    idle = [r for r in rows if r["idle_days"] is not None and r["idle_days"] > lim["idle_days_to_sleep"]]
+    idle_limit = reg["limits"]["idle_days_to_sleep"]
+    rows = _active(reg, now)
+    idle = [r for r in rows if r["idle_days"] is not None and r["idle_days"] > idle_limit]
     out = [{"action": "sleep", "unit": r["session"], "idle_days": r["idle_days"], "handoff": False,
-            "why": f"idle {r['idle_days']}d > {lim['idle_days_to_sleep']}d"} for r in idle]
-    awake = len(registry.awake_sessions(reg)) - len(out)
-    if awake > lim["max_awake_sessions"]:
-        rest = sorted((r for r in rows if r not in idle), key=lambda r: units.parse_iso(r["last_activity"])
-                      or _dt.datetime.min.replace(tzinfo=_dt.timezone.utc))
-        for r in rest[:awake - lim["max_awake_sessions"]]:
+            "why": f"idle {r['idle_days']}d > {idle_limit}d"} for r in idle]
+    count, limit = limits.awake(reg)
+    awake = count - len(out)
+    if awake > limit:
+        oldest = _dt.datetime.min.replace(tzinfo=_dt.timezone.utc)
+        rest = sorted((r for r in rows if r not in idle),
+                      key=lambda r: oldest if r["at"] is None else r["at"].replace(microsecond=0))
+        for r in rest[:awake - limit]:
             out.append({"action": "sleep", "unit": r["session"], "idle_days": r["idle_days"], "handoff": True,
-                        "why": f"awake {awake} > limit {lim['max_awake_sessions']} (oldest idle)"})
+                        "why": f"awake {awake} > limit {limit} (oldest idle)"})
     return out
 
 
@@ -136,15 +158,15 @@ def apply(reg, props, *, dry_run) -> list:
     results = []
     limit = reg["limits"]["idle_days_to_sleep"]
     for p in props:
-        unit = units.find_unit(reg, p["unit"])
+        unit = roster.Roster(reg).member(p["unit"])
         handoff = p["handoff"]
         if not handoff:  # re-check at apply time: skip the HANDOFF check only for a truly idle unit
             at = units.last_active(unit.entry)
             handoff = at is None or (units.now() - at).days <= limit
         try:
-            _, line = cmd_sleep_wake.sleep_unit(reg, unit, dry_run=dry_run, require_handoff=handoff)
+            _, line = transitions.sleep(reg, unit, dry_run=dry_run, require_handoff=handoff)
             results.append({"unit": p["unit"], "result": line})
-        except cmd_sleep_wake.Blocked as exc:
+        except book.Refused as exc:
             results.append({"unit": p["unit"], "error": exc.msg})
     return results
 
@@ -172,8 +194,9 @@ def render(data) -> str:
 def run(reg, *, now=None, do_apply=False, dry_run=False) -> dict:
     now = now or units.now()
     props = proposals(reg, now)
-    data = {"date": now.date().isoformat(), "awake": len(registry.awake_sessions(reg)),
-            "limit": reg["limits"]["max_awake_sessions"], "metrics": metrics_line(now), "proposals": props,
+    count, limit = limits.awake(reg)
+    data = {"date": now.date().isoformat(), "awake": count,
+            "limit": limit, "metrics": metrics_line(now), "proposals": props,
             "overlaps": overlaps(reg), "corrections": corrections(reg, now), "applied": []}
     if do_apply and props:
         data["applied"] = apply(reg, props, dry_run=dry_run)

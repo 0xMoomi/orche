@@ -10,6 +10,7 @@ import re
 from collections import defaultdict
 from pathlib import Path
 
+
 # USD list price per 1M tokens: input, output, cache read, cache write.
 PRICES = {
     "claude-fable-5-1": {"input": 10.0, "output": 50.0, "cache_read": 0.25, "cache_write": 12.5},
@@ -202,33 +203,43 @@ def compute(root=None, days=30, now=None, prices=None) -> dict:
     }
 
 
-def runner_summary(roots, days=30, now=None) -> dict:
-    """Sum `orche run` records (`<root>/.orche/units/*/RUN.json`) whose `finished` is in the window.
+def runner_summary(records, days=30, now=None) -> dict:
+    """Sum `orche run` records (RUN.json dicts, runs.records) whose `finished` is in the window.
 
-    {units, cost_usd, median_cost_usd, failures, by_status}; failures = status `failed`.
+    {units, cost_usd, median_cost_usd, failures, by_status, by_model_effort}; failures = status
+    `failed`; by_model_effort maps "<model> <effort>" ('?' for a missing one) to {units, cost_usd,
+    median_cost_usd, failures}.
     """
     now = now or _dt.datetime.now(_dt.timezone.utc).astimezone()
     cutoff = now - _dt.timedelta(days=days)
-    costs, statuses = [], defaultdict(int)
-    for root in roots:
-        for path in sorted(Path(root).glob(".orche/units/*/RUN.json")):
-            try:
-                rec = json.loads(path.read_text(encoding="utf-8"))
-                at = _dt.datetime.fromisoformat(str(rec.get("finished")))
-            except (OSError, ValueError, AttributeError):
-                continue
-            at = at if at.tzinfo else at.replace(tzinfo=_dt.timezone.utc)
-            if not cutoff <= at <= now:
-                continue
-            statuses[str(rec.get("status"))] += 1
-            cost_usd = rec.get("cost_usd")
-            costs.append(float(cost_usd) if isinstance(cost_usd, (int, float)) and not isinstance(cost_usd, bool)
-                         else 0.0)
+    costs, statuses, groups = [], defaultdict(int), defaultdict(lambda: ([], [0]))
+    for rec in records:
+        try:
+            at = _dt.datetime.fromisoformat(str(rec.get("finished")))
+        except (ValueError, AttributeError):
+            continue
+        at = at if at.tzinfo else at.replace(tzinfo=_dt.timezone.utc)
+        if not cutoff <= at <= now:
+            continue
+        status = str(rec.get("status"))
+        statuses[status] += 1
+        cost_usd = rec.get("cost_usd")
+        cost = float(cost_usd) if isinstance(cost_usd, (int, float)) and not isinstance(cost_usd, bool) else 0.0
+        costs.append(cost)
+        group = groups[f"{rec.get('model') or '?'} {rec.get('effort') or '?'}"]
+        group[0].append(cost)
+        group[1][0] += status == "failed"
+    return {**_cost_stats(costs), "failures": statuses.get("failed", 0),
+            "by_status": dict(sorted(statuses.items())),
+            "by_model_effort": {key: {**_cost_stats(c), "failures": f[0]}
+                                for key, (c, f) in sorted(groups.items())}}
+
+
+def _cost_stats(costs) -> dict:
     ordered = sorted(costs)
     mid = len(ordered) // 2
     median = (ordered[mid] if len(ordered) % 2 else (ordered[mid - 1] + ordered[mid]) / 2) if ordered else 0.0
-    return {"units": len(costs), "cost_usd": round(sum(costs), 6), "median_cost_usd": round(median, 6),
-            "failures": statuses.get("failed", 0), "by_status": dict(sorted(statuses.items()))}
+    return {"units": len(costs), "cost_usd": round(sum(costs), 6), "median_cost_usd": round(median, 6)}
 
 
 def triage_summary(path, days=30, now=None) -> dict:
@@ -286,4 +297,7 @@ def render(m: dict) -> list:
         lines += ["Runner (orche run, RUN.json):",
                   f"  units {run['units']}, cost ${run['cost_usd']:.2f}, median ${run['median_cost_usd']:.2f}/unit, "
                   f"failures {run['failures']}"]
+        lines += [f"  {key}: units {g['units']}, cost ${g['cost_usd']:.2f}, "
+                  f"median ${g['median_cost_usd']:.2f}/unit, failures {g['failures']}"
+                  for key, g in run.get("by_model_effort", {}).items()]
     return lines

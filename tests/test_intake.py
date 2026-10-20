@@ -16,7 +16,7 @@ from unittest import mock
 import support
 import test_hr
 import test_runner
-from orche import hr, intake, registry
+from orche import intake, paths, registry, statusline
 from support import write_fake_claude
 from test_registry import load_cli
 
@@ -54,14 +54,10 @@ def answer(divisions, card=None, notes=("checked README only",)):
     return {"card": {**base, **(card or {})}, "divisions": divisions, "notes": list(notes)}
 
 
-# What the installed claude 2.1.302 lists (`--restricted`, `--tools`), on top of support.HELP_FULL.
-HELP_RESTRICTED = support.HELP_FULL + "  --restricted  Restricted mode: removes the built-in tools that run commands\n"
-
-
 class FakeClaudeMixin:
-    def setup_fake(self, config=None, help_text=HELP_RESTRICTED):
+    def setup_fake(self, config=None):
         self.fake = self.home / "fake-claude"
-        self.claude = write_fake_claude(self.fake, help_text)
+        self.claude = write_fake_claude(self.fake)
         cfg = {"claude_bin": str(self.claude), "notify": False}
         cfg.update(config or {})
         (self.home / "config.json").write_text(json.dumps(cfg))
@@ -101,7 +97,7 @@ class IntakeCase(FakeClaudeMixin, support.TempHomeCase):
             "standing": ".orche/STANDING.md",
             "divisions": {name: {"status": "dormant", "worktree": f"repo-acme::/nowhere/{name}",
                                  "branch": f"div/{name}", "session": f"div-acme-{name}", "model": "m",
-                                 "effort": "high", "last_activity": "2026-10-01T00:00:00+00:00"}
+                                 "last_activity": "2026-10-01T00:00:00+00:00"}
                           for name in ("build", "research", "design")},
             "custom_divisions": {"design": {"label": "Design", "charter": "Owns the visual design system.",
                                             "model": "claude-opus-5-5", "effort": "high"}}}
@@ -237,15 +233,20 @@ class IntakeRunTest(IntakeCase):
         self.assertEqual(code, 0)
         self.assertLessEqual(len(json.loads(out)["stdin"].encode("utf-8")), intake.REQUEST_BYTES)
 
-    def test_older_claude_without_restricted_keeps_project_settings_only(self):
-        self.setup_fake(help_text=support.HELP_OLD)
-        argv = json.loads(self.orche("--dry-run", "--json", "intake", "acme")[1])["argv"]
-        self.assertEqual(argv[8:10], ["--setting-sources", "project"])
-        self.assertNotIn("--restricted", argv)
-        self.assertNotIn("--tools", argv)
-        self.assertEqual(argv[argv.index("--allowedTools") + 1], "Read,Glob,Grep")
-        self.assertIn("Bash", argv[argv.index("--disallowedTools") + 1].split(","))
-        self.assertEqual(argv[-2], "--append-system-prompt")
+    def test_the_worker_never_carries_the_callers_identity(self):
+        """The sealed call drops the caller's ORCHE_* identity; the worker gets its own run tag."""
+        self.reply(answer({"build": "b"}))
+        with mock.patch.dict(os.environ, {"ORCHE_SESSION": "main-acme", "ORCHE_RUNNER": "1",
+                                          "ORCHE_KEYMASTER": "1"}):
+            self.assertEqual(self.orche("intake", "acme")[0], 0)
+        self.assertEqual((self.fake / "session.txt").read_text().strip(), "")
+        names = [line.split("=", 1)[0] for line in (self.fake / "env.txt").read_text().splitlines()]
+        for name in ("ORCHE_SESSION", "ORCHE_RUNNER", "ORCHE_KEYMASTER"):
+            self.assertNotIn(name, names)
+        run_ids = [line.split("=", 1)[1] for line in (self.fake / "env.txt").read_text().splitlines()
+                   if line.startswith("ORCHE_RUN_ID=")]
+        self.assertEqual(len(run_ids), 1)
+        self.assertTrue(run_ids[0].startswith("intake-acme@"), run_ids[0])
 
     def test_card_markers_in_the_answer_are_stripped(self):
         """M-1: the block's own markers inside an answer never end the block early on a re-run."""
@@ -314,7 +315,6 @@ class IntakeRunTest(IntakeCase):
         self.assertFalse((self.fake / "argv.txt").exists())
         self.assertFalse((self.repo / ".orche").exists())
         self.assertFalse((self.home / "intake").exists())
-        self.assertFalse((self.home / "runner" / "probe.json").exists())
         data = json.loads(self.orche("--dry-run", "--json", "intake", "acme")[1])
         self.assertEqual(data["divisions"], ["research", "build", "design"])
         self.assertIn("--allowedTools", data["argv"])
@@ -360,9 +360,9 @@ class BackgroundTest(IntakeCase):
     """`orche intake <proj> --background`: detached (own session), log under ORCHE_HOME/logs/intake."""
 
     def test_spawns_detached_and_creates_the_log_dir(self):
-        from orche import dispatch, paths
+        from orche import paths, procs
         seen = []
-        with mock.patch.object(dispatch.subprocess, "Popen", lambda argv, **kw: seen.append((argv, kw))):
+        with mock.patch.object(procs.subprocess, "Popen", lambda argv, **kw: seen.append((argv, kw))):
             code, out, err = self.orche("intake", "acme", "--background", "--if-stale")
         self.assertEqual((code, err), (0, ""))
         log = self.home / "logs" / "intake" / "acme.log"
@@ -389,15 +389,15 @@ class BackgroundTest(IntakeCase):
         self.assertEqual(self.stamp()["head"], head(self.repo))
 
     def test_running_intake_holds_the_lock_so_nothing_is_spawned(self):
-        from orche import dispatch
+        from orche import procs
         with intake.lock("acme"), \
-                mock.patch.object(dispatch.subprocess, "Popen", lambda *a, **k: self.fail("spawned")):
+                mock.patch.object(procs.subprocess, "Popen", lambda *a, **k: self.fail("spawned")):
             code, out, err = self.orche("intake", "acme", "--background")
         self.assertEqual((code, out, err), (0, "intake already running for acme\n", ""))
 
     def test_unknown_project_fails_before_spawning(self):
-        from orche import dispatch
-        with mock.patch.object(dispatch.subprocess, "Popen", lambda *a, **k: self.fail("spawned")):
+        from orche import procs
+        with mock.patch.object(procs.subprocess, "Popen", lambda *a, **k: self.fail("spawned")):
             code, _out, err = self.orche("intake", "nope", "--background")
         self.assertEqual(code, 2)
         self.assertIn("nope", err)
@@ -501,7 +501,8 @@ class InitIntakeTest(FakeClaudeMixin, test_hr.HrCase):
         code, out, err = self.orche("init", "Acme Shop", "--divisions", "build,gtm",
                                     "--custom", "design=Design:Owns the visual design system.")
         self.assertEqual(code, 0, err)
-        self.assertEqual(out.splitlines()[-1], "intake acme-shop: 3 divisions, $0.42, 38 s (claude-sonnet-5-5)")
+        self.assertEqual(out.splitlines()[-2], "intake acme-shop: 3 divisions, $0.42, 38 s (claude-sonnet-5-5)")
+        self.assertEqual(out.splitlines()[-1], "Main is open in the main-acme-shop tab; type a request there.")
         self.assertIn("- design (Design, custom): Owns the visual design system.", self.stdin())
         for name in ("build", "gtm", "design"):
             self.assertTrue((self.repo / ".orche" / "div" / name / "CONTEXT.md").is_file())
@@ -524,15 +525,16 @@ class InitIntakeTest(FakeClaudeMixin, test_hr.HrCase):
     def test_dry_run_says_what_it_would_run(self):
         code, out, _ = self.orche("--dry-run", "init", "Acme Shop", "--divisions", "build")
         self.assertEqual(code, 0)
-        self.assertEqual(out.splitlines()[-1], "would run: orche intake acme-shop")
+        self.assertEqual(out.splitlines()[-2], "would run: orche intake acme-shop")
+        self.assertEqual(out.splitlines()[-1], "would switch to main-acme-shop")
         self.assertFalse((self.fake / "argv.txt").exists())
         # M-4: once the stamp covers every division the dry run says so; a new division would sweep
         self.reply(answer({"build": "b"}))
         self.assertEqual(self.orche("init", "Acme Shop", "--divisions", "build")[0], 0)
         (self.fake / "argv.txt").unlink()
-        self.assertEqual(self.orche("--dry-run", "init", "Acme Shop")[1].splitlines()[-1], "intake: covered")
+        self.assertEqual(self.orche("--dry-run", "init", "Acme Shop")[1].splitlines()[-2], "intake: covered")
         self.assertEqual(self.orche("--dry-run", "init", "Acme Shop", "--divisions", "build,gtm")[1]
-                         .splitlines()[-1], "would run: orche intake acme-shop")
+                         .splitlines()[-2], "would run: orche intake acme-shop")
         self.assertFalse((self.fake / "argv.txt").exists())
 
     def init_interrupted_by(self, signum):
@@ -553,15 +555,19 @@ class InitIntakeTest(FakeClaudeMixin, test_hr.HrCase):
         thread = threading.Thread(target=fire, daemon=True)
         previous = signal.signal(signal.SIGINT, signal.default_int_handler)
         try:
-            with mock.patch.object(hr, "refresh_status_line") as refresh:
-                thread.start()
-                started = time.monotonic()
-                code, out, err = self.orche("init", "Acme Shop", "--divisions", "build")
+            thread.start()
+            started = time.monotonic()
+            code, out, err = self.orche("init", "Acme Shop", "--divisions", "build")
         finally:
             signal.signal(signal.SIGINT, previous)
             thread.join(timeout=5)
         self.assertLess(time.monotonic() - started, 15)          # the 30 s sleep did not run out
-        return code, out, err, int(pidfile.read_text()), refresh
+        return code, out, err, int(pidfile.read_text())
+
+    def assertStatusLine(self):
+        """HR refreshed the status line with every record: it shows the registry as init left it."""
+        line = (paths.orche_home() / "status" / "acme-shop.line").read_text(encoding="utf-8")
+        self.assertEqual(line, statusline.segment(registry.load(), "acme-shop") + "\n")
 
     def assertGone(self, pid):
         deadline = time.monotonic() + 5
@@ -576,11 +582,11 @@ class InitIntakeTest(FakeClaudeMixin, test_hr.HrCase):
     def test_ctrl_c_during_the_intake_finishes_init(self):
         """I4: Ctrl-C kills claude's group, prints the interrupted line, init still reports, refreshes
         the status line and exits 0; nothing of the intake is written and its lock is free."""
-        code, out, err, pid, refresh = self.init_interrupted_by(signal.SIGINT)
+        code, out, err, pid = self.init_interrupted_by(signal.SIGINT)
         self.assertEqual(code, 0, err)
-        self.assertEqual(out.splitlines()[-1], "intake interrupted; run `orche intake acme-shop` later")
+        self.assertEqual(out.splitlines()[-2], "intake interrupted; run `orche intake acme-shop` later")
         self.assertIn("initialized acme-shop", out)
-        refresh.assert_called_once()
+        self.assertStatusLine()
         self.assertGone(pid)
         self.assertFalse((self.repo / ".orche" / "intake.json").exists())
         self.assertFalse((self.repo / ".orche" / "div").exists())
@@ -588,10 +594,10 @@ class InitIntakeTest(FakeClaudeMixin, test_hr.HrCase):
         self.assertEqual(self.orche("intake", "acme-shop")[0], 0)      # the lock was released
 
     def test_sigterm_during_the_intake_finishes_init(self):
-        code, out, err, pid, refresh = self.init_interrupted_by(signal.SIGTERM)
+        code, out, err, pid = self.init_interrupted_by(signal.SIGTERM)
         self.assertEqual(code, 0, err)
-        self.assertEqual(out.splitlines()[-1], "intake interrupted; run `orche intake acme-shop` later")
-        refresh.assert_called_once()
+        self.assertEqual(out.splitlines()[-2], "intake interrupted; run `orche intake acme-shop` later")
+        self.assertStatusLine()
         self.assertGone(pid)
         self.assertFalse((self.repo / ".orche" / "intake.json").exists())
 
@@ -604,7 +610,7 @@ class InitIntakeTest(FakeClaudeMixin, test_hr.HrCase):
         self.assertEqual(code, 0, err)
         self.assertIn("usually under a minute; Ctrl-C skips it", err)
         self.assertRegex(err, r"intake running… \d+ s \(claude-sonnet-5-5\)\n")
-        self.assertTrue(out.splitlines()[-1].startswith("intake acme-shop: 1 division, $0.42"))
+        self.assertTrue(out.splitlines()[-2].startswith("intake acme-shop: 1 division, $0.42"))
 
     def test_a_failed_intake_never_fails_init(self):
         for case in ({"result": "prose, no JSON"}, {"result": answer({}), "code": 1}):
@@ -613,7 +619,7 @@ class InitIntakeTest(FakeClaudeMixin, test_hr.HrCase):
                 code, out, _ = self.orche("init", "Acme Shop", "--divisions", "build", "--custom",
                                           f"x{len(case)}=X{len(case)}:Charter.")
                 self.assertEqual(code, 0)
-                last = out.splitlines()[-1]
+                last = out.splitlines()[-2]
                 self.assertTrue(last.startswith("intake skipped: "), last)
                 self.assertTrue(last.endswith("; run `orche intake acme-shop` later"), last)
                 self.assertFalse((self.repo / ".orche" / "intake.json").exists())
@@ -623,7 +629,7 @@ class InitIntakeTest(FakeClaudeMixin, test_hr.HrCase):
         (self.home / "config.json").write_text(json.dumps({"claude_bin": str(self.home / "no-claude")}))
         code, out, _ = self.orche("init", "Acme Shop", "--divisions", "build")
         self.assertEqual(code, 0)
-        self.assertIn("intake skipped: ", out.splitlines()[-1])
+        self.assertIn("intake skipped: ", out.splitlines()[-2])
 
 
 class RunnerContextTest(test_runner.RunnerCase):
@@ -696,3 +702,24 @@ class RunnerContextTest(test_runner.RunnerCase):
         self.reply("STATUS: blocked\nx")
         self.orche("run", unit)
         self.assertNotIn("## Project context", (self.fake / "stdin.txt").read_text())
+
+
+class ReadContextTest(support.TempHomeCase):
+    """intake.read_context: the CONTEXT.md reader the runner frames (C2 T6)."""
+
+    def read(self, text, max_chars=None):
+        path = self.home / "CONTEXT.md"
+        path.write_text(text, encoding="utf-8")
+        cfg = {"intake": {"max_chars": max_chars}} if max_chars else {}
+        return intake.read_context(path, cfg)
+
+    def test_header_missing_header_cap_and_empty(self):
+        self.assertEqual(self.read("# Context for Build — intake at abc1234, 2026-10-18\n\nRun `make test`.\n"),
+                         ("abc1234", "2026-10-18", "Run `make test`."))
+        self.assertEqual(self.read("hand-written notes\n"), ("?", "?", "hand-written notes"))
+        sha, date, body = self.read("# Context for Build — intake at abc1234, 2026-10-18\n\n" + "x" * 500, 100)
+        self.assertEqual(body, "x" * (100 + intake.CONTEXT_SLACK) + "\n… (truncated)")
+        self.assertEqual(len(self.read("y" * 2200)[2]), 2200)          # default 2000 + slack: not cut
+        self.assertIsNone(self.read("# Context for Build — intake at abc1234, 2026-10-18\n\n  \n"))
+        self.assertIsNone(self.read(""))
+        self.assertIsNone(intake.read_context(self.home / "missing.md", {}))
