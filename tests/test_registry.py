@@ -9,7 +9,7 @@ import unittest
 from contextlib import redirect_stdout
 
 import support
-from orche import registry, util
+from orche import registry, roster, util
 
 SAMPLE = json.loads((support.FIXTURES / "registry.sample.json").read_text())
 ORCHE_BIN = support.ROOT / "bin" / "orche.py"   # the Python entry point behind the bin/orche launcher
@@ -78,6 +78,13 @@ class ValidateTest(unittest.TestCase):
 
     def test_non_object(self):
         self.assertEqual(registry.validate([]), ["registry: must be an object"])
+
+    def test_old_liaison_session_key_is_ignored(self):
+        """C8: a project written before the Liaison left keeps its `liaison_session`; it validates and names no member."""
+        reg = sample()
+        reg["projects"]["acme-shop"]["liaison_session"] = "liaison-x"
+        self.assertEqual(registry.validate(reg), [])
+        self.assertIsNone(roster.Roster(reg).member("liaison-x"))
 
 
 DESIGN = {"label": "Design", "charter": "Owns the visual system.", "model": "claude-opus-5-5", "effort": "high"}
@@ -218,7 +225,7 @@ class CliTest(support.TempHomeCase):
         return cp.returncode, cp.stdout, cp.stderr
 
     def test_version(self):
-        self.assertEqual(self.orche("version"), (0, "orche 0.4.0\n", ""))
+        self.assertEqual(self.orche("version"), (0, "orche 0.5.0\n", ""))
 
     def test_projects_json_empty_home(self):
         self.assertEqual(self.orche("projects", "--json"), (0, "[]\n", ""))

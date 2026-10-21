@@ -36,7 +36,7 @@ DIVISION_STATUSES = ("active", "dormant", "paused", "retired", "onboarding")
 FEATURE_STATUSES = ("active", "paused", "retired", "onboarding")
 EVENT_TYPES = ("create", "sleep", "wake", "retire", "freeze", "unfreeze", "stage")
 
-PROJECT_STR_KEYS = ("repo_id", "path", "main_session", "liaison_session", "card", "standing")
+PROJECT_STR_KEYS = ("repo_id", "path", "main_session", "card", "standing")
 DIVISION_STR_KEYS = ("worktree", "branch", "session", "model", "last_activity")
 FEATURE_STR_KEYS = ("name", "worktree", "branch", "session", "created", "last_activity", "reason")
 EVENT_STR_KEYS = ("at", "project", "unit", "by")
@@ -316,7 +316,7 @@ def awake_sessions(reg: dict) -> list:
     """Sessions of active divisions and of every active feature, whatever its division's status.
 
     The limit is about live sessions/panes, so an active feature under a paused or dormant
-    division still counts. Main/liaison sessions are not counted.
+    division still counts. Main sessions are not counted.
     """
     out = []
     for proj in reg.get("projects", {}).values():

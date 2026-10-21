@@ -16,7 +16,6 @@
       "stage": "building",
       "aliases": ["Acme", "shop"],
       "main_session": "main-acme-shop",
-      "liaison_session": "liaison-acme-shop",
       "card": "~/.claude/orche/cards/acme-shop.md",
       "standing": ".orche/STANDING.md",
       "divisions": {
@@ -68,7 +67,6 @@
       "stage": "public",
       "aliases": [],
       "main_session": "main-docs-site",
-      "liaison_session": "liaison-docs-site",
       "card": "~/.claude/orche/cards/docs-site.md",
       "standing": ".orche/STANDING.md",
       "divisions": {}

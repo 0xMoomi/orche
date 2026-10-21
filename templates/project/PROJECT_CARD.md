@@ -1,6 +1,6 @@
 # {{PROJECT}} — project card
 
-<!-- Keep under 2K tokens. The liaison refreshes it weekly; other projects read it before asking. -->
+<!-- Keep under 2K tokens. `orche card refresh {{PROJECT}}` updates it weekly from git history; other projects read it (`orche card {{PROJECT}}`) before asking. -->
 
 ## Purpose
 
@@ -14,10 +14,15 @@
 
 (main commands, key directories, where the app starts)
 
+## Recent changes
+
+(user-visible changes, newest first)
+
 ## How to ask
 
-Send questions to `liaison-{{PROJECT}}`; it answers from this card and the repo, and forwards to
-`main-{{PROJECT}}` only when a decision is needed.
+Read this card first. If it does not answer, run `orche ask {{PROJECT}} "<question>"`: a read-only
+answer from the repository. Work goes to `main-{{PROJECT}}` as an external request
+(`orche report external-request --to main-{{PROJECT}} --summary "<request>"`).
 
 ## Last refreshed
 

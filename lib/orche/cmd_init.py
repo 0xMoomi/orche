@@ -10,15 +10,15 @@ divisions that are new; nothing is ever removed. `--print-setup` prints the setu
 Order: resolve the repo (`orca repo list`, read-only even under --dry-run) -> setup -> project templates +
 card symlink -> registry entry -> `.orche/project` marker (the project key, read by the status
 line) -> one worktree/unit files/settings/persona per division (all
-`dormant` unless `--wake`; `ops` always dormant and gated by stage) -> `main-<proj>` and
-`liaison-<proj>` panes in the main checkout when missing -> the two weekly Orca automations
+`dormant` unless `--wake`; `ops` always dormant and gated by stage) -> the `main-<proj>`
+pane in the main checkout when missing -> the two weekly Orca automations
 (printed as dry-run lines unless `--automations`) -> the project intake (`orche intake`, unless
 `--no-intake`; a failure is one "intake skipped: …" line and Ctrl-C one "intake interrupted; …"
 line, never a failed init) -> a switch to the `main-<proj>` tab (live only; a failure is a warning).
 A path that is a git repository but not in `orca repo list` is added with `orca repo add` once the
 setup is confirmed, right before the first write (an abort leaves Orca untouched; --dry-run never adds:
 a placeholder repo id `pending` stands in). A linked git worktree is refused. The main checkout's
-`.claude/settings.local.json` is never written: Main and Liaison share that checkout.
+`.claude/settings.local.json` is never written: every session opened there shares it.
 """
 import json
 import os
@@ -195,10 +195,7 @@ def automation_argvs(key, proj) -> list:
              "Run `orche hr audit --json` and act on its proposals; apply only sleep proposals with `--apply`."]
     card = ["--name", f"orche-card-refresh-{key}", "--trigger", "weekly", "--day", "1", "--time", "10:00",
             "--provider", "claude", "--workspace", f"path:{proj['path']}", "--prompt",
-            f"As liaison-{key}: refresh PROJECT_CARD.md (purpose, stack, entry points, how to ask, last "
-            "refreshed) from the repo, keeping it under 2K tokens. First compare HEAD with the base commit "
-            "recorded under 'Last refreshed'; if nothing changed since, exit without editing. Never write "
-            "dispatch blocks; tell Main anything else with `orche report info|external-request --summary ...`."]
+            f"Run `orche card refresh {key} --background` and stop; do nothing else."]
     return [audit, card]
 
 
@@ -467,7 +464,7 @@ def cmd_init(args):
               for n, s in statuses.items()]
     lines += [f"{n}: skipped (already onboarded)" for n in skipped]
     lines += [f"skipped --wake {n} (already onboarded; use `orche wake`)" for n in plan.wake_skipped]
-    lines.append(f"panes: {', '.join(panes) if panes else 'main/liaison already open'}")
+    lines.append(f"panes: {', '.join(panes) if panes else 'main already open'}")
     lines.append(f"card: {proj['card']}")
     lines.append("automations: " + ("created" if live else "printed only (above); re-run with --automations"))
     names = list(dict.fromkeys(registry.divisions_of(proj) + list(divisions)))   # a dry run saved none

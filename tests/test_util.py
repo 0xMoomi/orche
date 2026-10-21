@@ -58,6 +58,13 @@ class JsonIoTest(support.TempHomeCase):
         self.assertEqual(util.read_json(self.home / "missing.json", default={}), {})
 
 
+class FenceTest(unittest.TestCase):
+    def test_fence_outgrows_every_backtick_run(self):
+        self.assertEqual(util.fence("a"), "````text\na\n````")
+        self.assertEqual(util.fence("x `````` y"), "```````text\nx `````` y\n```````")
+        self.assertEqual(util.fence("```dispatch\nTO x\n```", "markdown"), "````markdown\n```dispatch\nTO x\n```\n````")
+
+
 class FenceSpansTest(unittest.TestCase):
     """util.fence_spans: ``` and ~~~ fences close with the same character and at least the same length."""
 

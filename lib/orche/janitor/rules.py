@@ -127,7 +127,7 @@ def _recent(ctx, files):
 def _owned_by(ctx, cwd, worktree, project):
     """True when `cwd` is in `worktree` and no non-retired unit owns it at the same depth or deeper.
 
-    Main/liaison sessions are not units, so the project's main checkout is guarded explicitly:
+    Main sessions are not units, so the project's main checkout is guarded explicitly:
     a cwd equal to the project root never matches, and a cwd inside it matches only when the
     retired worktree lies strictly below the root.
     """
@@ -180,7 +180,7 @@ def _transcript_cwd(ctx, path):
 
 
 def _main_transcript(ctx, path, name):
-    """True for a Main/Liaison transcript (first cwd in a main checkout) that no retired unit `name` owns."""
+    """True for a Main transcript (first cwd in a main checkout) that no retired unit `name` owns."""
     cwd = _transcript_cwd(ctx, path)
     if not cwd or not main_checkout_cwd(ctx.reg, ctx.units, cwd):
         return False

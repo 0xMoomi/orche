@@ -180,10 +180,10 @@ def names(setup: dict) -> list:
 
 
 def summary(setup: dict, *, new: int, registered: bool, wake=()) -> str:
-    """`Summary: build, gtm, design(custom) · stage building · 3 worktrees · panes main + liaison`."""
+    """`Summary: build, gtm, design(custom) · stage building · 3 worktrees · pane main`."""
     divs = ", ".join(d + ("(custom)" if d in setup["custom"] else "") for d in names(setup)) or "no divisions"
     worktrees = f"{new} {'new ' if registered else ''}worktree{'' if new == 1 else 's'}"
-    line = f"Summary: {divs} · stage {setup['stage']} · {worktrees} · panes main + liaison"
+    line = f"Summary: {divs} · stage {setup['stage']} · {worktrees} · pane main"
     return line + (f" · wake {','.join(wake)}" if wake else "")
 
 

@@ -78,8 +78,7 @@ def cmd_discard(args):
             return _fail(EXIT_NOT_FOUND, f"no such path or session: {target}")
         owner = _main_transcript_project(reg, r, target)
         if owner:
-            return _fail(EXIT_BLOCKED, f"{target} is a Main/Liaison transcript (its cwd is {owner}'s main "
-                                       "checkout); refusing")
+            return _fail(EXIT_BLOCKED, f"{target} is a transcript from {owner}'s main checkout; refusing")
         explicit_session = target
         key = _resolve_project(reg, r, args.project, os.getcwd())
         if key is None:

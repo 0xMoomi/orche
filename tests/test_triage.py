@@ -271,7 +271,7 @@ class BypassTest(TriageCase):
         out = self.handle("[build] add a line to README.md")
         self.assertEqual((out.block, out.note, self.spawned, self.samples()), (None, "", [], []))
         self.enable()
-        for session in ("div-acme-build", "feat-acme-checkout", "liaison-acme", "main-nope", None):
+        for session in ("div-acme-build", "feat-acme-checkout", "main-nope", None):
             out = self.handle("[build] add a line to README.md", session=session)
             self.assertEqual((out.block, self.spawned), (None, []), session)
         self.assertEqual(self.samples(), [])

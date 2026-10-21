@@ -28,6 +28,9 @@ DEFAULTS = {
     # timeout_s 540: a sweep ends inside the Bash tool's 10-minute maximum (/orche-apply).
     "intake": {"enabled": True, "model": "claude-sonnet-5-5", "max_turns": 30, "timeout_s": 540,
                "max_chars": 2000, "refresh_commits": 50, "refresh_days": 14},
+    # The Liaison (lib/orche/liaison.py): one read-only `claude -p` per `orche ask` and
+    # `orche card refresh`; timeout_s 100 ends an ask inside the Bash tool's 2-minute default.
+    "liaison": {"model": "claude-sonnet-5-5", "effort": "low", "max_turns": 12, "timeout_s": 100},
 }
 
 

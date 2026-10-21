@@ -19,7 +19,7 @@ def make_registry(root: Path) -> dict:
     reg = registry.empty()
     reg["projects"]["acme"] = {
         "repo_id": "repo-acme", "path": str(root / "acme"), "stage": "building", "aliases": ["ac"],
-        "main_session": "main-acme", "liaison_session": "liaison-acme", "card": "", "standing": "",
+        "main_session": "main-acme", "card": "", "standing": "",
         "divisions": {"build": {
             "worktree": f"repo-acme::{root / 'acme-build'}", "branch": "div/build",
             "session": "div-acme-build", "model": "opus", "status": "active",

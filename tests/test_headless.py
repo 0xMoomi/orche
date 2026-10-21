@@ -304,6 +304,16 @@ class MarkerTest(TempHomeCase):
         self.assertEqual(headless.marker_path(tag), self.home / "runner" / "mcp" / "r-42.json")
 
 
+class ResultTest(unittest.TestCase):
+    def test_problem_names_why_a_call_failed(self):
+        ok = {"type": "result", "subtype": "success", "is_error": False, "result": "hi"}
+        self.assertEqual(headless.Result(0, ok, "", "", False).problem, "")
+        self.assertEqual(headless.Result(3, {}, "", "exit 3: no output", False).problem, "exit 3: no output")
+        err = {"type": "result", "subtype": "error_max_turns", "is_error": True}
+        self.assertEqual(headless.Result(0, err, "", "", False).problem, "claude reported an error (error_max_turns)")
+        self.assertEqual(headless.Result(2, ok, "", "", False).problem, "claude exited 2")
+
+
 class ImportTest(unittest.TestCase):
     def test_loads_only_its_modules(self):
         code = ("import sys; sys.path.insert(0, 'lib'); import orche.headless; "

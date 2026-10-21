@@ -33,7 +33,7 @@ rule that should hold from now on, Main (or you) adds a numbered standing order:
 Put its name or alias in square brackets, e.g. "What changed in [app] lately?". Candidates are
 a closed list: registered projects and their aliases (`orche init --aliases`). Main echoes
 `Understood: source = <project>, output = <project>` and asks one line when it is ambiguous.
-Questions go through the Liaisons and project cards (`orche card <proj>`); work requests become
+Questions go through the project cards (`orche card <proj>`) and `orche ask <proj> "…"`; work requests become
 an `external-request` pointer in the other Main's inbox, which its user confirms. Do not use
 `@`: in Claude Code it mentions a session, so ORCHE never uses it for projects.
 

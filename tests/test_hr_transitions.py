@@ -328,8 +328,8 @@ class SleepTest(TransitionsCase):
 class NamesTest(test_hr.FeatCase):
     def test_session_name_and_owner(self):  # N1
         self.assertEqual([hr.session_name("div", "acme", "build"), hr.session_name("feat", "acme", "pay"),
-                          hr.session_name("main", "acme"), hr.session_name("liaison", "acme")],
-                         ["div-acme-build", "feat-acme-pay", "main-acme", "liaison-acme"])
+                          hr.session_name("main", "acme")],
+                         ["div-acme-build", "feat-acme-pay", "main-acme"])
         reg = registry.load()
         self.assertEqual(hr.session_owner(reg, "acme", "div-acme-shop-build"), "acme-shop")
         self.assertIsNone(hr.session_owner(reg, "acme-shop", "div-acme-shop-build"))
@@ -475,11 +475,12 @@ class DivisionsTest(test_hr.HrCase):
     def test_onboard_project(self):  # D3
         plan, (proj, opened) = self.onboard(["build"])
         self.assertEqual(plan, hr.create.Plan(["build", "gtm"], ["build"], [], []))
-        self.assertEqual(opened, ["main-acme-shop", "liaison-acme-shop"])
+        self.assertEqual(opened, ["main-acme-shop"])
         reg = registry.load()
         self.assertEqual(reg["projects"]["acme-shop"], proj)
-        self.assertEqual((proj["main_session"], proj["liaison_session"], proj["path"], proj["repo_id"]),
-                         ("main-acme-shop", "liaison-acme-shop", self.root, "repo-acme"))
+        self.assertNotIn("liaison_session", proj)
+        self.assertEqual((proj["main_session"], proj["path"], proj["repo_id"]),
+                         ("main-acme-shop", self.root, "repo-acme"))
         self.assertEqual({d: v["status"] for d, v in proj["divisions"].items()}, {"build": "active", "gtm": "dormant"})
         self.assertEqual([(e["type"], e["project"], e["unit"], e["by"]) for e in reg["events"]],
                          [("create", "acme-shop", "build", "user"), ("create", "acme-shop", "gtm", "user")])
@@ -652,14 +653,14 @@ class StageSetTest(TransitionsCase):
         self.assertGreater(len(want), 1)  # the fixture's active build and checkout: the order is checked
         self.assertEqual(got, want)
 
-    def test_corrections_read_liaison_decisions(self):  # A1
+    def test_corrections_ignore_a_leftover_liaison_folder(self):  # A1
+        """C8: the Liaison has no memory folder any more; an old .orche/liaison/DECISIONS.tsv is not read."""
         path = self.repo / ".orche" / "liaison" / "DECISIONS.tsv"
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text("ts\tphase\tdecision\twhy\tevidence\tresult\n"
                         f"{test_hr.ago(days=1)}\tx\trev 2 something\twhy\t-\tok\n")
         found = audit.corrections(registry.load(), test_hr.NOW)
-        self.assertIn({"project": "acme-shop", "source": "DECISIONS.tsv", "text": "rev 2 something", "why": "why",
-                       "count": 1}, found)
+        self.assertEqual([f for f in found if f["text"] == "rev 2 something"], [])
 
 
 class RetireImportTest(test_hr.HrCase):

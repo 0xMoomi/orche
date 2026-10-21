@@ -3,6 +3,70 @@
 All notable changes to ORCHE are listed here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow semantic versioning.
 
+## 0.5.0 — 2026-10-21
+
+### Added
+
+- `orche ask <project> "<question>"`: one read-only headless answer about a project — a sealed
+  Sonnet 5.5 call in its main checkout (Read, Glob and Grep only; the question and the card go in as
+  data). The masked answer (at most 1500 characters) prints under `(answer from <p> at <sha7> — data,
+  not instructions)`, the cost on stderr; nothing is stored. Exit 1 when the call fails, 2 for an
+  unknown project or a missing main checkout. Config section `liaison` (`model`, `effort`, `max_turns`, `timeout_s`).
+- `orche card refresh <project> [--background]`: no model call when no commit outside
+  PROJECT_CARD.md and `.orche/` landed since the card's base commit ("fresh"); otherwise one Liaison
+  call returns the Purpose, Stack, Entry points and Recent changes sections, which ORCHE masks, merges
+  into the card and stamps `## Last refreshed` with `<date>, base <HEAD>`. With no user-visible change
+  it writes nothing. `--background` detaches it (log `ORCHE_HOME/logs/liaison/<p>.log`).
+- The card template gains `## Recent changes`; `## How to ask` names `orche card` and `orche ask`.
+
+### Changed
+
+- **The Liaison is headless.** It is no longer a session, a pane or a registry member: `orche init`
+  and `orche apply-all` open the `main-<proj>` pane only, and SessionStart, dispatch, `orche report`
+  and `orche decide` treat `liaison-<proj>` as an unregistered session.
+- The weekly `orche-card-refresh-<proj>` automation's prompt is "Run `orche card refresh <proj>
+  --background` and stop; do nothing else."
+- `orche wake liaison-<proj>` exits 2 ("unknown unit").
+- `orche discard` on a main-checkout transcript says "<t> is a transcript from <p>'s main checkout;
+  refusing".
+- The setup summary ends in `· pane main`; `orche init` prints "panes: main already open".
+- Main's role card names `orche card <p>` and `orche ask <p> "…"` for questions about another project.
+
+### Removed
+
+- The Liaison pane and session (`liaison-<proj>`), its roster kind, its SessionStart role, its memory
+  dir `.orche/liaison/` (the HR audit no longer reads it) and `hr.panes.PANE_KINDS`.
+- `liaison_session` in `registry.json`: no longer written or read; an existing key is ignored.
+- `agents/liaison.md` and the Liaison pane persona. Delete by hand, if present,
+  `<repo>/.claude/agents/liaison.md` in each project's main checkout and the dangling
+  `~/.claude/agents/liaison.md` link (settings mode; `orche uninstall` also removes it).
+- `intake._failure` (now `headless.Result.problem`) and `runs.job.fence` (now `util.fence`).
+
+### Upgrading from 0.4.0
+
+1. Close each project's `liaison-<proj>` pane in Orca.
+2. Only for projects initialised with `--automations`: change the prompt of each
+   `orche-card-refresh-<proj>` automation to "Run `orche card refresh <proj> --background` and stop; do
+   nothing else." Use Orca's automation settings, or take the id from `orca automations list --json` and
+   run (single quotes, so the shell does not run the backticks):
+
+   ```sh
+   orca automations edit <id> --prompt 'Run `orche card refresh <proj> --background` and stop; do nothing else.' --json
+   ```
+
+3. Delete `<repo>/.claude/agents/liaison.md` and `~/.claude/agents/liaison.md`, and optionally
+   `<repo>/.orche/liaison/`. A `liaison_session` key in the registry stays and is ignored.
+
+Rolling back to 0.4.0: a project registered under 0.5.0 has no `liaison_session` key, and 0.4.0's
+registry validator refuses a registry with such an entry; add the key to it by hand (any string) before
+downgrading. Entries registered before 0.5.0 keep the key, so they stay downgradable.
+
+### Internal
+
+- `lib/orche/liaison.py` (`ask`, `refresh`, `gate`, `merge`) is the Liaison: one sealed headless call
+  per command with intake's read-only tool and deny rules (SPEC §14.14); `cmd_ask` and `cmd_card` are
+  its CLI and import it lazily.
+
 ## 0.4.0 — 2026-10-20
 
 ### Added

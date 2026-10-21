@@ -7,7 +7,8 @@ A `Call` names a context:
   worker cannot answer prompts; the gates and the deny list still block), the run's own empty MCP
   config when tagged, the caller's tool rules, a persona file, ORCHE's PreToolUse gates through
   `--settings` (gates()).
-- `sealed`: intake. `--restricted`, `--tools` derived from the allowed rules, no session kept.
+- `sealed`: intake and the Liaison. `--restricted`, `--tools` derived from the allowed rules, no
+  session kept.
 - `blank`: triage. No tools, no MCP config, no session kept, its own system prompt.
 
 argv() and env() have no side effects: what a dry run prints is what runs. run() is the one process
@@ -143,6 +144,17 @@ class Result:
     @property
     def usage(self):
         return self.data.get("usage")
+
+    @property
+    def problem(self) -> str:
+        """Why the call failed, '' when it did not: failure, an is_error result, a nonzero exit."""
+        if self.failure:
+            return self.failure
+        if self.is_error:
+            return f"claude reported an error ({self.data.get('subtype') or 'is_error'})"
+        if self.code:
+            return f"claude exited {self.code}"
+        return ""
 
 
 def gates() -> str:

@@ -189,7 +189,7 @@ class InstallTest(InstallCase):
         self.assertTrue(script.startswith(STATUSLINE + "\n# >>> orche >>>\n"))
         self.assertEqual(script.count("# >>> orche >>>"), 1)
         # Agents: ours linked, foreign files and links untouched and reported.
-        for name in ("exec.md", "hr.md", "liaison.md"):
+        for name in ("exec.md", "hr.md"):
             self.assertEqual(os.readlink(self.c / "agents" / name), str(PLUGIN_ROOT / "agents" / name))
         self.assertEqual((self.c / "agents" / "runner.md").read_text(), "my own runner\n")
         self.assertEqual(os.readlink(self.c / "agents" / "deep-reasoner.md"),
@@ -401,7 +401,7 @@ class InstallTest(InstallCase):
         self.assertEqual((self.c / "fable" / "fable.md").read_text(), FIXED)
         self.assertEqual((self.c / "fable" / "active.md").read_text(), FIXED)
         self.assertEqual(self.read_settings(), self.settings)  # hooks removed, absent keys removed again
-        for name in ("exec.md", "hr.md", "liaison.md"):
+        for name in ("exec.md", "hr.md"):
             self.assertFalse((self.c / "agents" / name).is_symlink())
         self.assertEqual((self.c / "agents" / "runner.md").read_text(), "my own runner\n")
         self.assertTrue((self.c / "agents" / "deep-reasoner.md").is_symlink())
@@ -880,7 +880,7 @@ class ApplyAllDryRunTest(InstallCase):
                                  "plan Gamma (gamma): orche init repo-gamma --stage building --divisions rnd,research,build,gtm,ops --no-intake --wake build"])
         self.assertIn("skip Acme Shop: already registered as acme-shop", out)
         self.assertIn("3 repo(s), 2 planned, 0 failed", out)
-        self.assertIn("panes: 6 to open (main + liaison per repo, plus --wake)", out)
+        self.assertIn("panes: 4 to open (main per repo, plus --wake)", out)
         self.assertEqual(out.splitlines()[-1], "intake not run for 2 projects: run `orche intake <proj>` "
                                                "per project (about $0.1–0.3 each)")
 
@@ -936,11 +936,11 @@ class ApplyAllRunTest(HrCase):
         rows = out.splitlines()
         self.assertEqual(rows[0], "repo\tkey\tcreated\tskipped\tpanes\tresult")
         self.assertTrue(rows[1].startswith("Acme Shop\tacme-shop\trnd,research,build,gtm,ops\t-\t"
-                                           "main-acme-shop,liaison-acme-shop\tok"), rows[1])
+                                           "main-acme-shop\tok"), rows[1])
         self.assertIn("ok [--wake build dropped (awake limit 1)]", rows[2])
         self.assertTrue(rows[3].startswith("Gone\tgone\t-\t-\t-\tfailed (exit "), rows[3])
         self.assertEqual(rows[-3], "3 repo(s), 3 processed, 1 failed")
-        self.assertEqual(rows[-2], "panes: 5 opened (main + liaison per repo, plus --wake)")
+        self.assertEqual(rows[-2], "panes: 3 opened (main per repo, plus --wake)")
         self.assertEqual(rows[-1], "intake not run for 2 projects: run `orche intake <proj>` per project "
                                    "(about $0.1–0.3 each)")
 

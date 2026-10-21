@@ -20,7 +20,7 @@ the main checkout:
 - `.orche/div/<division>/CONTEXT.md` per division: `# Context for <label> — intake at <sha7>,
   <YYYY-MM-DD>`, then the text capped at `intake.max_chars` (cut at a paragraph boundary,
   "… (truncated)"). The runner appends it to every brief of that division (a feature agent: Build).
-- `PROJECT_CARD.md`: a section the liaison has not filled yet (Purpose / Stack / Entry points still
+- `PROJECT_CARD.md`: a section nobody has filled yet (Purpose / Stack / Entry points still
   holding the template's placeholder) gets `what` / `stack` / `layout`; a section with any other
   text is left alone. `build_test_run`, `conventions` and `risks` go into one delimited block
   (`<!-- orche-intake:begin … -->` … `<!-- orche-intake:end -->`, before `## How to ask`) that each
@@ -93,7 +93,7 @@ MANIFEST_GLOBS = ("requirements*.txt", "Dockerfile.*", "docker-compose*.y*ml", "
 ENV_TEMPLATES = (".env.example", ".env.sample", ".env.template")
 _ENV_NAME = re.compile(r"^\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=")
 CARD_FIELDS = ("what", "stack", "layout", "build_test_run", "conventions", "risks")
-CARD_CHARS = 600         # per card field: the card stays near the liaison's 2K-token budget
+CARD_CHARS = 600         # per card field: the card stays near its 2K-token budget
 MAX_NOTES = 5
 TRUNCATED = "… (truncated)"
 BEGIN = ("<!-- orche-intake:begin — written by `orche intake` and replaced whole by the next one; "
@@ -331,16 +331,16 @@ def _env_names(root, rel) -> list:
     return list(dict.fromkeys(m.group(1) for line in text.splitlines() if (m := _ENV_NAME.match(line))))
 
 
-def _git_log(root) -> list:
-    res = shell.run(["git", "-C", str(root), "-c", "core.pager=cat", "log", "--oneline", f"-{LOG_COMMITS}"],
-                    timeout=30)
+def git_log(root, n=LOG_COMMITS) -> list:
+    """`git log --oneline -<n>` of the checkout, each line cut at 100 characters; [] on failure."""
+    res = shell.run(["git", "-C", str(root), "-c", "core.pager=cat", "log", "--oneline", f"-{n}"], timeout=30)
     return [line[:100] for line in (res.out or "").splitlines()] if res.ok else []
 
 
 def repo_facts(root, tree_bytes=TREE_BYTES) -> str:
     """The pre-computed request section (masked): tree, history, manifests, env variable names."""
     lines, total, manifests, envs = _walk(root)
-    log_lines = _git_log(root)
+    log_lines = git_log(root)
     parts = ["Repository facts (collected by ORCHE before this run: you have no shell; use these instead "
              "of listing directories or reading git history):", "",
              f"Tree (depth {TREE_DEPTH}; .git, node_modules, dist, build, .orche, .venv, __pycache__ and "
@@ -439,30 +439,44 @@ def lock(key):
 _MARKERS = re.compile(r"<!--\s*orche-intake:(?:begin|end)\b[^>]*-->|<!--\s*orche-intake:(?:begin|end)")
 
 
-def _clean(value) -> str:
-    """A masked string of the answer, without the card block's own markers (one inside `risks`
-    would end the block early on the next intake)."""
+def clean(value) -> str:
+    """A masked string of a worker's answer, without the card block's own markers (one inside
+    `risks` would end the block early on the next intake); "" for a non-string."""
     return mask.redact(_MARKERS.sub("", value).strip())[0] if isinstance(value, str) else ""
+
+
+def extract_json(text) -> dict:
+    """The JSON object in a worker's answer, from its first `{` to its last `}` (a code fence or
+    prose around it tolerated). ValueError, with the message to report, when there is none."""
+    raw = str(text or "").strip()
+    start, end = raw.find("{"), raw.rfind("}")
+    if start < 0 or end <= start:
+        raise ValueError("the worker's answer holds no JSON object")
+    try:
+        return json.loads(raw[start:end + 1])
+    except ValueError as exc:
+        raise ValueError(f"the worker's answer is not valid JSON ({exc.msg})") from None
 
 
 def parse_result(text) -> dict:
     """The worker's JSON (a code fence or prose around it tolerated), every string masked.
     IntakeError when there is no object of the expected shape."""
-    raw = str(text or "").strip()
-    start, end = raw.find("{"), raw.rfind("}")
-    if start < 0 or end <= start:
-        raise IntakeError("the worker's answer holds no JSON object")
     try:
-        data = json.loads(raw[start:end + 1])
+        data = extract_json(text)
     except ValueError as exc:
-        raise IntakeError(f"the worker's answer is not valid JSON ({exc.msg})") from None
+        raise IntakeError(str(exc)) from None
     if not isinstance(data, dict) or not isinstance(data.get("card"), dict) \
             or not isinstance(data.get("divisions", {}), dict):
         raise IntakeError('the worker\'s JSON lacks the "card" / "divisions" objects')
     notes = data.get("notes") if isinstance(data.get("notes"), list) else []
-    return {"card": {f: _clean(data["card"].get(f)) for f in CARD_FIELDS},
-            "divisions": {str(k): _clean(v) for k, v in (data.get("divisions") or {}).items()},
-            "notes": [n for n in (_clean(x) for x in notes[:MAX_NOTES]) if n]}
+    return {"card": {f: clean(data["card"].get(f)) for f in CARD_FIELDS},
+            "divisions": {str(k): clean(v) for k, v in (data.get("divisions") or {}).items()},
+            "notes": [n for n in (clean(x) for x in notes[:MAX_NOTES]) if n]}
+
+
+def cost4(value):
+    """A cost for an events line: a number rounded to 4 decimals (0.42 stays 0.42), else as is."""
+    return round(value, 4) if isinstance(value, (int, float)) else value
 
 
 def cap(text, limit) -> str:
@@ -530,16 +544,6 @@ def write_files(plan_, result, cfg, date) -> list:
 
 # ---- run -------------------------------------------------------------------
 
-def _failure(res) -> str:
-    if res.failure:
-        return res.failure
-    if res.is_error:
-        return f"claude reported an error ({res.data.get('subtype') or 'is_error'})"
-    if res.code:
-        return f"claude exited {res.code}"
-    return ""
-
-
 def run(reg, name, cfg) -> dict:
     """Run the intake of project `name` now: the stamp plus `project`, `files`, `notes`.
     IntakeError (masked message, `code`) on any failure; nothing is written then."""
@@ -555,7 +559,7 @@ def run(reg, name, cfg) -> dict:
             log.log("events", f"intake project={key} interrupted: {res.error}")
             raise Interrupted(res.error or "terminated")
         try:
-            why = _failure(res)
+            why = res.problem
             if why:
                 raise IntakeError(why)
             result = parse_result(res.text)
@@ -569,7 +573,7 @@ def run(reg, name, cfg) -> dict:
                  "duration_s": round(ms / 1000, 1) if isinstance(ms, (int, float)) else round(wall, 1),
                  "divisions": [d[0] for d in p.divisions], "turns": res.turns}
         util.write_json(stamp_path(p.root), stamp)
-        log.log("events", f"intake project={key} head={p.head[:7]} model={p.call.model} cost={stamp['cost_usd']} "
+        log.log("events", f"intake project={key} head={p.head[:7]} model={p.call.model} cost={cost4(stamp['cost_usd'])} "
                           f"turns={stamp['turns']} divisions={len(p.divisions)}")
     return {"project": key, **stamp, "files": files + [str(stamp_path(p.root))], "notes": result["notes"]}
 

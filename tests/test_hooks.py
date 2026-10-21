@@ -243,7 +243,7 @@ class DispatchRelayTest(HookCase):
         (self.root / "beta").mkdir()
         reg["projects"]["beta"] = {"repo_id": "repo-beta", "path": str(self.root / "beta"), "stage": "building",
                                    "aliases": ["bee"], "main_session": "main-beta",
-                                   "liaison_session": "liaison-beta", "card": "x", "standing": ".orche/STANDING.md",
+                                   "card": "x", "standing": ".orche/STANDING.md",
                                    "divisions": {"build": {"status": "active", "worktree": "repo-beta::/nowhere",
                                                            "branch": "div/build", "session": "div-beta-build",
                                                            "model": "m",
@@ -597,12 +597,13 @@ class DispatchRelayTest(HookCase):
             cwd=str(self.root / "scratch")), ORCHE_SESSION="")
         self.assertEqual((res.returncode, res.stderr), (0, ""))
 
-    def test_liaison_and_feature_senders_refused(self):
+    def test_unregistered_and_feature_senders_refused(self):
+        """C8: a leftover liaison-<proj> pane is no registered session (the registry key is ignored)."""
         path = self.transcript(DISPATCH_OK)
         res = self.run_hook("dispatch_relay.py", self.payload("stop.json", transcript_path=path),
                             ORCHE_SESSION="liaison-acme")
         self.assertEqual(res.returncode, 2)
-        self.assertIn("only Main or a division may dispatch; liaison-acme is a liaison session", res.stderr)
+        self.assertIn("only Main or a division may dispatch; liaison-acme is an unknown session", res.stderr)
         res = self.run_hook("dispatch_relay.py", self.payload("stop.json", transcript_path=path,
                                                               cwd=str(self.root / "acme-checkout")),
                             ORCHE_SESSION="")
@@ -700,7 +701,7 @@ class DispatchRelayTest(HookCase):
         (self.root / "buildproj").mkdir()
         reg["projects"]["build"] = {"repo_id": "repo-build", "path": str(self.root / "buildproj"),
                                     "stage": "building", "aliases": [], "main_session": "main-build",
-                                    "liaison_session": "", "card": "x", "standing": ".orche/STANDING.md",
+                                    "card": "x", "standing": ".orche/STANDING.md",
                                     "divisions": {}}
         (self.home / "registry.json").write_text(json.dumps(reg))
         res = self.stop(DISPATCH_OK)
@@ -738,8 +739,7 @@ class DispatchRelayTest(HookCase):
         res = self.stop(DISPATCH_OK.replace("TO        build", "TO        beta"))
         self.assertEqual((res.returncode, res.stderr),
                          (2, "[orche] dispatch refused: unknown TO 'beta'. Valid targets: div-acme-build, "
-                             "div-acme-rnd, div-beta-build, feat-acme-checkout, liaison-acme, liaison-beta, "
-                             "main-acme.\n"))
+                             "div-acme-rnd, div-beta-build, feat-acme-checkout, main-acme.\n"))
         self.assertFalse(self.units_dir().exists())
         self.assertEqual(self.inbox("main-beta"), [])
 
@@ -906,7 +906,7 @@ class ReportInjectTest(HookCase):
         (beta / ".orche").mkdir(parents=True)
         (beta / ".orche" / "STANDING.md").write_text("1. Beta orders only.\n")
         reg["projects"]["beta"] = {"repo_id": "repo-beta", "path": str(beta), "stage": "building",
-                                   "aliases": [], "main_session": "main-beta", "liaison_session": "liaison-beta",
+                                   "aliases": [], "main_session": "main-beta",
                                    "card": "x", "standing": ".orche/STANDING.md", "divisions": {}}
         (self.home / "registry.json").write_text(json.dumps(reg))
         res = self.run_hook("report_inject.py", self.payload("prompt.json", cwd=str(beta)))
@@ -1299,16 +1299,17 @@ class SessionStartEndTest(HookCase):
         feat = self.run_hook("session_start.py", self.payload("session_start_clear.json")).stdout
         self.assertIn("## Role rules\nORCHE unit rules", feat)
 
-    def test_liaison_session_in_main_checkout_gets_generic_card(self):
+    def test_leftover_liaison_pane_is_an_unregistered_session(self):
+        """C8: an old liaison-<proj> pane gets the unregistered-session note and the generic card,
+        never its old role, its memory or Main's rules."""
         liaison = self.repo / ".orche" / "liaison"
         liaison.mkdir()
         (liaison / "STATUS.md").write_text("LIAISON-STATUS card refreshed\n")
         out = self.run_hook("session_start.py", self.payload("session_start_clear.json", cwd=str(self.repo)),
                             ORCHE_SESSION="liaison-acme").stdout
-        self.assertTrue(out.startswith("## ORCHE role\nsession: liaison-acme\nrole: liaison\nproject: acme"))
+        self.assertTrue(out.startswith("## ORCHE role\n[orche] session liaison-acme is not registered"), out)
         self.assertIn("## Role rules\nORCHE unit rules", out)
-        self.assertIn("LIAISON-STATUS", out)
-        for absent in ("main-acme", "ORCHE Main rules", "dispatch"):
+        for absent in ("LIAISON-STATUS", "role: liaison", "ORCHE Main rules", "main-acme", "dispatch"):
             self.assertNotIn(absent, out)
 
     def test_unidentified_main_checkout_gets_generic_card_and_note(self):

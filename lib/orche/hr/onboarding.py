@@ -26,7 +26,6 @@ SETTINGS_TMPL = templates.TEMPLATES_ROOT / "project" / ".claude" / "settings.loc
 ROLE_TEXT = {
     "division": "You run the {name} division of {project} as a long-lived owner of its charter.",
     "feature": "You own the {name} feature of {project}, inside its scope globs only.",
-    "liaison": "You answer other projects' questions about {project} from PROJECT_CARD.md and the repo.",
 }
 
 
@@ -145,7 +144,7 @@ def persona_template(role, name, custom=False):
     """Most specific persona template that exists, else None. A custom division always uses the
     generic `div-custom.md`."""
     names = {"division": ["div-custom.md"] if custom else [f"div-{name}.md", "division.md"],
-             "feature": ["feature.md"], "liaison": ["liaison.md"]}[role]
+             "feature": ["feature.md"]}[role]
     return next((PERSONAS / n for n in names if (PERSONAS / n).is_file()), None)
 
 
@@ -156,8 +155,7 @@ def persona_text(role, *, project, name, session, model, effort, custom=None):
         extra = {"LABEL": custom["label"], "CHARTER": custom["charter"]} if custom else {}
         return templates.render(tmpl.read_text(encoding="utf-8"), PROJECT=project, NAME=name,
                                 SESSION=session, MODEL=model, EFFORT=effort, **extra), True
-    agent = "liaison" if role == "liaison" else session
-    text = (f"---\nname: {agent}\ndescription: ORCHE {role} agent for {project} ({name})\nmodel: {model}\n---\n"
+    text = (f"---\nname: {session}\ndescription: ORCHE {role} agent for {project} ({name})\nmodel: {model}\n---\n"
             f"{ROLE_TEXT[role].format(name=name, project=project)}\n"
             + (f"Charter: {custom['charter']}\n" if custom else "")
             + "Read .orche/STANDING.md first; keep your HANDOFF.md current before any pause.\n")
@@ -191,20 +189,21 @@ def write_persona(dirs, agent, role, *, project, name, session, model, effort, m
 
 def session_name(kind, key, name="") -> str:
     """The session of a unit or project pane (SPEC §14.8): div-<key>-<name>, feat-<key>-<name>,
-    main-<key>, liaison-<key>."""
-    return f"{kind}-{key}" if kind in ("main", "liaison") else f"{kind}-{key}-{name}"
+    main-<key>."""
+    return f"main-{key}" if kind == "main" else f"{kind}-{key}-{name}"
 
 
 def session_owner(reg: dict, key: str, session: str):
     """The other project that has `session`, or reserves it, else None. Session names are unique
     registry-wide (Roster.member resolves a name to one member): another project holds every session
-    it has (main, liaison, divisions, features, retired ones too) and reserves `div-<other>-<d>` for
+    it has (main, divisions, features, retired ones too) and reserves `div-<other>-<d>` for
     each standard division and each custom definition, onboarded or not."""
     for other, proj in reg.get("projects", {}).items():
         if other == key:
             continue
         held = {session_name("div", other, d) for d in (*registry.DIVISIONS, *(proj.get("custom_divisions") or {}))}
-        held.update(s for s in (proj.get("main_session"), proj.get("liaison_session")) if s)
+        if proj.get("main_session"):
+            held.add(proj["main_session"])
         for div in (proj.get("divisions") or {}).values():
             held.update(s for s in [div.get("session")] + [f.get("session") for f in div.get("features", [])] if s)
         if session in held:
