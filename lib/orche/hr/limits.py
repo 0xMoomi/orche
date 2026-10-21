@@ -73,7 +73,7 @@ class AwakeLimit(book.Refused):
 
 def awake(reg) -> tuple:
     """(awake sessions, limits.max_awake_sessions). Awake = active divisions and active features
-    (registry.awake_sessions); Main and Liaison panes do not count."""
+    (registry.awake_sessions); Main panes do not count."""
     return len(registry.awake_sessions(reg)), reg["limits"]["max_awake_sessions"]
 
 

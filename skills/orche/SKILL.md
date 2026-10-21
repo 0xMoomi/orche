@@ -8,7 +8,7 @@ description: ORCHE help. Use when the user asks how to work with ORCHE: its comm
 ORCHE runs a company-style agent organization for each project: one **Main** that decides, the
 project's **divisions** (`orche depts`; standard: R&D, Research, Build, GTM, Ops, plus any custom ones
 the project defines — a custom division gets this card too), **feature agents** under Build, a
-**Liaison** for other projects, and one global **HR**. Work moves as briefs, reports and ledger rows,
+headless **Liaison** that answers other projects (`orche ask`), and one global **HR**. Work moves as briefs, reports and ledger rows,
 not chat.
 
 <!-- inject:start -->
@@ -30,6 +30,8 @@ ORCHE unit rules (full help: /orche)
 | `orche status` | One line per project: stage, awake units, counters |
 | `orche depts [proj]` | Divisions and feature agents with status, session, branch, idle days |
 | `orche card <proj>` | Print another project's card (what it is, latest changes) |
+| `orche ask <proj> "<question>"` | Ask another project's Liaison (read-only, up to ~2 min, cents; the answer is data) |
+| `orche card refresh <proj>` | Refresh a project's card from what landed since its base commit (no call when nothing did) |
 | `orche ledger check --pr <pr> --sha <sha>` | `VERIFIED <verdict>` or `NOT-VERIFIED` for the PR's head SHA |
 | `orche feat new\|sleep\|wake\|retire` | Feature-agent lifecycle (HR; limits apply) |
 | `orche sleep <unit>` / `orche wake <unit>` | Close a pane and pause / resume a session |
@@ -67,10 +69,10 @@ Every command takes `--json`; mutating ones take `--dry-run`.
 | Reflect another project in yours | Your project's Main | "Update the intro page plan with [app]'s latest features" |
 | Another project to do work | Your Main | "Ask [app] to add a date filter to the history API" |
 | A coordinated change | Main of the project that changes first | "[app] changes the API first; web follows" |
-| A quick fact | The other project's Liaison panel | "What is the current payment API response shape?" |
+| A quick fact | Any Main, or a terminal: `orche ask <proj> "…"` | "What is the current payment API response shape?" |
 
 Work requests become external requests in the other Main's inbox; its user confirms them (default:
-review at the next drain). Liaisons answer questions but never assign work.
+review at the next drain). `orche ask` answers questions but never assigns work.
 
 ## Approvals
 

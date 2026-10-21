@@ -1,6 +1,6 @@
 """Wake, sleep and stage change (SPEC §2.3, §2.5, §14.12).
 
-Precondition of `wake` and `sleep`: `unit.owns_worktree` (the CLI routes Main and Liaison to
+Precondition of `wake` and `sleep`: `unit.owns_worktree` (the CLI routes Main to
 `panes.project_pane`). Both return (data, line) or raise book.Refused(code, msg).
 """
 import sys

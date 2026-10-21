@@ -23,7 +23,7 @@ def actor(env=None) -> str:
 
 @dataclass(frozen=True)
 class Member:
-    """A registered session: a project's Main or Liaison, a division, or a feature agent.
+    """A registered session: a project's Main, a division, or a feature agent.
 
     `==` ignores `entry` and `home`, so a live record and its retired twin compare equal; compare `.entry` with `is`.
     """
@@ -37,7 +37,7 @@ class Member:
 
     @property
     def role(self) -> str:
-        """The word for messages: main, liaison, division or feature."""
+        """The word for messages: main, division or feature."""
         return {"div": "division", "feat": "feature"}.get(self.kind, self.kind)
 
     @property
@@ -47,7 +47,7 @@ class Member:
 
     @property
     def worktree(self) -> Path | None:
-        """The recorded worktree (`repoId::` stripped, not resolved); None if unrecorded or main/liaison."""
+        """The recorded worktree (`repoId::` stripped, not resolved); None if unrecorded or main."""
         path = units.worktree_path((self.entry or {}).get("worktree", "")) if self.owns_worktree else ""
         return Path(path) if path else None
 
@@ -63,18 +63,17 @@ class Member:
 
     @property
     def event_unit(self) -> str | None:
-        """events[].unit: "<division>" or "<division>/<feature>"; None for main/liaison."""
+        """events[].unit: "<division>" or "<division>/<feature>"; None for main."""
         if self.kind == "div":
             return self.name
         return f"{self.division}/{self.name}" if self.kind == "feat" else None
 
     @property
     def memory(self) -> Path:
-        """The member's memory dir: <home>/.orche, <home>/.orche/liaison, or <worktree>/.orche/<kind>/<name>."""
+        """The member's memory dir: <home>/.orche (Main), or <worktree>/.orche/<kind>/<name>."""
         if self.owns_worktree:
             return (self.worktree or Path(".")) / ".orche" / self.kind / self.name
-        base = (self.home or Path(".")) / ".orche"
-        return base / "liaison" if self.kind == "liaison" else base
+        return (self.home or Path(".")) / ".orche"
 
 
 class _Lazy:
@@ -147,12 +146,10 @@ class Roster:
         heads: dict[str, Member] = {}
         for key, proj in reg.get("projects", {}).items():
             home = units.project_root(reg, key)
-            for kind, attr in (("main", "main_session"), ("liaison", "liaison_session")):
-                if proj.get(attr):
-                    member = Member(proj[attr], key, kind, "", None, None, home)
-                    heads.setdefault(member.session, member)
-                    if kind == "main":
-                        self._mains[key] = member
+            if proj.get("main_session"):
+                member = Member(proj["main_session"], key, "main", "", None, None, home)
+                heads.setdefault(member.session, member)
+                self._mains[key] = member
             for div_name, div in proj.get("divisions", {}).items():
                 self._units.append(Member(div.get("session", ""), key, "div", div_name, div_name, div, home))
                 for feat in div.get("features", []):
@@ -166,7 +163,7 @@ class Roster:
         self._members = {**retired, **live, **heads}
 
     def member(self, session) -> Member | None:
-        """Exact name; Main/Liaison before units; live before retired."""
+        """Exact name; Main before units; live before retired."""
         return self._members.get(session) if session else None
 
     def main(self, project) -> Member | None:

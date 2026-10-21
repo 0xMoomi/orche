@@ -9,7 +9,7 @@ The read model over the registry that answers who a session is, where a cwd is, 
 _Avoid_: registry (the stored file), units (the old helper module).
 
 **Member**:
-A registered session of a project — its Main, its Liaison, a division or a feature agent — with its registry record.
+A registered session of a project — its Main, a division or a feature agent — with its registry record.
 _Avoid_: unit (that is dispatched work), role (that is a member's kind), agent (too broad).
 
 **Identity**:
@@ -41,14 +41,14 @@ Who gets credit in events, the HR log, graveyard and audit rows: `ORCHE_SESSION`
 _Avoid_: requester, by (those are field names).
 
 **Memory dir**:
-A member's folder for STATUS.md, HANDOFF.md and DECISIONS.tsv: `.orche/` (Main), `.orche/liaison/` (Liaison), `<worktree>/.orche/<div|feat>/<name>/` (division, feature).
+A member's folder for STATUS.md, HANDOFF.md and DECISIONS.tsv: `.orche/` (Main), `<worktree>/.orche/<div|feat>/<name>/` (division, feature).
 
 **Unit**:
 One dispatched piece of work with a brief, a report and (for code) a ledger row, named `<proj>-<slug>-<yyyymmdd>-<n>` (SPEC §16).
 _Avoid_: unit for a division or feature agent (say member); the old `units.Unit` type meant that.
 
 **Headless call**:
-One `claude -p` process that ORCHE starts, feeds, waits for and cleans up (`lib/orche/headless.py`): a unit worker, an intake sweep or a triage classification.
+One `claude -p` process that ORCHE starts, feeds, waits for and cleans up (`lib/orche/headless.py`): a unit worker, an intake sweep, a Liaison answer or card refresh, or a triage classification.
 _Avoid_: worker (say unit worker), runner (that is `orche run`).
 
 **Unit worker**:
@@ -60,8 +60,19 @@ What a headless call may see. *project*: the cwd's project settings, all tools u
 _Avoid_: mode, sandbox, profile.
 
 **Run tag**:
-`<unit>@<started_ns>` (intake: `intake-<project>@<started_ns>`). A tagged call's `ORCHE_RUN_ID` and the name of its marker file; when the call ends, every process carrying the tag is killed.
+`<unit>@<started_ns>` (intake: `intake-<project>@<started_ns>`; the Liaison: `ask-<project>@<started_ns>`, `card-<project>@<started_ns>`). A tagged call's `ORCHE_RUN_ID` and the name of its marker file; when the call ends, every process carrying the tag is killed.
 _Avoid_: run id (the lock's field name for the same value).
+
+**Liaison**:
+The headless read-only role that answers other projects' questions (`orche ask`) and refreshes PROJECT_CARD.md (`orche card refresh`). Not a member: no pane, session, memory or registry record.
+_Avoid_: liaison session, liaison pane (gone since 0.5.0).
+
+**Base commit**:
+The commit a card reflects: `base <sha>` under `## Last refreshed`. A refresh reads what landed since it and moves it to HEAD when it writes.
+_Avoid_: stamp (that is intake's).
+
+**Card refresh**:
+`orche card refresh <project>`: a git gate, then (only when commits outside the card and `.orche/` landed since the base commit) one Liaison call whose sections the CLI merges into the card.
 
 **Effort**:
 Claude Code's `--effort` level. A unit worker's effort comes from its TIER (mechanical low, standard medium, hard high); its model comes from the target's registry record. A pane's effort is its persona file's `effort:` line; a division record carries none (an old `effort` key is ignored).
@@ -129,7 +140,7 @@ _Avoid_: zombie lock.
 
 ## Relationships
 
-- A project has one Main, one Liaison, divisions and (under Build) feature agents; each is a **Member**.
+- A project has one Main, divisions and (under Build) feature agents; each is a **Member**. The **Liaison** is a *sealed* **Headless call**, not a Member.
 - An **Identity** names at most one Member; a **Place** names at most one project and one unit worktree.
 - A **Target** receives **Units**; a **Recipient** receives pointers.
 - A **Unit** is carried out by one **Unit worker** per run.
@@ -154,3 +165,4 @@ _Avoid_: zombie lock.
 - "completion gate", "done gate" and "ledger gate" named one thing in three places: it is the Done gate, and the ledger row is one of its checks.
 - "gated" meant both the ledger gate (`gated_sender`) and the stage gate (`gated_by_stage`): say ledger-gated member.
 - "run" is the noun (one execution), `orche run` the command (the runner), `lib/orche/runs/` the module; the old runner module is gone.
+- "liaison" meant a pane and session (until 0.4.0); now it is the headless role only.

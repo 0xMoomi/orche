@@ -181,16 +181,16 @@ class ReportTest(support.TempHomeCase):
         self.assertEqual(self.orche("report", "done", "--summary", "x")[0], 0)
 
     def test_adhoc_unit_for_requests_questions_and_info(self):
-        self.as_session("liaison-acme-shop")
+        self.as_session("div-acme-shop-rnd")
         code, out, err = self.orche("--json", "report", "external-request", "--summary", "add a date filter")
         self.assertEqual((code, err), (0, ""))
         ptr = json.loads(out)
-        self.assertRegex(ptr["unit"], r"^adhoc-liaison-acme-shop-\d{8}$")
+        self.assertRegex(ptr["unit"], r"^adhoc-div-acme-shop-rnd-\d{8}$")
         self.assertEqual((ptr["to"], ptr["brief_rev"], ptr["report_path"]), ("main-acme-shop", 1, ""))
         self.assertEqual(self.orche("report", "question", "--summary", "which API?")[0], 0)
         code, _, err = self.orche("report", "blocked", "--summary", "x")
         self.assertEqual(code, 1)
-        self.assertIn("no brief addressed to liaison-acme-shop; pass --unit", err)
+        self.assertIn("no brief addressed to div-acme-shop-rnd; pass --unit", err)
 
     def test_retired_target_rejected(self):
         reg = registry.load()

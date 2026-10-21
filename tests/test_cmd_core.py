@@ -465,11 +465,11 @@ class SleepWakeTest(CoreCase):
         self.assertEqual(self.orche("sleep", "div-acme-shop-gtm")[0], 2)
         code, _, err = self.orche("wake", "nonsense")
         self.assertEqual(code, 2)
-        self.assertIn("main-<proj> or liaison-<proj>", err)
+        self.assertIn("feat-<proj>-<feature> or main-<proj>)", err)
 
 
 class ProjectPaneTest(CoreCase):
-    """`orche wake main-<proj>|liaison-<proj>` opens the project pane or switches to it."""
+    """`orche wake main-<proj>` opens the project pane or switches to it."""
     WT = "id:repo-acme::/srv/orca/acme-shop"
     ENV = f"PATH={support.ROOT / 'bin'}:$PATH "
 
@@ -492,13 +492,12 @@ class ProjectPaneTest(CoreCase):
         self.assertEqual(self.calls_of("create"), [])
         self.assertEqual(self.calls_of("switch"), [["orca", "terminal", "switch", "--terminal", "t-main", "--json"]])
 
-    def test_wake_liaison_opens_with_the_liaison_agent(self):
-        code, out, err = self.orche("--json", "wake", "liaison-acme-shop")
-        self.assertEqual((code, err), (0, ""))
-        self.assertEqual(json.loads(out), {"session": "liaison-acme-shop", "pane": "opened"})
-        self.assertEqual(self.calls_of("create")[0][-2],
-                         f"{self.ENV}ORCHE_SESSION=liaison-acme-shop claude --agent liaison --name liaison-acme-shop")
-        self.assertNotIn("--permission-mode", self.calls_of("create")[0][-2])
+    def test_wake_liaison_is_an_unknown_unit(self):
+        """C8: the Liaison has no pane any more."""
+        code, out, err = self.orche("wake", "liaison-acme-shop")
+        self.assertEqual((code, out), (2, ""))
+        self.assertIn("unknown unit: liaison-acme-shop", err)
+        self.assertEqual(self.calls_of("create") + self.calls_of("switch"), [])
 
     def test_wake_main_dry_run_prints_create_argv_or_switch(self):
         code, out, err = self.orche("--dry-run", "wake", "main-acme-shop")

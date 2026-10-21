@@ -56,8 +56,7 @@ def standing_additions(root, rel) -> list:
 
 
 def _decision_files(proj) -> list:
-    files = [Path(proj["path"]) / ".orche" / "DECISIONS.tsv",
-             Path(proj["path"]) / ".orche" / "liaison" / "DECISIONS.tsv"]
+    files = [Path(proj["path"]) / ".orche" / "DECISIONS.tsv"]
     for dname, div in proj.get("divisions", {}).items():
         files.append(Path(units.worktree_path(div.get("worktree", ""))) / ".orche" / "div" / dname / "DECISIONS.tsv")
         for feat in div.get("features", []):

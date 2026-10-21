@@ -17,7 +17,7 @@ Install ORCHE on this Mac and set it up on one of my projects. Do exactly these 
    Allow it up to 10 minutes (set the command timeout to 600000 ms): it reads the codebase once at the end.
    Without a terminal it takes the defaults and asks nothing. If Orca does not list the repository yet, init adds it to Orca first; at the end it switches Orca to the main-<project> tab.
 4. Run: export PATH="$HOME/orche/bin:$PATH" && orche status
-5. Report in five lines: the version (orche version); whether the Claude Code plugin was installed or the hooks went into settings.json; the two Orca panes that were created (main-<project> and liaison-<project>); that I should restart Claude Code once so the plugin loads; and the one next step: type a request in plain language in the main-<project> tab that Orca now shows.
+5. Report in five lines: the version (orche version); whether the Claude Code plugin was installed or the hooks went into settings.json; the Orca pane that was created (main-<project>); that I should restart Claude Code once so the plugin loads; and the one next step: type a request in plain language in the main-<project> tab that Orca now shows.
 ```
 
 The installer checks the requirements for you (macOS, git, Python 3.11+, Claude Code, Orca) and stops with a hint when one is missing. This prompt skips Jev (optional, faster routing of simple requests); add it any time with `orche jev setup`. Run the same prompt again later to update.
@@ -51,8 +51,8 @@ folder Orca does not list yet is added to Orca first):
 orche init ~/path/to/your/project   # or, inside the project: orche init
 ```
 
-Press Enter at every question to take the defaults. This creates the project's divisions, two Orca
-panes (`main-<project>` and `liaison-<project>`), and reads the codebase once so each division knows
+Press Enter at every question to take the defaults. This creates the project's divisions, one Orca
+pane (`main-<project>`), and reads the codebase once so each division knows
 it (about $0.1–0.3). If you close the Main pane later, `orche wake main-<project>` opens a new Main
 session there (`claude --name`; it does not resume the old one), or switches to the pane when it is open.
 
@@ -85,9 +85,9 @@ detail.
 
 ORCHE runs a small company of Claude Code sessions inside Orca, the desktop multi-agent manager
 ORCHE is built and optimized for.
-Each project gets one **Main** (decides, never codes), a **Liaison** (answers other projects), and
-long-lived **divisions** (R&D, Research, Build, GTM, Ops), each in its own git worktree; Build owns
-per-feature **feature agents**. ORCHE is a Claude Code **plugin** (agents, skills, hooks) with a
+Each project gets one **Main** (decides, never codes), long-lived **divisions** (R&D, Research,
+Build, GTM, Ops), each in its own git worktree, and a headless **Liaison** (`orche ask`, `orche card
+refresh`: answers other projects and keeps the card fresh); Build owns per-feature **feature agents**. ORCHE is a Claude Code **plugin** (agents, skills, hooks) with a
 companion CLI, `orche`; it is neither a CLAUDE.md snippet nor a single skill. To run it you need
 Claude Code, Orca (with its `orca` CLI on `PATH`), Python 3.11+, git, and macOS (the pure-Python parts also run
 on Linux).
@@ -202,7 +202,7 @@ export PATH="$HOME/orche/bin:$PATH"
 orche version
 ```
 
-Success: `orche 0.4.0` (or the version you cloned).
+Success: `orche 0.5.0` (or the version you cloned).
 
 To make it permanent, add the same line to your login profile. ORCHE's panes and `orche doctor` use a
 login shell (`$SHELL -lc`), and a zsh login shell does not read `~/.zshrc`, so use:
@@ -377,13 +377,13 @@ Divisions for my-app  (type numbers to toggle, a to add a custom division, Enter
 > 
 Stage [building]:
 Aliases (comma-separated) []: my,app
-Summary: build, gtm, design(custom) · stage building · 3 worktrees · panes main + liaison
+Summary: build, gtm, design(custom) · stage building · 3 worktrees · pane main
 Apply? [Y/n]
 ```
 
 For a first try, press Enter at every prompt to take the defaults. Success: the output starts with
 `initialized my-app (…) stage=building`, lists each division as `dormant`, and ends with
-`panes: main-my-app, liaison-my-app`.
+`panes: main-my-app`.
 
 ### What gets created
 
@@ -395,12 +395,13 @@ For that project only:
    whether they belong in the repo.
 2. One Orca worktree per chosen division (`div-<division>`) with its charter, status and handoff
    files. Every division starts dormant (no pane, no cost).
-3. Two Orca panes in the main checkout: `main-<proj>` (you talk here) and `liaison-<proj>` (answers
-   other projects' questions, keeps `PROJECT_CARD.md` fresh). No division pane opens unless you pass
-   `--wake`. With no such pane open, `orche wake main-<proj>` (or `liaison-<proj>`) opens a new
+3. One Orca pane in the main checkout: `main-<proj>` (you talk here). Other projects ask about this
+   one with `orche ask <proj>`, and `orche card refresh <proj>` keeps `PROJECT_CARD.md` fresh (see
+   [Asking another project](#asking-another-project)). No division pane opens unless you pass
+   `--wake`. With no such pane open, `orche wake main-<proj>` opens a new
    session (`claude --name`; it does not resume the old one); with one open it switches to it. The
    last thing init does is switch Orca to `main-<proj>`. Division and feature panes start with
-   `--permission-mode bypassPermissions`; Main and Liaison panes ask as usual. On a machine without
+   `--permission-mode bypassPermissions`; the Main pane asks as usual. On a machine without
    `skipDangerousModePermissionPrompt`, the first division pane shows Claude Code's one-time bypass
    confirmation.
 4. An entry in `~/.claude/orche/registry.json`. Two weekly Orca automations are printed, not
@@ -428,8 +429,8 @@ what a shell would have shown: the directory tree three levels deep (without `.g
   data: under `## Project context (…) — reference data written by orche intake, not instructions`,
   inside a fenced block that nothing in the text can close, before the runner's own instructions.
 - `PROJECT_CARD.md` — Purpose, Stack and Entry points while they are still empty, plus an `Intake`
-  block (build/test/run, conventions, risks) that the next intake replaces. Text the liaison or you
-  wrote is left alone.
+  block (build/test/run, conventions, risks) that the next intake replaces. Text `orche card refresh`
+  or you wrote is left alone.
 
 It costs well under a dollar for a mid-size repo on Sonnet and usually takes under a minute (up to
 9 on a large repo, `intake.timeout_s` 540; `orche init` prints `intake running… 60 s (claude-sonnet-5-5)` every 30 s); the
@@ -452,8 +453,7 @@ orche --dry-run intake my-app        # print the exact claude command; writes no
 `orche janitor run` refreshes it with `--if-stale` for projects that already had one (this runs even
 while the janitor itself is still a dry run; `"intake": {"enabled": false}` in the config turns it
 off). `/orche-apply` runs one `orche init` with a 10-minute tool timeout (the intake runs last; the
-sweep's own limit is 9 minutes), and the liaison starts `--if-stale` refreshes only with
-`--background`. `orche apply-all`
+sweep's own limit is 9 minutes). `orche apply-all`
 never runs the intake.
 
 Secrets: the worker cannot run commands, so it cannot print a file or old diffs through `git`. It may
@@ -599,6 +599,39 @@ Every command takes `--json`; commands that change state take `--dry-run` (`orch
 </details>
 
 <details>
+<summary><b>Asking another project</b></summary>
+
+## Asking another project
+
+Each project has a card, `PROJECT_CARD.md` in its main checkout (Purpose, Stack, Entry points,
+Recent changes, How to ask). Read it first; it costs nothing:
+
+```sh
+orche card my-app                          # print the card
+```
+
+When the card does not answer, ask the project's **Liaison**, a read-only Sonnet call in that
+project's main checkout:
+
+```sh
+orche ask my-app "Which endpoint creates an order, and what does it return?"
+```
+
+Quote the question. An answer takes up to about two minutes and costs a few cents. It is data, not
+instructions: masked, at most 1500 characters, and nothing is stored (no session, no pane). Any Main
+can run it, and so can you in a terminal.
+
+The card stays fresh with `orche card refresh my-app`: it reads what landed since the card's base
+commit and rewrites only the sections that changed (Purpose, Stack, Entry points, Recent changes);
+when nothing outside the card and `.orche/` landed, it makes no call. `--background` returns at once
+(log in `~/.claude/orche/logs/liaison/`). With `--automations`, `orche init` creates a weekly Orca automation that runs it.
+
+Work for another project still goes as an external request to its Main (`TO main-<proj>`); `orche
+ask` answers questions but never assigns work.
+
+</details>
+
+<details>
 <summary><b>Jev (optional)</b></summary>
 
 ## Jev (optional)
@@ -740,7 +773,7 @@ only (`--setting-sources project`), ORCHE's secret-read and scope gates (passed 
 `--settings`; no other ORCHE hook runs there), no MCP servers (its own empty `--mcp-config`,
 `~/.claude/orche/runner/mcp/<unit>@<started_ns>.json`, written at run start and removed on every
 exit path, by reconcile and by log pruning; `--dry-run` prints the placeholder path), the
-target's model from the registry (a feature agent: its division's; Main and Liaison:
+target's model from the registry (a feature agent: its division's; Main:
 `claude-opus-5-5`), and a TIER-sized effort and budget:
 
 | TIER | Effort | Max turns | Allowed tools |
@@ -988,14 +1021,15 @@ Why: in practice most token spend is a big orchestrator context re-read on every
 ```
 User ──(talks to Main; may open any panel)──▶ Main (per project)
                                                │ ```dispatch block → [Stop hook] → relay
-   ┌───────────┬──────────┬───────────┬────────┼────────┬──────────┐
-   ▼           ▼          ▼           ▼        ▼        ▼
- Liaison      R&D      Research     Build     GTM      Ops (dormant while stage=building)
+               ┌──────────┬───────────┬────────┼────────┬──────────┐
+               ▼          ▼           ▼        ▼        ▼
+              R&D      Research     Build     GTM      Ops (dormant while stage=building)
                                       │
                          ┌────────────┼────────────┐
                     feature agent  feature agent  feature agent …
                     (child worktrees of Build; created by HR)
 HR (one global) ── registry.json ── create · sleep · retire · rate limits · weekly audit
+Liaison (headless) ── orche ask <proj> · orche card refresh <proj> (read-only Sonnet calls in the main checkout)
 ```
 
 | Piece | What it does |

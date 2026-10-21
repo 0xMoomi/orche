@@ -48,7 +48,7 @@ def build_registry(root: Path) -> dict:
                                "design": _div(root, "acme-design", "div-acme-design"),
                                "build": acme_build}},
         "beta": {"repo_id": "repo-beta", "path": str(root / "beta"), "aliases": ["bee"],
-                 "main_session": "main-beta", "liaison_session": "liaison-beta",
+                 "main_session": "main-beta",
                  "divisions": {"build": _div(root, "beta-build", "div-beta-build")}},
         "build": {"repo_id": "repo-build", "path": str(root / "build-proj"), "aliases": [],
                   "main_session": "main-build", "divisions": {}},
@@ -99,7 +99,7 @@ class IdentifyTest(RosterCase):
              "feat-acme-checkout"),
             (5, "elsewhere", None, None, None, None, None, None),
             (6, "elsewhere", "main-acme", None, "main-acme", "main-acme", None, None),
-            (7, "acme", "liaison-acme", None, "liaison-acme", "liaison-acme", "acme", None),
+            (7, "acme", "liaison-acme", None, "liaison-acme", None, "acme", None),   # an old registry key: no member
             (8, "acme-build", "main-acme", None, "main-acme", "main-acme", "acme", "div-acme-build"),
             (9, "acme-build", "ghost-acme", None, "ghost-acme", None, "acme", "div-acme-build"),
             (10, "acme-build", "", None, "div-acme-build", "div-acme-build", "acme", "div-acme-build"),
@@ -125,8 +125,6 @@ class IdentifyTest(RosterCase):
                 self.assertEqual(who.member.session if who.member else None, member)
                 self.assertEqual(who.place.project, project)
                 self.assertEqual(who.place.unit.session if who.place.unit else None, unit)
-                if row == 7:
-                    self.assertEqual(who.member.kind, "liaison")
                 if row == 11:
                     self.assertEqual((who.place.unit.kind, who.place.unit.name), ("div", "build"))
                 if row == 12:
@@ -237,9 +235,7 @@ class MemberTest(RosterCase):
         self.assertIsNone(main.worktree)
         self.assertFalse(main.owns_worktree)
         self.assertEqual((main.branch, main.status), ("", ""))
-        liaison = self.r.member("liaison-acme")
-        self.assertEqual((liaison.kind, liaison.role), ("liaison", "liaison"))
-        self.assertEqual(liaison.memory, root / "acme/.orche/liaison")
+        self.assertIsNone(self.r.member("liaison-acme"))   # an old liaison_session key indexes nothing
 
     def test_unknown_and_twin(self):
         for name in ("nope", "", None):
@@ -262,7 +258,7 @@ class MemberTest(RosterCase):
         self.reg["projects"]["acme"]["divisions"]["rnd"]["session"] = ""
         self.assertEqual(Roster(self.reg).sessions(), [
             "div-acme-build", "div-acme-design", "div-beta-build", "feat-acme-checkout", "feat-acme-nested",
-            "feat-acme-old", "liaison-acme", "liaison-beta", "main-acme", "main-beta", "main-build"])
+            "feat-acme-old", "main-acme", "main-beta", "main-build"])
 
     def test_attribution(self):
         self.assertEqual(roster.actor({}), "user")
@@ -283,7 +279,7 @@ class RecipientTest(RosterCase):
 
         rows = [
             ("main-acme", None, "main-acme"),
-            ("liaison-acme", None, "main-acme"),
+            ("liaison-acme", None, None),
             ("div-acme-build", None, "main-acme"),
             ("feat-acme-checkout", None, "div-acme-build"),
             ("feat-acme-checkout", blank_division, "main-acme"),

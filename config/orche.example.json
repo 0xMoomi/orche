@@ -33,5 +33,11 @@
     "max_chars": 2000,
     "refresh_commits": 50,
     "refresh_days": 14
+  },
+  "liaison": {
+    "model": "claude-sonnet-5-5",
+    "effort": "low",
+    "max_turns": 12,
+    "timeout_s": 100
   }
 }

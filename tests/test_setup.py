@@ -47,7 +47,7 @@ class DefaultsTest(SetupCase):
         code, out, err = self.orche("init", "Acme Shop")
         self.assertEqual(code, 0, err)
         self.assertEqual(self.created(), ["div-rnd", "div-research", "div-build", "div-gtm"])
-        self.assertIn("Summary: rnd, research, build, gtm · stage building · 4 worktrees · panes main + liaison\n",
+        self.assertIn("Summary: rnd, research, build, gtm · stage building · 4 worktrees · pane main\n",
                       out)
         proj = self.proj()
         self.assertEqual(registry.divisions_of(proj), ["rnd", "research", "build", "gtm"])
@@ -60,7 +60,7 @@ class DefaultsTest(SetupCase):
         code, out, err = self.orche("init", "Acme Shop")
         self.assertEqual(code, 0, err)
         self.assertEqual(self.created(), [])
-        self.assertIn("Summary: build · stage building · 0 new worktrees · panes main + liaison", out)
+        self.assertIn("Summary: build · stage building · 0 new worktrees · pane main", out)
         self.assertIn("build: skipped (already onboarded)", out)
 
     def test_json_on_a_terminal_never_prompts(self):
@@ -69,7 +69,7 @@ class DefaultsTest(SetupCase):
         data = json.loads(out)
         self.assertEqual(list(data["divisions"]), ["rnd", "research", "build", "gtm"])
         self.assertEqual(data["summary"], "Summary: rnd, research, build, gtm · stage building · 4 worktrees · "
-                                          "panes main + liaison")
+                                          "pane main")
 
 
 # ---- interactive checklist ----------------------------------------------------------------------
@@ -88,7 +88,7 @@ class InteractiveTest(SetupCase):
                       " 5 [ ] ops       Ops — deploy and operate (dormant until stage public)\n> ", out)
         self.assertIn(" 6 [x] design    Design — owns the visual system, reviews UI chan…\n", out)
         self.assertIn(" 1 [ ] rnd ", out)
-        self.assertIn("Summary: build, gtm, design(custom) · stage building · 3 worktrees · panes main + liaison\n"
+        self.assertIn("Summary: build, gtm, design(custom) · stage building · 3 worktrees · pane main\n"
                       "Apply? [Y/n] ", out)
         self.assertEqual(self.created(), ["div-build", "div-gtm", "div-design"])
         proj = self.proj()
@@ -179,7 +179,7 @@ class InteractiveTest(SetupCase):
         code, out, err = self.typed("1", "", "1", "", "", "", "", argv=("init", "Acme Shop", "--wake", "rnd"))
         self.assertEqual(code, 0, err)
         self.assertEqual(out.count("  --wake rnd: rnd is unticked"), 1)
-        self.assertIn("Summary: rnd, research, build, gtm · stage building · 4 worktrees · panes main + liaison · "
+        self.assertIn("Summary: rnd, research, build, gtm · stage building · 4 worktrees · pane main · "
                       "wake rnd", out)
         self.assertEqual(self.proj()["divisions"]["rnd"]["status"], "active")
 
@@ -234,8 +234,7 @@ class FlagsTest(SetupCase):
         self.assertEqual(self.created(), ["div-build", "div-design", "div-qa"])
         panes = [c[c.index("--title") + 1] for c in self.orca_calls("terminal create")]
         self.assertEqual(panes[0], "div-acme-shop-design")
-        self.assertIn("Summary: build, design(custom), qa(custom) · stage building · 3 worktrees · panes main + "
-                      "liaison · wake design", out)
+        self.assertIn("Summary: build, design(custom), qa(custom) · stage building · 3 worktrees · pane main · wake design", out)
 
     def test_custom_flag_errors(self):
         cases = [
@@ -783,7 +782,7 @@ class LandOnMainTest(SetupCase):
         self.assertEqual(writes[-1], "terminal switch")   # after both panes were created
 
     def test_open_panes_are_not_switched_to_before_the_end(self):
-        self.terminals = [{"handle": "t1", "title": "main-acme-shop"}, {"handle": "t2", "title": "liaison-acme-shop"}]
+        self.terminals = [{"handle": "t1", "title": "main-acme-shop"}]
         code, out, err = self.orche("init", "Acme Shop", "--divisions", "build", "--no-intake")
         self.assertEqual(code, 0, err)
         self.assertNotIn("warning", err)
@@ -865,9 +864,9 @@ class SetupModelTest(unittest.TestCase):
     def test_summary_counts(self):
         setup = {"divisions": ["build"], "custom": {"qa": DESIGN}, "stage": "public", "aliases": []}
         self.assertEqual(setup_flow.summary(setup, new=1, registered=False),
-                         "Summary: build, qa(custom) · stage public · 1 worktree · panes main + liaison")
+                         "Summary: build, qa(custom) · stage public · 1 worktree · pane main")
         self.assertEqual(setup_flow.summary({**setup, "divisions": [], "custom": {}}, new=0, registered=True),
-                         "Summary: no divisions · stage public · 0 new worktrees · panes main + liaison")
+                         "Summary: no divisions · stage public · 0 new worktrees · pane main")
 
 
 if __name__ == "__main__":

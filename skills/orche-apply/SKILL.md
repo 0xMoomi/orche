@@ -19,8 +19,9 @@ user names it. `orche apply-all` is never used: some repos are dormant and some 
    defaults are `rnd`, `research`, `build` and `gtm`; `ops` is opt-in and stays dormant while the stage is
    `building`. A custom division (the user's own, e.g. `design`) gets a worktree `div-<name>`, a session
    `div-<proj>-<name>` and a persona written from its one-paragraph charter. Every division starts dormant.
-3. Two Orca panes in the main checkout: `main-<proj>` (the user talks here) and `liaison-<proj>` (answers
-   other projects' questions, keeps PROJECT_CARD.md fresh). No division pane opens unless `--wake`.
+3. One Orca pane in the main checkout: `main-<proj>` (the user talks here). Other projects ask about this
+   one with `orche ask <proj>`; a weekly automation runs `orche card refresh <proj>`. No division pane opens
+   unless `--wake`.
 4. A registry entry in `~/.claude/orche/registry.json` and two weekly Orca automations (printed, not
    created, unless `--automations`).
 5. The project intake, last: a headless, read-only Sonnet sweep of the existing codebase (`orche intake

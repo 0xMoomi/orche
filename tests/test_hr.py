@@ -130,15 +130,14 @@ class InitTest(HrCase):
         self.assertEqual(creates, [f"[dry-run] orca worktree create --repo id:repo-acme --name div-{d} --no-parent --json"
                                    for d in registry.DIVISIONS])
         panes = [l for l in dry if " terminal create " in l]
-        self.assertEqual(len(panes), 2)
+        self.assertEqual(len(panes), 1)
         self.assertIn(f"--title main-acme-shop --command {PANE}ORCHE_SESSION=main-acme-shop claude --name main-acme-shop --json", panes[0])
-        self.assertIn(f"--title liaison-acme-shop --command {PANE}ORCHE_SESSION=liaison-acme-shop claude --agent liaison --name liaison-acme-shop",
-                      panes[1])
         autos = [l for l in dry if " automations create " in l]
         self.assertEqual(len(autos), 2)
         self.assertIn("--name orche-hr-audit-acme-shop --trigger weekly --day 1 --time 09:00", autos[0])
         self.assertIn(f"--workspace path:{PLUGIN_ROOT}", autos[0])
         self.assertIn(f"--name orche-card-refresh-acme-shop", autos[1])
+        self.assertIn("Run `orche card refresh acme-shop --background` and stop; do nothing else.", autos[1])
         self.assertIn(f"--workspace path:{os.path.realpath(self.repo)}", autos[1])
         self.assertIn("[dry-run] write ", err)
         self.assertIn("ops: dormant (gated by stage)", out)
@@ -176,15 +175,15 @@ class InitTest(HrCase):
         self.assertTrue(persona.startswith("---\nname: div-acme-shop-build\ndescription: "))
         self.assertIn("model: claude-opus-5-5\n---\n", persona)
         self.assertTrue((wt / ".claude" / "agents" / "div-acme-shop-build.md").is_file())
-        self.assertTrue((self.repo / ".claude" / "agents" / "liaison.md").is_file())
+        self.assertEqual(sorted(p.name for p in (self.repo / ".claude" / "agents").iterdir()),   # division personas only
+                         [f"div-acme-shop-{d}.md" for d in ("build", "gtm", "ops", "research", "rnd")])
         self.assertFalse((self.repo / ".claude" / "settings.local.json").exists())
         self.assertIn("persona template missing for division build", hr.log_path().read_text())
-        # Panes: the two woken divisions, then main and liaison.
+        # Panes: the two woken divisions, then main.
         panes = [c[c.index("--title") + 1:c.index("--title") + 4] for c in self.orca_calls("terminal create")]
         self.assertEqual(panes, [["div-acme-shop-build", "--command", f"{PANE}ORCHE_SESSION=div-acme-shop-build claude --permission-mode bypassPermissions --name div-acme-shop-build"],
                                  ["div-acme-shop-gtm", "--command", f"{PANE}ORCHE_SESSION=div-acme-shop-gtm claude --permission-mode bypassPermissions --name div-acme-shop-gtm"],
-                                 ["main-acme-shop", "--command", f"{PANE}ORCHE_SESSION=main-acme-shop claude --name main-acme-shop"],
-                                 ["liaison-acme-shop", "--command", f"{PANE}ORCHE_SESSION=liaison-acme-shop claude --agent liaison --name liaison-acme-shop"]])
+                                 ["main-acme-shop", "--command", f"{PANE}ORCHE_SESSION=main-acme-shop claude --name main-acme-shop"]])
         self.assertEqual(self.orca_calls("automations create"), [])
         self.assertIn("[dry-run] orca automations create --name orche-hr-audit-acme-shop", err)
         # Project templates and card symlink.
@@ -241,7 +240,7 @@ class InitTest(HrCase):
         reg = registry.empty()
         reg["projects"]["shopfront"] = {"repo_id": "repo-acme", "path": str(self.repo), "stage": "building",
                                         "aliases": [], "main_session": "main-shopfront",
-                                        "liaison_session": "liaison-shopfront", "card": "~/c.md",
+                                        "card": "~/c.md",
                                         "standing": ".orche/STANDING.md", "divisions": {}}
         self.save(reg)
         code, _, err = self.orche("init", "shopfront", "--divisions", "build")
@@ -256,7 +255,7 @@ class InitTest(HrCase):
         reg = registry.empty()
         reg["projects"]["shopfront"] = {"repo_id": "repo-gone", "path": str(self.home / "gone"),
                                         "stage": "building", "aliases": ["acme shop"],
-                                        "main_session": "main-shopfront", "liaison_session": "liaison-shopfront",
+                                        "main_session": "main-shopfront",
                                         "card": "~/c.md", "standing": ".orche/STANDING.md", "divisions": {}}
         self.save(reg)
         code, out, err = self.orche("init", "Acme Shop", "--divisions", "build")
@@ -285,9 +284,7 @@ class InitTest(HrCase):
                                     "Run `orche hr audit --json` and act on its proposals; apply only sleep "
                                     "proposals with `--apply`.", "--json"])
         card_prompt = autos[1][autos[1].index("--prompt") + 1]
-        self.assertIn("exit without editing", card_prompt)
-        self.assertIn("Never write dispatch blocks", card_prompt)
-        self.assertIn("orche report info|external-request", card_prompt)
+        self.assertEqual(card_prompt, "Run `orche card refresh acme-shop --background` and stop; do nothing else.")
         self.assertEqual(list(registry.load()["projects"]["acme-shop"]["divisions"]), ["build"])
 
     def test_settings_merge_keeps_other_keys_and_existing_panes_skipped(self):
@@ -300,7 +297,7 @@ class InitTest(HrCase):
                          {"permissions": {"allow": ["Bash(ls)"]}, "agent": "div-acme-shop-build",
                           "crossSessionInbound": "accept"})
         titles = [c[c.index("--title") + 1] for c in self.orca_calls("terminal create")]
-        self.assertEqual(titles, ["liaison-acme-shop"])
+        self.assertEqual(titles, [])
         self.assertEqual(self.orca_calls("terminal switch"), [["orca", "terminal", "switch", "--terminal", "t1", "--json"]])
 
     def test_persona_templates_prefer_specific_then_generic(self):
@@ -322,8 +319,7 @@ class InitTest(HrCase):
     def test_rerun_resumes_partial_init_without_duplicates(self):
         self.assertEqual(self.orche("init", "Acme Shop", "--divisions", "rnd,build", "--wake", "build")[0], 0)
         self.calls.clear()
-        self.terminals = [{"handle": "t1", "title": "main-acme-shop"}, {"handle": "t2", "title": "liaison-acme-shop"},
-                          {"handle": "t3", "title": "div-acme-shop-build"}]
+        self.terminals = [{"handle": "t1", "title": "main-acme-shop"}, {"handle": "t3", "title": "div-acme-shop-build"}]
         code, out, err = self.orche("init", "Acme Shop", "--wake", "build,gtm", "--divisions", ALL)
         self.assertEqual(code, 0, err)
         self.assertIn("skipped --wake build (already onboarded; use `orche wake`)", out)
@@ -343,7 +339,7 @@ class InitTest(HrCase):
     def test_same_repo_under_another_key_refused(self):
         reg = registry.empty()
         reg["projects"]["shop"] = {"repo_id": "repo-acme", "path": "/elsewhere", "stage": "building",
-                                   "aliases": [], "main_session": "main-shop", "liaison_session": "liaison-shop",
+                                   "aliases": [], "main_session": "main-shop",
                                    "card": "~/c.md", "standing": ".orche/STANDING.md", "divisions": {}}
         self.save(reg)
         code, _, err = self.orche("init", "Acme Shop")
@@ -433,7 +429,7 @@ class InitTest(HrCase):
     def test_empty_path_entry_is_not_a_conflict(self):
         reg = registry.empty()
         reg["projects"]["ghost"] = {"repo_id": "repo-ghost", "path": "", "stage": "building", "aliases": [],
-                                    "main_session": "main-ghost", "liaison_session": "liaison-ghost",
+                                    "main_session": "main-ghost",
                                     "card": "~/c.md", "standing": ".orche/STANDING.md", "divisions": {}}
         self.save(reg)
         old = os.getcwd()
@@ -601,7 +597,7 @@ class FeatNewTest(FeatCase):
                                    name=f, session=f"feat-acme-{f}", branch=f"feat/{f}") for f in features]}
         reg["projects"]["acme"] = {**copy.deepcopy(reg["projects"]["acme-shop"]), "repo_id": "repo-acme2",
                                    "path": str(self.home / "acme"), "aliases": [], "main_session": "main-acme",
-                                   "liaison_session": "liaison-acme", "divisions": {"build": build}}
+                                   "divisions": {"build": build}}
         return self.save(reg)
 
     def test_a_feature_session_another_project_holds_is_refused_both_ways(self):
@@ -733,8 +729,8 @@ class FeatRetireTest(FeatCase):
         self.mine.write_text(json.dumps({"cwd": str(self.wt / "src")}) + "\n")
         self.main = slug / "2222.jsonl"
         self.main.write_text(json.dumps({"cwd": str(self.repo)}) + "\n")
-        self.liaison = slug / "liaison-acme-shop.jsonl"
-        self.liaison.write_text(json.dumps({"cwd": str(self.wt)}) + "\n")
+        self.named = slug / "main-acme-shop.jsonl"
+        self.named.write_text(json.dumps({"cwd": str(self.wt)}) + "\n")
         self.tag = f"archive/feat-checkout-{NOW.strftime('%Y%m%d')}"
         self.kept = self.home / "archive" / "feat-acme-shop-checkout" / "unit-files" / self.tag
 
@@ -1015,7 +1011,7 @@ class FeatRetireTest(FeatCase):
         self.assertEqual(self.tags(), [self.tag])
         self.assertEqual(self.calls, [["orca", "worktree", "rm", "--worktree", f"id:repo-acme::{self.wt}", "--json"]])
         self.assertFalse(self.mine.exists())
-        self.assertTrue(self.main.exists() and self.liaison.exists())
+        self.assertTrue(self.main.exists() and self.named.exists())
         self.assertEqual(len(list((self.home / "archive" / "feat-acme-shop-checkout").glob("*.manifest.json"))), 1)
         graveyard = (self.repo / "docs" / "GRAVEYARD.md").read_text()
         self.assertIn("archived 1 session files of feat-acme-shop-checkout", graveyard)

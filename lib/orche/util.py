@@ -1,4 +1,4 @@
-"""Small shared helpers: slugs, timestamps, atomic JSON IO, fenced-block spans."""
+"""Small shared helpers: slugs, timestamps, atomic JSON IO, fenced-block spans, fencing data."""
 import datetime as _dt
 import json
 import os
@@ -147,3 +147,12 @@ def fence_spans(lines, nest=TRAILER_INFOS) -> list:
     if cur is not None:
         spans.append((cur[0], None, cur[4]))
     return spans
+
+
+def fence(body, info="text") -> str:
+    """`body` in a backtick fence longer than any backtick run inside it (at least 4), so nothing
+    in it (a ```dispatch fence, a `## Runner` heading) can close it or read as the surrounding
+    text's own."""
+    longest = max((len(run) for run in re.findall(r"`+", body)), default=0)
+    ticks = "`" * max(4, longest + 1)
+    return f"{ticks}{info}\n{body}\n{ticks}"

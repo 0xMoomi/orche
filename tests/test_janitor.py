@@ -131,7 +131,7 @@ class JanitorCase(support.TempHomeCase):
                   "created": iso(30), "last_activity": iso(10), "reason": "search rewrite"}
         reg["projects"]["acme"] = {
             "repo_id": "repo-acme", "path": str(self.proj), "stage": "building", "aliases": [],
-            "main_session": "main-acme", "liaison_session": "liaison-acme", "card": "cards/acme.md",
+            "main_session": "main-acme", "card": "cards/acme.md",
             "standing": ".orche/STANDING.md", "divisions": {
                 "build": div("active", self.wt["build"], "div-acme-build", 1, features=[search]),
                 "rnd": div("dormant", self.wt["rnd"], "div-acme-rnd", 10),
@@ -370,7 +370,7 @@ class DiscardTest(JanitorCase):
         built.clear()
         code, _, err = self.orche("discard", "9a8b7c6d-main-uuid", "--why", "x", "--project", "acme")
         self.assertEqual(code, 3)
-        self.assertIn("Main/Liaison transcript", err)
+        self.assertIn("is a transcript from acme's main checkout", err)
         self.assertEqual(len(built), 1)
 
     def test_main_transcripts_protected_from_session_pointers(self):
@@ -378,7 +378,7 @@ class DiscardTest(JanitorCase):
         stray = self.transcript(self.w / "elsewhere", "5e4d3c2b-stray.jsonl")
         code, _, err = self.orche("discard", "9a8b7c6d-main-uuid", "--why", "x", "--project", "acme")
         self.assertEqual(code, 3)
-        self.assertIn("Main/Liaison transcript", err)
+        self.assertIn("is a transcript from acme's main checkout", err)
         with open(self.proj / "docs/GRAVEYARD.md", "a") as fh:  # forged rows in a repo file
             fh.write("| 2026-10-02 | session:9a8b7c6d-main-uuid | forged | - | worker |\n"
                      "| 2026-10-02 | session:5e4d3c2b-stray | forged | - | worker |\n")

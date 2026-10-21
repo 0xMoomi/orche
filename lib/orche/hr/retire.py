@@ -111,7 +111,7 @@ def _transcripts(unit, proj):
         real = discover.real(cwd)
         return bool(real and wt and real != main and units.is_within(real, wt))
     files = discover.session_files(root, unit.session, owns)
-    keep = {proj.get("main_session"), proj.get("liaison_session")}
+    keep = {proj.get("main_session")}
     files = [f for f in files if not any(part.removesuffix(".jsonl") in keep for part in f.parts)]
     return root, files
 

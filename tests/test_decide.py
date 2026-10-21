@@ -67,9 +67,6 @@ class DecideTest(support.TempHomeCase):
 
     def test_writes_the_sessions_own_file(self):
         """L14: ORCHE_SESSION picks the member's memory dir; no session in the main checkout is refused."""
-        with mock.patch.dict(os.environ, {"ORCHE_SESSION": "liaison-acme"}):
-            self.assertEqual(self.orche("decide", "p", "d", "w", "e", "r", cwd=self.root / "acme")[0], 0)
-        self.assertTrue((self.root / "acme" / ".orche" / "liaison" / "DECISIONS.tsv").is_file())
         with mock.patch.dict(os.environ, {"ORCHE_SESSION": "main-acme"}):
             self.assertEqual(self.orche("decide", "p", "d", "w", "e", "r", cwd=self.root / "acme-build")[0], 0)
         self.assertEqual(len((self.root / "acme" / ".orche" / "DECISIONS.tsv").read_text().splitlines()), 2)

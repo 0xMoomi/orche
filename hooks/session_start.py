@@ -75,18 +75,12 @@ def _unit_sections(reg, m):
             *_memory(str(m.memory))]
 
 
-def _project_sections(reg, key, liaison=False, note=None):
-    """Main checkout: Main's role + card, (liaison=True) the Liaison's role, generic card and memory,
-    or (note) the note + the generic card — never Main's rules by guess."""
-    from orche import dispatch, units
+def _project_sections(reg, key, note=None):
+    """Main checkout: Main's role + card, or (note) the note + the generic card — never Main's rules by guess."""
+    from orche import dispatch
     proj = reg["projects"][key]
     stage = proj.get("stage", "?")
     standing = ("STANDING.md", dispatch.standing_text(reg, key))
-    if liaison:
-        role = f"session: {proj['liaison_session']}\nrole: liaison\nproject: {key}\nstage: {stage}"
-        root = units.project_root(reg, key)
-        memory = _memory(os.path.join(str(root), ".orche", "liaison")) if root else []
-        return [("ORCHE role", role), *_role_card("orche"), standing, *memory]
     if note:
         return [("ORCHE role", f"{note}\nproject: {key}\nstage: {stage}"), *_role_card("orche"), standing]
     role = f"session: {proj.get('main_session', 'main-' + key)}\nproject: {key}\nstage: {stage}"
@@ -113,8 +107,6 @@ def _sections(r, who):
     if m is not None:
         if m.kind == "main":
             return _project_sections(r.reg, m.project)
-        if m.kind == "liaison":
-            return _project_sections(r.reg, m.project, liaison=True)
         return _unit_sections(r.reg, m)
     key = who.place.project
     return _project_sections(r.reg, key, note=_note(r, who)) if key is not None else []

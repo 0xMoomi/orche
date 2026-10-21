@@ -1,8 +1,7 @@
 """`orche decide <phase> <decision> <why> <evidence> <result> [--file PATH]` — append to DECISIONS.tsv.
 
 The file is the calling member's (ORCHE_SESSION, else the unit whose worktree holds cwd), in its
-memory dir: `.orche/` (Main), `.orche/liaison/` (Liaison), `<worktree>/.orche/<div|feat>/<name>/`
-(division, feature). With no member, pass --file.
+memory dir: `.orche/` (Main), `<worktree>/.orche/<div|feat>/<name>/` (division, feature). With no member, pass --file.
 """
 from __future__ import annotations
 

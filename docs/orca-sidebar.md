@@ -7,7 +7,7 @@ hierarchy with fixed names, so you can see the organization at a glance without 
 
 ```
 my-app                                   (Orca repo)
- ├─ main checkout                        2 panes: main-my-app, liaison-my-app
+ ├─ main checkout                        1 pane: main-my-app
  ├─ div-rnd                              div-my-app-rnd       (branch div/rnd)
  ├─ div-research                         div-my-app-research  (branch div/research)
  ├─ div-build                            div-my-app-build     (branch div/build)
@@ -20,13 +20,12 @@ my-app                                   (Orca repo)
 | Item | Name | Where |
 |---|---|---|
 | Main pane | `main-<proj>` | the project's main checkout |
-| Liaison pane | `liaison-<proj>` | the same main checkout, separate pane |
 | Division card / pane | worktree `div-<division>`, pane `div-<proj>-<division>` | its own worktree, branch `div/<division>` |
 | Feature card / pane | worktree `feat-<feature>`, pane `feat-<proj>-<feature>` | child worktree of Build, branch `feat/<feature>` |
 
 Pane titles equal Claude Code session names. ORCHE starts a division or feature pane with
 `PATH=<plugin>/bin:$PATH ORCHE_SESSION=<session> claude --permission-mode bypassPermissions --name <session>`
-(or `--resume <session>` on wake), and a Main or Liaison pane with the same command without
+(or `--resume <session>` on wake), and the Main pane with the same command without
 `--permission-mode bypassPermissions`, so hooks know the pane's role and `orche` is on the pane's PATH. `orche init` creates the division worktrees; `orche feat new` creates
 feature worktrees.
 

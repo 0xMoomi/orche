@@ -5,7 +5,7 @@ A worker files its completion (or block, question, stop) as one inbox pointer:
 - to: the project's Main; a feature session reports to its Build division (override with --to);
 - unit: the newest `.orche/units/*/BRIEF.md` addressed (TO) to `from`; brief_rev from its `rev:` line;
   with no such brief, `external-request|question|info` use `adhoc-<from>-<yyyymmdd>` (others need one);
-- head_sha: git HEAD of the reporter's worktree (Main, Liaison: the cwd); ledger_row: whether the canonical
+- head_sha: git HEAD of the reporter's worktree (Main: the cwd); ledger_row: whether the canonical
   ledger has a row for it;
 - report_path: --report-path, else the unit's REPORT.md when it exists.
 The recipient must be a session the registry knows; the summary is masked (mask.redact).

@@ -40,14 +40,13 @@ def plan_divisions(reg, key, setup, wake) -> Plan:
 
 def onboard_project(reg, key, setup, plan, *, repo_id, root, card, dry_run=False) -> tuple:
     """Register project `key` (or resume it) and onboard `plan.divisions`. Returns (project entry,
-    titles of the Main/Liaison panes opened). Raises Refused "init <key> stopped: <why> (re-run orche
+    titles of the Main pane opened). Raises Refused "init <key> stopped: <why> (re-run orche
     init <key> to resume)" — 3 for an unsafe target, 1 for an Orca, file or JSON error.
     Order: the registry entry and "init <key> (repo <id>)" record (a registered project: the
     "init <key> resumed …" record, saved only when this setup adds custom definitions) ->
     `.orche/project` marker -> info/exclude -> per division: worktree, a provisional `onboarding`
     entry (saved at once), unit files, settings, persona, pane when woken, its `create` record ->
-    the liaison persona -> Main and Liaison panes (opened, never switched: init switches to Main
-    once, at the very end)."""
+    the Main pane (opened, never switched: init switches to Main once, at the very end)."""
     by, custom, proj = roster.actor(), setup["custom"], reg["projects"].get(key)
     if proj is not None:
         if not dry_run:
@@ -60,7 +59,6 @@ def onboard_project(reg, key, setup, plan, *, repo_id, root, card, dry_run=False
     else:
         proj = {"repo_id": repo_id, "path": root, "stage": setup["stage"], "aliases": setup["aliases"],
                 "main_session": onboarding.session_name("main", key),
-                "liaison_session": onboarding.session_name("liaison", key),
                 "card": card, "standing": ".orche/STANDING.md", "divisions": {},
                 "custom_divisions": dict(custom)}
         if not dry_run:
@@ -72,14 +70,8 @@ def onboard_project(reg, key, setup, plan, *, repo_id, root, card, dry_run=False
         for name in plan.divisions:   # standard ones in catalogue order, then custom ones
             _onboard_division(reg, key, proj, name, wake=name in plan.wake, root=root, repo_id=repo_id,
                               spec=custom.get(name), by=by, dry_run=dry_run)
-        onboarding.write_persona([root], "liaison", "liaison", project=key, name="liaison",
-                                 session=proj["liaison_session"], model="claude-sonnet-5-5", effort="medium",
-                                 main_root=root, dry_run=dry_run)
-        opened = []
-        for kind in panes.PANE_KINDS:
-            data, _ = panes.project_pane(proj, kind, dry_run=dry_run, switch=False)
-            if data["pane"] == "opened":
-                opened.append(data["session"])
+        data, _ = panes.project_pane(proj, dry_run=dry_run, switch=False)
+        opened = [data["session"]] if data["pane"] == "opened" else []
     except onboarding.UnsafeTarget as exc:
         raise book.Refused(cli.EXIT_BLOCKED, f"init {key} stopped: {exc} (re-run orche init {key} to resume)") from None
     except (orca.OrcaError, OSError, util.JsonError) as exc:

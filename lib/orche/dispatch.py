@@ -113,7 +113,7 @@ def plan_blocks(r, bodies, frm) -> list:
 
 def runner_wanted(r, to, tier, cfg) -> bool:
     """A brief, AMEND or STOP for a division/feature goes through the runner unless `delivery: pane`
-    (or a hard TIER with `runner.hard_in_pane`). Main/liaison targets keep the pane: a human reads them."""
+    (or a hard TIER with `runner.hard_in_pane`). Main targets keep the pane: a human reads them."""
     if cfg.get("delivery", "runner") != "runner":
         return False
     m = r.member(to)

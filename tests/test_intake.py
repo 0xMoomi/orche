@@ -9,6 +9,7 @@ import signal
 import subprocess
 import threading
 import time
+import unittest
 from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
 from unittest import mock
@@ -93,7 +94,7 @@ class IntakeCase(FakeClaudeMixin, support.TempHomeCase):
         reg = registry.empty()
         reg["projects"]["acme"] = {
             "repo_id": "repo-acme", "path": str(self.repo), "stage": "building", "aliases": ["shop"],
-            "main_session": "main-acme", "liaison_session": "liaison-acme", "card": "~/x.md",
+            "main_session": "main-acme", "card": "~/x.md",
             "standing": ".orche/STANDING.md",
             "divisions": {name: {"status": "dormant", "worktree": f"repo-acme::/nowhere/{name}",
                                  "branch": f"div/{name}", "session": f"div-acme-{name}", "model": "m",
@@ -138,7 +139,7 @@ class IntakeRunTest(IntakeCase):
         self.assertIn(f"## Intake ({sha7}, {today})", card)
         self.assertIn("### Build, test, run\n\n`make test`; `make run`\n", card)
         self.assertIn("### Risks\n\nno tests for `src/billing/`\n", card)
-        self.assertIn("## Last refreshed\n\n(date, base commit)", card)            # the liaison's
+        self.assertIn("## Last refreshed\n\n(date, base commit)", card)            # orche card refresh fills it
         stamp = self.stamp()
         self.assertEqual(set(stamp), {"head", "date", "model", "cost_usd", "duration_s", "divisions", "turns"})
         self.assertEqual((stamp["head"], stamp["model"], stamp["cost_usd"], stamp["duration_s"], stamp["turns"]),
@@ -280,15 +281,15 @@ class IntakeRunTest(IntakeCase):
         self.assertIn("Deploy key [REDACTED] and [REDACTED] in CI.", self.context("build").read_text())
         self.assertIn("note: saw [REDACTED]", out)
 
-    def test_rerun_replaces_its_block_and_keeps_what_the_liaison_wrote(self):
+    def test_rerun_replaces_its_block_and_keeps_what_a_person_wrote(self):
         self.reply(answer({"build": "one"}))
         self.orche("intake", "acme")
         card = self.repo / "PROJECT_CARD.md"
-        card.write_text(card.read_text().replace("A shop for acme widgets.", "Liaison's own purpose."))
+        card.write_text(card.read_text().replace("A shop for acme widgets.", "A person's own purpose."))
         self.reply(answer({"build": "two"}, card={"what": "Other purpose.", "risks": "new risk"}))
         self.assertEqual(self.orche("intake", "acme")[0], 0)
         text = card.read_text()
-        self.assertIn("Liaison's own purpose.", text)
+        self.assertIn("A person's own purpose.", text)
         self.assertNotIn("Other purpose.", text)
         self.assertEqual(text.count("<!-- orche-intake:begin"), 1)
         self.assertIn("new risk", text)
@@ -723,3 +724,9 @@ class ReadContextTest(support.TempHomeCase):
         self.assertIsNone(self.read("# Context for Build — intake at abc1234, 2026-10-18\n\n  \n"))
         self.assertIsNone(self.read(""))
         self.assertIsNone(intake.read_context(self.home / "missing.md", {}))
+
+
+class CleanTest(unittest.TestCase):
+    def test_markers_are_stripped_before_masking(self):
+        """A marker inside a key would hide it from the pattern if it were stripped after masking."""
+        self.assertEqual(intake.clean("sk-ant-" + intake.END + "A" * 24), "[REDACTED]")

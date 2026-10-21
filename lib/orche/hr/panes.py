@@ -1,13 +1,11 @@
 """Orca panes of units and projects: the pane command, a unit's create argv, project panes.
 
-Division and feature panes run `claude --permission-mode bypassPermissions`; Main and Liaison
-panes (`project_pane`) do not.
+Division and feature panes run `claude --permission-mode bypassPermissions`; Main panes
+(`project_pane`) do not.
 """
 import shlex
 
 from .. import config, orca, paths
-
-PANE_KINDS = ("main", "liaison")
 
 
 def session_env(session) -> str:
@@ -23,7 +21,7 @@ def pane_command(session, *, resume) -> str:
     """`claude --permission-mode bypassPermissions --resume <session>` for a paused unit, `--name
     <session>` for a fresh start: a division or feature pane never stops at a permission prompt.
 
-    Prefixed with `session_env(session)`. Main and liaison panes (`project_pane`) do not use it."""
+    Prefixed with `session_env(session)`. Main panes (`project_pane`) do not use it."""
     flag = "--resume" if resume else "--name"
     return (f"{session_env(session)}{config.load().get('claude_bin', 'claude')} "
             f"--permission-mode bypassPermissions {flag} {session}")
@@ -40,17 +38,16 @@ def unit_argv(unit, *, resume) -> tuple:
     return ("--worktree", f"id:{unit.entry['worktree']}", "--title", unit.session, "--command", command)
 
 
-def project_pane(proj, kind, *, dry_run, switch=True) -> tuple:
-    """Open the project's `main-<proj>` / `liaison-<proj>` pane in its main checkout, or switch to it.
+def project_pane(proj, *, dry_run, switch=True) -> tuple:
+    """Open the project's `main-<proj>` pane in its main checkout, or switch to it.
 
-    One title lookup: no pane -> create one (`claude --name`, the liaison with `--agent liaison`);
-    a pane -> `terminal switch` to it (with switch=False it is left as it is). Returns (data, line);
-    data["pane"] is "opened", "switched" or (switch=False) "open". Under dry_run the create argv is
-    printed and no writing orca command runs. Raises orca.OrcaError.
+    One title lookup: no pane -> create one (`claude --name`); a pane -> `terminal switch` to it
+    (with switch=False it is left as it is). Returns (data, line); data["pane"] is "opened",
+    "switched" or (switch=False) "open". Under dry_run the create argv is printed and no writing
+    orca command runs. Raises orca.OrcaError.
     """
-    title = proj["main_session"] if kind == "main" else proj["liaison_session"]
-    agent = "--agent liaison " if kind == "liaison" else ""
-    command = f"{session_env(title)}{config.load().get('claude_bin', 'claude')} {agent}--name {title}"
+    title = proj["main_session"]
+    command = f"{session_env(title)}{config.load().get('claude_bin', 'claude')} --name {title}"
     term = orca.find_terminal_by_title(title)
     data = {"session": title, "pane": "opened" if term is None else "switched" if switch else "open"}
     if dry_run:
