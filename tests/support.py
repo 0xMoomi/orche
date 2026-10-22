@@ -23,7 +23,8 @@ _jev_setup.OSASCRIPT = "/nonexistent/orche-test/osascript"
 _NO_CLAUDE_DIR = None
 NO_CLAUDE = "#!/bin/sh\necho 'tests never run the real claude (support.NO_CLAUDE)' >&2\nexit 1\n"
 NO_ORCA = "#!/bin/sh\necho 'tests never run the real orca (support.NO_ORCA)' >&2\nexit 1\n"
-NO_WAKE = {"inbox": {"wake": False}}     # every test home's config: no test types into a pane
+NO_WAKE = {"inbox": {"wake": False, "quiet_s": 0}}   # every test home's config: no test types into a pane
+# and no nudger waits out a quiet window (tests that exercise it set inbox.quiet_s and a fake clock)
 # An empty keychain for child processes (`bin/orche.py run|intake|card` read the stored OAuth token
 # through `security` on macOS); each call is recorded, argv only, in $ORCHE_HOME/security-calls.log.
 NO_SECURITY = ("#!/bin/sh\n"
@@ -31,10 +32,18 @@ NO_SECURITY = ("#!/bin/sh\n"
                "echo 'security: The specified item could not be found in the keychain.' >&2\n"
                "exit 44\n")
 SECURITY_CALLS = "security-calls.log"
+# No real notification and no real launchd query: `osascript` succeeds and `launchctl` fails (nothing
+# loaded), each recording its argv (one line per call) in $ORCHE_HOME/<name>-calls.log.
+RECORDING = ("#!/bin/sh\n"
+             "[ -n \"$ORCHE_HOME\" ] && printf '%s\\n' \"$*\" >> \"$ORCHE_HOME/{name}-calls.log\" 2>/dev/null\n"
+             "exit {code}\n")
+OSASCRIPT_CALLS = "osascript-calls.log"
+LAUNCHCTL_CALLS = "launchctl-calls.log"
 
 
 def no_claude_dir() -> str:
-    """A directory whose `claude`, `orca` and `security` always fail. It goes first on PATH for the
+    """A directory whose `claude`, `orca`, `security` and `launchctl` always fail and whose `osascript`
+    only records its call (no test shows a notification). It goes first on PATH for the
     whole test process (below), so code that falls back to the default `claude_bin` (e.g. the intake
     at the end of `orche init`) or `orca_bin` (a nudger) can never start the developer's real Claude
     Code or reach the live Orca, and no child process reads the real keychain (it sees an empty one),
@@ -46,7 +55,9 @@ def no_claude_dir() -> str:
         import shutil
         _NO_CLAUDE_DIR = tempfile.mkdtemp(prefix="orche-no-claude-")
         atexit.register(shutil.rmtree, _NO_CLAUDE_DIR, True)
-        for name, text in (("claude", NO_CLAUDE), ("orca", NO_ORCA), ("security", NO_SECURITY)):
+        for name, text in (("claude", NO_CLAUDE), ("orca", NO_ORCA), ("security", NO_SECURITY),
+                           ("osascript", RECORDING.format(name="osascript", code=0)),
+                           ("launchctl", RECORDING.format(name="launchctl", code=113))):
             stub = Path(_NO_CLAUDE_DIR) / name
             stub.write_text(text)
             stub.chmod(0o755)

@@ -42,6 +42,9 @@
     "timeout_s": 100
   },
   "inbox": {
-    "wake": true
+    "wake": true,
+    "quiet_s": 90,
+    "quiet_max_s": 240,
+    "notify": true
   }
 }

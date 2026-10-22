@@ -20,6 +20,14 @@ SAMPLE = json.loads((support.FIXTURES / "registry.sample.json").read_text())
 NOW = dt.datetime(2026, 10, 16, 9, 0, tzinfo=dt.timezone(dt.timedelta(hours=9)))
 
 
+def at(minutes):
+    return (NOW - dt.timedelta(minutes=minutes)).isoformat()
+
+
+def hhmm(minutes):
+    return (NOW - dt.timedelta(minutes=minutes)).astimezone().strftime("%H:%M")
+
+
 class CoreCase(support.TempHomeCase):
     def setUp(self):
         super().setUp()
@@ -124,12 +132,45 @@ class StatusTest(CoreCase):
         self.assertEqual(out.splitlines()[1:], [
             "  undelivered: acme-shop-x-20261016-1 → div-acme-shop-build (rev 2, 12 min) — "
             "run `orche deliver acme-shop-x-20261016-1`",
-            "  unread: main-acme-shop has 2 report(s) waiting (oldest 25 min) — run `orche nudge main-acme-shop`"])
+            "  unread: main-acme-shop has 2 report(s) waiting (oldest 25 min) — run `orche nudge main-acme-shop`",
+            f"  blocked: u2 (question, since {hhmm(11)}, 11 min) — waiting on the owner; answer in main-acme-shop"])
         self.assertTrue(out.startswith("acme-shop stage=building "))
         row = json.loads(self.orche("--json", "status", "acme")[1])[0]
         self.assertEqual(row["undelivered"], [{"unit": "acme-shop-x-20261016-1", "to": "div-acme-shop-build",
                                                "rev": 2, "minutes": 12}])
         self.assertEqual(row["unread"], [{"session": "main-acme-shop", "count": 2, "minutes": 25}])
+
+    def test_status_names_units_waiting_on_the_owner(self):
+        """0.6.2: a unit whose newest pointer to Main is blocked/question gets a `blocked:` line until a
+        later pointer (an AMEND or STOP files one) or BRIEF.md revision answers it, or 24 h pass."""
+        root = Path(tempfile.mkdtemp(dir=self.home))
+        reg = registry.load()
+        reg["projects"]["acme-shop"]["path"] = str(root)
+        registry.save(reg)
+        unit = "acme-shop-x-20261016-1"
+        self.write("inbox/main-acme-shop/a.json", {"unit": unit, "status": "blocked", "at": at(30)})
+        self.write("inbox/main-acme-shop/.drained/b.json", {"unit": "acme-shop-y-20261016-2", "status": "question",
+                                                           "at": at(3)})
+        self.write("inbox/main-acme-shop/c.json", {"unit": "acme-shop-z-20261016-3", "status": "blocked",
+                                                   "at": at(60 * 25)})                 # expired
+        self.write("inbox/main-acme-shop/d.json", {"unit": "acme-shop-w-20261016-4", "status": "blocked",
+                                                   "at": at(40)})
+        self.write("inbox/main-acme-shop/.drained/e.json", {"unit": "acme-shop-w-20261016-4", "from": "orche",
+                                                           "status": "info", "at": at(20)})   # STOP feedback
+        out = self.orche("status", "acme")[1].splitlines()[1:]
+        self.assertEqual([x for x in out if "blocked:" in x], [
+            f"  blocked: {unit} (blocked, since {hhmm(30)}, 30 min) — waiting on the owner; answer in main-acme-shop",
+            f"  blocked: acme-shop-y-20261016-2 (question, since {hhmm(3)}, 3 min) — waiting on the owner; "
+            "answer in main-acme-shop"])
+        row = json.loads(self.orche("--json", "status", "acme")[1])[0]
+        self.assertEqual([b["unit"] for b in row["blocked"]], [unit, "acme-shop-y-20261016-2"])
+        folder = root / ".orche" / "units" / unit                          # an AMEND writes a new BRIEF.md
+        folder.mkdir(parents=True)
+        (folder / "BRIEF.md").write_text("rev: 2\n")
+        later = (NOW - dt.timedelta(minutes=5)).timestamp()
+        os.utime(folder / "BRIEF.md", (later, later))
+        self.assertEqual([b["unit"] for b in json.loads(self.orche("--json", "status", "acme")[1])[0]["blocked"]],
+                         ["acme-shop-y-20261016-2"])
 
 
 class DeptsTest(CoreCase):

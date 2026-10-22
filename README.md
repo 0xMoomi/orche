@@ -206,7 +206,7 @@ export PATH="$HOME/orche/bin:$PATH"
 orche version
 ```
 
-Success: `orche 0.6.1` (or the version you cloned).
+Success: `orche 0.6.2` (or the version you cloned).
 
 To make it permanent, add the same line to your login profile. ORCHE's panes and `orche doctor` use a
 login shell (`$SHELL -lc`), and a zsh login shell does not read `~/.zshrc`, so use:
@@ -596,6 +596,21 @@ Main reports each finished unit in its pane without being asked (ORCHE wakes it)
 
 Success: the result of your unit appears in Main's reply. See [How units run](#how-units-run) for
 when a unit counts as done.
+
+### When the owner is needed
+
+Reports that land close together reach Main as one wake: ORCHE waits until the newest has been quiet for 90 s
+(at most 240 s; `inbox.quiet_s`, `inbox.quiet_max_s`), and Main writes one consolidated report. A unit that is
+`blocked`, asks a `question` or `failed` wakes Main at once, and on macOS also shows a notification
+(`ORCHE <project>`, the unit's short id and status only; `inbox.notify` turns it off). Until you answer,
+`orche status` lists it:
+
+```text
+  blocked: my-app-fix-login-20261022-3 (question, since 14:05, 12 min) — waiting on the owner; answer in main-my-app
+```
+
+ORCHE needs no extra waker: `orche doctor` warns when an old `com.orche.main-waker` launchd job is still loaded
+and prints the command that removes it.
 
 Every command takes `--json`; commands that change state take `--dry-run` (`orche --help`).
 

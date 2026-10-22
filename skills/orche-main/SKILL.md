@@ -104,6 +104,15 @@ notice. In the same turn:
 2. End the turn with your report to the user in this pane, unasked, in the ketchup format below: outcome · what
    landed · what failed · decisions needed (recommendation + default) · next step.
 3. Follow it with the next dispatch block, or the question the user must answer (record the default with `orche decide`).
+4. Finish with one line to the owner: the state (nothing to do / running: <what> / all done) and either the decision
+   you need with its default or the question what to do next; dispatch blocks go before that line.
+
+Several reports in one wake (ORCHE waits for a quiet moment, so a batch arrives together) get one consolidated
+report, with anything the owner must do first.
+
+ORCHE wakes Main itself since 0.6.0 and notifies the owner on blocked/question reports; never install or re-register
+a waker, launchd job or polling script for this; if you believe wakes are failing, run `orche status` and
+`orche doctor` and report.
 
 Never only acknowledge ("3 reports arrived") and end the turn. Update the ledger only through `orche` commands. Never
 read diffs: review is a verification unit for Build. A pointer whose `brief_rev` is older than the current rev never

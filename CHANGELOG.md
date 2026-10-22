@@ -3,6 +3,25 @@
 All notable changes to ORCHE are listed here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow semantic versioning.
 
+## 0.6.2 — 2026-10-22
+
+### Added
+- A macOS notification when the owner is needed: one per urgent report to Main (`blocked`, `question`, `failed`
+  or `urgent: true`), titled `ORCHE <project>`, holding only the unit's short id and status. `inbox.notify`
+  (default on) turns it off.
+- `orche status` lists `blocked: <unit> (<status>, since HH:MM, N min) — waiting on the owner` for a unit whose
+  newest report to Main is `blocked` or `question` (under 24 h, not yet answered by a later pointer or brief).
+- `orche doctor` warns about a loaded `com.orche.main-waker` launchd job and prints the `launchctl bootout` fix.
+- Gate denials (`env_read_gate`, `scope_gate`) are logged to events.log: `gate=<name> session=… tool=… what=…`.
+
+### Changed
+- One wake per quiet batch: the nudger waits until the newest waking report is `inbox.quiet_s` old (90 s, at most
+  `inbox.quiet_max_s`, 240 s) before it wakes Main; an urgent report wakes at once.
+- The wake line asks Main for one consolidated report that puts what the owner must do first.
+- The Main rulebook forbids installing a waker, launchd job or polling script; ORCHE wakes Main itself.
+- Main's reply ends with one line to the owner (state, then the decision needed with its default or the question
+  what to do next); dispatch blocks go before that line and are relayed wherever they sit in the final reply.
+
 ## 0.6.1 — 2026-10-22
 
 ### Added

@@ -99,6 +99,19 @@ def _existing(path):
     return path
 
 
+MAIN_WAKER = "com.orche.main-waker"
+
+
+def main_waker_rows() -> list:
+    """A WARN when the pre-0.6.0 launchd waker is still loaded: it wakes Main next to ORCHE's own
+    nudger (doubled turns). No row when launchctl is missing or the job is not loaded."""
+    res = shell.run(["launchctl", "print", f"gui/{os.getuid()}/{MAIN_WAKER}"], timeout=3)
+    if not res.ok:
+        return []
+    return [("WARN", "main-waker", f"launchd job {MAIN_WAKER} is loaded — it predates 0.6.0 and conflicts with "
+             f"ORCHE's own wake; run: launchctl bootout gui/$(id -u)/{MAIN_WAKER}")]
+
+
 def disk_checks() -> list:
     """(level, name, detail): free space where ORCHE_HOME lives (a full disk keeps the runner
     from filing: reconcile files it later, once writes work again) and the size of logs/runs."""
@@ -184,7 +197,7 @@ def checks(ctx) -> list:
     add(*oauth.doctor_row())
     level, detail = _orche_home()
     add(level, "orche_home", detail)
-    for row in disk_checks():
+    for row in disk_checks() + main_waker_rows():
         add(*row)
     try:
         reg = registry.load()

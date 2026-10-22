@@ -781,6 +781,18 @@ class DispatchRelayTest(HookCase):
         self.assertIn("indented deeper than its opener", ptr["summary"])
         self.assertFalse(self.units_dir().exists())
 
+    def test_block_before_the_closing_line_to_the_owner_is_relayed(self):
+        """0.6.2: the reply ends with one line to the owner; a dispatch block before it is still relayed."""
+        block = DISPATCH_OK[DISPATCH_OK.index("```dispatch"):]
+        text = ("Coupon plan confirmed.\n\n" + block +
+                "\nRunning: coupon field build. Next: say if checkout copy should change (default: unchanged).\n")
+        res = self.stop(text)
+        self.assertEqual((res.returncode, res.stderr), (0, ""))
+        unit = self.only_unit()
+        self.assertTrue((self.units_dir() / unit / "BRIEF.md").is_file())
+        [ptr] = [json.loads(p.read_text()) for p in self.inbox("div-acme-build")]
+        self.assertEqual((ptr["unit"], ptr["brief_rev"]), (unit, 1))
+
     def test_example_next_to_a_real_block_relays_the_real_block(self):
         """B-2: an example inside a closed ````markdown fence does not stop the real block after it."""
         block = DISPATCH_OK[DISPATCH_OK.index("```dispatch"):]
@@ -1163,12 +1175,16 @@ class ReportInjectTest(HookCase):
         self.assertNotIn(inbox.REPORT_LINE, res.stdout)
 
     def test_report_line_text_is_pinned(self):
-        """Ruling A's text, verbatim (plan Appendix C8)."""
+        """Ruling A's text, verbatim (plan Appendix C8; the consolidation and closing-line sentences since 0.6.2)."""
         self.assertEqual(inbox.REPORT_LINE,
                          "[orche] Act on the inbox above now: read each report named (Read tool), then end this "
                          "turn with your report to the user in this pane — outcome · what landed · what failed · "
                          "decisions needed (recommendation + default) · next step — followed by the next dispatch "
-                         "block or the question the user must answer. Never only acknowledge.")
+                         "block or the question the user must answer. Never only acknowledge. When several "
+                         "reports are listed, write one consolidated report and put anything the owner must do "
+                         "first. Finish with one line to the owner: the state (nothing to do / running: <what> / "
+                         "all done) and either the decision you need with its default or the question what to do "
+                         "next; dispatch blocks go before that line.")
         self.assertNotIn("\n", inbox.REPORT_LINE)
 
     def test_pointer_fields_cannot_forge_orche_lines(self):
@@ -1271,6 +1287,16 @@ class EnvReadGateTest(HookCase):
         self.assertEqual(self.gate("Bash", {"command": "cat .env"}), "deny")
         self.assertEqual(self.gate("Bash", {"command": "vercel env pull .env.local --yes"}), "silent")
         self.assertEqual(self.gate("Read", {"file_path": "/x/.env.local"}, ORCHE_KEYMASTER="1"), "silent")
+
+    def test_a_denial_is_logged_to_events(self):
+        """0.6.2: one events line per denial (gate, session, tool, reason prefix); an allowed call logs nothing."""
+        events = self.home / "logs" / "events.log"
+        self.assertEqual(self.gate("Bash", {"command": "git status"}), "silent")
+        self.assertFalse(events.exists() and "gate=" in events.read_text())
+        self.assertEqual(self.gate("Read", {"file_path": "/x/.env.local"}, ORCHE_SESSION="div-acme-build"), "deny")
+        [line] = [x for x in events.read_text().splitlines() if "gate=" in x]
+        self.assertIn("gate=env_read session=div-acme-build tool=Read what=", line)
+        self.assertLessEqual(len(line.split("what=", 1)[1]), 80)
 
     def test_fixture_payloads(self):
         for name in ("pretool_read.json", "pretool_bash.json"):
@@ -1505,6 +1531,15 @@ class ScopeGateTest(HookCase):
         wt = self.root / "acme-checkout"
         for root in (f"{wt}/src/checkout/**", f"{wt}/tests/checkout/**", f"{wt}/.orche/", f"{wt}/docs/"):
             self.assertIn(root, out["permissionDecisionReason"])
+
+    def test_a_denial_is_logged_to_events(self):
+        events = self.home / "logs" / "events.log"
+        self.assertIsNone(self.gate("docs/coupon.md"))
+        self.assertFalse(events.exists() and "gate=" in events.read_text())
+        self.assertEqual(self.gate("src/search/index.ts")["permissionDecision"], "deny")
+        [line] = [x for x in events.read_text().splitlines() if "gate=" in x]
+        self.assertRegex(line, r"gate=scope session=\S+ tool=\S+ what=")
+        self.assertLessEqual(len(line.split("what=", 1)[1]), 80)
 
     def test_inside_scope_and_orche_allowed(self):
         self.assertIsNone(self.run_hook("scope_gate.py", self.payload("pretool_edit.json")).stdout or None)
