@@ -884,6 +884,21 @@ class DiskTest(RunnerCase):
         self.assertIn("0.0 GiB free", rows[0][2])
         self.assertIn("lower runner.log_keep_days", rows[1][2])
 
+    def test_doctor_warns_about_a_loaded_main_waker(self):
+        """0.6.2: the pre-0.6.0 launchd waker doubles Main's wakes; the stub launchctl (not loaded) gives no row."""
+        from orche.install import doctor
+        self.assertEqual(doctor.main_waker_rows(), [])
+        self.assertIn(f"print gui/{os.getuid()}/com.orche.main-waker",
+                      (self.home / support.LAUNCHCTL_CALLS).read_text())
+        fake = self.home / "fakebin"
+        fake.mkdir()
+        (fake / "launchctl").write_text("#!/bin/sh\nexit 0\n")
+        (fake / "launchctl").chmod(0o755)
+        os.environ["PATH"] = f"{fake}{os.pathsep}{os.environ['PATH']}"   # TempHomeCase restores PATH
+        [(level, name, detail)] = doctor.main_waker_rows()
+        self.assertEqual((level, name), ("WARN", "main-waker"))
+        self.assertIn("run: launchctl bootout gui/$(id -u)/com.orche.main-waker", detail)
+
     def test_a_run_that_cannot_file_exits_5_and_reconcile_files_it_later(self):
         """The inbox is read-only (as with EACCES/ENOSPC): the run writes RUN.json, fails on the
         pointer, says so on stderr (the run log), exits 5 and leaves its lock; once the inbox takes

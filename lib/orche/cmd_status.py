@@ -1,12 +1,15 @@
-"""`orche status [proj]` (one line per project, then its `undelivered:`, `unread:` and `upgrade:` lines) and
+"""`orche status [proj]` (one line per project, then its `undelivered:`, `unread:`, `blocked:` and `upgrade:` lines) and
 `orche statusline [--cwd PATH]`."""
+import datetime as _dt
 import json
 import os
 import sys
 
-from . import __version__, inbox, registry, roster, runs, statusline
+from . import __version__, brief, inbox, registry, roster, runs, statusline, units
 
 EXIT_OK, EXIT_NOT_FOUND = 0, 2
+WAITING = ("blocked", "question")
+WAITING_TTL = _dt.timedelta(hours=24)
 
 
 def register(subparsers):
@@ -31,15 +34,63 @@ def status_row(reg, key, now=None) -> dict:
     return {"project": key, "stage": proj["stage"], "awake": c["awake"], "limit": limit,
             "divisions": divisions, "active_features": c["active_features"], "new": c["new"],
             "keys": c["keys"], "unverified": c["unverified"], "running": c["running"], "line": line,
-            "undelivered": undelivered, "unread": unread, "upgrade": registry.upgrade(proj, __version__)}
+            "undelivered": undelivered, "unread": unread, "blocked": blocked(reg, key, now),
+            "upgrade": registry.upgrade(proj, __version__)}
+
+
+def _mtime(path):
+    try:
+        return _dt.datetime.fromtimestamp(path.stat().st_mtime, _dt.timezone.utc)
+    except OSError:
+        return None
+
+
+def blocked(reg, key, now=None) -> list:
+    """Units waiting on the owner: the newest pointer for the unit in `main-<key>`'s inbox (pending or
+    drained, under 24 h old) is blocked or question, and no later pointer or BRIEF.md revision (an
+    AMEND or STOP files a pointer too) has answered it. `[{unit, status, since, minutes}]`."""
+    now = now or units.now()
+    try:
+        folder = inbox.box(f"main-{key}")
+    except ValueError:
+        return []
+    latest = {}
+    for path in list(folder.glob("*.json")) + list((folder / inbox.DRAINED).glob("*.json")):
+        if path.name.startswith("."):
+            continue
+        try:
+            ptr = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        if not isinstance(ptr, dict) or not ptr.get("unit"):
+            continue
+        t = inbox.pointer_time(path, ptr)
+        unit = str(ptr["unit"])
+        if t is not None and (unit not in latest or t >= latest[unit][0]):
+            latest[unit] = (t, ptr)
+    out = []
+    for unit in sorted(latest):
+        t, ptr = latest[unit]
+        if ptr.get("status") not in WAITING or now - t >= WAITING_TTL:
+            continue
+        b = brief.find(reg, unit, project=key)
+        answered = _mtime(b.path) if b is not None else None
+        if answered is not None and answered > t:
+            continue
+        out.append({"unit": unit, "status": ptr["status"], "since": t.astimezone().strftime("%H:%M"),
+                    "minutes": int((now - t).total_seconds() // 60)})
+    return out
 
 
 def overdue_lines(row) -> list:
-    """The project's late deliveries and unread reports (≥ inbox.LATE), each naming its command."""
+    """The project's late deliveries and unread reports (≥ inbox.LATE), each naming its command, then the
+    units waiting on the owner."""
     return ([f"  undelivered: {u['unit']} → {u['to']} (rev {u['rev']}, {u['minutes']} min) — "
              f"run `orche deliver {u['unit']}`" for u in row["undelivered"]]
             + [f"  unread: {u['session']} has {u['count']} report(s) waiting (oldest {u['minutes']} min) — "
-               f"run `orche nudge {u['session']}`" for u in row["unread"]])
+               f"run `orche nudge {u['session']}`" for u in row["unread"]]
+            + [f"  blocked: {u['unit']} ({u['status']}, since {u['since']}, {u['minutes']} min) — waiting on the "
+               f"owner; answer in main-{row['project']}" for u in row["blocked"]])
 
 
 def cmd_status(args):

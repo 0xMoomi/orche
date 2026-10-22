@@ -20,14 +20,21 @@ it runs or already ran.
 """
 import contextlib
 import fcntl
+import json
 import sys
 import time
 
-from . import brief, config, inbox, log, orca, paths, procs, roster, runs, util
+from . import brief, config, inbox, log, orca, paths, procs, roster, runs, shell, util
 
 LOCK = ".deliver.lock"
-LOCK_WAIT_S = 150.0
+# A nudger holds the lock for at most list + idle wait + quiet window + read + wait/read again +
+# send (~20 + 130 + 240 + 20 + 130 + 20 + 30 s); a later nudger waits that long, then sees the
+# marker (`already-nudged`), never a spurious `locked`.
+LOCK_WAIT_S = 600.0
 POLL_S = 0.5
+NOTIFIED = ".notified"      # pointer file names the owner was notified about (one name per line)
+PLATFORM = sys.platform    # the notification is macOS only (a seam for tests)
+QUIET_POLL_S = 2.0         # the quiet window's poll (config inbox.quiet_s / quiet_max_s)
 SUBMIT_WAIT_S = 20         # `send --wait-submit`: UserPromptSubmit hooks (ORCHE's 3 s budget plus others) run first
 SEND = ("--enter", "--wait-submit", str(SUBMIT_WAIT_S))
 IDLE_WAIT_S = 120          # `terminal wait --for tui-idle` before a wake
@@ -70,13 +77,15 @@ def _result(res, key) -> dict:
     return inner if isinstance(inner, dict) else res
 
 
-def _type(session, text, *, strict, wait_s, still_needed, before_send=None, on_fail=None):
+def _type(session, text, *, strict, wait_s, still_needed, before_send=None, on_fail=None, settle=None):
     """Type `text` + Enter into `session`'s pane (design §4.4 steps 3-7). (state, waited seconds).
 
     The pane title is the session name. strict: not idle after `wait_s` → `busy` (else send anyway: Claude Code queues typed input,
     and an accepted send with no `turn_started` is then `queued`, not `nudge-failed`).
     still_needed(): checked after the wait; False → `nothing-pending`. before_send() runs right
     before the send; on_fail() after a send that failed (`refused`, `dialog`, `nudge-failed`).
+    settle(): runs once, after the first empty-draft read; when it waited (returns > 0 seconds) the
+    idle wait, still_needed() and the draft read run again, since the pane may have changed.
     """
     started = time.monotonic()
 
@@ -91,35 +100,41 @@ def _type(session, text, *, strict, wait_s, still_needed, before_send=None, on_f
     if term is None or not term.get("handle"):
         return done("no-pane")
     handle = str(term["handle"])
-    try:
-        wait = _result(orca.terminal("wait", "--terminal", handle, "--for", "tui-idle", "--timeout-ms",
-                                     str(int(wait_s * 1000)), timeout=wait_s + WAIT_SLACK_S), "wait")
-    except orca.OrcaError as exc:
-        if "timeout" not in exc.code:
-            log.log("hooks", f"deliver: terminal wait for {session}: {exc}")
+    while True:
+        try:
+            wait = _result(orca.terminal("wait", "--terminal", handle, "--for", "tui-idle", "--timeout-ms",
+                                         str(int(wait_s * 1000)), timeout=wait_s + WAIT_SLACK_S), "wait")
+        except orca.OrcaError as exc:
+            if "timeout" not in exc.code:
+                log.log("hooks", f"deliver: terminal wait for {session}: {exc}")
+                return done("nudge-failed")
+            wait = {"satisfied": False}
+        if wait.get("blockedReason"):
+            return done("dialog")
+        if wait.get("status") is not None and wait.get("status") != "running":
+            return done("no-agent")
+        busy = not wait.get("satisfied")
+        if strict and busy:
+            return done("busy")
+        if not still_needed():
+            return done("nothing-pending")
+        try:
+            draft = _result(orca.terminal("read", "--terminal", handle, timeout=CALL_S), "terminal").get("draft")
+        except Exception as exc:  # noqa: BLE001 - an unread composer is never typed into
+            log.log("hooks", f"deliver: terminal read for {session}: {exc}")
             return done("nudge-failed")
-        wait = {"satisfied": False}
-    if wait.get("blockedReason"):
-        return done("dialog")
-    if wait.get("status") is not None and wait.get("status") != "running":
-        return done("no-agent")
-    busy = not wait.get("satisfied")
-    if strict and busy:
-        return done("busy")
-    if not still_needed():
-        return done("nothing-pending")
-    try:
-        draft = _result(orca.terminal("read", "--terminal", handle, timeout=CALL_S), "terminal").get("draft")
-    except Exception as exc:  # noqa: BLE001 - an unread composer is never typed into
-        log.log("hooks", f"deliver: terminal read for {session}: {exc}")
-        return done("nudge-failed")
-    draft = str(draft or "").strip()
-    if draft and _stale(draft):
-        # ORCHE's own unsubmitted line: it cannot be cleared from here and is never typed again.
-        log.log("hooks", f"deliver: {session} composer holds a stale ORCHE line; not typing")
-        return done("nudge-failed")
-    if draft:
-        return done("user-typing")
+        draft = str(draft or "").strip()
+        if draft and _stale(draft):
+            # ORCHE's own unsubmitted line: it cannot be cleared from here and is never typed again.
+            log.log("hooks", f"deliver: {session} composer holds a stale ORCHE line; not typing")
+            return done("nudge-failed")
+        if draft:
+            return done("user-typing")
+        if settle is None:
+            break
+        settled, settle = settle(), None
+        if not settled:
+            break
     if before_send is not None:
         before_send()
     try:
@@ -195,15 +210,68 @@ def _unmark(session) -> None:
         log.log("hooks", f"deliver: cannot remove {session}'s wake marker: {exc}")
 
 
-def _event(session, state, pending, waited) -> None:
-    log.log("events", f"nudge session={session} state={state} pending={pending} waited={waited}s")
+def _event(session, state, pending, waited, quiet=0) -> None:
+    log.log("events", f"nudge session={session} state={state} pending={pending} waited={waited}s quiet={quiet}s")
+
+
+def _quiet(session, cfg) -> int:
+    """The quiet window: wait (polling every QUIET_POLL_S) while the newest waking pointer is younger
+    than `quiet_s` and none is urgent, for at most `quiet_max_s`; returns the seconds waited."""
+    quiet_s, cap = float(cfg.get("quiet_s", 90)), float(cfg.get("quiet_max_s", 240))
+    started = time.monotonic()
+    while True:
+        items = [(x, p) for x, p in inbox.pending(session) if inbox.wakes(p)]
+        if not items or any(inbox.is_urgent(p) for _x, p in items):
+            break
+        stamps = [t.timestamp() for t in (inbox.pointer_time(x, p) for x, p in items) if t is not None]
+        age = time.time() - max(stamps) if stamps else quiet_s
+        left = min(quiet_s - age, cap - (time.monotonic() - started))
+        if left <= 0:
+            break
+        time.sleep(min(QUIET_POLL_S, left))
+    return int(time.monotonic() - started)
+
+
+def notify_owner(session) -> None:
+    """A macOS notification per urgent waking pointer pending for a `main-*` session, once each
+    (`inbox/<session>/.notified`); config `inbox.notify`. The text holds only the unit's short id
+    and its status. Never raises (failures go to hooks.log)."""
+    try:
+        if not session.startswith("main-") or PLATFORM != "darwin" or not config.load()["inbox"].get("notify", True):
+            return
+        marker = inbox.box(session) / NOTIFIED
+        seen = set(marker.read_text().split()) if marker.is_file() else set()
+        items = [(x, p) for x, p in inbox.pending(session) if inbox.wakes(p) and inbox.is_urgent(p)]
+        project = session[len("main-"):]
+        for path, ptr in items:
+            if path.name in seen:
+                continue
+            unit = str(ptr.get("unit") or "")
+            short = unit[len(project) + 1:] if unit.startswith(project + "-") else unit
+            text = json.dumps(f"{short} {ptr.get('status')} — Main에 보고가 있습니다", ensure_ascii=False)
+            title = json.dumps(f"ORCHE {project}", ensure_ascii=False)
+            res = shell.run(["osascript", "-e", f'display notification {text} with title {title} sound name "Glass"'],
+                            timeout=5)
+            if not res.ok:
+                log.log("hooks", f"deliver: notify {session}: osascript exit {res.code}")
+            seen.add(path.name)
+        live = {x.name for x, _p in items}
+        if items or marker.is_file():
+            marker.write_text("".join(f"{name}\n" for name in sorted(seen & live)))
+    except Exception as exc:  # noqa: BLE001 - a notification is best-effort
+        log.log("hooks", f"deliver: notify {session}: {type(exc).__name__}: {exc}")
 
 
 def nudge(session) -> tuple:
     """`orche nudge <session>` (design §4.4): (exit code, state). Raises ValueError for an unsafe
     session name (before anything is touched); every other failure is a state."""
     inbox.box(session)
-    started, state, waited = time.monotonic(), "nudge-failed", 0
+    notify_owner(session)
+    started, state, waited, quiet = time.monotonic(), "nudge-failed", 0, [0]
+
+    def settle():
+        quiet[0] = _quiet(session, config.load()["inbox"])
+        return quiet[0]
     try:
         with _lock(session, LOCK_WAIT_S, POLL_S) as ok:
             if not ok:
@@ -215,7 +283,8 @@ def nudge(session) -> tuple:
             else:
                 state, waited = _type(session, inbox.WAKE_TEXT, strict=True,
                                       wait_s=IDLE_WAIT_S, still_needed=lambda: _waking(session) > 0,
-                                      before_send=lambda: _mark(session), on_fail=lambda: _unmark(session))
+                                      before_send=lambda: _mark(session), on_fail=lambda: _unmark(session),
+                                      settle=settle)
     except Exception as exc:  # noqa: BLE001 - the events line is always written
         log.log("hooks", f"deliver: nudge {session}: {type(exc).__name__}: {exc}")
         state, waited = "nudge-failed", int(time.monotonic() - started)
@@ -224,7 +293,7 @@ def nudge(session) -> tuple:
             pending = _waking(session)
         except Exception:  # noqa: BLE001
             pending = 0
-        _event(session, state, pending, waited)
+        _event(session, state, pending, waited, quiet[0])
     return (0 if state in OK_STATES else 1), state
 
 

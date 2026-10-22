@@ -166,6 +166,14 @@ _Avoid_: run log (that is `logs/runs/<unit>.log`).
 `ORCHE_HOME/runs/<project>/<run tag>.sweep`: a filed Lost run whose leftover processes are not killed yet. It holds no Run slot; every reconcile retries it.
 _Avoid_: zombie lock.
 
+**Urgent pointer**:
+A waking pointer whose status is `blocked`, `question` or `failed`, or that carries `urgent: true`. It wakes Main without the quiet window and, on macOS, shows one notification.
+_Avoid_: priority, alert.
+
+**Quiet window**:
+How long the nudger waits after the newest waking pointer before it wakes Main (`inbox.quiet_s`, default 90 s, capped by `inbox.quiet_max_s`, 240 s), so a batch of reports is one wake. Skipped when an urgent pointer is pending.
+_Avoid_: debounce, delay.
+
 ## Relationships
 
 - A project has one Main, divisions and (under Build) feature agents; each is a **Member**. The **Liaison** is a *sealed* **Headless call**, not a Member.

@@ -37,6 +37,18 @@ def denied(tool, tool_input):
     return envgate.reason(tool, tool_input) is not None
 
 
+def _log_denial(tool, reason):
+    """One events line per denial: the gate, the session, the tool and the reason's first 80 characters
+    (the reason names only the matched token or path; never file contents or the command). Best-effort."""
+    try:
+        from orche import log
+        what = " ".join(str(reason).split())[:80]
+        log.log("events", f"gate=env_read session={os.environ.get('ORCHE_SESSION') or '-'} tool={tool or '-'} "
+                f"what={what}")
+    except Exception:  # noqa: BLE001 - logging never changes the decision
+        pass
+
+
 def main():
     try:
         payload = json.load(sys.stdin)
@@ -53,6 +65,7 @@ def main():
         except Exception:  # noqa: BLE001
             pass
         return 0
+    _log_denial(tool, reason)
     print(json.dumps({"hookSpecificOutput": {"hookEventName": "PreToolUse", "permissionDecision": "deny",
                                              "permissionDecisionReason": reason}}))
     return 0

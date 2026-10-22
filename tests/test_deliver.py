@@ -4,6 +4,7 @@ the deliverer (C9 T3): `orche deliver <unit>` (design §4.5).
 In-process against the fake Orca (ORCHE_FAKE_ORCA=1, canned `fake-orca.json`, calls recorded in
 `logs/fake-orca.jsonl`); spawns are mocked (procs.spawn_detached), never a real Orca or nudger.
 """
+import datetime as _dt
 import fcntl
 import io
 import json
@@ -467,6 +468,151 @@ class DeliverTest(NudgeCase):
         self.assertNotIn("deliver unit=", self.events())
 
 
+class FakeClock:
+    """deliver's `time`: sleep() advances the clock at once and fires the callbacks due by then."""
+
+    def __init__(self):
+        self.t0, self.now, self.due = float(int(time.time())), 0.0, []
+
+    def monotonic(self):
+        return self.now
+
+    def time(self):
+        return self.t0 + self.now
+
+    def sleep(self, seconds):
+        self.now += seconds
+        for item in [d for d in self.due if d[0] <= self.now]:
+            self.due.remove(item)
+            item[1]()
+
+    def at(self, offset=None):
+        return _dt.datetime.fromtimestamp(self.t0 + (self.now if offset is None else offset)).astimezone() \
+            .isoformat(timespec="seconds")
+
+
+class QuietTest(NudgeCase):
+    """The quiet window (0.6.2): one wake per batch of reports; urgent statuses wake at once."""
+
+    def setUp(self):
+        super().setUp()
+        (self.home / "config.json").write_text(json.dumps(
+            {"delivery": "pane", "inbox": {"wake": False, "quiet_s": 90, "quiet_max_s": 240}}))
+        self.clock = FakeClock()
+        patcher = mock.patch.object(deliver, "time", self.clock)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def post(self, n, status="done", offset=None):
+        inbox.write(inbox.make(f"acme-r{n}-20261021-1", "div-acme-build", "main-acme", status, via="runner",
+                               at=self.clock.at(offset)))
+
+    def later(self, when, n, status="done"):
+        self.clock.due.append((when, lambda: self.post(n, status)))
+
+    def test_three_reports_ten_seconds_apart_are_one_wake_after_the_quiet_window(self):
+        self.post(1)
+        self.later(10, 2)
+        self.later(20, 3)
+        self.assertEqual(self.nudge(), (0, "nudged"))
+        self.assertEqual(self.clock.now, 110)                      # 90 s after the newest report
+        self.assertEqual(self.calls(), [["terminal", "list"], ["terminal", "wait"], ["terminal", "read"],
+                                        ["terminal", "wait"], ["terminal", "read"], ["terminal", "send"]])
+        self.assertIn("nudge session=main-acme state=nudged pending=3 waited=110s quiet=110s", self.events())
+
+    def test_an_urgent_report_wakes_at_once(self):
+        for n, status in enumerate(("blocked", "question", "failed")):
+            with self.subTest(status=status):
+                self.post(n, status)
+                self.marker().unlink(missing_ok=True)
+                start = self.clock.now
+                self.assertEqual(self.nudge(), (0, "nudged"))
+                self.assertEqual(self.clock.now, start)
+                self.assertIn(f"nudge session=main-acme state=nudged pending={n + 1} waited=0s quiet=0s",
+                              self.events())
+
+    def test_an_urgent_report_ends_the_window_early(self):
+        self.post(1)
+        self.later(30, 2, "question")
+        self.assertEqual(self.nudge(), (0, "nudged"))
+        self.assertEqual(self.clock.now, 30)
+        self.assertIn("state=nudged pending=2 waited=30s quiet=30s", self.events())
+
+    def test_the_window_is_capped(self):
+        self.post(0)
+        for n in range(1, 20):
+            self.later(n * 30, n)                                  # a report every 30 s, never quiet
+        self.assertEqual(self.nudge(), (0, "nudged"))
+        self.assertEqual(self.clock.now, 240)
+        self.assertIn("waited=240s quiet=240s", self.events())
+
+    def test_an_old_report_does_not_wait(self):
+        self.post(1, offset=-300)
+        self.assertEqual(self.nudge(), (0, "nudged"))
+        self.assertEqual(self.clock.now, 0)
+        self.assertEqual(len(self.calls()), 4)
+        self.assertIn("waited=0s quiet=0s", self.events())
+
+
+class NotifyTest(NudgeCase):
+    """0.6.2: the nudger notifies the owner (macOS) once per urgent pointer for a Main session."""
+
+    def setUp(self):
+        super().setUp()
+        patcher = mock.patch.object(deliver, "PLATFORM", "darwin")
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def notes(self):
+        log_ = self.home / support.OSASCRIPT_CALLS
+        return log_.read_text().splitlines() if log_.is_file() else []
+
+    def test_one_notification_per_urgent_pointer(self):
+        self.report(status="blocked")
+        with mock.patch.object(deliver.shell, "run", wraps=deliver.shell.run) as run:
+            self.nudge()
+        run.assert_called_once_with(["osascript", "-e", 'display notification "blocked-20261021-1 blocked — Main에 '
+                                     '보고가 있습니다" with title "ORCHE acme" sound name "Glass"'], timeout=5)
+        self.assertEqual(len(self.notes()), 1)
+        self.marker().unlink(missing_ok=True)
+        self.nudge()                                               # the same pointer: no second notification
+        self.assertEqual(len(self.notes()), 1)
+        self.report(status="question")
+        self.marker().unlink(missing_ok=True)
+        self.nudge()
+        self.assertEqual(len(self.notes()), 2)
+        self.assertIn("question-20261021-1 question", self.notes()[1])
+
+    def test_an_urgent_report_notifies_while_a_wake_is_fresh(self):
+        self.marker().parent.mkdir(parents=True, exist_ok=True)
+        self.marker().write_text("x")
+        self.report(status="failed")
+        self.assertEqual(self.nudge(), (0, "already-nudged"))
+        self.assertEqual(len(self.notes()), 1)
+        self.assertIn("failed-20261021-1 failed", self.notes()[0])
+        self.assertEqual(self.nudge(), (0, "already-nudged"))       # a re-run never re-notifies
+        self.assertEqual(len(self.notes()), 1)
+
+    def test_no_notification(self):
+        cases = {"done": ("done", {}, "main-acme"), "notify-off": ("blocked", {"notify": False}, "main-acme"),
+                 "not-main": ("blocked", {}, "div-acme-build"), "linux": ("blocked", {}, "main-acme")}
+        for name, (status, cfg, to) in cases.items():
+            with self.subTest(name):
+                (self.home / "config.json").write_text(json.dumps(
+                    {"delivery": "pane", "inbox": {"wake": False, "quiet_s": 0, **cfg}}))
+                inbox.write(inbox.make(f"acme-{name}-20261021-1", "main-acme" if to != "main-acme" else
+                                       "div-acme-build", to, status, via="runner"))
+                with mock.patch.object(deliver, "PLATFORM", "linux" if name == "linux" else "darwin"):
+                    deliver.notify_owner(to)
+                self.assertEqual(self.notes(), [])
+
+    def test_a_failing_osascript_is_logged_and_never_raises(self):
+        self.report(status="blocked")
+        with mock.patch.object(deliver.shell, "run", return_value=deliver.shell.Result(1, "", "boom", [])):
+            deliver.notify_owner("main-acme")
+        self.assertIn("deliver: notify main-acme: osascript exit 1", (self.home / "logs" / "hooks.log").read_text())
+
+
 class WakeTest(support.TempHomeCase):
     ARGV = [sys.executable, str(support.ROOT / "bin" / "orche.py"), "nudge", "--", "main-acme"]
 
@@ -505,6 +651,15 @@ class WakeTest(support.TempHomeCase):
         (folder / inbox.NUDGED).write_text("x")
         inbox.post(self.ptr())
         self.spawn.assert_not_called()
+        for status in inbox.URGENT:                               # an urgent pointer still reaches the nudger
+            inbox.post(self.ptr(status))                           # (it notifies, then exits already-nudged)
+        self.assertEqual(self.spawn.call_count, len(inbox.URGENT))
+        self.spawn.reset_mock()
+        unit_box = inbox.box("div-acme-build")
+        unit_box.mkdir(parents=True, exist_ok=True)
+        (unit_box / inbox.NUDGED).write_text("x")
+        inbox.post(inbox.make("acme-y-20261021-1", "main-acme", "div-acme-build", "blocked", via="runner"))
+        self.spawn.assert_not_called()                             # no owner notification for a unit
 
     def test_an_unsafe_session_spawns_nothing_and_logs(self):
         inbox.wake("../x")

@@ -81,6 +81,18 @@ def decide(payload):
             "Ask Main to re-scope or dispatch the change to the owning unit.")
 
 
+def _log_denial(tool, reason):
+    """One events line per denial: the gate, the session, the tool and the reason's first 80 characters
+    (the reason names only the matched token or path; never file contents or the command). Best-effort."""
+    try:
+        from orche import log
+        what = " ".join(str(reason).split())[:80]
+        log.log("events", f"gate=scope session={os.environ.get('ORCHE_SESSION') or '-'} tool={tool or '-'} "
+                f"what={what}")
+    except Exception:  # noqa: BLE001 - logging never changes the decision
+        pass
+
+
 def main():
     try:
         payload = json.load(sys.stdin)
@@ -95,6 +107,7 @@ def main():
             pass
         return 0
     if reason:
+        _log_denial(payload.get("tool_name"), reason)
         print(json.dumps({"hookSpecificOutput": {"hookEventName": "PreToolUse", "permissionDecision": "deny",
                                                  "permissionDecisionReason": reason}}))
     return 0
