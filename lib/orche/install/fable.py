@@ -31,7 +31,7 @@ def block(plugin_root) -> str:
         "- Hand work to a unit with a fenced block tagged `dispatch` at the end of the final reply:",
         "  one `KEY value` line per key, continuation lines indented by two spaces.",
         "- Required keys: TO GOAL SCOPE CONTEXT ACCEPT VERIFY TIMEBOX FORBID REPORT TIER (optional ROLLBACK);",
-        "  TIER is mechanical, standard or hard; unknown keys are refused.",
+        "  TIER is mechanical, standard or hard; a plain line that is not a key continues the field above.",
         "- Corrections: `AMEND <unit> rev <N>`, `SUPERSEDES rev <N-1>: <what>`, then only the keys that change;",
         "  halts: `STOP <unit> [reason]` (no keys but an optional TO).",
         "- Hooks deliver briefs and reports; done means a ledger row, not a claim.",

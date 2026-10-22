@@ -3,6 +3,43 @@
 All notable changes to ORCHE are listed here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow semantic versioning.
 
+## 0.6.1 — 2026-10-22
+
+### Added
+- Headless runs can use their own Claude OAuth token instead of the pane login: run `claude setup-token`, then
+  `orche auth set` (hidden prompt, or stdin from a script; never argv). Stored in the macOS keychain (account
+  `CLAUDE_CODE_OAUTH_TOKEN`), else `~/.claude/orche/secrets/oauth.token` (0600). Every `claude -p` ORCHE starts
+  gets it; an inherited `CLAUDE_CODE_OAUTH_TOKEN` wins; panes keep the login. `orche auth status|rm`, and an
+  `oauth token` row in `orche doctor` (WARN when not set).
+
+### Fixed
+- `orche wake` reopened a unit pane with `claude --resume <session name>`, which Claude Code cannot find (the
+  name matches the transcript's title, not its id: a name shared by an earlier session of the same unit opens
+  the interactive picker, and a cleaned-up transcript fails), so the woken pane never started its conversation.
+  It now resumes the newest transcript titled with the session name in the unit's worktree project dir by its
+  id (`--resume <id>`). When no transcript carries the name (or the project dir is missing) the pane starts a
+  fresh session under `--name <session>` and stderr says so.
+- A plain line that is not a KEY line continues the field above; it no longer refuses the whole reply as `unknown keys …`.
+- A STOP reason may span lines, and its TO may come before or after the reason.
+- In an AMEND, prose before any key or after SUPERSEDES extends the note.
+- A brief that opens with prose is refused: `line 1 "…" is not a KEY line; a brief starts with TO.`
+- Every parse refusal quotes the offending line (60 chars) and states the fix in one clause.
+- One refused block no longer drops the reply: every valid block is delivered, and one refusal lists each block (`block N: delivered …` / `block N: refused — …`) and asks Main to re-send only the refused block(s).
+- The same reply seen again (including under `stop_hook_active`, where the refusal is parked) never delivers a block twice.
+- Every refusal logs `dispatch refused by=<session> blocks=<n> reason=…` to events.log.
+- When every block of a reply is refused, the refusal says `no block was delivered` (it used to say the delivered
+  ones went out).
+- A dispatch block holding a code fence, the verb line of another STOP/AMEND block, or a KEY line other than TO
+  inside a STOP is refused (two blocks run together or a pasted code sample); code samples go indented.
+- A block identical to one already delivered from the same session is skipped only within 10 minutes of that
+  delivery (`delivered_at` in the relayed marker), and the skip is no longer silent: an events line
+  `dispatch skipped …` and an `info` pointer to the sender name it. A legitimate repeat after that is delivered.
+- A relayed marker that cannot be written is logged to hooks.log instead of swallowing the refusal.
+- A stored OAuth token that cannot be read (keychain error, timeout after 15 s, unreadable file) writes one line
+  to hooks.log (`oauth: stored token unreadable (…); headless run uses the login`), never the value.
+- A usage error masks a token passed as `--token=<value>` (`[REDACTED]`).
+- The test suite never runs the real `security` binary, so it cannot read or prompt for the login keychain.
+
 ## 0.6.0 — 2026-10-22
 
 ### Added

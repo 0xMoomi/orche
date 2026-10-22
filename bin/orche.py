@@ -34,8 +34,9 @@ GLOBAL_DESTS = {"json", "dry_run"}
 
 class Parser(argparse.ArgumentParser):
     def error(self, message):
+        from orche import mask      # `--token=<value>` is echoed in "unrecognized arguments"
         self.print_usage(sys.stderr)
-        self.exit(EXIT_USER, f"{self.prog}: error: {message}\n")
+        self.exit(EXIT_USER, f"{self.prog}: error: {mask.redact(message)[0]}\n")
 
 
 def emit(args, data, human_lines):

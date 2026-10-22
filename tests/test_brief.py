@@ -16,8 +16,15 @@ from orche.brief import Block, Refusal
 R = "[orche] dispatch refused: "
 ALLOWED = "Allowed: TO GOAL SCOPE CONTEXT ACCEPT VERIFY TIMEBOX FORBID REPORT TIER ROLLBACK."
 FILL = "Fill every field or drop the block."
-DUP = "Write each key once; continue a value on lines indented by two spaces."
+DUP = "Write each key once; continue a value on the lines below it."
+FIX = "start each field with its exact KEY."
+INCIDENT = ("Stop at the current safe boundary: the owner wants per-kind LUCKY ladders folded into rules\n"
+            "13 before world 7 goes live, so nothing may be merged until that lands. If a\n"
+            "rebase or merge of PR #25 is in progress, finish it to a clean state first.")
 WANT = "(want <proj>-<slug>-<yyyymmdd>-<n>)"
+OWN = "put it in its own dispatch block."
+ONLY = "a STOP takes only TO and the reason."
+FENCE = "code samples go indented by two spaces."
 U = "acme-fix-login-20261016-1"
 
 FULL = """TO build
@@ -58,6 +65,19 @@ class GrammarTest(unittest.TestCase):
             ("STOP with reason and TO", f"STOP {U}  wrong target \nTO build",
              ("stop", U, 0, "wrong target", {"TO": "build"})),
             ("STOP bare", f"STOP {U}", ("stop", U, 0, "", {})),
+            ("STOP reason spans plain lines", f"STOP {U}\nTO build\n{INCIDENT}",
+             ("stop", U, 0, INCIDENT, {"TO": "build"})),
+            ("STOP TO after the body", f"STOP {U} first\nsecond line\nTO build",
+             ("stop", U, 0, "first\nsecond line", {"TO": "build"})),
+            ("STOP indented line continues the reason", f"STOP {U}\nwhy\n  more", ("stop", U, 0, "why\nmore", {})),
+            ("AMEND prose before a key is note", f"AMEND {U} rev 2\nscope moved\nGOAL g2",
+             ("amend", U, 2, "scope moved", {"GOAL": "g2"})),
+            ("AMEND prose after SUPERSEDES is note", f"AMEND {U} rev 2\nSUPERSEDES rev 1: smaller\nand faster\nGOAL g2",
+             ("amend", U, 2, "rev 1: smaller\nand faster", {"GOAL": "g2"})),
+            ("AMEND prose after a key extends it", f"AMEND {U} rev 2\nGOAL g2\nand more",
+             ("amend", U, 2, "", {"GOAL": "g2\nand more"})),
+            ("plain continuation", FULL.replace("CONTEXT c", "CONTEXT c\nunindented more"),
+             ("brief", "", 0, "", {**FIELDS, "CONTEXT": "c\nunindented more"})),
             ("indented verb", f"   AMEND {U} rev 2\nGOAL g2", ("amend", U, 2, "", {"GOAL": "g2"})),
             ("verb after comment and blanks", f"\n# why\n\n  # more\nSTOP {U}", ("stop", U, 0, "", {})),
             ("one-space-indented key", FULL.replace("GOAL g", " GOAL g"), ("brief", "", 0, "", FIELDS)),
@@ -91,25 +111,33 @@ class GrammarTest(unittest.TestCase):
         self.assertEqual(str(cm.exception),
                          f"{R}TIER must be one of mechanical|standard|hard, got 'standard\\n# cheap enough'.")
 
+    def test_g2_indented_verbs_keys_and_fences_are_content(self):
+        b = brief.parse(FULL.replace("  npm test", f"  ```sh\n  npm test\n  ```\n  STOP {U}"))
+        self.assertEqual(b.fields["VERIFY"], f"run:\n```sh\nnpm test\n```\nSTOP {U}")
+        b = brief.parse(f"STOP {U}\nwhy\n  GOAL g")
+        self.assertEqual((b.note, b.fields), ("why\nGOAL g", {}))
+        b = brief.parse(FULL.replace("CONTEXT c", "CONTEXT c\nSTOP soon"))   # no unit id: prose
+        self.assertEqual(b.fields["CONTEXT"], "c\nSTOP soon")
+
     def test_amend_indented_supersedes_is_content(self):
         b = brief.parse(f"AMEND {U} rev 2\nGOAL g2\n  SUPERSEDES x")
         self.assertEqual((b.fields["GOAL"], b.note), ("g2\nSUPERSEDES x", ""))
 
-    def test_supersedes_is_a_key_outside_amend(self):
+    def test_supersedes_is_prose_outside_amend(self):
         with self.assertRaises(Refusal) as cm:
             brief.parse(FULL + "\nSUPERSEDES x")
-        self.assertEqual(str(cm.exception), f"{R}unknown keys SUPERSEDES. {ALLOWED}")
+        self.assertEqual(str(cm.exception), f"{R}TIER must be one of mechanical|standard|hard, got 'standard\\n"
+                                            f"SUPERSEDES x'. Line 12 \"SUPERSEDES x\" was read as part of TIER; {FIX}")
 
-    def test_dropped_continuations(self):
+    def test_codec(self):
         for name, lines, want in [
-            ("before any key", ["  stray", "GOAL g"], (["GOAL"], {"GOAL": "g"}, "")),
-            ("after an unknown key", ["FOO x", "  stray", "GOAL g"], (["FOO", "GOAL"], {"GOAL": "g"}, "")),
+            ("indented before any key is dropped", ["  stray", "GOAL g"], ([("GOAL", 2, "GOAL g")], {"GOAL": "g"},
+                                                                            "", [], None)),
+            ("plain before any key is stray", ["FOO x", "  more", "GOAL g", "BAR"],
+             ([("GOAL", 3, "GOAL g")], {"GOAL": "g\nBAR"}, "", [(4, "BAR", "GOAL")], (1, "FOO x"))),
         ]:
             with self.subTest(name):
                 self.assertEqual(brief._codec(lines), want)
-        with self.assertRaises(Refusal) as cm:
-            brief.parse("FOO x\n  stray\n" + FULL)
-        self.assertEqual(str(cm.exception), f"{R}unknown keys FOO. {ALLOWED}")
 
     def test_refusals(self):
         all_missing = "TO, GOAL, SCOPE, CONTEXT, ACCEPT, VERIFY, TIMEBOX, FORBID, REPORT, TIER"
@@ -117,22 +145,47 @@ class GrammarTest(unittest.TestCase):
             ("R1 empty", "", f"{R}missing {all_missing}. {FILL}"),
             ("R1 blank", "  \n\n", f"{R}missing {all_missing}. {FILL}"),
             ("R1 comments only", "# a\n  # b", f"{R}missing {all_missing}. {FILL}"),
-            ("R2 no rev", "AMEND u", f"{R}AMEND needs 'AMEND <unit> rev <N>'."),
-            ("R2 AMENDMENT", "AMENDMENT x", f"{R}AMEND needs 'AMEND <unit> rev <N>'."),
-            ("R2 rev not a number", f"AMEND {U} rev two", f"{R}AMEND needs 'AMEND <unit> rev <N>'."),
-            ("R3 bare STOP", "STOP", f"{R}STOP needs 'STOP <unit>'."),
-            ("R3 STOPPED", "STOPPED", f"{R}STOP needs 'STOP <unit>'."),
+            ("R2 no rev", "AMEND u", f"{R}AMEND needs 'AMEND <unit> rev <N>'; line 1 \"AMEND u\" does not match."),
+            ("R2 AMENDMENT", "\nAMENDMENT x",
+             f"{R}AMEND needs 'AMEND <unit> rev <N>'; line 2 \"AMENDMENT x\" does not match."),
+            ("R2 rev not a number", f"AMEND {U} rev two",
+             f"{R}AMEND needs 'AMEND <unit> rev <N>'; line 1 \"AMEND {U} rev two\" does not match."),
+            ("R3 bare STOP", "STOP", f"{R}STOP needs 'STOP <unit>'; line 1 \"STOP\" does not match."),
+            ("R3 STOPPED", "STOPPED", f"{R}STOP needs 'STOP <unit>'; line 1 \"STOPPED\" does not match."),
             ("R4 AMEND foo", "AMEND foo rev 2\nGOAL g", f"{R}bad unit id 'foo' {WANT}."),
             ("R4 AMEND acme-x", "AMEND acme-x rev 2\nGOAL g", f"{R}bad unit id 'acme-x' {WANT}."),
             ("R4 STOP foo", "STOP foo", f"{R}bad unit id 'foo' {WANT}."),
-            ("R5 FOO then OWNER", FULL + "\nFOO x\nOWNER y", f"{R}unknown keys FOO, OWNER. {ALLOWED}"),
-            ("R5 FOO twice listed once", FULL + "\nFOO x\nFOO y", f"{R}unknown keys FOO. {ALLOWED}"),
-            ("R5 STOP GOAL FOO", f"STOP {U}\nGOAL g\nFOO x", f"{R}unknown keys GOAL, FOO. Allowed: TO."),
-            ("R5 STOP with GOAL", f"STOP {U}\nTO build\nGOAL g", f"{R}unknown keys GOAL. Allowed: TO."),
-            ("R5 AMEND inside a brief", FULL + f"\nAMEND {U} rev 2", f"{R}unknown keys AMEND. {ALLOWED}"),
-            ("R5 lowercase key", FULL.replace("GOAL g", "goal g"), f"{R}unknown keys goal. {ALLOWED}"),
-            ("R6 ACCEPT twice", FULL + "\nACCEPT two", f"{R}duplicate keys ACCEPT. {DUP}"),
-            ("R6 TO twice in STOP", f"STOP {U}\nTO a\nTO b", f"{R}duplicate keys TO. {DUP}"),
+            ("R5 brief opens with prose", "Here is the brief:\n" + FULL,
+             f"{R}line 1 \"Here is the brief:\" is not a KEY line; a brief starts with TO."),
+            ("R5 brief opens with an unknown key", "\nOWNER y\n" + FULL,
+             f"{R}line 2 \"OWNER y\" is not a KEY line; a brief starts with TO."),
+            ("R5 stray quote is one line of 60", "x" * 70 + "\n" + FULL,
+             f"{R}line 1 \"{'x' * 60}\" is not a KEY line; a brief starts with TO."),
+            ("R5 typo'd key is caught as missing", FULL.replace("GOAL g", "GAOL g"),
+             f"{R}missing GOAL. {FILL} Line 2 \"GAOL g\" was read as part of TO; {FIX}"),
+            ("R5 lowercase key", FULL.replace("GOAL g", "goal g"),
+             f"{R}missing GOAL. {FILL} Line 2 \"goal g\" was read as part of TO; {FIX}"),
+            ("R5 AMEND inside a brief", FULL + f"\nAMEND {U} rev 2",
+             f"{R}line 12 \"AMEND {U} rev 2\" starts another block; {OWN}"),
+            ("G2 STOP merged with a brief", f"STOP {U}\nTO build\nwhy\n" + FULL.split("\n", 1)[1],
+             f"{R}line 4 \"GOAL g\" is a GOAL line inside a STOP; {ONLY}"),
+            ("G2 STOP non-TO key", f"STOP {U}\nGOAL g", f"{R}line 2 \"GOAL g\" is a GOAL line inside a STOP; {ONLY}"),
+            ("G2 brief merged with a STOP", FULL + f"\nSTOP {U} wrong target",
+             f"{R}line 12 \"STOP {U} wrong target\" starts another block; {OWN}"),
+            ("G2 STOP inside an AMEND", f"AMEND {U} rev 2\nGOAL g2\nSTOP {U}",
+             f"{R}line 3 \"STOP {U}\" starts another block; {OWN}"),
+            ("G2 AMEND inside an AMEND", f"AMEND {U} rev 2\nAMEND {U} rev 3\nGOAL g2",
+             f"{R}line 2 \"AMEND {U} rev 3\" starts another block; {OWN}"),
+            ("G2 bare fence in a brief", FULL.replace("  npm test", "```\nnpm test\n```"),
+             f"{R}line 7 \"```\" is a code fence inside a dispatch block; {FENCE}"),
+            ("G2 tilde fence with info", FULL.replace("CONTEXT c", "CONTEXT c\n~~~python"),
+             f"{R}line 5 \"~~~python\" is a code fence inside a dispatch block; {FENCE}"),
+            ("G2 fence in a STOP", f"STOP {U}\nwhy\n```sh", f"{R}line 3 \"```sh\" is a code fence inside a "
+                                                                f"dispatch block; {FENCE}"),
+            ("R6 ACCEPT twice", FULL + "\nACCEPT two",
+             f"{R}duplicate keys ACCEPT; line 12 \"ACCEPT two\" repeats one. {DUP}"),
+            ("R6 TO twice in STOP", f"STOP {U}\nTO a\nwhy\nTO b",
+             f"{R}duplicate keys TO; line 4 \"TO b\" repeats one. {DUP}"),
             ("R7 epic", FULL.replace("TIER standard", "TIER epic"),
              f"{R}TIER must be one of mechanical|standard|hard, got 'epic'."),
             ("R7 Standard", FULL.replace("TIER standard", "TIER Standard"),
@@ -150,16 +203,15 @@ class GrammarTest(unittest.TestCase):
 
     def test_fault_order(self):
         for name, body, want in [
-            ("unknown + bad TIER -> R5", FULL.replace("TIER standard", "TIER epic") + "\nFOO x",
-             f"{R}unknown keys FOO. {ALLOWED}"),
-            ("dup + missing -> R6", "TO a\nTO b", f"{R}duplicate keys TO. {DUP}"),
-            ("unknown + bad id -> R5", "AMEND foo rev 2\nFOO x", f"{R}unknown keys FOO. {ALLOWED}"),
-            ("unknown + dup -> R5", FULL + "\nACCEPT two\nFOO x", f"{R}unknown keys FOO. {ALLOWED}"),
+            ("prose + dup -> R5", "hi\nTO a\nTO b", f"{R}line 1 \"hi\" is not a KEY line; a brief starts with TO."),
+            ("dup + missing -> R6", "TO a\nTO b", f"{R}duplicate keys TO; line 2 \"TO b\" repeats one. {DUP}"),
+            ("prose note + bad id -> R4", "AMEND foo rev 2\nFOO x", f"{R}bad unit id 'foo' {WANT}."),
             ("bad TIER + missing -> R7", "TO a\nTIER epic",
              f"{R}TIER must be one of mechanical|standard|hard, got 'epic'."),
             ("bad TIER + bad id -> R7", "AMEND foo rev 2\nTIER epic",
              f"{R}TIER must be one of mechanical|standard|hard, got 'epic'."),
-            ("verb syntax first", "AMEND u\nFOO x\nFOO y", f"{R}AMEND needs 'AMEND <unit> rev <N>'."),
+            ("verb syntax first", "AMEND u\nFOO x\nFOO y",
+             f"{R}AMEND needs 'AMEND <unit> rev <N>'; line 1 \"AMEND u\" does not match."),
         ]:
             with self.subTest(name):
                 with self.assertRaises(Refusal) as cm:

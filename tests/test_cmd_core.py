@@ -415,17 +415,18 @@ class SleepWakeTest(CoreCase):
     def test_wake_dry_run_prints_orca_argv(self):
         code, out, err = self.orche("wake", "feat-acme-shop-search", "--dry-run")
         self.assertEqual((code, out), (0, "would wake feat-acme-shop-search (dry-run)\n"))
-        self.assertEqual(err, "[dry-run] orca terminal create --worktree id:repo-acme::/srv/orca/acme-shop-search"
+        self.assertEqual(err, "orche: no transcript named feat-acme-shop-search; the pane starts a fresh session\n"
+                              "[dry-run] orca terminal create --worktree id:repo-acme::/srv/orca/acme-shop-search"
                               f" --title feat-acme-shop-search --command PATH={support.ROOT / 'bin'}:$PATH"
                               " ORCHE_SESSION=feat-acme-shop-search claude --permission-mode bypassPermissions"
-                              " --resume feat-acme-shop-search --json\n")
+                              " --name feat-acme-shop-search --json\n")
         self.assertEqual(registry.load(), self.reg)
 
     def test_wake_dry_run_json_argv_carries_bypass_permissions(self):
         code, out, _ = self.orche("--json", "wake", "feat-acme-shop-search", "--dry-run")
         self.assertEqual(code, 0)
         command = json.loads(out)["argv"][json.loads(out)["argv"].index("--command") + 1]
-        self.assertIn(" --permission-mode bypassPermissions --resume feat-acme-shop-search", command)
+        self.assertIn(" --permission-mode bypassPermissions --name feat-acme-shop-search", command)
 
     def test_wake_and_sleep_load_the_registry_once(self):
         from unittest import mock
@@ -441,7 +442,7 @@ class SleepWakeTest(CoreCase):
         self.assertEqual((code, out), (0, "feat-acme-shop-search active\n"))
         self.assertEqual(self.calls[-1][:3], ["orca", "terminal", "create"])
         self.assertIn(f"PATH={support.ROOT / 'bin'}:$PATH ORCHE_SESSION=feat-acme-shop-search claude "
-                      "--permission-mode bypassPermissions --resume feat-acme-shop-search", self.calls[-1])
+                      "--permission-mode bypassPermissions --name feat-acme-shop-search", self.calls[-1])
         reg = registry.load()
         self.assertEqual(reg["projects"]["acme-shop"]["divisions"]["build"]["features"][1]["status"], "active")
         self.assertEqual((reg["events"][-1]["type"], reg["events"][-1]["unit"]), ("wake", "build/search"))
@@ -451,14 +452,14 @@ class SleepWakeTest(CoreCase):
         self.reg["limits"]["max_awake_sessions"] = 1   # already counted as awake: the cap does not apply
         registry.save(self.reg)
         code, out, err = self.orche("wake", "div-acme-shop-build")
-        self.assertEqual((code, out, err), (0, "div-acme-shop-build pane reopened\n", ""))
+        self.assertEqual((code, out, err), (0, "div-acme-shop-build pane reopened\n", "orche: no transcript named div-acme-shop-build; the pane starts a fresh session\n"))
         self.assertEqual([c[1:3] for c in self.calls], [["terminal", "list"], ["terminal", "create"]])
         create = self.calls[-1]
         self.assertEqual(create[create.index("--worktree") + 1], f"id:repo-acme::{self.wt}")
         self.assertEqual(create[create.index("--title") + 1], "div-acme-shop-build")
         self.assertEqual(create[create.index("--command") + 1],
                          f"PATH={support.ROOT / 'bin'}:$PATH ORCHE_SESSION=div-acme-shop-build "
-                         "claude --permission-mode bypassPermissions --resume div-acme-shop-build")
+                         "claude --permission-mode bypassPermissions --name div-acme-shop-build")
         reg = registry.load()
         self.assertEqual(reg["projects"]["acme-shop"]["divisions"]["build"]["status"], "active")
         self.assertEqual(reg["events"], self.reg["events"])
@@ -476,7 +477,7 @@ class SleepWakeTest(CoreCase):
     def test_wake_active_unit_without_pane_dry_run(self):
         code, out, err = self.orche("--dry-run", "wake", "div-acme-shop-build")
         self.assertEqual((code, out), (0, "would reopen div-acme-shop-build pane (dry-run)\n"))
-        self.assertTrue(err.startswith("[dry-run] orca terminal create --worktree"), err)
+        self.assertIn("\n[dry-run] orca terminal create --worktree", err)
         self.assertEqual([c[1:3] for c in self.calls], [["terminal", "list"]])
         self.assertEqual(registry.load(), self.reg)
 
@@ -504,7 +505,8 @@ class SleepWakeTest(CoreCase):
         self.dormant_build()
         code, out, err = self.orche("wake", "feat-acme-shop-search")
         self.assertEqual((code, out), (0, "feat-acme-shop-search active\n"))
-        self.assertEqual(err, "orche: warning: parent division build is dormant\n")
+        self.assertEqual(err, "orche: warning: parent division build is dormant\n"
+                              "orche: no transcript named feat-acme-shop-search; the pane starts a fresh session\n")
         self.assertEqual(registry.awake_sessions(registry.load()),
                          ["feat-acme-shop-checkout", "feat-acme-shop-search"])
 
@@ -633,12 +635,12 @@ class PaneCommandTest(support.TempHomeCase):
         from orche.hr import panes
         self.assertEqual(panes.pane_command("feat-acme-x", resume=True),
                          f"PATH={support.ROOT / 'bin'}:$PATH ORCHE_SESSION=feat-acme-x claude "
-                         "--permission-mode bypassPermissions --resume feat-acme-x")
+                         "--permission-mode bypassPermissions --name feat-acme-x")
 
     def test_unit_panes_start_with_bypass_permissions(self):
         from orche.hr import panes
         for session in ("div-acme-build", "feat-acme-x"):
-            for resume, flag in ((True, "--resume"), (False, "--name")):
+            for resume, flag in ((True, "--name"), (False, "--name")):   # no transcript: a fresh named session
                 self.assertTrue(panes.pane_command(session, resume=resume).endswith(
                     f" claude --permission-mode bypassPermissions {flag} {session}"))
 

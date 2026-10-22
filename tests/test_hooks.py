@@ -334,10 +334,120 @@ class DispatchRelayTest(HookCase):
         self.assertFalse(self.units_dir().exists())
         self.assertEqual(self.orca_calls(), [])
 
-    def test_unknown_key_and_bad_tier_refused(self):
+    def test_unknown_key_line_continues_the_field_and_bad_tier_refused(self):
         res = self.stop(DISPATCH_OK.replace("TIER      standard", "TIER      epic\nOWNER     me"))
         self.assertEqual(res.returncode, 2)
-        self.assertIn("unknown keys OWNER", res.stderr)
+        self.assertIn("TIER must be one of mechanical|standard|hard", res.stderr)
+        self.assertIn('was read as part of TIER; start each field with its exact KEY.', res.stderr)
+
+    # -- C10: one refused block no longer drops the reply ------------------------------------
+    def test_two_blocks_second_refused_delivers_the_first_once(self):
+        bad = DISPATCH_OK.split("\n\n", 1)[1].replace("Add coupon field", "Add gift card field")
+        text = DISPATCH_OK + "\n\n" + bad.replace("VERIFY    scripts/verify-checkout.sh\n", "")
+        res = self.stop(text)
+        self.assertEqual(res.returncode, 2)
+        unit = self.only_unit()
+        self.assertEqual(res.stderr.strip().splitlines(), [
+            "[orche] dispatch refused: 1 of 2 blocks refused. Re-send ONLY the refused block; the delivered "
+            "ones went out and must not be sent again.",
+            f"block 1: delivered {unit} → div-acme-build",
+            "block 2: refused — missing VERIFY. Fill every field or drop the block."])
+        self.assertEqual(len(self.inbox("div-acme-build")), 1)
+        events = self.events()
+        self.assertIn(f"dispatch kind=brief unit={unit} rev=1 to=div-acme-build by=main-acme", events)
+        self.assertIn("dispatch refused by=main-acme blocks=2 reason=1 of 2 blocks refused. Re-send ONLY", events)
+        marker = self.home / "sessions" / "sess-main-0001.relayed.json"
+        self.assertEqual(list(json.loads(marker.read_text())["delivered"].values()), [f"{unit} → div-acme-build"])
+        # The same reply again under stop_hook_active: block 1 is not delivered twice; the refusal is parked.
+        res = self.stop(text, stop_hook_active=True)
+        self.assertEqual((res.returncode, res.stderr), (0, ""))
+        self.only_unit()
+        self.assertEqual(len(self.inbox("div-acme-build")), 1)
+        [parked] = [json.loads(p.read_text()) for p in self.inbox("main-acme")
+                    if json.loads(p.read_text())["unit"] == "dispatch-refused"]
+        self.assertIn(f"block 1: delivered {unit} → div-acme-build (earlier)", parked["summary"])
+        self.assertIn("block 2: refused — missing VERIFY.", parked["summary"])
+        # Re-sending only the fixed block delivers it and clears the no-redelivery set.
+        res = self.stop("Fixed.\n\n" + bad, msg_id="msg_2")
+        self.assertEqual((res.returncode, res.stderr), (0, ""))
+        self.assertEqual(len(list(self.units_dir().iterdir())), 2)
+        self.assertNotIn("delivered", json.loads(marker.read_text()))
+
+    def _partly_refused(self):
+        """Turn 1: block 1 delivered, block 2 refused (missing VERIFY). Returns (unit, fixed block 2)."""
+        bad = DISPATCH_OK.split("\n\n", 1)[1].replace("Add coupon field", "Add gift card field")
+        res = self.stop(DISPATCH_OK + "\n\n" + bad.replace("VERIFY    scripts/verify-checkout.sh\n", ""))
+        self.assertEqual(res.returncode, 2)
+        return self.only_unit(), bad
+
+    def test_d1_identical_block_in_a_later_turn_within_the_window_is_skipped_with_feedback(self):
+        unit, fixed = self._partly_refused()
+        res = self.stop(DISPATCH_OK + "\n\n" + fixed, msg_id="msg_2")
+        self.assertEqual((res.returncode, res.stderr), (0, ""))
+        self.assertEqual(len(list(self.units_dir().iterdir())), 2)          # block 1 not written again
+        self.assertEqual(len(self.inbox("div-acme-build")), 2)
+        self.assertIn(f"dispatch skipped by=main-acme unit={unit} reason=already delivered", self.events())
+        skipped = [json.loads(p.read_text())["summary"] for p in self.inbox("main-acme")
+                   if json.loads(p.read_text())["summary"].startswith("skipped")]
+        self.assertEqual(skipped, [f"skipped {unit} → div-acme-build: already delivered (an identical "
+                                   "block went out in the last 10 min); not sent again"])
+
+    def test_d1_after_the_window_the_identical_block_is_delivered(self):
+        unit, fixed = self._partly_refused()
+        marker = self.home / "sessions" / "sess-main-0001.relayed.json"
+        seen = json.loads(marker.read_text())
+        self.assertIsInstance(seen["delivered_at"], float)
+        marker.write_text(json.dumps({**seen, "delivered_at": seen["delivered_at"] - 601}))
+        res = self.stop(DISPATCH_OK + "\n\n" + fixed, msg_id="msg_2")
+        self.assertEqual((res.returncode, res.stderr), (0, ""))
+        self.assertEqual(len(list(self.units_dir().iterdir())), 3)
+        self.assertNotIn("dispatch skipped", self.events())
+
+    def test_d4_every_block_refused_says_none_was_delivered(self):
+        bad = DISPATCH_OK.split("\n\n", 1)[1].replace("VERIFY    scripts/verify-checkout.sh\n", "")
+        res = self.stop(DISPATCH_OK.replace("VERIFY    scripts/verify-checkout.sh\n", "") + "\n\n" + bad)
+        self.assertEqual(res.returncode, 2)
+        self.assertEqual(res.stderr.strip().splitlines(), [
+            "[orche] dispatch refused: all 2 blocks refused; no block was delivered. Fix them and send them again.",
+            "block 1: refused — missing VERIFY. Fill every field or drop the block.",
+            "block 2: refused — missing VERIFY. Fill every field or drop the block."])
+        self.assertFalse(self.units_dir().exists())
+        self.assertFalse((self.home / "sessions" / "sess-main-0001.relayed.json").exists())
+
+    def test_d4_a_refused_block_first_then_a_valid_one(self):
+        good = DISPATCH_OK.split("\n\n", 1)[1]
+        res = self.stop(DISPATCH_OK.replace("VERIFY    scripts/verify-checkout.sh\n", "") + "\n\n" + good)
+        self.assertEqual(res.returncode, 2)
+        unit = self.only_unit()
+        self.assertEqual(res.stderr.strip().splitlines(), [
+            "[orche] dispatch refused: 1 of 2 blocks refused. Re-send ONLY the refused block; the delivered "
+            "ones went out and must not be sent again.",
+            "block 1: refused — missing VERIFY. Fill every field or drop the block.",
+            f"block 2: delivered {unit} → div-acme-build"])
+        self.assertEqual(len(self.inbox("div-acme-build")), 1)
+
+    def test_every_refusal_writes_an_events_line(self):
+        res = self.stop(DISPATCH_OK.replace("VERIFY    scripts/verify-checkout.sh\n", ""))
+        self.assertEqual(res.returncode, 2)
+        self.assertEqual(res.stderr.strip(), "[orche] dispatch refused: missing VERIFY. Fill every field or drop "
+                                             "the block.")
+        self.assertIn("dispatch refused by=main-acme blocks=1 reason=missing VERIFY. Fill every field or drop "
+                      "the block.\n", self.events())
+
+    def test_incident_stop_with_unindented_reason_and_a_brief_both_relay(self):
+        self.run_hook("dispatch_relay.py", self.payload("stop.json", transcript_path=str(SAMPLE)))
+        unit = self.only_unit()
+        brief_two = DISPATCH_OK.split("\n\n", 1)[1].replace("Add coupon field", "Add gift card field")
+        text = (f"Stopping the old unit.\n\n```dispatch\nSTOP {unit}\nStop now: the rebase went wrong at\n"
+                "13,rebase onto the wrong base (shared worktree),\nso the build must wait;\n"
+                "the brief below replaces it.\nTO build\n```\n\n" + brief_two)
+        res = self.stop(text, msg_id="msg_2")
+        self.assertEqual((res.returncode, res.stderr), (0, ""))
+        self.assertEqual(len(list(self.units_dir().iterdir())), 2)
+        events = self.events()
+        self.assertIn(f"dispatch kind=stop unit={unit}", events)
+        self.assertEqual(events.count("dispatch kind=brief"), 2)
+        self.assertNotIn("dispatch refused", events)
 
     def test_unknown_target_lists_valid_targets(self):
         res = self.stop(DISPATCH_OK.replace("TO        build", "TO        nobody"))
@@ -348,7 +458,8 @@ class DispatchRelayTest(HookCase):
         twice = DISPATCH_OK.replace("VERIFY    ", "ACCEPT    Totals update\nVERIFY    ")
         res = self.stop(twice)
         self.assertEqual(res.returncode, 2)
-        self.assertIn("[orche] dispatch refused: duplicate keys ACCEPT.", res.stderr)
+        self.assertIn('[orche] dispatch refused: duplicate keys ACCEPT; line 7 "ACCEPT Totals update" repeats one.',
+                      res.stderr)
         self.assertFalse(self.units_dir().exists())
         hashed = DISPATCH_OK.replace("VERIFY    scripts/verify-checkout.sh\n",
                                      "VERIFY    scripts/verify-checkout.sh\n  # unit tests\n")

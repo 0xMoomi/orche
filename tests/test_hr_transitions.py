@@ -176,7 +176,7 @@ class WakeTest(TransitionsCase):
         argv = self.create_argv()
         self.assertEqual(argv[argv.index("--worktree") + 1], "id:repo-acme::/srv/orca/acme-shop-search")
         self.assertTrue(argv[argv.index("--command") + 1].endswith(
-            "--permission-mode bypassPermissions --resume feat-acme-shop-search"))
+            "--permission-mode bypassPermissions --name feat-acme-shop-search"))
         entry = self.entry("feat-acme-shop-search")
         self.assertEqual(entry["status"], "active")
         self.assertNotEqual(entry["last_activity"], self.reg["projects"]["acme-shop"]["divisions"]["build"]["features"][1]["last_activity"])
@@ -209,7 +209,7 @@ class WakeTest(TransitionsCase):
         data, line = self.run_verb(transitions.wake, "div-acme-shop-build")
         self.assertEqual((data, line), ({"unit": "div-acme-shop-build", "status": "active", "changed": False,
                                          "pane_reopened": True}, "div-acme-shop-build pane reopened"))
-        self.assertIn("--resume div-acme-shop-build", self.create_argv()[self.create_argv().index("--command") + 1])
+        self.assertIn("--name div-acme-shop-build", self.create_argv()[self.create_argv().index("--command") + 1])
         self.assertEqual(registry.load(), before)
         self.assertEqual(self.log_lines(), ["reopen div-acme-shop-build pane by user"])
         self.assertEqual(self.refresh.call_count, 0)
@@ -252,7 +252,7 @@ class WakeTest(TransitionsCase):
         self.assertEqual(line, "would wake feat-acme-shop-search (dry-run)")
         self.assertTrue(data["dry_run"])
         self.assertEqual(data["argv"][1:3], ["terminal", "create"])
-        self.assertIn("--resume feat-acme-shop-search", data["argv"][data["argv"].index("--command") + 1])
+        self.assertIn("--name feat-acme-shop-search", data["argv"][data["argv"].index("--command") + 1])
         self.assertEqual(self.orca_calls("terminal create"), [])
         self.assertEqual(registry.load(), before)
         self.assertEqual(self.log_lines(), [])

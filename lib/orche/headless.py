@@ -222,9 +222,13 @@ def env(call: Call, cfg: dict) -> dict:
 
     Everything inherited passes, except the owned namespaces (OWNED): there only PASS_ENV and
     AUTH_ENV pass. The configured Jev key variable never passes. The plugin's bin/ goes first on
-    PATH, then call.env applies, then a tagged call gets ORCHE_RUN_ID (an untagged one has none)."""
+    PATH, then call.env applies, then a tagged call gets ORCHE_RUN_ID (an untagged one has none).
+    CLAUDE_CODE_OAUTH_TOKEN: inherited, else the one `orche auth set` stored (oauth.inject), else
+    none (the run uses the login). Reading the store is the only lookup; nothing is written."""
+    from . import oauth  # lazy: hooks import this module for argv()/env() only
     jev_key_env = str((cfg.get("jev") or {}).get("api_key_env") or "JEV_API_KEY")
     out = {k: v for k, v in os.environ.items() if not _owned(k) and k != jev_key_env}
+    oauth.inject(out)
     out["PATH"] = f"{paths.PLUGIN_ROOT / 'bin'}{os.pathsep}{out.get('PATH', '')}"
     out.update({str(k): str(v) for k, v in call.env.items()})
     out.pop(procs.ENV, None)

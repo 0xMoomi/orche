@@ -52,7 +52,9 @@ ROLLBACK  How to revert (mandatory when the unit deploys)
 ````
 
 - All fields except ROLLBACK are required; an empty field makes the hook refuse the block and hand
-  it back with the list. Unknown keys are refused.
+  it back with the list. A plain line that is not a KEY line continues the field above.
+- Every valid block is delivered even if another one is refused; the refusal lists each block's outcome.
+  Re-send ONLY the refused block(s) — the delivered ones went out.
 - Several blocks per reply are fine; each is one unit. The hook assigns the unit id
   (`<project>-<slug>-<yyyymmdd>-<n>`) and files an info pointer with the unit id and delivery state
   (`relayed <unit> → <target> rev N (<state>)`); a delivery that fails reaches you at once as an urgent
@@ -65,8 +67,12 @@ ROLLBACK  How to revert (mandatory when the unit deploys)
 - Budget every unit with a realistic TIMEBOX: the runner's turn cap is 3 turns per TIMEBOX minute (30–400).
 - Corrections are new revisions, never chat: `AMEND <unit> rev N` on the first line, then
   `SUPERSEDES rev N-1: <what>`, then the changed fields. A permanent correction also goes into
-  STANDING.md. `STOP <unit> <reason>` halts a unit at a safe boundary.
-- Write each key once; continue a value on lines indented by two spaces (a `#` there is content, an
+  STANDING.md. `STOP <unit> <reason>` halts a unit at a safe boundary; the reason may span lines:
+  ```dispatch
+  STOP <unit> Rebase went wrong on the shared worktree.
+  Wait for the replacement brief below.
+  ```
+- Write each key once; continue a value on the lines below it, indented by two spaces (a `#` there is content, an
   unindented `#` line is a comment).
 - If a correction conflicts with a standing order, ask one line: "Conflicts with standing order N.
   Change the rule, or exception this time?" Default: exception this time.
