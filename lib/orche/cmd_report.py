@@ -2,7 +2,8 @@
 
 A worker files its completion (or block, question, stop) as one inbox pointer:
 - from: $ORCHE_SESSION, else the session owning the cwd;
-- to: the project's Main; a feature session reports to its Build division (override with --to);
+- to: the brief's sender when it is a live Main or division of the project other than `from`; else the
+  project's Main; a feature session reports to its division (override with --to);
 - unit: the newest `.orche/units/*/BRIEF.md` addressed (TO) to `from`; brief_rev from its `rev:` line;
   with no such brief, `external-request|question|info` use `adhoc-<from>-<yyyymmdd>` (others need one);
 - head_sha: git HEAD of the reporter's worktree (Main: the cwd); ledger_row: whether the canonical
@@ -29,9 +30,11 @@ def register(subparsers):
     p.add_argument("status", help="|".join(inbox.STATUSES))
     p.add_argument("--summary", required=True, help="what happened, <= 5 lines")
     p.add_argument("--unit", help="unit id (default: the newest brief addressed to this session)")
-    p.add_argument("--to", help="recipient session (default: Main; a feature reports to Build)")
+    p.add_argument("--to", help="recipient session (default: the brief's sender; else Main; a feature: its division)")
     p.add_argument("--report-path", help="REPORT.md path (default: the unit's REPORT.md if present)")
-    p.add_argument("--urgent", action="store_true", help="mark the pointer urgent (drained at Main's next prompt; does not wake a pane)")
+    p.add_argument("--urgent", action="store_true",
+                   help="mark an `info` note urgent: it is injected at once and wakes the recipient "
+                        "(every other status always is)")
     p.set_defaults(func=cmd_report)
 
 
@@ -65,15 +68,7 @@ def cmd_report(args):
         return _fail(unidentified_message(r, who.place))
     if who.member is None:
         return _fail("cannot tell which session is reporting; set ORCHE_SESSION or run inside a unit")
-    me, key, default_to = who.member.session, who.member.project, r.recipient(who.member.session)
-    to = args.to or default_to
-    if not to:
-        return _fail(f"no recipient for {me}; pass --to")
-    target = r.member(to)
-    if target is None:
-        return _fail(f"unknown target session {to!r} (not in the registry)")
-    if target.status == "retired":
-        return _fail(f"target session {to!r} is retired")
+    me, key = who.member.session, who.member.project
     summary = inbox.clip(mask.redact(args.summary)[0])
     if not summary:
         return _fail("--summary is empty")
@@ -87,6 +82,14 @@ def cmd_report(args):
         if b is None and args.status not in ADHOC_STATUSES:
             return _fail(f"no brief addressed to {me}; pass --unit")
         unit = b.unit if b else f"adhoc-{util.slugify(me)}-{units.now():%Y%m%d}"
+    to = args.to or r.recipient(me, b.sender if b else None)
+    if not to:
+        return _fail(f"no recipient for {me}; pass --to")
+    target = r.member(to)
+    if target is None:
+        return _fail(f"unknown target session {to!r} (not in the registry)")
+    if target.status == "retired":
+        return _fail(f"target session {to!r} is retired")
     if args.report_path:
         report = str(Path(args.report_path).expanduser().resolve())
     else:
@@ -101,7 +104,7 @@ def cmd_report(args):
                          ledger_row=proof.row is not None,
                          brief_rev=b.rev if b else 1,
                          urgent=args.urgent, summary=summary)
-        path = None if args.dry_run else inbox.write(ptr)
+        path = None if args.dry_run else inbox.post(ptr)
         if not args.dry_run:
             units.touch_activity(me)
     except ValueError as exc:

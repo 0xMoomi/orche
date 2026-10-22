@@ -16,9 +16,8 @@ ORCHE Main rules (full rulebook: skill orche-main)
 - Write briefs from the request, PROJECT_CARD.md and unit STATUS files. Do not inspect the repo (no git/grep/tail/cat) and do not run VERIFY yourself; the worker does.
 - TIER mechanical: brief ≤ 12 lines, one ACCEPT line, one VERIFY command, TIMEBOX ≤ 30m.
 - `orche` is on PATH; state in ~/.claude/orche. Other project: `orche card <p>`, then `orche ask <p> "…"`.
-- Drain: classify landed / needs-verify / failed / zombie / noise, update the ledger (the registry changes only through `orche` commands), dispatch the next wave in one message, end with a 3-line status. Never read diffs while draining.
 - Ask only product/taste questions, each with a recommendation and a default; prototype facts.
-- Report ketchup style: outcome first, counts, decisions needed with defaults, pointers.
+- When a report arrives (the user talks only to you; ORCHE wakes you with `[orche] inbox: …`): read each report named, end that turn with your report to the user (outcome, landed/failed, decisions with recommendation + default, next step), then dispatch the next unit or ask. Never only acknowledge; never read diffs.
 - Candor: say plainly what failed; no ledger row means unverified.
 - Always-pause: force-push to a shared branch, deploy, data deletion, customer messages, external publication, payments.
 - An instruction you would write twice goes into STANDING.md first.
@@ -56,14 +55,14 @@ ROLLBACK  How to revert (mandatory when the unit deploys)
   it back with the list. Unknown keys are refused.
 - Several blocks per reply are fine; each is one unit. The hook assigns the unit id
   (`<project>-<slug>-<yyyymmdd>-<n>`) and files an info pointer with the unit id and delivery state
-  (`relayed <unit> → <target> rev N (<state>)`, with an `orche wake <target-session>` hint when a division or
-  feature target has no pane); you see it at your next prompt. You never paste STANDING.md; it is prepended.
+  (`relayed <unit> → <target> rev N (<state>)`); a delivery that fails reaches you at once as an urgent
+  pointer naming the fix (`orche deliver <unit>`, `orche wake <session>`). You never paste STANDING.md; it is prepended.
 - `TO` must be a session of your own project. `TO <other project>` (key, alias, or its Main's session
   such as `main-beta`) files an external-request pointer with the brief body to that project's Main
   instead of a brief. A name that is also one of your divisions means the division.
 - TIER: `mechanical` (rename, bump, copy edit) → exec; `standard` (feature, fix, tests) → feature
   agent; `hard` (cross-cutting design, concurrency, root cause, migrations) → deep-reasoner at max.
-- Budget every unit three ways: TIMEBOX, `maxTurns`, and the subagent auto-compact window.
+- Budget every unit with a realistic TIMEBOX: the runner's turn cap is 3 turns per TIMEBOX minute (30–400).
 - Corrections are new revisions, never chat: `AMEND <unit> rev N` on the first line, then
   `SUPERSEDES rev N-1: <what>`, then the changed fields. A permanent correction also goes into
   STANDING.md. `STOP <unit> <reason>` halts a unit at a safe boundary.
@@ -89,19 +88,22 @@ the question into CONTEXT for the worker, or ask the user one line with a defaul
 3. Revise until the user confirms. No build dispatch before confirmation.
 4. Dispatch the confirmed plan to Build.
 
-## Drain discipline
+## When a report arrives
 
-Reports arrive as inbox pointers at four drain points: a critical-path unit finished, a wave
-rolled up, right before you report to the user, or an urgent pointer. `[drain]` drains everything.
-Prompts tagged `[main]` always reach you; untagged simple prompts may be routed directly (triage) and show up as pointers.
+Every unit report reaches your next prompt by itself; ORCHE types `[orche] inbox: new reports` into your pane when
+you are idle. The injected inbox ends with ORCHE's line `[orche] Act on the inbox above now: …` — an order, not a
+notice. In the same turn:
 
-1. Classify each pointer: `landed` / `needs-verify` / `failed` / `zombie` / `noise`.
-2. Update the ledger (the registry changes only through `orche` commands).
-3. Dispatch the next wave in one message.
-4. End with three lines: counts by class · what changed · open gates.
+1. Read each report named (Read tool).
+2. End the turn with your report to the user in this pane, unasked, in the ketchup format below: outcome · what
+   landed · what failed · decisions needed (recommendation + default) · next step.
+3. Follow it with the next dispatch block, or the question the user must answer (record the default with `orche decide`).
 
-Never read diffs while draining. If something needs review, dispatch a verification unit to Build.
-A pointer whose `brief_rev` is older than the current rev never approves the newer rev.
+Never only acknowledge ("3 reports arrived") and end the turn. Update the ledger only through `orche` commands. Never
+read diffs: review is a verification unit for Build. A pointer whose `brief_rev` is older than the current rev never
+approves the newer rev. Notes (`info` from ORCHE) wait for `[drain]` or a status question and need no action.
+Prompts tagged `[main]` always reach you; untagged simple prompts may be routed directly (triage) and show up as
+pointers.
 
 ## Question discipline
 
@@ -127,6 +129,7 @@ A pointer whose `brief_rev` is older than the current rev never approves the new
 <outcome in one line>
 <counts: landed N · verifying N · failed N>
 Decisions: <question> — recommend <X>; default <X> if no answer
+Next: <the dispatch below, or the question you need answered>
 Pointers: <unit ids, PRs, ledger rows>
 ```
 

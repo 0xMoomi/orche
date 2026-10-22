@@ -5,6 +5,7 @@ import io
 import json
 import os
 import shlex
+import shutil
 import subprocess
 import unittest
 from contextlib import redirect_stderr, redirect_stdout
@@ -131,7 +132,8 @@ class InitTest(HrCase):
                                    for d in registry.DIVISIONS])
         panes = [l for l in dry if " terminal create " in l]
         self.assertEqual(len(panes), 1)
-        self.assertIn(f"--title main-acme-shop --command {PANE}ORCHE_SESSION=main-acme-shop claude --name main-acme-shop --json", panes[0])
+        self.assertIn(f"--title main-acme-shop --command {PANE}ORCHE_SESSION=main-acme-shop claude "
+                      "--permission-mode bypassPermissions --name main-acme-shop --json", panes[0])
         autos = [l for l in dry if " automations create " in l]
         self.assertEqual(len(autos), 2)
         self.assertIn("--name orche-hr-audit-acme-shop --trigger weekly --day 1 --time 09:00", autos[0])
@@ -183,7 +185,7 @@ class InitTest(HrCase):
         panes = [c[c.index("--title") + 1:c.index("--title") + 4] for c in self.orca_calls("terminal create")]
         self.assertEqual(panes, [["div-acme-shop-build", "--command", f"{PANE}ORCHE_SESSION=div-acme-shop-build claude --permission-mode bypassPermissions --name div-acme-shop-build"],
                                  ["div-acme-shop-gtm", "--command", f"{PANE}ORCHE_SESSION=div-acme-shop-gtm claude --permission-mode bypassPermissions --name div-acme-shop-gtm"],
-                                 ["main-acme-shop", "--command", f"{PANE}ORCHE_SESSION=main-acme-shop claude --name main-acme-shop"]])
+                                 ["main-acme-shop", "--command", f"{PANE}ORCHE_SESSION=main-acme-shop claude --permission-mode bypassPermissions --name main-acme-shop"]])
         self.assertEqual(self.orca_calls("automations create"), [])
         self.assertIn("[dry-run] orca automations create --name orche-hr-audit-acme-shop", err)
         # Project templates and card symlink.
@@ -309,11 +311,16 @@ class InitTest(HrCase):
         existing.write_text("mine\n")
         self.assertEqual(self.orche("init", "Acme Shop", "--divisions", "build,research,gtm")[0], 0)
         agents = self.repo / ".claude" / "agents"
+        header = onboarding.PERSONA_HEADER.format(file="{}") + "\n"
         self.assertEqual((agents / "div-acme-shop-build.md").read_text(),
-                         "---\nname: div-acme-shop-build\n---\nBuild acme-shop claude-opus-5-5\n")
+                         "---\nname: div-acme-shop-build\n---\n" + header.format("div-build.md")
+                         + "Build acme-shop claude-opus-5-5\n")
+        generic = "---\nname: {}\n---\n" + header.format("division.md") + "Generic {} medium\n"
         self.assertEqual((agents / "div-acme-shop-research.md").read_text(),
-                         "---\nname: div-acme-shop-research\n---\nGeneric research medium\n")
-        self.assertEqual(existing.read_text(), "mine\n")
+                         generic.format("div-acme-shop-research", "research"))
+        # A persona is ORCHE's: one already at the path is rendered over (T10; was: never overwritten).
+        self.assertEqual(existing.read_text(), "---\nname: div-acme-shop-gtm\n---\n" + header.format("division.md")
+                         + "Generic gtm high\n")
         self.assertNotIn("persona template missing for division", hr.log_path().read_text())
 
     def test_rerun_resumes_partial_init_without_duplicates(self):
@@ -441,8 +448,9 @@ class InitTest(HrCase):
         main = git_repo(self.home / "main-repo")
         linked = self.home / "linked"
         git("worktree", "add", "-q", "-b", "div/build", str(linked), cwd=main)
-        first = onboarding.exclude_settings(linked)
-        self.assertEqual(onboarding.exclude_settings(linked), first)
+        first, wrote = onboarding.exclude_settings(linked)
+        self.assertTrue(wrote)
+        self.assertEqual(onboarding.exclude_settings(linked), (first, False))
         self.assertEqual(os.path.realpath(first), os.path.realpath(main / ".git" / "info" / "exclude"))
         self.assertEqual(first.read_text().splitlines().count(".claude/settings.local.json"), 1)
         self.assertEqual(first.read_text().splitlines().count(".orche/units/"), 1)
@@ -450,7 +458,7 @@ class InitTest(HrCase):
         status = subprocess.run(["git", "status", "--porcelain", "--untracked-files=all"], cwd=linked,
                                 capture_output=True, text=True).stdout
         self.assertEqual(status, "")
-        self.assertIsNone(onboarding.exclude_settings(self.home / "not-git"))
+        self.assertEqual(onboarding.exclude_settings(self.home / "not-git"), (None, False))
 
     def test_init_excludes_units_dir_in_main_checkout(self):
         git_repo(self.repo)
@@ -470,6 +478,137 @@ class InitTest(HrCase):
                                                    "r", "x", "feat/fallback"), ("r::/w/x", "/w/x", "feat/x"))
         self.assertEqual(onboarding.parse_worktree({"id": "r::/w/y", "path": "/w/y"}, "r", "y", "div/y"),
                          ("r::/w/y", "/w/y", "div/y"))
+
+
+# ---- refresh (T10): re-running init re-renders ORCHE-owned unit files -------------------------------
+
+class RefreshTest(HrCase):
+    """A registered project: build (active), gtm (dormant), rnd (no persona template), research (retired),
+    a custom division design (dormant, div-custom.md) and the active feature checkout."""
+    OLD = "---\nname: old\n---\nhand-edited rules\n"
+
+    def setUp(self):
+        super().setUp()
+        self.personas.mkdir()
+        for name in ("div-build.md", "div-gtm.md", "div-research.md", "div-custom.md", "feature.md"):
+            (self.personas / name).write_text(f"---\nname: {{{{SESSION}}}}\nmodel: {{{{MODEL}}}}\n---\n{name} "
+                                              "{{EFFORT}}\n")
+        code, _, err = self.orche("init", "Acme Shop", "--divisions", "rnd,research,build,gtm", "--custom",
+                                  "design=Design:owns the visual system", "--wake", "build", "--no-intake")
+        self.assertEqual(code, 0, err)
+        code, _, err = self.orche("feat", "new", "acme-shop", "checkout", "--scope", "src/checkout/**",
+                                  "--reason", "r")
+        self.assertEqual(code, 0, err)
+        reg = registry.load()
+        reg["projects"]["acme-shop"]["divisions"]["research"]["status"] = "retired"
+        registry.save(reg)
+        self.root = os.path.realpath(self.repo)
+
+    def copies(self, session):
+        wt = {"feat": "feat-checkout"}.get(session.split("-")[0]) or "div-" + session.rsplit("-", 1)[1]
+        return [Path(self.root) / ".claude" / "agents" / f"{session}.md",
+                self.wtroot / wt / ".claude" / "agents" / f"{session}.md"]
+
+    def outdate(self, *sessions):
+        for session in sessions:
+            for path in self.copies(session):
+                path.write_text(self.OLD)
+
+    def refresh(self, ts="T1", dry_run=False):
+        return hr.refresh_project(registry.load(), "acme-shop", root=self.root, ts=ts, dry_run=dry_run)
+
+    def state(self):
+        files = [p for p in (*Path(self.root).rglob("*"), *self.wtroot.rglob("*")) if p.is_file()]
+        return {str(p): (p.read_bytes(), p.stat().st_mtime_ns) for p in files}
+
+    def test_outdated_personas_are_rerendered_with_backups_and_a_second_run_writes_nothing(self):
+        live = ["div-acme-shop-build", "feat-acme-shop-checkout", "div-acme-shop-gtm", "div-acme-shop-design"]
+        self.outdate(*live, "div-acme-shop-research")
+        ref = self.refresh()
+        self.assertEqual([str(p) for p in ref.changed], [str(p) for s in live for p in self.copies(s)])
+        self.assertEqual(ref.restart, ["div-acme-shop-build", "feat-acme-shop-checkout"])   # active units only
+        header = onboarding.PERSONA_HEADER.format(file="div-build.md")
+        for path in self.copies("div-acme-shop-build"):
+            self.assertEqual(path.read_text(), "---\nname: div-acme-shop-build\nmodel: claude-opus-5-5\n---\n"
+                                               f"{header}\ndiv-build.md high\n")
+        self.assertIn("div-custom.md", self.copies("div-acme-shop-design")[0].read_text())
+        backups = self.home / "backups" / "acme-shop" / "T1"
+        self.assertEqual(sorted(p.name for p in backups.iterdir()),
+                         sorted(f"{s}.{c}.md" for s in live for c in ("main", "worktree")))
+        self.assertTrue(all(p.read_text() == self.OLD for p in backups.iterdir()))
+        for path in self.copies("div-acme-shop-research"):   # retired: untouched
+            self.assertEqual(path.read_text(), self.OLD)
+        before = self.state()
+        again = self.refresh(ts="T2")
+        self.assertEqual((again.changed, again.restart), ([], []))
+        self.assertEqual(self.state(), before)               # content and mtime
+        self.assertFalse((self.home / "backups" / "acme-shop" / "T2").exists())
+
+    def test_onboarding_over_a_differing_persona_leaves_a_backup(self):
+        """F5: `orche feat new` over a hand-edited persona backs it up as `orche init` does."""
+        persona = Path(self.root) / ".claude" / "agents" / "feat-acme-shop-payments.md"
+        persona.write_text(self.OLD)
+        code, _, err = self.orche("feat", "new", "acme-shop", "payments", "--scope", "src/payments/**",
+                                  "--reason", "r")
+        self.assertEqual(code, 0, err)
+        self.assertIn("feature.md", persona.read_text())
+        [backup] = (self.home / "backups" / "acme-shop").glob("*/feat-acme-shop-payments.main.md")
+        self.assertEqual(backup.read_text(), self.OLD)
+        self.assertEqual([p.name for p in backup.parent.iterdir()], [backup.name])   # the new worktree copy: none
+
+    def test_a_unit_without_a_template_is_kept_byte_identical(self):
+        self.outdate("div-acme-shop-rnd")
+        ref = self.refresh()
+        self.assertEqual([(p, w) for p, w in ref.kept if "rnd" in p],
+                         [(str(p), "no persona template") for p in self.copies("div-acme-shop-rnd")])
+        self.assertTrue(all(p.read_text() == self.OLD for p in self.copies("div-acme-shop-rnd")))
+        self.assertEqual(ref.changed, [])
+
+    def test_a_missing_worktree_refreshes_the_main_copy_only(self):
+        self.outdate("div-acme-shop-gtm")
+        main_copy, _ = self.copies("div-acme-shop-gtm")
+        shutil.rmtree(self.wtroot / "div-gtm")
+        ref = self.refresh()
+        self.assertEqual(ref.changed, [main_copy])
+        self.assertIn((str(self.wtroot / "div-gtm"), "missing"), ref.kept)
+        self.assertFalse((self.wtroot / "div-gtm").exists())
+
+    def test_settings_keep_user_keys_and_an_unchanged_file_is_not_rewritten(self):
+        build = self.wtroot / "div-build" / ".claude" / "settings.local.json"
+        build.write_text(json.dumps({"permissions": {"allow": ["Bash(ls)"]}, "agent": "old"}))
+        gtm = self.wtroot / "div-gtm" / ".claude" / "settings.local.json"
+        stat = gtm.stat().st_mtime_ns
+        ref = self.refresh()
+        self.assertEqual(ref.changed, [build])
+        self.assertEqual(json.loads(build.read_text()), {"permissions": {"allow": ["Bash(ls)"]},
+                                                         "agent": "div-acme-shop-build",
+                                                         "crossSessionInbound": "accept"})
+        self.assertEqual(gtm.stat().st_mtime_ns, stat)
+        self.assertEqual(ref.restart, [])   # a settings change alone restarts nothing
+
+    def test_dry_run_says_would_refresh_and_writes_nothing(self):
+        self.outdate("div-acme-shop-build")
+        before, reg_bytes = self.state(), registry.path().read_bytes()
+        err = io.StringIO()
+        with redirect_stderr(err):
+            ref = self.refresh(dry_run=True)
+        self.assertEqual(ref.changed, self.copies("div-acme-shop-build"))
+        self.assertEqual(err.getvalue().splitlines(), [f"[dry-run] refresh {p}" for p in ref.changed])
+        self.assertEqual(self.state(), before)
+        self.assertFalse((self.home / "backups").exists())
+        code, out, err = self.orche("--dry-run", "init", "Acme Shop", "--no-intake")
+        self.assertEqual(code, 0, err)
+        self.assertEqual([ln for ln in out.splitlines() if "refresh" in ln],
+                         [f"would refresh {p}" for p in ref.changed])
+        self.assertEqual(self.state(), before)
+        self.assertEqual(registry.path().read_bytes(), reg_bytes)
+
+    def test_an_unsafe_target_refuses(self):
+        agents = self.wtroot / "div-gtm" / ".claude" / "agents"
+        shutil.rmtree(agents)
+        agents.symlink_to(Path(self.root) / ".claude" / "agents")
+        with self.assertRaises(onboarding.UnsafeTarget):
+            self.refresh()
 
 
 class RegistryKeysTest(unittest.TestCase):

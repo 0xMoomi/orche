@@ -11,6 +11,7 @@ from pathlib import Path
 from unittest import mock
 
 import support
+from orche import __version__ as VERSION
 from orche import headless, registry, shell
 from orche.paths import PLUGIN_ROOT
 from orche.install import MIGRATION_LINE, doctor
@@ -19,7 +20,8 @@ from test_registry import load_cli
 
 REAL_RUNNER = shell.RUNNER
 SEGMENT = PLUGIN_ROOT / "templates" / "statusline-segment.sh"
-HOOK_NAMES = ("dispatch_relay", "report_inject", "env_read_gate", "scope_gate", "session_start", "session_end")
+# One per hooks.json handler: dispatch_relay serves Stop and StopFailure.
+HOOK_NAMES = ("dispatch_relay", "dispatch_relay", "report_inject", "env_read_gate", "scope_gate", "session_start", "session_end")
 PLUGIN_CMDS = [f'"{PLUGIN_ROOT}/hooks/run.sh" {name}' for name in HOOK_NAMES]
 LEGACY_CMDS = [f'python3 "{PLUGIN_ROOT}/hooks/{name}.py"' for name in HOOK_NAMES]  # before hooks/run.sh
 
@@ -228,13 +230,13 @@ class InstallTest(InstallCase):
         self.assertIn("differs from fable.md", out)
         self.assertIn("<!-- >>> orche >>> -->", (self.c / "fable" / "fable.md").read_text())
 
-    def test_settings_mode_registers_six_hooks_once(self):
+    def test_settings_mode_registers_seven_hooks_once(self):
         self.install("--mode", "settings")
         out = self.install("--mode", "settings")
         cmds = self.commands(self.read_settings())
         for cmd in PLUGIN_CMDS:
-            self.assertEqual(cmds.count(cmd), 1, cmd)
-        self.assertEqual(len(cmds), 2 + 6)
+            self.assertEqual(cmds.count(cmd), PLUGIN_CMDS.count(cmd), cmd)
+        self.assertEqual(len(cmds), 2 + 7)
         pre = self.read_settings()["hooks"]["PreToolUse"]
         self.assertEqual(pre[0], self.settings["hooks"]["PreToolUse"][0])  # existing entries keep their order
         self.assertEqual([e.get("matcher") for e in pre[1:]], ["Read|Bash|Grep|Edit|Write",
@@ -261,8 +263,8 @@ class InstallTest(InstallCase):
         out = self.install("--mode", "settings")
         cmds = self.commands(self.read_settings())
         self.assertEqual([c for c in cmds if c in LEGACY_CMDS], [])
-        self.assertEqual([cmds.count(c) for c in PLUGIN_CMDS], [1] * 6)
-        self.assertEqual(len(cmds), 2 + 6)
+        self.assertEqual([cmds.count(c) for c in PLUGIN_CMDS], [PLUGIN_CMDS.count(c) for c in PLUGIN_CMDS])
+        self.assertEqual(len(cmds), 2 + 7)
         self.assertIn(f"settings: replace (hook Stop {LEGACY_CMDS[0]} (now hooks/run.sh))", out)
         self.assertEqual(sorted(h["command"] for h in self.state()["added_hooks"]), sorted(PLUGIN_CMDS))
         self.assertEqual(self.orche("uninstall", "--home", str(self.h))[0], 0)
@@ -314,7 +316,8 @@ class InstallTest(InstallCase):
         self.assertEqual(sorted(h["command"] for h in self.state()["added_hooks"] if "check-careful" not in h["command"]),
                          sorted(PLUGIN_CMDS))
         cmds = self.commands(self.read_settings())
-        self.assertEqual(([c for c in cmds if c in LEGACY_CMDS], cmds.count(PLUGIN_CMDS[0])), ([], 1))
+        stop = self.commands(self.read_settings(), "Stop")
+        self.assertEqual(([c for c in cmds if c in LEGACY_CMDS], stop.count(PLUGIN_CMDS[0])), ([], 1))
         self.assertEqual(self.orche("uninstall", "--home", str(self.h))[0], 0)
         self.assertEqual(self.read_settings(), self.settings)
 
@@ -332,8 +335,8 @@ class InstallTest(InstallCase):
         self.install("--mode", "settings")
         self.install("--mode", "settings")
         cmds = self.commands(self.read_settings())
-        self.assertEqual([cmds.count(c) for c in PLUGIN_CMDS], [1] * 6)
-        self.assertEqual(len(cmds), 2 + 6)
+        self.assertEqual([cmds.count(c) for c in PLUGIN_CMDS], [PLUGIN_CMDS.count(c) for c in PLUGIN_CMDS])
+        self.assertEqual(len(cmds), 2 + 7)
         self.assertEqual(sorted(h["command"] for h in self.state()["added_hooks"]), sorted(PLUGIN_CMDS))
 
     def test_uninstall_removes_both_hook_shapes(self):
@@ -439,7 +442,7 @@ class InstallTest(InstallCase):
         user_cmd = PLUGIN_CMDS[0]  # the user registered dispatch_relay by hand, identical string
         self.settings["hooks"]["Stop"].append({"hooks": [{"type": "command", "command": user_cmd}]})
         (self.c / "settings.json").write_text(json.dumps(self.settings, indent=2) + "\n")
-        # Settings mode finds it already registered and records only the other five.
+        # Settings mode finds it already registered on Stop and records only the other six.
         # (Plugin mode would remove it: with the plugin enabled it would run twice; see R4 tests.)
         self.install("--mode", "settings")
         self.assertEqual(sorted(h["command"] for h in self.state()["added_hooks"]), sorted(PLUGIN_CMDS[1:]))
@@ -797,10 +800,23 @@ class DoctorTest(InstallCase):
         self.assertTrue(any(l.startswith("WARN\tcleanupPeriodDays\t") for l in lines))
         self.assertTrue(all(l.split("\t")[0] in ("OK", "WARN", "FAIL") for l in lines))
         self.assertIn("WARN\tjev\tnot configured (Haiku fallback)", lines)  # Jev is optional
+        self.assertFalse([l for l in lines if "\tupgrade\t" in l])
         self.install("--mode", "settings", "--yes")
         code, out, _ = self.doctor(missing=())
         self.assertEqual([l for l in out.splitlines() if not l.startswith("OK\t")],
                          ["WARN\tjev\tnot configured (Haiku fallback)"])
+
+    def test_warn_for_a_project_rendered_by_another_version_only(self):
+        reg = registry.empty()
+        sample = json.loads((support.FIXTURES / "registry.sample.json").read_text())["projects"]["acme-shop"]
+        reg["projects"]["acme-shop"] = dict(sample)                                   # no stamp: stale
+        reg["projects"]["beta"] = dict(sample, repo_id="repo-beta", orche_version="0.0.1")   # older: stale
+        reg["projects"]["gamma"] = dict(sample, repo_id="repo-gamma", orche_version=VERSION)  # current
+        registry.save(reg)
+        _, out, _ = self.doctor()
+        self.assertEqual([l for l in out.splitlines() if "\tupgrade\t" in l], [
+            f"WARN\tupgrade\tacme-shop rendered by an earlier version, now {VERSION} — run orche init acme-shop",
+            f"WARN\tupgrade\tbeta rendered by 0.0.1, now {VERSION} — run orche init beta"])
 
     def test_author_specific_files_skipped_when_absent(self):
         registry.save(registry.empty())
@@ -824,7 +840,7 @@ class DoctorTest(InstallCase):
         data["enabledPlugins"]["orche@orche"] = True
         (self.c / "settings.json").write_text(json.dumps(data, indent=2) + "\n")
         _, out, _ = self.doctor()
-        self.assertIn("WARN\thooks\thooks registered twice (plugin + 6 settings.json entries): run orche install "
+        self.assertIn("WARN\thooks\thooks registered twice (plugin + 7 settings.json entries): run orche install "
                       "(plugin mode removes the settings entries) or disable the plugin", out.splitlines())
         self.install()   # R4: plugin mode removes them; doctor is quiet again
         _, out, _ = self.doctor()

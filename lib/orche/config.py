@@ -9,11 +9,13 @@ DEFAULTS = {
     "notify": True,
     "lang": "en",
     # How the Stop hook delivers a brief to a division/feature: `runner` spawns `orche run <unit>`
-    # (headless `claude -p`); `pane` nudges the unit's Orca pane.
+    # (headless `claude -p`); `pane` starts `orche deliver <unit>`, which types into the unit's Orca pane.
     "delivery": "runner",
     # queue_wait_s: how long a run waits for a project slot or its target's lock, then "runner busy".
     # log_keep_days: logs/runs/*.log older than this go at `orche run` start and `orche janitor run`.
-    "runner": {"max_turns": 20, "max_parallel": 4, "hard_in_pane": False, "queue_wait_s": 1800, "log_keep_days": 14},
+    # turns_*: a run's --max-turns = clamp(ceil(TIMEBOX minutes × turns_per_minute), turns_floor, turns_ceiling).
+    "runner": {"turns_per_minute": 3, "turns_floor": 30, "turns_ceiling": 400, "max_parallel": 4,
+               "queue_wait_s": 1800, "log_keep_days": 14},
     "jev": {"enabled": False, "base_url": "", "model": "jev-1.13.0", "timeout_s": 1.0,
             "api_key_env": "JEV_API_KEY"},
     # Triage of a Main pane's prompts (lib/orche/triage.py): backend auto = Jev when enabled and
@@ -31,6 +33,9 @@ DEFAULTS = {
     # The Liaison (lib/orche/liaison.py): one read-only `claude -p` per `orche ask` and
     # `orche card refresh`; timeout_s 100 ends an ask inside the Bash tool's 2-minute default.
     "liaison": {"model": "claude-sonnet-5-5", "effort": "low", "max_turns": 12, "timeout_s": 100},
+    # The wake (R-INBOX-4): posting a waking pointer starts `orche nudge <recipient>`, which types
+    # `[orche] inbox: new reports` into the recipient's idle pane. false: reports wait for a prompt.
+    "inbox": {"wake": True},
 }
 
 

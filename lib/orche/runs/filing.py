@@ -44,9 +44,12 @@ def masked(value):
     return mask.redact(value)[0] if isinstance(value, str) else value
 
 
-def recipient(reg, to):
-    """Where `to`'s pointers go (a feature: its division; else the project's Main), else None."""
-    return roster.Roster(reg).recipient(to)
+def recipient(reg, who):
+    """Where who["to"]'s pointers for who["unit"] go: the sender of the unit's brief when it is a live
+    Main or division of the project other than the target; else a feature: its division; else the
+    project's Main; else None."""
+    b = brief.find(reg, who["unit"], project=who["project"])
+    return roster.Roster(reg).recipient(who["to"], b.sender if b is not None else None)
 
 
 def set_aside_report(folder) -> None:
@@ -114,23 +117,23 @@ def file_pointer(reg, who, rev, folder, status, summary, head=None, link_report=
     """The pointer from who["to"] to its recipient, `via: runner`, `brief_rev` `rev`, REPORT.md
     linked when asked and present, the summary masked then inbox.clip'ped. False (logged to
     hooks.log) when the target routes nowhere."""
-    to = recipient(reg, who["to"])
+    to = recipient(reg, who)
     if not to:
         log.log("hooks", f"runner: no recipient for {who['to']}; pointer for {who['unit']} not filed")
         return False
     report = folder / "REPORT.md"
     linked = link_report and report.is_file()
-    inbox.write(inbox.make(who["unit"], who["to"], to, status, report_path=str(report) if linked else "",
-                           head_sha=head or "",
-                           ledger_row=bool(head) and ledger.row_for_sha(who["project"], head) is not None,
-                           brief_rev=rev,
-                           summary=inbox.clip(mask.redact(summary)[0]) or status, via=VIA))
+    inbox.post(inbox.make(who["unit"], who["to"], to, status, report_path=str(report) if linked else "",
+                          head_sha=head or "",
+                          ledger_row=bool(head) and ledger.row_for_sha(who["project"], head) is not None,
+                          brief_rev=rev,
+                          summary=inbox.clip(mask.redact(summary)[0]) or status, via=VIA))
     return True
 
 
-def events(who, cost, turns, status) -> None:
+def events(who, cost, turns, status, stop=None) -> None:
     log.log("events", f"run unit={who['unit']} to={who['to']} model={who['model']} cost={cost} "
-                      f"turns={turns} status={status}")
+                      f"turns={turns} status={status} stop={stop or '-'}")
 
 
 def unrun(reg, who, rev, folder, status, summary, error, stop_reason, record=True) -> dict:
@@ -144,14 +147,14 @@ def unrun(reg, who, rev, folder, status, summary, error, stop_reason, record=Tru
     file is an earlier run's or the live run's, still being written."""
     now = util.now_iso()
     try:
-        routed = bool(recipient(reg, who["to"]))
+        routed = bool(recipient(reg, who))
     except Exception:  # noqa: BLE001 - file_pointer below logs the same failure
         routed = False
     rec = run_record(who, started=now, finished=now, status=status, stop_reason=stop_reason,
                      is_error=status == "failed", error=masked(error), pointer_filed=routed)
     steps = [lambda: file_pointer(reg, who, rev, folder, status, summary, None, link_report=False),
              lambda: units.touch_activity(who["to"]),
-             lambda: events(who, None, None, status)]
+             lambda: events(who, None, None, status, stop_reason)]
     if record:
         steps.insert(0, lambda: util.write_json(folder / "RUN.json", rec))
     for step in steps:
@@ -184,7 +187,7 @@ def lost(reg, proj, data) -> str:
     who["to"] = who["to"] or b.to       # every lock written carries `to`: only a hand-made one falls back
     rev = data.get("rev") or b.rev or 1
     to, folder = who["to"], b.folder
-    rcpt = recipient(reg, to)
+    rcpt = recipient(reg, who)
     if filed_since(rcpt, unit, to, started):
         return "stale-lock"
     error = f"runner process {pid} died without filing"

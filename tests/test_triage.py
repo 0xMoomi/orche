@@ -12,7 +12,7 @@ from pathlib import Path
 from unittest import mock
 
 import support
-from orche import brief, config, dispatch, jev, paths, procs, registry, roster, triage, units
+from orche import brief, config, dispatch, inbox, jev, paths, procs, registry, roster, triage, units
 from test_runner import REAL_POPEN, SPAWN, RunnerCase, alive
 
 SECRET = "sk-" + "b" * 30
@@ -281,6 +281,14 @@ class BypassTest(TriageCase):
         self.config({"claude_bin": str(self.claude), "delivery": "pane", "triage": {"enabled": True}})
         self.assertIsNone(self.handle("[build] add a line to README.md").block)
         self.assertEqual(self.spawned, [])
+
+    def test_wake_line_is_not_triaged(self):
+        """C9 L4: ORCHE's own wake line goes to Main untouched: no sample row, no `triage` events line."""
+        for prompt in (inbox.WAKE_TEXT, "[orche] inbox: acme-a-20261016-1 rev 2"):
+            out = self.handle(prompt, classifier=stub(DIRECT))
+            self.assertEqual((out.block, out.note, self.spawned), (None, "", []), prompt)
+        self.assertEqual(self.samples(), [])
+        self.assertNotIn("triage ", self.events())
 
 
 class HeuristicTest(TriageCase):
@@ -713,8 +721,7 @@ class ActionTest(TriageCase):
         [(argv, kw)] = self.spawned
         self.assertEqual(argv, SPAWN + [unit])
         self.assertTrue(kw["start_new_session"])
-        [ptr] = self.pointers("div-acme-build")
-        self.assertEqual((ptr["status"], ptr["from"], ptr["unit"]), ("info", "main-acme", unit))
+        self.assertEqual(self.pointers("div-acme-build"), [])     # C9 ruling 6: a runner unit gets no target pointer
         self.assertEqual([p["summary"] for p in self.pointers("main-acme")],
                          [f"routed {unit} → div-acme-build (runner-started)"])
         self.assertIn(f"unit={unit} rev=1 to=div-acme-build by=triage delivery=runner-started", self.events())
@@ -836,8 +843,8 @@ class ActionTest(TriageCase):
         out = self.handle(self.PROMPT, stub(DIRECT), popen=mock.Mock(side_effect=OSError("no exec")))
         unit = self.only_unit()
         self.assertIsNone(out.block)
-        self.assertTrue(out.note.startswith(f"[orche] triage could not route this prompt: {unit} was filed for "
-                                            "div-acme-build but the runner did not start (runner-failed → "), out.note)
+        self.assertEqual(out.note, f"[orche] triage could not route this prompt: {unit} was filed for "
+                                   "div-acme-build but the runner did not start (runner-failed)")
         self.assertIn("triage session=main-acme decision=main stage=5", self.events())
 
     def test_refused_relay_does_not_block(self):
@@ -929,6 +936,41 @@ class HookTest(TriageCase):
         self.assertEqual(res.returncode, 0, res.stderr)
         self.assertIn("## Inbox (1)", res.stdout)
         self.assertIn("triage session=main-acme decision=main stage=3", self.events())
+
+    def test_a_routed_prompt_rearms_the_wake(self):
+        """C9 L8: Main spends no turn on a routed prompt, so the hook re-arms the wake for reports that
+        are pending; a prompt that reaches Main does not (its own prompt injects them)."""
+        import importlib.util
+        import io
+        from contextlib import redirect_stdout
+        spec = importlib.util.spec_from_file_location("report_inject_under_test",
+                                                      support.ROOT / "hooks" / "report_inject.py")
+        hook = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(hook)
+
+        def fake_popen(argv, **kw):
+            return mock.Mock(pid=4242) if argv[:3] == SPAWN else REAL_POPEN(argv, **kw)
+
+        def run(prompt):
+            payload = {"session_id": "sess-main-0001", "transcript_path": str(self.root / "none.jsonl"),
+                       "cwd": str(self.repo), "hook_event_name": "UserPromptSubmit", "prompt": prompt}
+            out = io.StringIO()
+            with mock.patch.dict(os.environ, {"ORCHE_SESSION": "main-acme"}), \
+                    mock.patch.object(procs.subprocess, "Popen", fake_popen), \
+                    mock.patch.object(hook.sys, "stdin", io.StringIO(json.dumps(payload))), \
+                    mock.patch.object(inbox, "rearm") as rearm, redirect_stdout(out):
+                self.assertEqual(hook.main(), 0)
+            return out.getvalue(), rearm
+
+        marker = inbox.box("main-acme") / inbox.NUDGED
+        marker.parent.mkdir(parents=True, exist_ok=True)
+        marker.write_text("x")
+        out, rearm = run("[build] add a line to README")
+        self.assertEqual(json.loads(out)["decision"], "block")
+        rearm.assert_called_once_with("main-acme")
+        self.assertFalse(marker.exists())            # every prompt removes the wake marker, a routed one too
+        out, rearm = run("Let's plan the Q4 roadmap together")
+        rearm.assert_not_called()
 
     def test_relay_failure_note_is_injected_with_the_inbox(self):
         res = self.prompt("[gtm] add a tagline to landing.md")

@@ -45,11 +45,12 @@ class ReportTest(support.TempHomeCase):
     def as_session(self, session):
         os.environ["ORCHE_SESSION"] = session
 
-    def brief(self, unit, to, rev=1, age=0):
+    def brief(self, unit, to, rev=1, age=0, frm=None):
         folder = self.repo / ".orche" / "units" / unit
         folder.mkdir(parents=True, exist_ok=True)
         path = folder / "BRIEF.md"
-        path.write_text(f"rev: {rev}\n\n1. Never force-push.\n\npersona: .claude/agents/{to}.md\n\n"
+        header = f"unit: {unit}\nto: {to}   from: {frm}\n" if frm else ""
+        path.write_text(f"rev: {rev}\n{header}\n1. Never force-push.\n\npersona: .claude/agents/{to}.md\n\n"
                         f"## Brief {unit}\nTO        {to}\nGOAL      Do the thing\n")
         stamp = time.time() - age
         os.utime(path, (stamp, stamp))
@@ -202,6 +203,14 @@ class ReportTest(support.TempHomeCase):
         code, _, err = self.orche("report", "info", "--summary", "x", "--to", feat["session"])
         self.assertEqual(code, 1)
         self.assertIn(f"target session {feat['session']!r} is retired", err)
+
+    def test_feature_reports_to_the_sender_of_its_brief(self):
+        self.as_session("feat-acme-shop-search")
+        self.brief("acme-shop-search-20261016-1", "feat-acme-shop-search", frm="main-acme-shop")
+        code, out, err = self.orche("report", "blocked", "--summary", "stuck")
+        self.assertEqual((code, err), (0, ""))
+        self.assertIn("-> main-acme-shop", out)
+        self.assertEqual((len(self.pointers("main-acme-shop")), self.pointers("div-acme-shop-build")), (1, []))
 
     def test_feature_of_sessionless_division_reports_to_main(self):
         reg = registry.load()

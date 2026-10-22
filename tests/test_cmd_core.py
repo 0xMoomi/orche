@@ -12,6 +12,7 @@ from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
 
 import support
+from orche import __version__ as VERSION
 from orche import hr, registry, shell, units
 from test_registry import load_cli
 
@@ -26,8 +27,10 @@ class CoreCase(support.TempHomeCase):
         self.reg = copy.deepcopy(SAMPLE)
         self.reg["events"].append({"at": "2026-10-15T18:00:00+09:00", "type": "create",
                                    "project": "acme-shop", "unit": "build/search", "by": "div-acme-shop-build"})
+        for proj in self.reg["projects"].values():   # rendered by this ORCHE: no `upgrade:` line
+            proj["orche_version"] = VERSION
         registry.save(self.reg)
-        (self.home / "config.json").write_text(json.dumps({"notify": False}))
+        (self.home / "config.json").write_text(json.dumps(support.no_wake({"notify": False})))
         self._orig_now, units.now = units.now, lambda: NOW
         self.addCleanup(setattr, units, "now", self._orig_now)
         self.calls = []
@@ -83,6 +86,50 @@ class StatusTest(CoreCase):
         self.assertEqual((code, row["project"], row["awake"], row["divisions"]["build"]),
                          (0, "acme-shop", 2, "active"))
         self.assertEqual(self.orche("status", "nope")[0], 2)
+        self.assertIsNone(row["upgrade"])
+
+    def test_status_names_a_project_init_must_upgrade(self):
+        reg = registry.load()
+        del reg["projects"]["acme-shop"]["orche_version"]          # rendered before the stamp existed
+        reg["projects"]["docs-site"]["orche_version"] = "0.0.1"    # rendered by an older ORCHE
+        registry.save(reg)
+        now = VERSION
+        code, out, err = self.orche("status")
+        self.assertEqual((code, err), (0, ""))
+        self.assertEqual(out.splitlines()[1::2], [
+            f"  upgrade: acme-shop rendered by an earlier version, now {now} — run orche init acme-shop",
+            f"  upgrade: docs-site rendered by 0.0.1, now {now} — run orche init docs-site"])
+        rows = json.loads(self.orche("--json", "status")[1])
+        self.assertEqual([r["upgrade"] for r in rows], [{"rendered_by": None, "now": now},
+                                                        {"rendered_by": "0.0.1", "now": now}])
+        self.assertEqual(self.orche("statusline", "--cwd", "/srv/orca/acme-shop")[1].count("upgrade"), 0)
+
+    def test_status_names_undelivered_units_and_unread_reports(self):
+        """C9 L15: pointers pending >= 10 min under the project line; younger ones and held notes never."""
+        def at(minutes):
+            return (NOW - dt.timedelta(minutes=minutes)).isoformat()
+        self.write("inbox/div-acme-shop-build/a.json", {"unit": "acme-shop-x-20261016-1", "from": "main-acme-shop",
+                                                        "status": "info", "via": "dispatch", "brief_rev": 1,
+                                                        "at": at(30)})
+        self.write("inbox/div-acme-shop-build/b.json", {"unit": "acme-shop-x-20261016-1", "from": "main-acme-shop",
+                                                        "status": "info", "via": "dispatch", "brief_rev": 2,
+                                                        "at": at(12)})
+        self.write("inbox/div-acme-shop-build/c.json", {"unit": "acme-shop-y-20261016-2", "status": "info",
+                                                        "via": "dispatch", "brief_rev": 1, "at": at(5)})
+        self.write("inbox/main-acme-shop/d.json", {"unit": "u1", "status": "done", "via": "runner", "at": at(25)})
+        self.write("inbox/main-acme-shop/e.json", {"unit": "u2", "status": "question", "at": at(11)})
+        self.write("inbox/main-acme-shop/f.json", {"unit": "u3", "status": "info", "from": "orche", "at": at(40)})
+        code, out, err = self.orche("status", "acme")
+        self.assertEqual((code, err), (0, ""))
+        self.assertEqual(out.splitlines()[1:], [
+            "  undelivered: acme-shop-x-20261016-1 → div-acme-shop-build (rev 2, 12 min) — "
+            "run `orche deliver acme-shop-x-20261016-1`",
+            "  unread: main-acme-shop has 2 report(s) waiting (oldest 25 min) — run `orche nudge main-acme-shop`"])
+        self.assertTrue(out.startswith("acme-shop stage=building "))
+        row = json.loads(self.orche("--json", "status", "acme")[1])[0]
+        self.assertEqual(row["undelivered"], [{"unit": "acme-shop-x-20261016-1", "to": "div-acme-shop-build",
+                                               "rev": 2, "minutes": 12}])
+        self.assertEqual(row["unread"], [{"session": "main-acme-shop", "count": 2, "minutes": 25}])
 
 
 class DeptsTest(CoreCase):
@@ -481,10 +528,11 @@ class ProjectPaneTest(CoreCase):
         self.assertEqual(self.orche("wake", "main-acme-shop"), (0, "main-acme-shop pane opened\n", ""))
         self.assertEqual(self.calls_of("create"), [
             ["orca", "terminal", "create", "--worktree", self.WT, "--title", "main-acme-shop", "--command",
-             f"{self.ENV}ORCHE_SESSION=main-acme-shop claude --name main-acme-shop", "--json"]])
+             f"{self.ENV}ORCHE_SESSION=main-acme-shop claude --permission-mode bypassPermissions "
+             "--name main-acme-shop", "--json"]])
         self.assertEqual(self.calls_of("switch"), [])
         self.assertEqual(len(registry.load()["events"]), events)
-        self.assertNotIn("--permission-mode", " ".join(self.calls_of("create")[0]))
+        self.assertIn("--permission-mode bypassPermissions --name main-acme-shop", " ".join(self.calls_of("create")[0]))
 
     def test_wake_main_switches_to_an_open_pane(self):
         self.terminals = [{"handle": "t-main", "title": "✳ main-acme-shop"}]
@@ -503,7 +551,8 @@ class ProjectPaneTest(CoreCase):
         code, out, err = self.orche("--dry-run", "wake", "main-acme-shop")
         self.assertEqual((code, out), (0, "would open main-acme-shop pane (dry-run)\n"))
         self.assertEqual(err, f"[dry-run] orca terminal create --worktree {self.WT} --title main-acme-shop --command "
-                              f"{self.ENV}ORCHE_SESSION=main-acme-shop claude --name main-acme-shop --json\n")
+                              f"{self.ENV}ORCHE_SESSION=main-acme-shop claude --permission-mode bypassPermissions "
+                              "--name main-acme-shop --json\n")
         self.terminals = [{"handle": "t-main", "title": "main-acme-shop"}]
         self.assertEqual(self.orche("--dry-run", "wake", "main-acme-shop"), (0, "would switch to main-acme-shop\n", ""))
         self.assertEqual({c[2] for c in self.calls}, {"list"})
@@ -514,7 +563,8 @@ class ProjectPaneTest(CoreCase):
         self.assertEqual(json.loads(out), {
             "session": "main-acme-shop", "pane": "opened", "dry_run": True,
             "argv": ["orca", "terminal", "create", "--worktree", self.WT, "--title", "main-acme-shop", "--command",
-                     f"{self.ENV}ORCHE_SESSION=main-acme-shop claude --name main-acme-shop", "--json"]})
+                     f"{self.ENV}ORCHE_SESSION=main-acme-shop claude --permission-mode bypassPermissions "
+                     "--name main-acme-shop", "--json"]})
 
     def test_wake_main_ignores_awake_limit_and_stage(self):
         self.reg["limits"]["max_awake_sessions"] = 0

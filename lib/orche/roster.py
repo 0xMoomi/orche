@@ -242,11 +242,16 @@ class Roster:
             return Identity(place.unit.session, place.unit, place)
         return Identity(None, None, place)
 
-    def recipient(self, session) -> str | None:
-        """Feature -> its division's session (Main if ""), else Main; None if unknown or no Main."""
+    def recipient(self, session, sender=None) -> str | None:
+        """`sender` (who sent the unit's brief) when it is a live Main or division of the same project other
+        than `session`; else feature -> its division's session (Main if ""), else Main; None if unknown or no Main."""
         member = self.member(session)
         if member is None:
             return None
+        frm = self.member(sender) if sender and sender != session else None
+        if (frm is not None and frm.project == member.project and frm.kind in ("main", "div")
+                and frm.status != "retired"):
+            return frm.session
         if member.kind == "feat":
             div = self.reg["projects"][member.project].get("divisions", {}).get(member.division) or {}
             if div.get("session"):

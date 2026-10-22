@@ -13,14 +13,14 @@ not chat.
 
 <!-- inject:start -->
 ORCHE unit rules (full help: /orche)
-- Your work is `<project root>/.orche/units/<unit>/BRIEF.md` (absolute path in your inbox entry's `report:` line, not in your worktree; first line `rev: N`). The brief is the contract: stay in SCOPE, meet ACCEPT, run VERIFY yourself.
+- Your work is `<project root>/.orche/units/<unit>/BRIEF.md` (your inbox entry's `report:` path; first line `rev: N`). The brief is the contract: stay in SCOPE, meet ACCEPT, run VERIFY yourself.
 - Work inside your own worktree (BRIEF header `worktree:`); never `cd` into the main checkout or another unit's worktree.
 - A newer rev supersedes the old one: check at checkpoints (new file, after tests, before done), log receipt with `orche decide`, revert conflicting work. `STOP <unit>` = safe boundary, `wip:` commit, HANDOFF.md, `orche report stop`.
 - Always-pause (user approval every time): force-push to a shared branch, deploy, data deletion, customer messages, external publication, payments. Never merge, rebase or retarget a PR unless the brief allows it.
-- Report: details go in `REPORT.md` beside it (≤200 words, outcome first, commands actually run, deviations, `memory-save:` line). Your FINAL MESSAGE carries the `STATUS: done|blocked|failed|stop` line (the Stop gate reads it there). Then `orche report <status> --summary "..."` (one pointer; `--urgent` for failure, blocker, security, deploy impact). Never hand-write pointer JSON.
-- Before claiming done: update STATUS.md and DECISIONS.tsv (HANDOFF.md if work continues) and save lessons to agent memory.
-- Never `/clear` mid-unit; only at the unit boundary after the memory save.
-- Name the principles you applied (SPEC §5.7) and the decision each changed.
+- Report: write `REPORT.md` beside the brief (≤200 words: outcome first, commands run, deviations, `Decisions needed → default applied`, `memory-save:` line). Your FINAL MESSAGE carries the `STATUS: done|blocked|failed|stop` line. Then `orche report <status> --summary "..."` (one pointer; it wakes the brief's sender; never hand-write pointer JSON).
+- Nobody reads your pane: never ask the owner there. Apply a default, go on; blocked on the owner → `orche report question`.
+- Before claiming done: update STATUS.md and DECISIONS.tsv (HANDOFF.md if work continues), save lessons to agent memory. Never `/clear` mid-unit.
+- Name the principles you applied (SPEC §5.7).
 <!-- inject:end -->
 
 ## Commands (terminal, 0 tokens)
@@ -36,8 +36,10 @@ ORCHE unit rules (full help: /orche)
 | `orche feat new\|sleep\|wake\|retire` | Feature-agent lifecycle (HR; limits apply) |
 | `orche sleep <unit>` / `orche wake <unit>` | Close a pane and pause / resume a session |
 | `orche decide ...` | Append a row to the unit's DECISIONS.tsv |
-| `orche report <status> --summary "..."` | File a unit's completion/blocker as one inbox pointer (to Main; features to Build) |
+| `orche report <status> --summary "..."` | File a unit's completion/blocker as one inbox pointer (to the brief's sender: Main, or Build for its feature units) |
 | `orche run <unit>` | Run (or re-run by hand) one unit headless with `claude -p` in its worktree; the Stop hook starts new units this way. `--dry-run` prints the argv |
+| `orche deliver <unit>` | Deliver a unit's current revision now (the recovery command `orche status` names) |
+| `orche nudge <session>` | Wake an idle pane that has unread reports |
 | `orche stage set <proj> building\|public --yes` | Project stage (public needs user approval) |
 | `orche hr correct <proj> --text "..."` | Add a numbered standing order |
 | `orche metrics`, `orche janitor report` | Usage metrics; last cleanup report |
@@ -58,8 +60,7 @@ Every command takes `--json`; mutating ones take `--dry-run`.
 - `[project]` — name or alias in square brackets (e.g. `[shop]`) marks the source project. Main
   resolves `[project]` tags against the registry (closed list + aliases); the hook resolves only the
   dispatch `TO` field. Never use the at-sign for projects: it mentions a session.
-- `[drain]` — at the start of a message: deliver every pending report to Main now and get the
-  3-line status (counts · what changed · open gates).
+- `[drain]` — at the start of a message: also deliver ORCHE's held notes (reports always arrive by themselves).
 
 ## Cross-project requests
 

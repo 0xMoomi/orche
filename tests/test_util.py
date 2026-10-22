@@ -131,7 +131,9 @@ class PathsLogConfigTest(support.TempHomeCase):
         log.log("hooks", "dropped")
 
     def test_config_defaults_merged(self):
+        (self.home / "config.json").unlink()        # the test home's wake-off config
         self.assertEqual(config.load(), config.DEFAULTS)
+        self.assertEqual(config.DEFAULTS["inbox"], {"wake": True})
         (self.home / "config.json").write_text(json.dumps({"lang": "ko", "jev": {"enabled": True}}))
         cfg = config.load()
         self.assertEqual(cfg["lang"], "ko")

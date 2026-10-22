@@ -678,8 +678,8 @@ class RetireImportTest(test_hr.HrCase):
 class StructureTest(test_hr.HrCase):
     """Design §9 ST1-ST4: HR owns registry writes and the HR log; orche.hr and orche.janitor stay leaves."""
     ALLOWED = set("""orche orche.bip39 orche.brief orche.cli orche.config orche.headless orche.hr orche.hr.audit
-        orche.hr.book orche.hr.create orche.hr.limits orche.hr.onboarding orche.hr.panes orche.hr.retire
-        orche.hr.transitions orche.janitor orche.janitor.archive orche.janitor.discover orche.janitor.graveyard
+        orche.hr.book orche.hr.create orche.hr.limits orche.hr.onboarding orche.hr.panes orche.hr.refresh
+        orche.hr.retire orche.hr.transitions orche.janitor orche.janitor.archive orche.janitor.discover orche.janitor.graveyard
         orche.log orche.mask orche.metrics orche.orca orche.paths orche.procs orche.registry orche.roster
         orche.runs orche.setup_flow orche.shell orche.statusline orche.templates orche.units orche.util""".split())
     FORBIDDEN = re.compile(r"orche\.(cmd_\w+|dispatch|runner|inbox|intake|triage|ledger|jev\w*)$")

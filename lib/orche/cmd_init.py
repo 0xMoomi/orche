@@ -5,7 +5,12 @@ With no argument the project is the git repository holding the current directory
 The divisions come from a setup (`setup_flow`): `--setup-file`, else `--divisions`/`--custom`/
 `--stage`/`--aliases`, else — on a terminal — the interactive checklist, else the setup defaults
 (every standard division but `ops`; a registered project keeps what it has). Re-running adds only
-divisions that are new; nothing is ever removed. `--print-setup` prints the setup JSON and exits.
+divisions that are new; nothing is ever removed. Re-running also re-renders the project's ORCHE-owned
+files from the current templates (`hr.refresh_project`: personas in the main checkout and the worktrees,
+worktree settings, the card link; an overwritten persona is first copied to
+`ORCHE_HOME/backups/<key>/<time>/`), never the user's files, stamps `orche_version` in the registry
+(saved only when it changes) and ends by naming the panes to restart. `--print-setup` prints the setup
+JSON and exits.
 
 Order: resolve the repo (`orca repo list`, read-only even under --dry-run) -> setup -> project templates +
 card symlink -> registry entry -> `.orche/project` marker (the project key, read by the status
@@ -23,10 +28,12 @@ a placeholder repo id `pending` stands in). A linked git worktree is refused. Th
 import json
 import os
 import sys
+import time
 from pathlib import Path
 
-from . import config, hr, intake, mask, orca, paths, registry, setup_flow, shell, templates, util
-from .cli import EXIT_NOT_FOUND, EXIT_OK, EXIT_USER, dry, fail, out, warn
+from . import __version__, config, hr, intake, mask, orca, paths, registry, setup_flow, shell, templates, util
+from .cli import EXIT_BLOCKED, EXIT_NOT_FOUND, EXIT_OK, EXIT_USER, dry, fail, out, warn
+from .hr import onboarding
 
 EXIT_INTERRUPTED = 130   # a setup given wrongly exits EXIT_USER (1), like argparse usage errors here
 SETUP_FLAGS = ("--divisions", "--custom", "--setup-file", "--stage", "--aliases", "--wake")
@@ -179,14 +186,23 @@ def _tilde(path: Path) -> str:
 
 
 def _link_card(key, repo_root, *, dry_run):
+    """The card symlink `ORCHE_HOME/cards/<key>.md` -> `<repo>/PROJECT_CARD.md`. Returns (link, what):
+    "created", "relinked" (it pointed elsewhere), "file" (a regular file there is kept) or None (in place)."""
     link = paths.orche_home() / "cards" / f"{key}.md"
     target = Path(repo_root) / "PROJECT_CARD.md"
-    if dry_run:
-        dry(f"symlink {link} -> {target}")
-    elif not link.exists() and not link.is_symlink():
-        link.parent.mkdir(parents=True, exist_ok=True)
-        link.symlink_to(target)
-    return link
+    if link.is_symlink():
+        what = None if os.readlink(link) == str(target) else "relinked"
+    else:
+        what = "file" if link.exists() else "created"
+    if what in ("created", "relinked"):
+        if dry_run:
+            dry(f"symlink {link} -> {target}")
+        else:
+            link.parent.mkdir(parents=True, exist_ok=True)
+            if what == "relinked":
+                link.unlink()
+            link.symlink_to(target)
+    return link, what
 
 
 def automation_argvs(key, proj) -> list:
@@ -434,12 +450,26 @@ def cmd_init(args):
     else:
         paths.ensure_dirs()
         templates.copy_project(root, PROJECT=key)
-    link = _link_card(key, root, dry_run=dry_run)
+    link, linked = _link_card(key, root, dry_run=dry_run)
     try:
         proj, panes = hr.onboard_project(reg, key, setup, plan, repo_id=repo["id"], root=root, card=_tilde(link),
                                          dry_run=dry_run)
     except hr.Refused as exc:
         return fail(exc.code, exc.msg)
+    ts = time.strftime("%Y%m%dT%H%M%S")
+    try:   # re-render the ORCHE-owned files of the registered units (design §15.2)
+        ref = hr.refresh_project(reg, key, root=root, ts=ts, dry_run=dry_run)
+    except onboarding.UnsafeTarget as exc:
+        return fail(EXIT_BLOCKED, f"init {key} stopped: {exc} (re-run orche init {key} to resume)")
+    except (OSError, util.JsonError) as exc:
+        return fail(EXIT_USER, f"init {key} stopped: {exc} (re-run orche init {key} to resume)")
+    before = proj.get("orche_version")
+    stamped = not dry_run and key in reg["projects"] and hr.stamp_version(reg, key, __version__)
+    upgraded = stamped and existing is not None   # a new project's first stamp is no upgrade
+    refreshed = list(ref.changed) + ([link] if linked == "relinked" else [])
+    kept = list(ref.kept) + ([(link, "a regular file, not a link")] if linked == "file" else [])
+    backups = paths.orche_home() / "backups" / key / ts
+    restart = [] if dry_run else ([proj["main_session"]] if upgraded else []) + ref.restart
     autos = automation_argvs(key, proj)
     live = args.automations and not dry_run
     try:
@@ -452,7 +482,9 @@ def cmd_init(args):
     data = {"project": key, "repo_id": repo["id"], "path": root, "stage": stage, "dry_run": dry_run,
             "divisions": statuses, "custom": [n for n in divisions if n in custom], "skipped": skipped,
             "wake_skipped": plan.wake_skipped, "panes": panes, "automations": "created" if live else "printed",
-            "card": proj["card"], "summary": summary, "added_to_orca": bool(added) and not dry_run}
+            "card": proj["card"], "summary": summary, "added_to_orca": bool(added) and not dry_run,
+            "refreshed": [str(p) for p in refreshed], "kept": [{"path": str(p), "why": w} for p, w in kept],
+            "rendered_by": {"before": before, "now": __version__} if upgraded else None, "restart": restart}
     lines = [f"would add {added} to Orca (orca repo add --path {added})" if dry_run else f"added {added} to Orca"] \
         if added else []
     if renamed:
@@ -467,6 +499,12 @@ def cmd_init(args):
     lines.append(f"panes: {', '.join(panes) if panes else 'main already open'}")
     lines.append(f"card: {proj['card']}")
     lines.append("automations: " + ("created" if live else "printed only (above); re-run with --automations"))
+    lines += [f"{'would refresh' if dry_run else 'refreshed'} {_tilde(Path(p))}" for p in refreshed]
+    lines += [f"kept {_tilde(Path(p))}: {why}" for p, why in kept]
+    if not dry_run and backups.is_dir():
+        lines.append(f"backups: {_tilde(backups)}")
+    if upgraded:
+        lines.append(f"rendered by {before or 'an earlier version'}, now {__version__}")
     names = list(dict.fromkeys(registry.divisions_of(proj) + list(divisions)))   # a dry run saved none
     intake_line, data["intake"] = _intake(args, reg, key, root, names)
     if intake_line:
@@ -478,5 +516,7 @@ def cmd_init(args):
         data["switched"] = _switch_to_main(proj)   # last, so the user lands on Main when all is done
         if data["switched"]:
             lines.append(f"Main is open in the {proj['main_session']} tab; type a request there.")
+    if restart:
+        lines.append(f"personas updated for {', '.join(restart)}: restart the pane or /clear to load them")
     out(args, data, lines)
     return EXIT_OK

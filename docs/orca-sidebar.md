@@ -25,8 +25,8 @@ my-app                                   (Orca repo)
 
 Pane titles equal Claude Code session names. ORCHE starts a division or feature pane with
 `PATH=<plugin>/bin:$PATH ORCHE_SESSION=<session> claude --permission-mode bypassPermissions --name <session>`
-(or `--resume <session>` on wake), and the Main pane with the same command without
-`--permission-mode bypassPermissions`, so hooks know the pane's role and `orche` is on the pane's PATH. `orche init` creates the division worktrees; `orche feat new` creates
+(or `--resume <session>` on wake), and the Main pane with the same command (since 0.6.0 Main also
+starts in bypass, like every pane), so hooks know the pane's role and `orche` is on the pane's PATH. `orche init` creates the division worktrees; `orche feat new` creates
 feature worktrees.
 
 ## Lineage

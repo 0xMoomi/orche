@@ -5,9 +5,10 @@
   "lang": "en",
   "delivery": "runner",
   "runner": {
-    "max_turns": 20,
+    "turns_per_minute": 3,
+    "turns_floor": 30,
+    "turns_ceiling": 400,
     "max_parallel": 4,
-    "hard_in_pane": false,
     "queue_wait_s": 1800,
     "log_keep_days": 14
   },
@@ -39,5 +40,8 @@
     "effort": "low",
     "max_turns": 12,
     "timeout_s": 100
+  },
+  "inbox": {
+    "wake": true
   }
 }

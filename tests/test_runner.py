@@ -33,6 +33,7 @@ SECRET = "sk-" + "a" * 30
 REAL_POPEN = subprocess.Popen
 ORCHE_BIN = str(support.ROOT / "bin" / "orche")          # the sh launcher (a human's `orche run`)
 SPAWN = [sys.executable, str(support.ROOT / "bin" / "orche.py"), "run"]   # the Stop hook's spawn (R-B)
+DELIVER = [sys.executable, str(support.ROOT / "bin" / "orche.py"), "deliver"]   # … for a pane unit
 COMMIT = ("echo work >> work.txt\ngit add work.txt\n"
           "git -c user.name=t -c user.email=t@example.com -c commit.gpgsign=false commit -q -m work\n")
 ROW = ("printf '7\\t%s\\t{verdict}\\tlog\\tverifier-1\\t2026-10-18T00:00:00Z\\n' \"$(git rev-parse HEAD)\" "
@@ -88,14 +89,14 @@ class RunnerCase(HookCase):
                               text=True, check=True).stdout.strip()
 
     def config(self, data):
-        (self.home / "config.json").write_text(json.dumps(data))
+        (self.home / "config.json").write_text(json.dumps(support.no_wake(data)))
 
-    def brief(self, to="div-acme-build", tier="standard", timebox="20m"):
+    def brief(self, to="div-acme-build", tier="standard", timebox="20m", sender="main-acme"):
         fields = {"TO": to, "GOAL": "Add coupon field", "SCOPE": "src/**", "CONTEXT": "none",
                   "ACCEPT": "works", "VERIFY": "true", "TIMEBOX": timebox, "FORBID": "merge",
                   "REPORT": "status", "TIER": tier}
         target = roster.Roster(registry.load()).member(to)    # not self.reg: add_research saves a division
-        return brief.write(brief.Block("brief", fields), target, "main-acme", "1. Never force-push.",
+        return brief.write(brief.Block("brief", fields), target, sender, "1. Never force-push.",
                            timeout=0).unit
 
     def reply(self, result, cost=0.31, turns=4, is_error=False, subtype="success", code=0):
@@ -273,7 +274,7 @@ class DryRunArgvTest(RunnerCase):
         before_home, before_repo = digest(self.home), digest(self.repo)
         code, out, err = self.orche("--dry-run", "run", unit)
         self.assertEqual(code, 0, err)
-        argv = self.base(unit, "claude-opus-5-5", "medium", 20, MECH + ",Bash",
+        argv = self.base(unit, "claude-opus-5-5", "medium", 60, MECH + ",Bash",
                          "--append-system-prompt-file", str(persona))
         self.assertEqual(out.splitlines(), [shlex.join(argv)])
         self.assertIn("ORCHE_SESSION=div-acme-build", err)
@@ -295,21 +296,37 @@ class DryRunArgvTest(RunnerCase):
         data = json.loads(out)
         # It may commit (git add/commit); amend, -n, --no-verify and push are denied best-effort
         # (the done gate's ancestry check is the guarantee); no persona file: no flag.
-        self.assertEqual(data["argv"], self.base(unit, "claude-opus-5-5", "low", 20, MECH, *MECH_DENY))
+        self.assertEqual(data["argv"], self.base(unit, "claude-opus-5-5", "low", 60, MECH, *MECH_DENY))
         self.assertEqual((data["cwd"], data["tier"], data["timeout_s"]), (str(self.wt), "mechanical", 1260))
         persona = self.persona()
         _, out, _ = self.orche("--dry-run", "--json", "run", unit)
-        self.assertEqual(json.loads(out)["argv"], self.base(unit, "claude-opus-5-5", "low", 20, MECH, *MECH_DENY,
+        self.assertEqual(json.loads(out)["argv"], self.base(unit, "claude-opus-5-5", "low", 60, MECH, *MECH_DENY,
                                                              "--append-system-prompt-file", str(persona)))
 
-    def test_hard_unit_gets_40_turns_high_effort_and_the_registry_model(self):
-        self.config({"claude_bin": str(self.claude), "runner": {"max_turns": 7}})
+    def test_turns_follow_timebox_at_every_tier(self):
         self.build_model("m-x")
+
+        def turns(unit):
+            _, out, _ = self.orche("--dry-run", "--json", "run", unit)
+            argv = json.loads(out)["argv"]
+            return int(argv[argv.index("--max-turns") + 1])
+
         hard, mech = self.brief(tier="hard"), self.brief(tier="mechanical")
         _, out, _ = self.orche("--dry-run", "--json", "run", hard)
-        self.assertEqual(json.loads(out)["argv"], self.base(hard, "m-x", "high", 40, MECH + ",Bash"))
+        self.assertEqual(json.loads(out)["argv"], self.base(hard, "m-x", "high", 60, MECH + ",Bash"))
         _, out, _ = self.orche("--dry-run", "--json", "run", mech)
-        self.assertEqual(json.loads(out)["argv"], self.base(mech, "m-x", "low", 7, MECH, *MECH_DENY))
+        self.assertEqual(json.loads(out)["argv"], self.base(mech, "m-x", "low", 60, MECH, *MECH_DENY))
+        got = {(tier, tb): turns(self.brief(tier=tier, timebox=tb))
+               for tier in ("mechanical", "standard", "hard") for tb in ("5m", "15m", "30m", "2h", "4h")}
+        self.assertEqual(got, {(tier, tb): n for tier in ("mechanical", "standard", "hard")
+                               for tb, n in (("5m", 30), ("15m", 45), ("30m", 90), ("2h", 360), ("4h", 400))})
+        self.config({"claude_bin": str(self.claude),
+                     "runner": {"turns_per_minute": 1, "turns_floor": 10, "turns_ceiling": 50}})
+        self.assertEqual([turns(self.brief(tier="hard", timebox=tb)) for tb in ("5m", "20m", "2h")], [10, 20, 50])
+        self.config({"claude_bin": str(self.claude), "runner": {"turns_ceiling": 100}})   # the rest: defaults
+        self.assertEqual([turns(self.brief(timebox=tb)) for tb in ("5m", "20m", "2h")], [30, 60, 100])
+        self.assertEqual((runner.max_turns(1200, None), runner.max_turns(1200, {"turns_per_minute": 0.5})),
+                         (60, 30))
 
     def test_feature_unit_uses_its_division_model(self):
         subprocess.run(["git", "init", "-q", str(self.root / "acme-checkout")], check=True)
@@ -383,8 +400,8 @@ class RunTest(RunnerCase):
         self.assertTrue((self.fake / "path.txt").read_text().startswith(str(support.ROOT / "bin") + ":"))
         self.assertIn("ORCHE_RUNNER=1\n", (self.fake / "env.txt").read_text())
         self.assertEqual(list((self.home / "runner" / "mcp").iterdir()), [])   # the run's own config: gone
-        self.assertIn(f"run unit={unit} to=div-acme-build model=claude-opus-5-5 cost=0.31 turns=4 status=done",
-                      self.events())
+        self.assertIn(f"run unit={unit} to=div-acme-build model=claude-opus-5-5 cost=0.31 turns=4 status=done "
+                      "stop=end_turn\n", self.events())
         self.assertTrue((self.home / "activity" / "div-acme-build").exists())
         self.assertEqual(ptr["via"], "runner")
         self.assertEqual(list((self.home / "runs" / "acme").glob("*.lock")), [])
@@ -570,11 +587,20 @@ class RunTest(RunnerCase):
 
     def test_claude_error_result_files_failed(self):
         unit = self.brief()
-        self.reply("", is_error=True, subtype="error_max_turns", code=1)
+        self.reply("", is_error=True, subtype="error_max_turns", code=1, turns=61, cost=1.234)
         self.orche("run", unit)
         [ptr] = self.pointers("main-acme")
         self.assertEqual((ptr["status"], ptr["summary"]),
-                         ("failed", "run failed: claude reported an error (error_max_turns)"))
+                         ("failed", "run failed: turn cap reached (61 turns, $1.23) — re-run with a larger TIMEBOX "
+                                    "or split the unit"))
+        self.assertEqual(self.run_record(unit)["stop_reason"], "error_max_turns")    # not the API's end_turn
+        self.assertIn(f"run unit={unit} to=div-acme-build model=claude-opus-5-5 cost=1.234 turns=61 status=failed "
+                      "stop=error_max_turns\n", self.events())
+        other = self.brief()
+        self.reply("", is_error=True, subtype="error_during_execution", code=1, cost=None)
+        self.orche("run", other)
+        [ptr] = [p for p in self.pointers("main-acme") if p["unit"] == other]
+        self.assertEqual(ptr["summary"], "run failed: claude reported an error (error_during_execution)")
 
     def test_timeout_kills_the_worker_and_files_failed(self):
         unit = self.brief()
@@ -655,14 +681,18 @@ class RunTest(RunnerCase):
         ptr = [p for p in self.pointers("main-acme") if p["unit"] == unit][0]
         self.assertEqual((ptr["from"], ptr["status"]), ("main-acme", "done"))
 
-    def test_feature_target_reports_to_build(self):
+    def test_feature_target_reports_to_its_sender(self):
         subprocess.run(["git", "init", "-q", str(self.root / "acme-checkout")], check=True)
-        unit = self.brief(to="feat-acme-checkout")
-        self.reply("STATUS: done\nfeature done")
-        self.orche("run", unit)
-        [ptr] = self.pointers("div-acme-build")
-        self.assertEqual((ptr["from"], ptr["status"]), ("feat-acme-checkout", "info"))  # no HEAD, no commit
-        self.assertEqual(ptr["summary"], "unverified: STATUS: done (no commit)\nfeature done")
+        for sender in ("main-acme", "div-acme-build"):
+            with self.subTest(sender=sender):
+                unit = self.brief(to="feat-acme-checkout", sender=sender)
+                self.reply("STATUS: done\nfeature done")
+                self.orche("run", unit)
+                [ptr] = [p for p in self.pointers(sender) if p["unit"] == unit]
+                self.assertEqual((ptr["from"], ptr["status"]), ("feat-acme-checkout", "info"))  # no HEAD, no commit
+                self.assertEqual(ptr["summary"], "unverified: STATUS: done (no commit)\nfeature done")
+                other = "div-acme-build" if sender == "main-acme" else "main-acme"
+                self.assertEqual([p for p in self.pointers(other) if p["unit"] == unit], [])
 
     def test_refusals(self):
         code, _, err = self.orche("run", "Bad_Id")
@@ -937,9 +967,14 @@ class RelayRunnerTest(RunnerCase):
         super().setUp()
         os.environ["ORCHE_FAKE_ORCA"] = "1"
         self.spawned = []
+        self.deliverers = []
 
-    def relay(self, to="div-acme-build", tier="standard", body=None, popen=None):
-        def fake_popen(argv, **kw):   # only the runner spawn is faked (git still runs)
+    def relay(self, to="div-acme-build", tier="standard", body=None, popen=None, deliverer=None):
+        def fake_popen(argv, **kw):   # only the runner and deliverer spawns are faked (git still runs)
+            if argv[:3] == DELIVER:
+                self.deliverers.append((argv, kw))
+                self.captured_deliverers = len(self.deliverers)     # HookCase.tearDown waits for no process
+                return deliverer(argv, **kw) if deliverer is not None else mock.Mock(pid=4343)
             if argv[:3] != SPAWN:
                 return REAL_POPEN(argv, **kw)
             self.spawned.append((argv, kw))
@@ -960,6 +995,9 @@ class RelayRunnerTest(RunnerCase):
     def feedback(self):
         return [p["summary"] for p in self.pointers("main-acme") if p["from"] == "orche"]
 
+    def urgent(self):
+        return [p["urgent"] for p in self.pointers("main-acme") if p["from"] == "orche"]
+
     def test_runner_delivery_spawns_orche_run_detached(self):
         unit = self.relay()
         [(argv, kw)] = self.spawned
@@ -973,62 +1011,79 @@ class RelayRunnerTest(RunnerCase):
         self.assertEqual(self.sends(), [])
         self.assertIn(f"unit={unit} rev=1 to=div-acme-build by=main-acme delivery=runner-started", self.events())
         self.assertEqual(self.feedback(), [f"relayed {unit} → div-acme-build rev 1 (runner-started)"])
-        [ptr] = self.pointers("div-acme-build")   # the brief pointer is still filed for the target
-        self.assertEqual(ptr["status"], "info")
+        self.assertEqual(self.urgent(), [False])
+        self.assertEqual(self.pointers("div-acme-build"), [])     # ruling 6: a runner unit gets no target pointer
+        self.assertEqual(self.deliverers, [])
         self.assertLess(self.elapsed, 1.0)
 
-    def test_spawn_failure_falls_back_to_the_nudge(self):
+    def test_spawn_failure_files_an_urgent_pointer(self):
         unit = self.relay(popen=mock.Mock(side_effect=OSError("no exec")))
-        self.assertEqual(len(self.sends()), 1)
-        self.assertIn(f"unit={unit} rev=1 to=div-acme-build by=main-acme delivery=runner-failed → nudged",
-                      self.events())
-        self.assertEqual(self.feedback(), [f"relayed {unit} → div-acme-build rev 1 (runner-failed → nudged)"
-                                           f" — runner did not start: run `orche run {unit}`"])
+        self.assertEqual((self.sends(), self.deliverers, self.pointers("div-acme-build")), ([], [], []))
+        self.assertIn(f"unit={unit} rev=1 to=div-acme-build by=main-acme delivery=runner-failed\n", self.events())
+        self.assertEqual(self.feedback(), [f"relayed {unit} → div-acme-build rev 1 (runner-failed)"
+                                           f" — the runner did not start: run `orche deliver {unit}`"])
+        self.assertEqual(self.urgent(), [True])
 
-    def test_pane_delivery_nudges_as_before(self):
+    def test_pane_delivery_spawns_the_deliverer(self):
         self.config({"claude_bin": str(self.claude), "delivery": "pane"})
         unit = self.relay()
-        self.assertEqual(self.spawned, [])
-        self.assertEqual(len(self.sends()), 1)
-        self.assertIn(f"unit={unit} rev=1 to=div-acme-build by=main-acme delivery=nudged", self.events())
+        self.assertEqual((self.spawned, self.sends()), ([], []))      # the hook itself types nothing
+        [(argv, kw)] = self.deliverers
+        self.assertEqual(argv, DELIVER + ["--", unit])
+        self.assertTrue(kw["start_new_session"])
+        self.assertEqual(kw["stdout"].name, str(self.home / "logs" / "deliver.log"))
+        self.assertIn(f"unit={unit} rev=1 to=div-acme-build by=main-acme delivery=deliverer-started", self.events())
+        [ptr] = self.pointers("div-acme-build")
+        self.assertEqual((ptr["unit"], ptr["status"], ptr["via"]), (unit, "info", "dispatch"))
+        self.assertEqual((self.feedback(), self.urgent()),
+                         ([f"relayed {unit} → div-acme-build rev 1 (deliverer-started)"], [False]))
 
-    def test_main_target_and_hard_in_pane_keep_the_pane_amend_of_an_idle_unit_starts_a_run(self):
+    def test_deliverer_spawn_failure_files_an_urgent_pointer(self):
+        self.config({"claude_bin": str(self.claude), "delivery": "pane"})
+        unit = self.relay(deliverer=mock.Mock(side_effect=OSError("no exec")))
+        self.assertIn(f"unit={unit} rev=1 to=div-acme-build by=main-acme delivery=deliverer-failed", self.events())
+        self.assertEqual(self.feedback(), [f"relayed {unit} → div-acme-build rev 1 (deliverer-failed)"
+                                           f" — run `orche deliver {unit}`"])
+        self.assertEqual(self.urgent(), [True])
+        self.assertEqual(len(self.pointers("div-acme-build")), 1)   # the pointer waits for `orche deliver`
+
+    def test_main_target_uses_the_pane_every_tier_the_runner(self):
         self.relay(to="main-acme")
         self.assertEqual(self.spawned, [])
+        self.assertEqual(len(self.deliverers), 1)
         unit = self.relay()                       # spawned once
         self.relay(body=f"AMEND {unit} rev 2\nSUPERSEDES rev 1: smaller\nGOAL      Smaller")
         self.assertEqual([a for a, _ in self.spawned], [SPAWN + [unit]] * 2)
         self.assertIn(f"kind=amend unit={unit} rev=2 to=div-acme-build by=main-acme delivery=runner-started",
                       self.events())
-        self.relay(tier="hard")                   # hard goes to the runner by default
+        self.relay(tier="hard")                   # hard goes to the runner
         self.assertEqual(len(self.spawned), 3)
-        self.config({"claude_bin": str(self.claude), "runner": {"hard_in_pane": True}})
+        self.config({"claude_bin": str(self.claude), "runner": {"hard_in_pane": True}})   # a removed key: ignored
         hard = self.relay(tier="hard")
-        self.assertEqual(len(self.spawned), 3)
-        self.relay(body=f"AMEND {hard} rev 2\nGOAL      Smaller")   # the brief's TIER hard keeps the pane
-        self.assertEqual(len(self.spawned), 3)
+        self.relay(body=f"AMEND {hard} rev 2\nGOAL      Smaller")
+        self.assertEqual(len(self.spawned), 5)
+        self.assertEqual(len(self.deliverers), 1)
 
-    def test_stop_of_an_idle_runner_unit_files_the_pointer_and_never_says_wake(self):
+    def test_stop_of_an_idle_runner_unit_files_no_target_pointer_and_never_says_wake(self):
         unit = self.brief()
         self.relay(body=f"STOP {unit} enough")
-        self.assertEqual((self.spawned, self.sends()), ([], []))
+        self.assertEqual((self.spawned, self.sends(), self.deliverers), ([], [], []))
         self.assertIn(f"kind=stop unit={unit} rev=1 to=div-acme-build by=main-acme "
                       "delivery=runner-stop-requested (no live run)", self.events())
         [fb] = self.feedback()
         self.assertEqual(fb, f"relayed {unit} → div-acme-build rev 1 (runner-stop-requested (no live run)) — "
-                             "already finished (or still queued: a queued run will not start); "
-                             "the STOP pointer is filed")
-        self.assertEqual([p["status"] for p in self.pointers("div-acme-build")], ["stop"])
+                             "already finished (or still queued: a queued run will not start)")
+        self.assertEqual(self.pointers("div-acme-build"), [])
         self.assertTrue(runs.stop_requested("acme", unit))    # marker written: a queued run gives up
 
     def test_stop_runner_failure_feedback_is_stop_specific(self):
-        """Round-2 M-8: a STOP whose runner delivery raised never advises `orche run`."""
+        """Round-2 M-8: a STOP whose runner delivery raised never advises a re-run; it is urgent."""
         unit = self.brief()
         with mock.patch.object(runs, "stop", side_effect=OSError("boom")):
             self.relay(body=f"STOP {unit}")
-        [fb] = self.feedback()
-        self.assertTrue(fb.startswith(f"relayed {unit} → div-acme-build rev 1 (runner-failed → "), fb)
-        self.assertTrue(fb.endswith(" — the STOP pointer is filed; check `orche status` for a live run"), fb)
+        self.assertEqual(self.feedback(), [f"relayed {unit} → div-acme-build rev 1 (runner-failed) — the STOP did "
+                                           "not reach the runner: check `orche status` and send the STOP again"])
+        self.assertEqual(self.urgent(), [True])
 
     def test_stop_with_a_recycled_pid_drops_the_lock_and_signals_nothing(self):
         """Round 2 (deferred M-3): the lock's pid is alive but is not `orche run <unit>`: a lost run
@@ -1388,8 +1443,8 @@ class RoundTwoRunTest(RunnerCase):
         self.assertEqual((ptr["status"], ptr["summary"]), ("info", "stopped by Main"))
 
     def test_bad_config_before_the_run_still_files_failed(self):
-        """M-5: build_argv raising (a non-integer max_turns) files `failed` with a RUN.json."""
-        self.config({"claude_bin": str(self.claude), "runner": {"max_turns": "lots"}})
+        """M-5: build_argv raising (a non-integer turns_ceiling) files `failed` with a RUN.json."""
+        self.config({"claude_bin": str(self.claude), "runner": {"turns_ceiling": "lots"}})
         unit = self.brief()
         code, _, err = self.orche("run", unit)
         self.assertEqual(code, 1)

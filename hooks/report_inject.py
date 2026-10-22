@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""UserPromptSubmit hook: triage a Main prompt, then drain the session's inbox at drain points.
+"""UserPromptSubmit hook: triage a Main prompt, then inject the session's pending pointers.
 
 Triage (lib/orche/triage.py, off unless `triage.enabled`) may route a simple prompt straight to a
 division and print `{"decision": "block", ...}` so Main spends no turn; otherwise the prompt reaches
@@ -31,6 +31,9 @@ def main():
         outcome = triage.handle(payload, STARTED, r, who)   # never raises
         if outcome.block is not None:
             print(json.dumps(outcome.block, ensure_ascii=False))
+            if who.session:
+                inbox.unmark(who.session)  # every prompt removes the wake marker (design §4.6)
+                inbox.rearm(who.session)   # Main spends no turn: pending reports still need their wake
             return 0
         # The hook budget runs from STARTED, less the time a classifier call was in flight.
         text = inbox.handle_prompt(payload, STARTED + outcome.model_s, r, who)

@@ -37,9 +37,12 @@ asking. "No" is a valid answer; a stopped action is never retried without a new 
   `orche report stop --summary "<where you stopped>"`.
 - Report by writing `<project root>/.orche/units/<unit>/REPORT.md`, then filing exactly one inbox pointer with
   `orche report <done|failed|blocked|question|stop> --summary "<=5 lines"` (it finds the unit, rev,
-  HEAD and ledger row; add `--unit <id>` if asked). Add `--urgent` for failure, blocker, security or
-  deploy impact. Never hand-write pointer JSON.
+  HEAD and ledger row; add `--unit <id>` if asked). The pointer reaches the brief's sender at once and
+  wakes it; `--urgent` matters only for an `info` note. Never hand-write pointer JSON.
   Under the runner (`ORCHE_RUNNER=1`) do not run `orche report`; the runner files your pointer.
+- Nobody reads your pane and the owner talks only to Main: never ask the owner here. Decide on a
+  default and go on; list each decision in REPORT.md as `decision → default applied`. When you cannot
+  go on without the owner, file `orche report question` with the question, your recommendation and the default.
 - Never `/clear` mid-unit. `/clear` only at the unit boundary, after the memory-save ritual below.
   If the context fills mid-unit, compact then and only then.
 
@@ -47,7 +50,7 @@ asking. "No" is a valid answer; a stopped action is never retried without a new 
 REPORT.md, ketchup style, ≤200 words: the first line is `STATUS: done | blocked | failed | stop`
 (the Stop hook checks `STATUS: done` and `STATUS: release-ready` claims against the ledger), then
 outcome in one sentence, branch, head SHA, PR, verdict, commands actually run with results,
-deviations, decisions needed (each with a recommendation and the default you applied), follow-ups,
+deviations, `Decisions needed → default applied` (each with your recommendation), follow-ups,
 and `memory-save: STATUS.md, DECISIONS.tsv[, HANDOFF.md] updated`. Label anything unverified.
 
 ## Memory-save before done

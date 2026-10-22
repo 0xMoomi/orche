@@ -292,6 +292,31 @@ class RecipientTest(RosterCase):
                 r = self.edited(edit) if edit else self.r
                 self.assertEqual(r.recipient(session), want)
 
+    def test_recipient_is_the_sender(self):
+        def retire_design(reg):
+            reg["projects"]["acme"]["divisions"]["design"]["status"] = "retired"
+
+        rows = [
+            ("feat-acme-checkout", "main-acme", None, "main-acme"),
+            ("feat-acme-checkout", "div-acme-build", None, "div-acme-build"),
+            ("feat-acme-checkout", "div-acme-design", None, "div-acme-design"),
+            ("feat-acme-checkout", "div-acme-design", retire_design, "div-acme-build"),   # retired
+            ("feat-acme-checkout", "ghost", None, "div-acme-build"),                      # unknown
+            ("feat-acme-checkout", "main-beta", None, "div-acme-build"),                  # other project
+            ("feat-acme-checkout", "div-beta-build", None, "div-acme-build"),             # other project
+            ("feat-acme-checkout", "feat-acme-nested", None, "div-acme-build"),           # not Main/division
+            ("feat-acme-checkout", "", None, "div-acme-build"),
+            ("div-acme-rnd", "main-acme", None, "main-acme"),
+            ("div-acme-rnd", "div-acme-build", None, "div-acme-build"),
+            ("div-acme-build", "div-acme-build", None, "main-acme"),                      # sender == session
+            ("main-acme", "main-acme", None, "main-acme"),
+            ("ghost", "main-acme", None, None),
+        ]
+        for session, sender, edit, want in rows:
+            with self.subTest(session=session, sender=sender, edit=edit and edit.__name__):
+                r = self.edited(edit) if edit else self.r
+                self.assertEqual(r.recipient(session, sender), want)
+
 
 class ResolveToTest(RosterCase):
     def test_resolve_to_table(self):

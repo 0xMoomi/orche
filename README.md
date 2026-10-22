@@ -67,8 +67,7 @@ Every line should say OK or WARN, never FAIL.
 **Then use it.** `orche init` ends by switching Orca to the `main-<project>` tab; ask there in plain
 language, for example
 `Add a date filter to the history API.` Main plans, confirms with you, hands the work to a division,
-and the result comes back in the same tab. Type `[drain]` any time to read everything that is
-waiting.
+and the result comes back in the same tab. Main reports every finished unit to you by itself; `[drain]` also shows ORCHE's notes.
 
 Optional, later: `orche jev setup` (faster routing of simple requests) and `orche triage enable`
 (simple requests go straight to a division without a Main turn).
@@ -157,6 +156,11 @@ What it does, in order:
 Re-run it any time to update: a second run pulls the new version and updates the plugin; everything
 else that is already in place stays as it is.
 
+After updating ORCHE, run `orche init <project>` in each project (`orche status` shows `upgrade:` when
+it is due). It re-renders ORCHE's own files (personas, worktree settings), copies what it overwrites to
+`~/.claude/orche/backups/`, never touches your files (card sections, STANDING.md, ledger, unit memory)
+and names the panes to restart.
+
 Flags (after `bash -s --` when piping, e.g. `curl -fsSL … | bash -s -- --dry-run`):
 
 | Flag | Effect |
@@ -202,7 +206,7 @@ export PATH="$HOME/orche/bin:$PATH"
 orche version
 ```
 
-Success: `orche 0.5.0` (or the version you cloned).
+Success: `orche 0.6.0` (or the version you cloned).
 
 To make it permanent, add the same line to your login profile. ORCHE's panes and `orche doctor` use a
 login shell (`$SHELL -lc`), and a zsh login shell does not read `~/.zshrc`, so use:
@@ -400,9 +404,9 @@ For that project only:
    [Asking another project](#asking-another-project)). No division pane opens unless you pass
    `--wake`. With no such pane open, `orche wake main-<proj>` opens a new
    session (`claude --name`; it does not resume the old one); with one open it switches to it. The
-   last thing init does is switch Orca to `main-<proj>`. Division and feature panes start with
-   `--permission-mode bypassPermissions`; the Main pane asks as usual. On a machine without
-   `skipDangerousModePermissionPrompt`, the first division pane shows Claude Code's one-time bypass
+   last thing init does is switch Orca to `main-<proj>`. Every ORCHE pane — Main, divisions, features — starts with
+   `--permission-mode bypassPermissions` (a woken Main must not stop at a prompt nobody watches). On a machine
+   without `skipDangerousModePermissionPrompt`, the first ORCHE pane shows Claude Code's one-time bypass
    confirmation.
 4. An entry in `~/.claude/orche/registry.json`. Two weekly Orca automations are printed, not
    created, unless you pass `--automations`.
@@ -588,8 +592,7 @@ orche depts my-app
 
 ### Step 4. Read the result
 
-Main sees urgent pointers at its next turn and the rest at a drain point. Type `[drain]` in the Main
-pane to get everything now plus a three-line status.
+Main reports each finished unit in its pane without being asked (ORCHE wakes it); `[drain]` also shows ORCHE's notes.
 
 Success: the result of your unit appears in Main's reply. See [How units run](#how-units-run) for
 when a unit counts as done.
@@ -778,9 +781,9 @@ target's model from the registry (a feature agent: its division's; Main:
 
 | TIER | Effort | Max turns | Allowed tools |
 |---|---|---|---|
-| mechanical | `low` | `runner.max_turns` (20) | Read, Write, Edit, Glob, Grep, `ls`, `test`, `git status`, `git diff`, `git add`, `git commit`; denied (best-effort prefix rules): `git commit --amend`, `-n`, `--no-verify`, `git push` |
-| standard | `medium` | `runner.max_turns` (20) | the same allowed tools plus Bash (no deny list) |
-| hard | `high` | 40 | the same allowed tools plus Bash (no deny list) |
+| mechanical | `low` | TIMEBOX × 3 (30–400) | Read, Write, Edit, Glob, Grep, `ls`, `test`, `git status`, `git diff`, `git add`, `git commit`; denied (best-effort prefix rules): `git commit --amend`, `-n`, `--no-verify`, `git push` |
+| standard | `medium` | TIMEBOX × 3 (30–400) | the same allowed tools plus Bash (no deny list) |
+| hard | `high` | TIMEBOX × 3 (30–400) | the same allowed tools plus Bash (no deny list) |
 
 A mechanical worker may commit, but the runner footer still says "do not commit, push, merge or
 rebase unless the brief allows it", so it is told to commit only when the brief says so (a triage
@@ -808,9 +811,8 @@ still files its own. Measured on
 $3.75 (about $0.31 per unit) and took 2 minutes. `orche metrics` sums the runs it recorded,
 also per model and effort.
 
-`delivery: pane` restores the older path (the hook types `[orche] inbox: <unit> rev <N>` into the
-worker's Orca pane). Main targets always use the pane, because a person reads them, and so do
-`hard` units when `runner.hard_in_pane` is true. For a runner unit, `STOP <unit>` kills a live
+`delivery: pane` restores the older path (`[orche] inbox: <unit> rev <N>` is typed into the
+worker's Orca pane). Main targets always use the pane, because a person reads them; `orche deliver` types the nudge (never the hook) and tells the sender when it cannot. For a runner unit, `STOP <unit>` kills a live
 run (its `claude` process group, SIGKILL after 5 s) and the runner files `info` "stopped by
 Main"; a run still waiting for a slot gives up and files "stopped by Main before start"; a run
 that already finished keeps its result (the feedback says "already finished"). `AMEND <unit>
@@ -842,7 +844,7 @@ exits); while that shell still sits under the outer run, the nested run ends wit
 hook spawns the run with its own Python (`<python> bin/orche.py run <unit>`); `bin/orche` is for
 people. Config lives in
 `~/.claude/orche/config.json` (see `config/orche.example.json`): `claude_bin`, `delivery`,
-`runner.max_turns`, `runner.max_parallel`, `runner.hard_in_pane`,
+`runner.turns_per_minute`, `runner.turns_floor`, `runner.turns_ceiling`, `runner.max_parallel`, `inbox.wake`,
 `runner.queue_wait_s`, `runner.log_keep_days` (14: older `logs/runs/*.log` are deleted at each
 `orche run` and by `orche janitor run`; RUN.json records stay). `orche doctor` checks that
 `claude` is found and lists the 15 flags ORCHE passes (`claude flags`), warns under 1 GiB free disk for
@@ -885,7 +887,7 @@ title-renaming programs above.
 
 `orche run <unit>` starts a headless `claude -p` worker in the target's worktree with the
 brief as its prompt; the worker runs VERIFY, ends with `STATUS: done|blocked|failed`, and the
-runner files one pointer to Main (a feature reports to Build) plus `RUN.json` and `REPORT.md`
+runner files one pointer to whoever sent the brief (Main, or Build for its feature units) plus `RUN.json` and `REPORT.md`
 next to the brief (the worker itself never runs `orche report` under the runner). A worker
 never records its own verdict (writer ≠ judge). From Build or a feature agent (the targets
 `orche report done` gates) the pointer is `done` only when the final STATUS line (SPEC
@@ -901,7 +903,7 @@ else the recording session's `ORCHE_SESSION`); for `done` the runner only checks
 exists and does not re-check who recorded it. From any other target (Research, R&D, GTM, Ops, Main) a
 final `STATUS: done` files `done`, as `orche report done` would. Among runner runs there is
 one run per target at a time, so "a new commit made during the run" is this unit's; a pane
-worker (`delivery: pane`, `runner.hard_in_pane`) or a person working in that worktree is not
+worker (`delivery: pane`) or a person working in that worktree is not
 counted.
 
 ```sh
@@ -1034,9 +1036,9 @@ Liaison (headless) ── orche ask <proj> · orche card refresh <proj> (read-on
 
 | Piece | What it does |
 |---|---|
-| Dispatch relay (Stop hook) | Parses `dispatch` blocks, refuses incomplete ones, writes `BRIEF.md` revisions, starts the runner (or nudges the target pane); gates completion claims (`STATUS: done` / `release-ready`) through the done gate |
+| Dispatch relay (Stop hook) | Parses `dispatch` blocks, refuses incomplete ones, writes `BRIEF.md` revisions, starts the runner (or `orche deliver` for a pane); gates completion claims (`STATUS: done` / `release-ready`) through the done gate |
 | Runner | `orche run <unit>`: one headless `claude -p` worker per unit in its worktree; records `RUN.json`, files the pointer through the done gate |
-| Report inject (UserPromptSubmit hook) | Injects inbox pointers at drain points; urgent ones first |
+| Report inject (UserPromptSubmit hook) | Injects every report at the next prompt (notes at drain triggers); ORCHE wakes an idle Main |
 | Verification ledger | `orche ledger record/check`; verdicts `live-ui-verified`, `unit-test-verified`, `type-check-only`, `verifier-blocked`, `verifier-failed`. CI green is not a verdict |
 | HR | `orche feat new/sleep/wake/retire`, rate limits, creation freeze, weekly audit, `orche hr correct` for standing orders |
 | Keymaster | `orche secret …`: agents see secret names only; you paste values into a dialog |
@@ -1063,7 +1065,7 @@ analysis). They are motivating evidence, not guarantees.
 
 Cost ≈ context size × turn count. Turns were driven by notifications, not by the user, and
 context grew because the orchestrator accumulated subagent output. ORCHE attacks both by
-structure: hooks relay dispatches and reports (0 Main turns), reports are batched at drain points,
+structure: hooks relay dispatches and reports (a dispatch costs 0 Main turns; a completion costs one, the wake, by design), reports are batched into Main's next prompt,
 Main never reads diffs, sessions `/clear` at unit boundaries with memory in files, and TIER routes
 mechanical work to cheaper models.
 

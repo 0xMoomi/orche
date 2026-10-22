@@ -25,6 +25,7 @@ _OPENER = re.compile(r"^([ \t]*)(`{3,}|~{3,})[ \t]*dispatch[ \t]*$")
 _REV = re.compile(r"^rev:\s*(\d+)\s*$", re.MULTILINE)
 _MARK = re.compile(r"^## Brief\b.*$", re.MULTILINE)
 _ORDER = re.compile(r"-(\d{8})-(\d+)$")
+_FROM = re.compile(r"^to: \S+\s+from: (\S+)\s*$", re.M)
 _MAIN_CHECKOUT = " (main checkout)"
 
 
@@ -206,6 +207,12 @@ class Brief:
     @property
     def to(self) -> str:
         return str(self.fields.get("TO", "")).strip()
+
+    @property
+    def sender(self) -> str:
+        """The header's `from:` session (who sent this revision), or "" when the header has none."""
+        m = _FROM.search(self.text)
+        return m.group(1) if m else ""
 
     @property
     def tier(self) -> str:

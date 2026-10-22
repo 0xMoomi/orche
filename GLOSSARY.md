@@ -33,8 +33,32 @@ The member a dispatch `TO` resolves to: an exact session, else a division of the
 _Avoid_: recipient.
 
 **Recipient**:
-Where a member's pointers go by default: a feature agent's division, everyone else's Main.
+The member that hears from a unit: the sender of its current brief revision when that is a live Main or division of the project; otherwise a feature agent's division, everyone else's Main.
 _Avoid_: target.
+
+**Held note**:
+A non-urgent `info` pointer that is neither a pane delivery nor a runner filing (ORCHE's dispatch feedback, a pane's `orche report info`). It waits for a drain trigger; every other pointer reaches the next prompt.
+_Avoid_: non-urgent pointer.
+
+**Wake**:
+ORCHE typing `[orche] inbox: new reports` into a recipient's idle pane after a waking pointer lands, once per batch, never into a draft or a dialog; it costs the recipient one turn. The command is `orche nudge <session>`.
+_Avoid_: ping; "nudge" for the concept (the brief line `[orche] inbox: <unit> rev <N>` is the nudge a deliverer types).
+
+**Undelivered**:
+An `orche status` line: a unit's newest `via: dispatch` pointer still in its recipient's inbox after 10 minutes (`inbox.LATE`). Fix with `orche deliver <unit>`.
+_Avoid_: lost, stuck.
+
+**Unread**:
+An `orche status` line: a session with waking pointers (reports) in its inbox for 10 minutes or more. Fix with `orche nudge <session>`.
+_Avoid_: undelivered (that is a brief, not a report).
+
+**Queued**:
+A delivery state: the line was typed into a busy pane and accepted without a turn start, so Claude Code holds it for the pane's next turn. It counts as delivered, not failed.
+_Avoid_: pending, failed.
+
+**Deliverer**:
+`orche deliver <unit>`: the detached process that types a pane unit's nudge and reports a failed delivery to the sender; also the recovery command.
+_Avoid_: relay (that is the Stop hook).
 
 **Actor**:
 Who gets credit in events, the HR log, graveyard and audit rows: `ORCHE_SESSION`, else `user`. Never inferred from the cwd.

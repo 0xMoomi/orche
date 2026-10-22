@@ -8,21 +8,10 @@ import re
 from dataclasses import dataclass
 from pathlib import Path
 
-from . import brief, config, donegate, inbox, log, mask, orca, paths, registry, roster, runs, transcript, units, util
+from . import (brief, config, deliver, donegate, inbox, log, mask, orca, paths, registry, roster, runs, transcript,
+               units, util)
 
 # ---- targets -------------------------------------------------------------
-
-def wake_state(r, session: str) -> str:
-    """What to log when the target has no pane (Task 7 owns waking; this never creates panes)."""
-    m = r.member(session)
-    entry = (m.entry if m else None) or {}
-    default = bool(m and (m.kind == "main" or (m.kind == "div" and m.name == "build")))
-    if entry.get("wake_on_dispatch", default):
-        return "wake-requested"
-    if entry.get("status") in ("dormant", "paused"):
-        return "needs-wake"
-    return "no-pane"
-
 
 def standing_text(reg, proj_key) -> str:
     proj = reg["projects"][proj_key]
@@ -111,18 +100,6 @@ def plan_blocks(r, bodies, frm) -> list:
     return plans
 
 
-def runner_wanted(r, to, tier, cfg) -> bool:
-    """A brief, AMEND or STOP for a division/feature goes through the runner unless `delivery: pane`
-    (or a hard TIER with `runner.hard_in_pane`). Main targets keep the pane: a human reads them."""
-    if cfg.get("delivery", "runner") != "runner":
-        return False
-    m = r.member(to)
-    if m is None or not m.owns_worktree:
-        return False
-    hard = tier == "hard"
-    return not (hard and (cfg.get("runner") or {}).get("hard_in_pane"))
-
-
 RUNNER_NOT_LIVE = " (no live run)"
 
 
@@ -146,70 +123,57 @@ def _run_delivery(plan, terms) -> str:
 
 
 def _deliver(r, plan, b, status, summary, frm, terms, cfg=None, by=None):
-    """Pointer always; then the runner (spawned, never awaited) or a pane nudge while the hook budget
-    lasts (one terminal list per run). A failed runner delivery falls back to the nudge.
-    `b` is the unit's Brief (the one just written, or the prior one for a STOP).
-    `by` names who relayed in the events line (default the sender; triage passes `triage`)."""
+    """No Orca call (ruling 2). A runner unit (deliver.runner_wanted) is started, restarted or stopped
+    here and gets no target pointer (ruling 6); an exception is `runner-failed`. A pane unit gets
+    its pointer (`via: dispatch`, injected at the target's next prompt) and a detached
+    `orche deliver <unit>` (`deliverer-started`; `deliverer-failed` when it cannot start), which
+    types the inbox line. `b` is the unit's Brief (the one just written, or the prior one for a
+    STOP). `by` names who relayed in the events line (default the sender; triage passes `triage`)."""
     rev = b.rev
-    inbox.write(inbox.make(plan.unit, frm, plan.to, status, report_path=str(b.path), brief_rev=rev,
-                           summary=summary))
-    units.touch_activity(plan.to)
-    prefix = ""
     by = by or frm
-    if runner_wanted(r, plan.to, b.tier, cfg if cfg is not None else config.load()):
+    if deliver.runner_wanted(r, plan.to, cfg if cfg is not None else config.load()):
         try:
             state = _run_delivery(plan, terms)
-            log.log("events", f"dispatch kind={plan.block.kind} unit={plan.unit} rev={rev} to={plan.to} "
-                              f"by={by} delivery={state}")
-            return state
-        except Exception as exc:  # noqa: BLE001 - fall back to the pane nudge
+        except Exception as exc:  # noqa: BLE001 - reported to the sender, urgent
             log.log("hooks", f"dispatch: runner delivery for {plan.unit} failed: {exc}")
-            prefix = "runner-failed → "
-    state = _nudge(r, plan, rev, terms)
-    log.log("events", f"dispatch kind={plan.block.kind} unit={plan.unit} rev={rev} to={plan.to} "
-                      f"by={by} delivery={prefix}{state}")
-    return prefix + state
-
-
-def _nudge(r, plan, rev, terms):
-    term = orca.match_title(terms.list(), plan.to) if terms.remaining() > 0 else None
-    if terms.remaining() <= 0:
-        state = "budget-exceeded"
-    elif term is None:
-        state = "nudge-failed" if terms.error else wake_state(r, plan.to)
+            state = "runner-failed"
     else:
+        inbox.write(inbox.make(plan.unit, frm, plan.to, status, report_path=str(b.path), brief_rev=rev,
+                               summary=summary, via="dispatch"))
+        units.touch_activity(plan.to)
         try:
-            terms.send(term, f"[orche] inbox: {plan.unit} rev {rev}")
-            state = "nudged"
-        except Exception as exc:  # noqa: BLE001 - delivery is best-effort; brief + pointer are on disk
-            state = "budget-exceeded" if terms.remaining() <= 0 else "nudge-failed"
-            log.log("hooks", f"dispatch: nudge {plan.to} failed: {exc}")
+            deliver.spawn(plan.unit)
+            state = "deliverer-started"
+        except Exception as exc:  # noqa: BLE001 - reported to the sender, urgent
+            log.log("hooks", f"dispatch: deliverer for {plan.unit} did not start: {exc}")
+            state = "deliverer-failed"
+    log.log("events", f"dispatch kind={plan.block.kind} unit={plan.unit} rev={rev} to={plan.to} "
+                      f"by={by} delivery={state}")
     return state
 
 
-def _feedback(r, frm, unit, to, rev, state, kind=None, by=None):
-    """One non-urgent `info` pointer to the sender: unit id + delivery state (seen at its next prompt).
+URGENT_STATES = ("runner-failed", "deliverer-failed")
 
-    Nothing opens a pane for a division/feature target, so the sender is told to wake it (pane
-    delivery) or to re-run it with `orche run` (a failed runner delivery); runner states never
-    mention `orche wake`. A brief triage routed from a prompt reads "routed <unit> → <to> (<state>)".
+
+def _feedback(frm, unit, to, rev, state, kind=None, by=None):
+    """One `info` pointer from orche to the sender: unit id + delivery state. Held until a drain
+    trigger, except a failed delivery (URGENT_STATES), which is urgent and names the fix. Pane-state
+    hints come from the deliverer's own failure pointer. A brief triage routed from a prompt reads
+    "routed <unit> → <to> (<state>)".
     """
     summary = (f"routed {unit} → {to} ({state})" if by == "triage"
                else f"relayed {unit} → {to} rev {rev} ({state})")
-    pane_state = state.rsplit("→ ", 1)[-1]   # after a failed runner spawn: the nudge outcome
-    if state.startswith("runner-failed") and kind == "stop":
-        summary += " — the STOP pointer is filed; check `orche status` for a live run"
-    elif state.startswith("runner-failed"):
-        summary += f" — runner did not start: run `orche run {unit}`"
+    if state == "runner-failed" and kind == "stop":
+        summary += " — the STOP did not reach the runner: check `orche status` and send the STOP again"
+    elif state == "runner-failed":
+        summary += f" — the runner did not start: run `orche deliver {unit}`"
+    elif state == "deliverer-failed":
+        summary += f" — run `orche deliver {unit}`"
     elif state == "runner-stop-requested" + RUNNER_NOT_LIVE:
-        summary += (" — already finished (or still queued: a queued run will not start); "
-                    "the STOP pointer is filed")
-    elif pane_state in ("wake-requested", "needs-wake") and (m := r.member(to)) is not None and m.owns_worktree:
-        summary += f" — target has no pane: run `orche wake {to}`"
-    elif pane_state == "needs-wake":
-        summary += f" — target is asleep: run `orche wake {to}`"
+        summary += " — already finished (or still queued: a queued run will not start)"
     try:        # best-effort: after a started runner nothing may turn the relay into an error
-        inbox.write(inbox.make(unit, "orche", frm, "info", brief_rev=rev, summary=summary))
+        inbox.post(inbox.make(unit, "orche", frm, "info", brief_rev=rev, urgent=state in URGENT_STATES,
+                              summary=summary))
     except (ValueError, OSError) as exc:
         log.log("hooks", f"dispatch: cannot file feedback for {frm!r}: {exc}")
 
@@ -220,8 +184,8 @@ def _external(plan, frm, sender_proj):
     body = "; ".join(f"{k} {' '.join(str(fields[k]).split())}" for k in brief.KEYS if k in fields and k != "TO")
     goal = util.slugify(" ".join(mask.redact(fields.get("GOAL", ""))[0].split()[:4])) or "request"
     plan.unit = f"xreq-{util.slugify(sender_proj or 'unknown')}-{goal}-{units.now():%Y%m%d}"
-    inbox.write(inbox.make(plan.unit, frm, plan.to, "external-request", summary=mask.redact(body)[0],
-                           from_project=sender_proj))
+    inbox.post(inbox.make(plan.unit, frm, plan.to, "external-request", summary=mask.redact(body)[0],
+                          from_project=sender_proj))
     units.touch_activity(plan.to)
     log.log("events", f"dispatch kind=external-request unit={plan.unit} to={plan.to} by={frm} "
                       f"from_project={sender_proj}")
@@ -246,7 +210,7 @@ def check_sender(r, who) -> "roster.Member":
 
 
 def relay(r, bodies, frm, deadline=None) -> list:
-    """Write briefs + pointers and nudge targets for the sending Member `frm`. Returns the unit ids. Raises brief.Refusal."""
+    """Write briefs and deliver them for the sending Member `frm`. Returns the unit ids. Raises brief.Refusal."""
     return [d["unit"] for d in relay_detail(r, bodies, frm, deadline)]
 
 
@@ -258,24 +222,24 @@ def relay_detail(r, bodies, frm, deadline=None, by=None) -> list:
     """
     sender, sender_proj = frm.session, frm.project
     plans = plan_blocks(r, bodies, frm)
-    terms = orca.Terminals(deadline if deadline is not None else orca.hook_deadline())
+    terms = orca.Terminals(deadline if deadline is not None else orca.hook_deadline())   # remaining() only
     cfg = config.load()
     done = []
     for plan in plans:
         block = plan.block
         if plan.external:
             state = _external(plan, sender, sender_proj)
-            _feedback(r, sender, plan.unit, plan.to, 0, state)
+            _feedback(sender, plan.unit, plan.to, 0, state)
         elif block.kind == "stop":
             state = _deliver(r, plan, plan.prior, "stop", block.note or "STOP requested", sender, terms, cfg, by)
-            _feedback(r, sender, plan.unit, plan.to, plan.prior.rev, state, kind="stop", by=by)
+            _feedback(sender, plan.unit, plan.to, plan.prior.rev, state, kind="stop", by=by)
         else:
             b = brief.write(block, r.member(plan.to), sender, standing_text(r.reg, plan.proj),
                             prior=plan.prior, timeout=min(0.5, terms.remaining()))
             plan.unit = b.unit
             goal = mask.redact(b.fields.get("GOAL", "").split("\n")[0])[0]
             state = _deliver(r, plan, b, "info", goal, sender, terms, cfg, by)
-            _feedback(r, sender, plan.unit, plan.to, b.rev, state, by=by)
+            _feedback(sender, plan.unit, plan.to, b.rev, state, by=by)
         done.append({"unit": plan.unit, "to": plan.to, "state": state})
     return done
 
@@ -289,14 +253,23 @@ def _relayed_marker(session_id):
 
 def _refusal_to_self(me, message):
     """Under stop_hook_active a refusal must not loop: log it, and park it in the session's own inbox
-    when the session is identified (`me` None: hooks.log only)."""
+    when the session is identified (`me` None: hooks.log only). The parked note is `quiet`: it does not
+    wake `me` (a woken Main re-emitting the bad block would loop) but is injected at its next prompt."""
     log.log("hooks", f"dispatch refused under stop_hook_active: {message}")
     if not me:
         return
     try:
-        inbox.write(inbox.make("dispatch-refused", "orche", me, "question", summary=message))
+        inbox.post(inbox.make("dispatch-refused", "orche", me, "question", summary=message, quiet=True))
     except ValueError as exc:
         log.log("hooks", f"dispatch: cannot park refusal for {me!r}: {exc}")
+
+
+def handle_stop_failure(payload: dict) -> None:
+    """StopFailure hook (a turn ended on an API error; Stop does not fire): re-arm the wake as Stop does.
+    Claude Code ignores the output; only the side effect matters."""
+    who = roster.Roster(registry.load()).identify(payload.get("cwd") or os.getcwd())
+    if who.session:
+        inbox.rearm(who.session)
 
 
 def final_text(payload: dict):
@@ -343,5 +316,8 @@ def handle_stop(payload: dict, started=None):
                     return 2, str(exc)
                 _refusal_to_self(me, str(exc))
             util.write_json(marker, {"text_hash": text_hash, "msg_id": msg_id, "at": util.now_iso()})
-    return donegate.may_stop(text, r, who, cwd, tpath, deadline,
-                             stop_hook_active=bool(payload.get("stop_hook_active")))
+    code, msg = donegate.may_stop(text, r, who, cwd, tpath, deadline,
+                                  stop_hook_active=bool(payload.get("stop_hook_active")))
+    if code == 0 and me:
+        inbox.rearm(me)   # reports that landed mid-turn: the turn is over, wake the pane now
+    return code, msg

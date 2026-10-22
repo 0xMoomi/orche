@@ -1,7 +1,6 @@
 import io
 import json
 import os
-import time
 import unittest
 from contextlib import redirect_stderr
 
@@ -112,7 +111,7 @@ class OrcaAdapterTest(ShellCase):
 
     def test_unsupported_command_rejected(self):
         with self.assertRaises(orca.OrcaError):
-            orca.terminal("read")
+            orca.terminal("resize")
         with self.assertRaises(orca.OrcaError):
             orca.call("search", None)
         self.assertEqual(self.fake.calls, [])
@@ -130,13 +129,6 @@ class OrcaAdapterTest(ShellCase):
         self.assertEqual(orca.find_terminal_by_title("main-acme")["handle"], "term_2")
         self.assertIsNone(orca.find_terminal_by_title("main"))
 
-    def test_nudge_sends_to_matching_pane(self):
-        self.queue(ok(TERMS), ok({"accepted": True}))
-        self.assertEqual(orca.nudge("div-acme-build", "[orche] inbox: u rev 1"), {"accepted": True})
-        self.assertEqual(self.fake.calls[1]["argv"],
-                         ["orca", "terminal", "send", "--terminal", "term_1",
-                          "--text", "[orche] inbox: u rev 1", "--enter", "--wait-submit", "1", "--json"])
-
     def test_hook_budget_defaults_to_three_seconds(self):
         self.assertEqual(orca.DEFAULT_HOOK_BUDGET_S, 3.0)
         os.environ.pop("ORCHE_HOOK_BUDGET_S", None)
@@ -145,31 +137,6 @@ class OrcaAdapterTest(ShellCase):
         self.assertAlmostEqual(orca.hook_deadline(100.0), 100.5)
         os.environ["ORCHE_HOOK_BUDGET_S"] = "junk"
         self.assertAlmostEqual(orca.hook_deadline(100.0), 103.0)
-
-    def test_hook_send_waits_one_second_for_submit(self):
-        self.queue(ok({"accepted": True}))
-        orca.Terminals(time.monotonic() + 3).send({"handle": "term_1"}, "hi")
-        self.assertEqual(self.fake.calls[0]["argv"],
-                         ["orca", "terminal", "send", "--terminal", "term_1", "--text", "hi",
-                          "--enter", "--wait-submit", "1", "--json"])
-
-    def test_nudge_without_pane_returns_none(self):
-        self.queue(ok({"terminals": []}))
-        self.assertIsNone(orca.nudge("div-acme-build", "hi"))
-        self.assertEqual(len(self.fake.calls), 1)
-
-    def test_nudge_relists_once_on_stale_handle(self):
-        fresh = {"terminals": [{"handle": "term_9", "title": "div-acme-build"}]}
-        self.queue(ok(TERMS), fail("terminal_handle_stale", "stale"), ok(fresh), ok({"accepted": True}))
-        self.assertEqual(orca.nudge("div-acme-build", "hi"), {"accepted": True})
-        self.assertEqual(self.fake.calls[3]["argv"][4], "term_9")
-
-    def test_nudge_gives_up_after_second_stale(self):
-        self.queue(ok(TERMS), fail("terminal_handle_stale", "stale"),
-                   ok(TERMS), fail("terminal_handle_stale", "stale"))
-        with self.assertRaises(orca.OrcaError):
-            orca.nudge("div-acme-build", "hi")
-        self.assertEqual(len(self.fake.calls), 4)
 
 
 if __name__ == "__main__":

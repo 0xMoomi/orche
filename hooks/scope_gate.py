@@ -1,10 +1,13 @@
 #!/usr/bin/env python3
 """PreToolUse gate: inside a division/feature worktree, deny edits outside the worktree or the
 feature's scope globs. Always allowed: `.orche/`, `docs/` and `.claude/agent-memory/` under the
-worktree, `~/.claude/agent-memory/`, and the session scratch root (`/private/tmp/claude-<uid>/`,
-`$TMPDIR/claude-*`, or $ORCHE_SCRATCH_ROOT). Internal error -> allow + log."""
+worktree, `~/.claude/agent-memory/`, the session scratch root (`/private/tmp/claude-<uid>/`,
+`$TMPDIR/claude-*`, or $ORCHE_SCRATCH_ROOT), and the session's own unit folders under the real
+project root (`<root>/.orche/units/<u>/…` when unit <u>'s brief is addressed to the session),
+except their `BRIEF.md`, `BRIEF.rev<N>.md` and `RUN.json`. Internal error -> allow + log."""
 import json
 import os
+import re
 import sys
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "lib"))
@@ -15,6 +18,8 @@ if not pyguard.check_hook("scope_gate"):
     sys.exit(0)  # fail-open: the hook does nothing, a gate allows
 
 ALWAYS = (".orche/", "docs/", ".claude/agent-memory/")
+UNIT_FIXED = re.compile(r"^(BRIEF\.md|BRIEF\.rev\d+\.md|RUN\.json)$", re.IGNORECASE)   # dispatch and the runner only;
+# any case: macOS file systems are case-insensitive, so `brief.md` is BRIEF.md
 
 
 def scratch_allowed(path) -> bool:
@@ -31,6 +36,22 @@ def scratch_allowed(path) -> bool:
     return False
 
 
+def own_unit_file(reg, unit, path) -> bool:
+    """True for `<realpath(project root)>/.orche/units/<u>/<rest>` (rest non-empty) when unit <u>'s
+    brief (rev > 0) is addressed to `unit.session` and `rest` is not BRIEF.md, BRIEF.rev<N>.md or RUN.json."""
+    from orche import brief, units
+    if unit.home is None:
+        return False
+    base = os.path.join(os.path.realpath(unit.home), brief.UNITS)
+    if not units.is_within(path, base):
+        return False
+    parts = os.path.relpath(path, base).split(os.sep)
+    if len(parts) < 2 or parts[0] in ("", ".", "..") or UNIT_FIXED.match("/".join(parts[1:])):
+        return False
+    b = brief.find(reg, parts[0], project=unit.project)
+    return b is not None and b.rev > 0 and b.to == unit.session
+
+
 def decide(payload):
     """Deny reason, or None to stay silent."""
     from orche import registry, roster, units
@@ -39,7 +60,8 @@ def decide(payload):
     if not target:
         return None
     cwd = payload.get("cwd") or os.getcwd()
-    unit = roster.Roster(registry.load()).place(cwd).unit
+    reg = registry.load()
+    unit = roster.Roster(reg).place(cwd).unit
     if unit is None:
         return None
     root = os.path.realpath(unit.worktree)
@@ -51,9 +73,11 @@ def decide(payload):
         rel = os.path.relpath(path, root).replace(os.sep, "/")
         if not scope or rel.startswith(ALWAYS) or any(units.scope_match(rel, g) for g in scope):
             return None
-    elif scratch_allowed(path):
+    elif own_unit_file(reg, unit, path) or scratch_allowed(path):
         return None
-    return (f"[orche] scope: {target} is outside {unit.session}'s allowed roots: {', '.join(allowed)}. "
+    home = os.path.realpath(unit.home) if unit.home is not None else "<project root>"
+    return (f"[orche] scope: {target} is outside {unit.session}'s allowed roots: {', '.join(allowed)} "
+            f"and its own unit folders under {home}/.orche/units/. "
             "Ask Main to re-scope or dispatch the change to the owning unit.")
 
 

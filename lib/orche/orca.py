@@ -12,11 +12,10 @@ ALLOWED = {
     "status": None,
     "repo": {"list", "add"},
     "worktree": {"list", "ps", "create", "set", "rm"},
-    "terminal": {"list", "create", "send", "rename", "wait", "close", "switch"},
+    "terminal": {"list", "create", "send", "rename", "wait", "read", "close", "switch"},
     "orchestration": {"send", "check"},
     "automations": {"create", "list", "remove"},
 }
-STALE_CODES = {"terminal_handle_stale"}
 
 
 class OrcaError(RuntimeError):
@@ -132,9 +131,6 @@ def find_terminal_by_title(title, *, timeout=20):
 
 
 DEFAULT_HOOK_BUDGET_S = 3.0
-# Without --wait-submit, `terminal send --enter` waits for the Claude TUI to confirm the submit
-# (measured 8 s on an idle pane); with `--wait-submit 1` it returns in ~0.1 s. Must be a positive integer.
-SEND_ENTER = ("--enter", "--wait-submit", "1")
 
 
 def hook_deadline(started=None) -> float:
@@ -147,11 +143,11 @@ def hook_deadline(started=None) -> float:
 
 
 class Terminals:
-    """For hooks: one `terminal list` per run, every Orca call bounded by a shared deadline."""
+    """For hooks: one `terminal list` per run, every Orca call bounded by a shared deadline. Hooks never
+    type into a pane (deliver.py does, detached)."""
 
     def __init__(self, deadline):
         self.deadline = deadline
-        self.error = None
         self._list = None
 
     def remaining(self) -> float:
@@ -161,35 +157,9 @@ class Terminals:
         if self._list is None:
             self._list = []
             if self.remaining() <= 0:
-                self.error = "budget-exceeded"
                 return self._list
             try:
                 self._list = terminals_of(terminal("list", timeout=self.remaining()))
             except Exception as exc:  # noqa: BLE001 - callers degrade gracefully
-                self.error = str(exc)
                 log.log("hooks", f"terminal list failed: {exc}")
         return self._list
-
-    def send(self, term, text):
-        """Send without the stale-handle retry (hooks have no time for a second list)."""
-        return terminal("send", "--terminal", term["handle"], "--text", text, *SEND_ENTER,
-                        timeout=max(self.remaining(), 0.1))
-
-
-def nudge(title, text, *, dry_run=False, timeout=20):
-    """Type `text` + Enter into the pane titled `title`. Returns the send result, or None if no pane.
-
-    A stale handle is re-listed once and retried.
-    """
-    if dry_run:
-        return terminal("send", "--terminal", f"<{title}>", "--text", text, *SEND_ENTER, dry_run=True)
-    for attempt in (1, 2):
-        term = find_terminal_by_title(title, timeout=timeout)
-        if term is None:
-            return None
-        try:
-            return terminal("send", "--terminal", term["handle"], "--text", text, *SEND_ENTER, timeout=timeout)
-        except OrcaError as exc:
-            if exc.code not in STALE_CODES or attempt == 2:
-                raise
-    return None

@@ -1,7 +1,7 @@
 """Orca panes of units and projects: the pane command, a unit's create argv, project panes.
 
-Division and feature panes run `claude --permission-mode bypassPermissions`; Main panes
-(`project_pane`) do not.
+Every ORCHE pane (Main, divisions, features) runs `claude --permission-mode bypassPermissions`:
+a woken pane runs with nobody watching and must not stop at a permission prompt.
 """
 import shlex
 
@@ -19,9 +19,9 @@ def session_env(session) -> str:
 
 def pane_command(session, *, resume) -> str:
     """`claude --permission-mode bypassPermissions --resume <session>` for a paused unit, `--name
-    <session>` for a fresh start: a division or feature pane never stops at a permission prompt.
+    <session>` for a fresh start (and for Main): no ORCHE pane ever stops at a permission prompt.
 
-    Prefixed with `session_env(session)`. Main panes (`project_pane`) do not use it."""
+    Prefixed with `session_env(session)`. The one builder for every ORCHE pane, Main included."""
     flag = "--resume" if resume else "--name"
     return (f"{session_env(session)}{config.load().get('claude_bin', 'claude')} "
             f"--permission-mode bypassPermissions {flag} {session}")
@@ -41,13 +41,14 @@ def unit_argv(unit, *, resume) -> tuple:
 def project_pane(proj, *, dry_run, switch=True) -> tuple:
     """Open the project's `main-<proj>` pane in its main checkout, or switch to it.
 
-    One title lookup: no pane -> create one (`claude --name`); a pane -> `terminal switch` to it
+    One title lookup: no pane -> create one (`pane_command`: `claude --permission-mode
+    bypassPermissions --name main-<proj>`, like every ORCHE pane); a pane -> `terminal switch` to it
     (with switch=False it is left as it is). Returns (data, line); data["pane"] is "opened",
     "switched" or (switch=False) "open". Under dry_run the create argv is printed and no writing
     orca command runs. Raises orca.OrcaError.
     """
     title = proj["main_session"]
-    command = f"{session_env(title)}{config.load().get('claude_bin', 'claude')} --name {title}"
+    command = pane_command(title, resume=False)
     term = orca.find_terminal_by_title(title)
     data = {"session": title, "pane": "opened" if term is None else "switched" if switch else "open"}
     if dry_run:
