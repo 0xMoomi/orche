@@ -86,7 +86,8 @@ def old_finished(job, call, res, data, model, started, finished, code, error, st
             "started": started, "finished": finished, "timeout_s": call.timeout,
             "exit_code": code, "is_error": res.is_error or (error is not None and not stopped),
             "stop_reason": "stopped" if stopped else _masked(
-                data.get("stop_reason") or data.get("subtype") or ("error" if error else None)),
+                data["subtype"] if str(data.get("subtype") or "").startswith("error")       # C9: an error wins
+                else data.get("stop_reason") or data.get("subtype") or ("error" if error else None)),
             "cost_usd": res.cost_usd, "num_turns": res.turns, "usage": res.usage,
             "result_tail": mask.redact(result[-2000:])[0], "error": error,
             "head_before": head_before, "head_sha": head, "status": status, "pointer_filed": filed}
@@ -144,8 +145,7 @@ class RecordTest(unittest.TestCase):
         new = filing.run_record(
             runner.who(self.JOB, call), started=self.NOW, finished=self.LATER, timeout_s=call.timeout,
             exit_code=0, is_error=res.is_error or (error is not None and not stopped),
-            stop_reason="stopped" if stopped else filing.masked(
-                data.get("stop_reason") or data.get("subtype") or ("error" if error else None)),
+            stop_reason=runner.stop_reason_of(data, error, stopped),
             cost_usd=res.cost_usd, num_turns=res.turns, usage=res.usage,
             result_tail=mask.redact(result[-filing.TAIL_CHARS:])[0], error=error,
             head_before="a" * 40, head_sha="b" * 40, status=status, pointer_filed=True)
@@ -159,6 +159,12 @@ class RecordTest(unittest.TestCase):
     def test_finished_with_an_error(self):
         res = SimpleNamespace(is_error=True, cost_usd=None, turns=None, usage=None)
         self.finished(res, {"subtype": "error_max_turns"}, "claude exited 1", False, "failed")
+        self.finished(res, {"subtype": "error_max_turns", "stop_reason": "tool_use"}, "claude exited 1", False,
+                      "failed")
+        self.assertEqual(runner.stop_reason_of({"subtype": "error_max_turns", "stop_reason": "tool_use"},
+                                               "claude exited 1", False), "error_max_turns")
+        self.assertEqual(runner.stop_reason_of({"subtype": "success", "stop_reason": "end_turn"}, None, False),
+                         "end_turn")
         self.finished(SimpleNamespace(is_error=False, cost_usd=None, turns=None, usage=None), {},
                       "timeout after 1860s", False, "failed")
 
@@ -378,7 +384,7 @@ class OnePointerTest(RunnerCase):
 
     def test_call_for_error(self):
         unit = self.brief()
-        self.config({"claude_bin": str(self.claude), "delivery": "runner", "runner": {"max_turns": "many"}})
+        self.config({"claude_bin": str(self.claude), "delivery": "runner", "runner": {"turns_ceiling": "many"}})
         out = self.execute(unit)
         self.check(out, unit, 1, 1, "error", False)
         self.assertEqual(out.stderr[-1], "orche: runner error: ValueError: invalid literal for int() with "

@@ -1,9 +1,10 @@
-"""`orche status [proj]` (one line per project) and `orche statusline [--cwd PATH]`."""
+"""`orche status [proj]` (one line per project, then its `undelivered:`, `unread:` and `upgrade:` lines) and
+`orche statusline [--cwd PATH]`."""
 import json
 import os
 import sys
 
-from . import registry, runs, statusline
+from . import __version__, inbox, registry, roster, runs, statusline
 
 EXIT_OK, EXIT_NOT_FOUND = 0, 2
 
@@ -26,9 +27,19 @@ def status_row(reg, key, now=None) -> dict:
             f" · new:{c['new']} · keys:{c['keys']} · unverified:{c['unverified']} · RUNNING {c['running']}")
     divisions = {name: proj.get("divisions", {}).get(name, {}).get("status", "dormant")
                  for name in registry.divisions_of(proj)}
+    undelivered, unread = inbox.overdue(roster.Roster(reg), key, now)
     return {"project": key, "stage": proj["stage"], "awake": c["awake"], "limit": limit,
             "divisions": divisions, "active_features": c["active_features"], "new": c["new"],
-            "keys": c["keys"], "unverified": c["unverified"], "running": c["running"], "line": line}
+            "keys": c["keys"], "unverified": c["unverified"], "running": c["running"], "line": line,
+            "undelivered": undelivered, "unread": unread, "upgrade": registry.upgrade(proj, __version__)}
+
+
+def overdue_lines(row) -> list:
+    """The project's late deliveries and unread reports (≥ inbox.LATE), each naming its command."""
+    return ([f"  undelivered: {u['unit']} → {u['to']} (rev {u['rev']}, {u['minutes']} min) — "
+             f"run `orche deliver {u['unit']}`" for u in row["undelivered"]]
+            + [f"  unread: {u['session']} has {u['count']} report(s) waiting (oldest {u['minutes']} min) — "
+               f"run `orche nudge {u['session']}`" for u in row["unread"]])
 
 
 def cmd_status(args):
@@ -48,6 +59,10 @@ def cmd_status(args):
     else:
         for row in rows:
             print(row["line"])
+            for line in overdue_lines(row):
+                print(line)
+            if row["upgrade"]:   # the stamp of the last `orche init` is missing or older
+                print(f"  upgrade: {registry.upgrade_text(row['project'], row['upgrade'])}")
         if not rows:
             print("no projects")
         line = triage_line()

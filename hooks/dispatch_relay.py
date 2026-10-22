@@ -2,6 +2,7 @@
 """Stop hook: relay ```dispatch blocks, gate completion claims, run the overnight predicate.
 
 Exit 2 + stderr makes the model continue with the message; exit 0 lets it stop. Fail-open.
+StopFailure (a turn ended on an API error) only re-arms the inbox wake; its output is ignored.
 """
 import json
 import os
@@ -25,6 +26,9 @@ def main():
         if not isinstance(payload, dict) or payload.get("agent_id"):
             return 0
         from orche import dispatch
+        if payload.get("hook_event_name") == "StopFailure":
+            dispatch.handle_stop_failure(payload)
+            return 0
         code, message = dispatch.handle_stop(payload, STARTED)
     except Exception as exc:  # noqa: BLE001 - fail-open
         try:

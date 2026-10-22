@@ -62,9 +62,10 @@ class AgentFilesTest(unittest.TestCase):
 
 
 class PersonaTemplatesTest(unittest.TestCase):
-    def test_eight_personas_with_placeholder_frontmatter(self):
+    def test_seven_personas_with_placeholder_frontmatter(self):
+        """No `main.md`: Main's rules are the orche-main card (C9 ruling 15)."""
         names = sorted(p.name for p in PERSONAS.glob("*.md") if p.name not in PROMPTS)
-        self.assertEqual(names, sorted(["main.md", "div-rnd.md", "div-research.md", "div-build.md",
+        self.assertEqual(names, sorted(["div-rnd.md", "div-research.md", "div-build.md",
                                         "div-gtm.md", "div-ops.md", "div-custom.md", "feature.md"]))
         for name in names:
             fm = frontmatter((PERSONAS / name).read_text())
@@ -132,14 +133,11 @@ class PersonaTemplatesTest(unittest.TestCase):
             self.assertIn("## Report format", text, path.name)
             self.assertIn("## Dispatch and inbox", text, path.name)
             self.assertNotRegex(text, r"STATUS: [^`]*stopped|inbox pointer JSON in|orche/inbox/", path.name)
-            if path.name != "main.md":
-                self.assertIn("orche report ", text, path.name)
+            self.assertIn("orche report ", text, path.name)
         unit = templates.render((PERSONAS / "feature.md").read_text(), **VARS)
         for part in (".orche/units/<unit>/BRIEF.md", "orche report stop", "Never hand-write pointer JSON",
                      "Never `/clear` mid-unit", "STATUS: done | blocked | failed | stop`"):
             self.assertIn(part, unit)
-        main = templates.render((PERSONAS / "main.md").read_text(), **VARS)
-        self.assertIn("Understood: source = <project>, output = <project>", main)
 
     def test_division_and_feature_personas_tell_runner_workers_not_to_report(self):
         """Runner round 2 (C): rendered through onboarding, as HR writes them."""
@@ -151,7 +149,6 @@ class PersonaTemplatesTest(unittest.TestCase):
                                                           model="claude-opus-5-5", effort="high")
             self.assertTrue(from_template, name)
             self.assertIn(note, text, name)
-        self.assertNotIn("ORCHE_RUNNER", (PERSONAS / "main.md").read_text())   # Main never runs under it
 
     def test_custom_division_persona_renders_charter_guards_and_runner_note(self):
         from orche.hr import onboarding
@@ -241,9 +238,17 @@ class SkillsTest(unittest.TestCase):
             self.assertIn(line, block)
         self.assertIn("## Dispatch effort\n\nTarget one API response per brief.", text)
 
+    def test_main_card_says_a_report_is_an_order(self):
+        """C9 T9: Main has no persona file; the card carries the echo-back and the report order."""
+        block = INJECT.findall((SKILLS / "orche-main" / "SKILL.md").read_text())[0]
+        for part in ("Understood: source = <project>, output = <project>", "When a report arrives",
+                     "Never only acknowledge"):
+            self.assertIn(part, block)
+        self.assertLessEqual(len(block), 1500)
+
     def test_rulebooks_cover_their_topics(self):
         main = (SKILLS / "orche-main" / "SKILL.md").read_text()
-        for heading in ("## Dispatch grammar", "## Drain discipline", "## Question discipline",
+        for heading in ("## Dispatch grammar", "## When a report arrives", "## Question discipline",
                         "## Ketchup report format", "## Echo-back", "## Candor"):
             self.assertIn(heading, main)
         build = (SKILLS / "orche-build" / "SKILL.md").read_text()

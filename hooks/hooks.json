@@ -3,6 +3,9 @@
     "Stop": [
       {"hooks": [{"type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}/hooks/run.sh\" dispatch_relay"}]}
     ],
+    "StopFailure": [
+      {"hooks": [{"type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}/hooks/run.sh\" dispatch_relay"}]}
+    ],
     "UserPromptSubmit": [
       {"hooks": [{"type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}/hooks/run.sh\" report_inject"}]}
     ],

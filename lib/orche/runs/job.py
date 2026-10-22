@@ -1,7 +1,7 @@
 """The runner: execute one unit headless with `claude -p` in its worktree (`orche run <unit>`).
 
 resolve() reads the unit's BRIEF.md and the registry; call_for() is the worker's headless.Call
-(project context; the registry model, effort, turns and tools by TIER); run() starts it through
+(project context; the registry model, effort and tools by TIER, turns by TIMEBOX); run() starts it through
 headless.run with the brief (+ the division's fenced project context, when it has one) + runner
 footer on stdin, under a project run slot and the target's lock (the run store, `runs/__init__.py`),
 records RUN.json / REPORT.md and files the inbox pointer from the target. execute() is `orche run`:
@@ -41,6 +41,7 @@ longer than any backtick run in it, before the runner's own `## Runner` footer.
 headless.run is the one way ORCHE starts claude (SPEC §14.10); this module holds the unit-worker
 policy (call_for) and files the run.
 """
+import math
 import os
 import re
 import time
@@ -48,13 +49,12 @@ import traceback
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 
-from .. import brief, donegate, headless, intake, log, mask, procs, roster, runs, shell, units, util
+from .. import brief, config, donegate, headless, intake, log, mask, procs, roster, runs, shell, units, util
 from . import filing
 
 EXIT_OK, EXIT_USER, EXIT_NOT_FOUND, EXIT_BLOCKED, EXIT_DUPLICATE, EXIT_UNFILED = 0, 1, 2, 3, 4, 5
 OPUS = "claude-opus-5-5"
 EFFORT = {"mechanical": "low", "standard": "medium", "hard": "high"}     # --effort by the dispatch TIER
-HARD_MAX_TURNS = 40
 MECH_TOOLS = ("Read,Write,Edit,Glob,Grep,Bash(ls:*),Bash(test:*),Bash(git status:*),Bash(git diff:*),"
               "Bash(git add:*),Bash(git commit:*)")
 # A mechanical unit may commit. These prefix rules are a best-effort first filter (`--amen`, `-anm`
@@ -170,17 +170,25 @@ def resolve(reg, unit) -> Job:
 
 # ---- the worker's call -----------------------------------------------------
 
+def max_turns(timebox_s, rcfg) -> int:
+    """--max-turns for a run of `timebox_s`: max(turns_floor, min(turns_ceiling, ceil(minutes ×
+    turns_per_minute))), the keys from `rcfg` (the `runner` config), missing ones from
+    config.DEFAULTS["runner"]. Raises ValueError/TypeError for a non-numeric value."""
+    rcfg = {**config.DEFAULTS["runner"], **(rcfg or {})}
+    k, floor, ceiling = float(rcfg["turns_per_minute"]), int(rcfg["turns_floor"]), int(rcfg["turns_ceiling"])
+    return max(floor, min(ceiling, math.ceil(timebox_s / 60 * k)))
+
+
 def call_for(job, cfg, tag=None) -> headless.Call:
-    """The unit worker's headless.Call (project context): the job's model, effort and max turns by
-    TIER, the tool rules (mechanical: MECH_TOOLS and MECH_DENIED; else MECH_TOOLS + Bash), the
+    """The unit worker's headless.Call (project context): the job's model and effort by TIER, max
+    turns by TIMEBOX (max_turns), the tool rules (mechanical: MECH_TOOLS and MECH_DENIED; else MECH_TOOLS + Bash), the
     persona file, the timebox + GRACE_S, and ORCHE_SESSION / ORCHE_RUNNER (`orche report` refuses
     under ORCHE_RUNNER: the runner files the pointer). `tag` is the run id, which only the run slot assigns
     (runs.acquire): `--dry-run` passes `<unit>@<started_ns>`, run() the lock's."""
     mechanical = job.tier == "mechanical"
     return headless.Call(
         context="project", model=job.model, effort=EFFORT[job.tier],
-        max_turns=(HARD_MAX_TURNS if job.tier == "hard"
-                   else int((cfg.get("runner") or {}).get("max_turns") or 20)),
+        max_turns=max_turns(job.timebox_s, cfg.get("runner")),
         timeout=job.timebox_s + GRACE_S, cwd=job.worktree,
         allowed=MECH_TOOLS if mechanical else MECH_TOOLS + ",Bash",
         denied=MECH_DENIED if mechanical else "", append_file=job.persona,
@@ -222,6 +230,11 @@ def decide(reg, job, data, error, code=0, head_before=None, head=None):
     """(pointer status, summary) for the run outcome."""
     if error:
         return "failed", f"run failed: {error}"
+    if data.get("is_error") and data.get("subtype") == "error_max_turns":
+        cost = data.get("total_cost_usd")
+        cost = f"{cost:.2f}" if isinstance(cost, (int, float)) and not isinstance(cost, bool) else "?"
+        return "failed", (f"run failed: turn cap reached ({data.get('num_turns')} turns, ${cost}) — re-run with "
+                          "a larger TIMEBOX or split the unit")
     if data.get("is_error"):
         return "failed", f"run failed: claude reported an error ({data.get('subtype') or 'is_error'})"
     word, line, summary = status_of(data.get("result"))
@@ -238,6 +251,18 @@ def decide(reg, job, data, error, code=0, head_before=None, head=None):
     else:
         note = f"unverified: {line or 'no STATUS line'}"
     return "info", "\n".join(x for x in (note, summary) if x)
+
+
+def stop_reason_of(data, error, stopped):
+    """RUN.json `stop_reason` (masked): "stopped" when Main stopped the run; else an `error*` result
+    subtype (error_max_turns: the API's own stop_reason is only the last turn's); else the API stop
+    reason, the subtype, "error" for a runner-side failure, or None."""
+    if stopped:
+        return "stopped"
+    subtype = data.get("subtype")
+    if isinstance(subtype, str) and subtype.startswith("error"):
+        return filing.masked(subtype)
+    return filing.masked(data.get("stop_reason") or subtype or ("error" if error else None))
 
 
 # ---- run -------------------------------------------------------------------
@@ -408,7 +433,7 @@ def _run_locked(reg, job, call, cfg, lock, since, stop) -> tuple:
     started, w = util.now_iso(), who(job, call)
     head_before = shell.git_head(job.worktree)
     filing.set_aside_report(job.unit_dir)
-    recipient = filing.recipient(reg, job.to)
+    recipient = filing.recipient(reg, w)
     before = filing.worker_pointers(recipient, job.unit, job.to)
     if stop.signum is not None or runs.stop_requested(job.project, job.unit, since):
         return _not_started(reg, job, since, stop)      # STOP/SIGTERM before claude started
@@ -433,8 +458,7 @@ def _run_locked(reg, job, call, cfg, lock, since, stop) -> tuple:
     record = filing.run_record(
         w, started=started, finished=finished, timeout_s=call.timeout, exit_code=code,
         is_error=res.is_error or (error is not None and not stopped),
-        stop_reason="stopped" if stopped else filing.masked(
-            data.get("stop_reason") or data.get("subtype") or ("error" if error else None)),
+        stop_reason=stop_reason_of(data, error, stopped),
         cost_usd=res.cost_usd, num_turns=res.turns, usage=res.usage,
         result_tail=mask.redact(result[-filing.TAIL_CHARS:])[0], error=error,
         head_before=head_before, head_sha=head, status=status, pointer_filed=filed)
@@ -450,7 +474,7 @@ def _run_locked(reg, job, call, cfg, lock, since, stop) -> tuple:
         except OSError as exc:
             raise filing.FilingError(f"pointer: {exc}") from exc
     units.touch_activity(job.to)
-    filing.events(w, record["cost_usd"], record["num_turns"], status)
+    filing.events(w, record["cost_usd"], record["num_turns"], status, record["stop_reason"])
     late = runs.marker_time(job.project, job.unit)
     if stopped:
         return record, stop_at

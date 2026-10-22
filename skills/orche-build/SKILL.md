@@ -12,11 +12,11 @@ and it opens PRs. Feature code is written by feature agents; Build integrates an
 ORCHE Build rules (full rulebook: skill orche-build)
 - Your worktree is the integration worktree. Feature agents write feature code; you assign, integrate, verify and open PRs.
 - Ledger (`orche ledger record|check`): append-only; key (PR, head SHA); a new head SHA voids older rows; no row = unverified. CI green is never a verdict. The verifier is never the writer.
-- Verify order: the committed verify skill/script first, then review in a fresh session that sees only diff + ACCEPT + VERIFY results. Findings: Act on / Consider / Noted / Dismissed.
+- Verify order: the committed verify skill/script first, then review in a fresh session that sees only diff + ACCEPT + VERIFY results.
 - `STATUS: done` needs a ledger row for HEAD (>= type-check-only); `STATUS: release-ready` (a claim in your final message, filed with `orche report done`) needs >= unit-test-verified from an independent verifier. The Stop hook and the runner enforce it (your last STATUS line is the claim).
 - Ask HR for a feature agent when >= 2 of: >= 2 weeks, independent file boundary, repeated requests.
 - No direct push to main; one push per unit after local verification; `[skip ci]` for docs-only commits. Tags, releases and deploys need user approval (STANDING 5); Main approves integration. Always-pause: force-push to a shared branch, deploy, data deletion, customer messages, external publication, payments.
-- Before done: STATUS.md + DECISIONS.tsv updated, lessons saved to memory; report via REPORT.md + `orche report <status> --summary "..."`.
+- Before done: STATUS.md + DECISIONS.tsv updated, lessons saved to memory; report via REPORT.md (`Decisions needed → default applied`) + `orche report <status> --summary "..."`. Nobody reads your pane: never ask the owner there; blocked on the owner → `orche report question`.
 <!-- inject:end -->
 
 ## Integration worktree
@@ -65,8 +65,8 @@ check written twice in briefs belongs in the verify skill.
 
 REPORT.md first line `STATUS: done | release-ready | blocked | failed | stop`; then outcome,
 branch, head SHA, PR, verdict + ledger row, commands actually run, deviations, follow-ups, and the
-`memory-save:` line. Then file it with `orche report <status> --summary "..."` (one pointer to Main;
-add `--urgent` for failure, blocker, security, deploy impact). Never hand-write pointer JSON.
+`memory-save:` line. Then file it with `orche report <status> --summary "..."` (one pointer to the brief's
+sender, usually Main, who is woken by it; `--urgent` matters only for `info`). Never hand-write pointer JSON.
 
 `release-ready` is a claim, not a pointer status: write `STATUS: release-ready` in REPORT.md and your
 final message (the Stop hook checks it against the ledger), then file it with `orche report done`.

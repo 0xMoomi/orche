@@ -427,7 +427,7 @@ class HelpersTest(JevCase):
         self.assertIsNone(jev.classify_pointers([{"unit": "u1"}]))
 
 
-def ptr(unit, status="done", urgent=False):
+def ptr(unit, status="info", urgent=False):
     return (Path(f"/x/{unit}.json"), {"unit": unit, "status": status, "urgent": urgent, "from": "w"})
 
 
@@ -450,9 +450,13 @@ class InboxGateTest(JevCase):
 
     def test_never_removes_urgency(self):
         self.configure()
-        self.scores({0: 0.0, 1: 0.0, 2: 0.89})
+        opener = self.scores({0: 0.89})
+        done = [ptr("d", status="done"), ptr("e", status="failed")]
+        self.assertIs(inbox._jev("hi", done), done)  # completions are never sent to Jev
+        self.assertEqual(opener.requests, [])
         items = [ptr("a"), ptr("b", urgent=True), ptr("c", status="failed")]
         out = inbox._jev("hi", items)
+        self.assertEqual(len(opener.requests), 1)  # only the held note "a" is scored
         self.assertEqual([p["unit"] for _x, p in out], ["b", "c", "a"])
         self.assertTrue(out[0][1]["urgent"])
         self.assertEqual(out[1][1]["status"], "failed")
@@ -686,10 +690,11 @@ class CliTest(JevCase):
 
     def test_enable_disable_and_dry_run(self):
         cfg = self.home / "config.json"
+        before = cfg.read_text()        # the test home's {"inbox": {"wake": false}}
         code, out, _err = self.orche("--dry-run", "jev", "enable")
         self.assertEqual(code, 0)
         self.assertIn("would set jev.enabled=true", out)
-        self.assertFalse(cfg.exists())
+        self.assertEqual(cfg.read_text(), before)
         self.assertEqual(self.orche("jev", "enable")[0], 0)
         self.assertTrue(json.loads(cfg.read_text())["jev"]["enabled"])
         self.orche("jev", "disable", "--dry-run")

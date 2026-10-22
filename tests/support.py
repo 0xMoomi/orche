@@ -1,4 +1,5 @@
 """Shared test helpers: put lib/ on sys.path and isolate ORCHE_HOME per test."""
+import json
 import os
 import sys
 import tempfile
@@ -21,23 +22,33 @@ _jev_setup.OSASCRIPT = "/nonexistent/orche-test/osascript"
 
 _NO_CLAUDE_DIR = None
 NO_CLAUDE = "#!/bin/sh\necho 'tests never run the real claude (support.NO_CLAUDE)' >&2\nexit 1\n"
+NO_ORCA = "#!/bin/sh\necho 'tests never run the real orca (support.NO_ORCA)' >&2\nexit 1\n"
+NO_WAKE = {"inbox": {"wake": False}}     # every test home's config: no test types into a pane
 
 
 def no_claude_dir() -> str:
-    """A directory whose `claude` always fails. It goes first on PATH for the whole test process
-    (below), so code that falls back to the default `claude_bin` (e.g. the intake at the end of
-    `orche init`) can never start the developer's real Claude Code, whatever the test's base
-    class; tests that want a worker set config `claude_bin`."""
+    """A directory whose `claude` and `orca` always fail. It goes first on PATH for the whole test
+    process (below), so code that falls back to the default `claude_bin` (e.g. the intake at the end
+    of `orche init`) or `orca_bin` (a nudger) can never start the developer's real Claude Code or
+    reach the live Orca, whatever the test's base class; tests that want a worker set config
+    `claude_bin`, tests that want Orca use ORCHE_FAKE_ORCA=1."""
     global _NO_CLAUDE_DIR
     if _NO_CLAUDE_DIR is None:
         import atexit
         import shutil
         _NO_CLAUDE_DIR = tempfile.mkdtemp(prefix="orche-no-claude-")
         atexit.register(shutil.rmtree, _NO_CLAUDE_DIR, True)
-        stub = Path(_NO_CLAUDE_DIR) / "claude"
-        stub.write_text(NO_CLAUDE)
-        stub.chmod(0o755)
+        for name, text in (("claude", NO_CLAUDE), ("orca", NO_ORCA)):
+            stub = Path(_NO_CLAUDE_DIR) / name
+            stub.write_text(text)
+            stub.chmod(0o755)
     return _NO_CLAUDE_DIR
+
+
+def no_wake(cfg: dict) -> dict:
+    """`cfg` with `inbox.wake` false unless it sets `inbox.wake` itself (test config writers)."""
+    inbox = cfg.get("inbox") if isinstance(cfg.get("inbox"), dict) else {}
+    return {**cfg, "inbox": {**NO_WAKE["inbox"], **inbox}}
 
 
 os.environ["PATH"] = no_claude_dir() + os.pathsep + os.environ.get("PATH", "")
@@ -45,13 +56,16 @@ os.environ["PATH"] = no_claude_dir() + os.pathsep + os.environ.get("PATH", "")
 
 class TempHomeCase(unittest.TestCase):
     """Runs each test with ORCHE_HOME pointing at a fresh temporary directory (and PATH restored
-    afterwards, the failing `claude` of no_claude_dir still first)."""
+    afterwards, the failing `claude` and `orca` of no_claude_dir still first). The home's config
+    turns the wake off; a test that turns it on sets `self.wakes = True` (and waits for its
+    nudger's events line), else tearDown fails it when `logs/nudge.log` exists."""
 
     def setUp(self):
         super().setUp()
         self._saved_path = os.environ.get("PATH", "")
         self._tmp = tempfile.TemporaryDirectory()
         self.home = Path(self._tmp.name)
+        (self.home / "config.json").write_text(json.dumps(NO_WAKE))
         # An ORCHE pane exports ORCHE_SESSION / ORCA_TERMINAL_HANDLE (and maybe more): every test
         # starts without any ORCHE_* / ORCA_* variable, and the caller's values come back after.
         self._saved_env = {k: v for k, v in os.environ.items() if k.startswith(("ORCHE_", "ORCA_"))}
@@ -69,6 +83,7 @@ class TempHomeCase(unittest.TestCase):
 
     def tearDown(self):
         from orche import jev_setup, jevkey
+        woke = (self.home / "logs" / "nudge.log").exists() and not getattr(self, "wakes", False)
         jevkey.PLATFORM, jevkey.SECURITY, jev_setup.OSASCRIPT = self._jev_seams
         for key in [k for k in os.environ if k.startswith(("ORCHE_", "ORCA_"))]:
             del os.environ[key]
@@ -76,6 +91,9 @@ class TempHomeCase(unittest.TestCase):
         os.environ["PATH"] = self._saved_path
         self._tmp.cleanup()
         super().tearDown()
+        if woke:
+            self.fail("a nudger was started (logs/nudge.log): keep the test home's inbox.wake false "
+                      "(support.no_wake) or set self.wakes = True and wait for its events line")
 
 
 ABSOLUTE_PYTHONS = "/opt/homebrew/bin/python3 /usr/local/bin/python3"

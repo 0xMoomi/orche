@@ -393,6 +393,16 @@ class WriteReadTest(StoreCase):
         self.assertEqual(brief.Brief("u", "acme", self.repo, 1, {"TIER": "epic"}, "").tier, "standard")
         self.assertNotIn("text", repr(brief.Brief("u", "acme", self.repo, 1, {}, "secret")))
 
+    def test_sender(self):
+        b = self.write({}, frm="div-acme-build")
+        self.assertEqual((b.sender, brief.find(self.reg, b.unit).sender), ("div-acme-build", "div-acme-build"))
+        a = brief.write(Block("amend", {}, b.unit, 2), self.member("div-acme-build"), "main-acme", STANDING,
+                        prior=b, timeout=0)
+        self.assertEqual(brief.find(self.reg, b.unit).sender, "main-acme")      # the current revision's
+        b.path.write_text("rev: 1\n\n## Brief x\nTO div-acme-build\n")          # hand-written: no header
+        self.assertEqual((brief.find(self.reg, b.unit).sender, a.sender), ("", "main-acme"))
+        self.assertEqual(brief.Brief("u", "acme", self.repo, 0, {}, "").sender, "")
+
 
 class HeaderTest(StoreCase):
     def setUp(self):

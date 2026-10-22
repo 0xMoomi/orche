@@ -8,7 +8,7 @@ import shlex
 import shutil
 import sys
 
-from .. import config, headless, jev_setup, orca, paths, procs, registry, runs, shell
+from .. import __version__, config, headless, jev_setup, orca, paths, procs, registry, runs, shell
 from . import careful, settings, statusline
 
 TOOLS = ("gcloud", "gh", "vercel", "age", "zstd")
@@ -152,6 +152,13 @@ def process_checks(reg) -> list:
     return rows
 
 
+def upgrade_checks(reg) -> list:
+    """One WARN row per project whose `orche_version` is missing or older than this ORCHE."""
+    projects = reg.get("projects", {})
+    return [("WARN", "upgrade", registry.upgrade_text(key, up)) for key in sorted(projects)
+            for up in [registry.upgrade(projects[key], __version__)] if up]
+
+
 def checks(ctx) -> list:
     out = []
 
@@ -184,6 +191,8 @@ def checks(ctx) -> list:
         for row in runner_lock_checks(reg, ctx.dry_run):
             add(*row)
         for row in process_checks(reg):
+            add(*row)
+        for row in upgrade_checks(reg):
             add(*row)
     except registry.RegistryError as exc:
         add("FAIL", "registry", str(exc).splitlines()[0] if str(exc) else "invalid")

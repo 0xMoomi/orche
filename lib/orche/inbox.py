@@ -1,16 +1,23 @@
-"""Inbox pointers: ORCHE_HOME/inbox/<session>/<ISO-ts>-<unit>.json (write, list, drain)."""
+"""Inbox pointers: ORCHE_HOME/inbox/<session>/<ISO-ts>-<unit>.json (write, post, list, drain)."""
 import datetime as _dt
 import json
 import os
 import re
+import sys
 import time
 from pathlib import Path
 
-from . import config, log, orca, paths, units, util
+from . import config, log, orca, paths, procs, units, util
 
 STATUSES = ("done", "failed", "blocked", "question", "info", "external-request", "stop")
-URGENT_STATUSES = ("failed", "blocked", "question", "stop", "external-request")
 DRAINED = ".drained"
+NUDGED = ".nudged"
+NUDGED_TTL = _dt.timedelta(minutes=10)
+WAKE_TEXT = "[orche] inbox: new reports"
+REPORT_LINE = ("[orche] Act on the inbox above now: read each report named (Read tool), then end this turn with "
+               "your report to the user in this pane — outcome · what landed · what failed · decisions needed "
+               "(recommendation + default) · next step — followed by the next dispatch block or the question the "
+               "user must answer. Never only acknowledge.")
 _SAFE = re.compile(r"^[A-Za-z0-9._-]+$")
 DRAIN_RE = re.compile(r"^\s*(\[drain\]|/drain)", re.IGNORECASE)
 NUDGE_RE = re.compile(r"^\s*\[orche\] inbox:")
@@ -53,6 +60,53 @@ def write(ptr: dict) -> Path:
     return target
 
 
+def post(ptr: dict) -> Path:
+    """write(ptr), then wake its recipient when the pointer wakes (R-INBOX-4). Raises only what
+    write raises; the wake never does."""
+    target = write(ptr)
+    if wakes(ptr):
+        wake(ptr["to"])
+    return target
+
+
+def nudged(session: str) -> bool:
+    """`inbox/<session>/.nudged` is younger than NUDGED_TTL: a wake is in flight or just typed."""
+    try:
+        age = time.time() - (box(session) / NUDGED).stat().st_mtime
+    except OSError:
+        return False
+    return age < NUDGED_TTL.total_seconds()
+
+
+def wake(session: str) -> None:
+    """Start `orche nudge <session>` detached (logs/nudge.log) unless config `inbox.wake` is off or
+    the session was nudged within NUDGED_TTL. Never raises (a failure goes to hooks.log)."""
+    try:
+        if not config.load()["inbox"].get("wake", True) or nudged(session):
+            return
+        procs.spawn_detached([sys.executable, str(paths.PLUGIN_ROOT / "bin" / "orche.py"), "nudge", "--", session],
+                             paths.orche_home() / "logs" / "nudge.log")
+    except Exception as exc:  # noqa: BLE001 - a wake is best-effort; the pointer is on disk
+        log.log("hooks", f"inbox: wake {session!r}: {type(exc).__name__}: {exc}")
+
+
+def unmark(session: str) -> None:
+    """Remove `inbox/<session>/.nudged` (a prompt arrived). Never raises."""
+    try:
+        (box(session) / NUDGED).unlink(missing_ok=True)
+    except (OSError, ValueError):
+        pass
+
+
+def rearm(session: str) -> None:
+    """wake(session) when a waking pointer is pending (a turn ended, a prompt was routed). Never raises."""
+    try:
+        if any(wakes(p) for _x, p in pending(session)):
+            wake(session)
+    except Exception as exc:  # noqa: BLE001
+        log.log("hooks", f"inbox: rearm {session!r}: {type(exc).__name__}: {exc}")
+
+
 def clip(summary: str) -> str:
     """A pointer summary: at most MAX_LINES lines, the last one TRUNCATED when cut."""
     lines = summary.strip().splitlines()
@@ -92,8 +146,15 @@ def pending(session: str) -> list:
     return out
 
 
-def is_urgent(ptr: dict) -> bool:
-    return bool(ptr.get("urgent")) or ptr.get("status") in URGENT_STATUSES
+def held(ptr: dict) -> bool:
+    """A note that waits for a drain trigger: a non-urgent `info` that is not a dispatch or a runner filing."""
+    return ptr.get("status") == "info" and not ptr.get("urgent") and ptr.get("via") not in ("dispatch", "runner")
+
+
+def wakes(ptr: dict) -> bool:
+    """Posting it wakes the recipient's pane (a dispatch is delivered by its own path; a `quiet` pointer,
+    such as a parked dispatch refusal, waits for the next prompt but is still injected there)."""
+    return not held(ptr) and ptr.get("via") != "dispatch" and not ptr.get("quiet")
 
 
 def pointer_time(path: Path, ptr: dict):
@@ -104,6 +165,38 @@ def pointer_time(path: Path, ptr: dict):
         return _dt.datetime.fromtimestamp(path.stat().st_mtime, _dt.timezone.utc)
     except OSError:
         return None
+
+
+LATE = _dt.timedelta(minutes=10)
+
+
+def overdue(r, key, now=None) -> tuple:
+    """(undelivered, unread) for project `key` (`orche status`, design §4.8), from the pending
+    pointers aged >= LATE in its members' inboxes. undelivered: `via: dispatch`, the newest per unit,
+    `[{unit, to, rev, minutes}]`; unread: waking pointers per session, `[{session, count, minutes}]`
+    (minutes of the oldest)."""
+    now = now or units.now()
+    undelivered, unread = {}, []
+    for session in r.sessions():
+        m = r.member(session)
+        if m is None or m.project != key:
+            continue
+        try:
+            items = pending(session)
+        except ValueError:
+            continue
+        late = [(t, p) for t, p in ((pointer_time(path, p), p) for path, p in items)
+                if t is not None and now - t >= LATE]
+        for t, p in late:
+            unit = str(p.get("unit") or "?")
+            if p.get("via") == "dispatch" and (unit not in undelivered or t >= undelivered[unit][0]):
+                undelivered[unit] = (t, {"unit": unit, "to": session, "rev": p.get("brief_rev"),
+                                         "minutes": int((now - t).total_seconds() // 60)})
+        waking = [t for t, p in late if wakes(p)]
+        if waking:
+            unread.append({"session": session, "count": len(waking),
+                           "minutes": int((now - min(waking)).total_seconds() // 60)})
+    return [row for _t, row in (undelivered[u] for u in sorted(undelivered))], unread
 
 
 def drain(paths_: list) -> None:
@@ -177,25 +270,27 @@ def _stalled(r, items, terms):
 
 
 def _jev(prompt, items, deadline=None):
-    """Jev drain-urgency gate (SPEC §7.2 ①): may ADD urgency (wake_now >= ACT), never remove it.
+    """Jev drain-urgency gate (SPEC §7.2 ①): may promote a held note (wake_now >= ACT), never demote.
 
-    Urgent pointers are ordered first; nothing is dropped. Disabled, unconfigured, failing or
-    out of budget -> `items` unchanged. `prompt` is reserved for placements ②③ (not wired yet).
+    Only held notes are scored; no call when none is held. Not-held pointers are ordered first;
+    nothing is dropped and no input is mutated. Disabled, unconfigured, failing or out of budget
+    -> `items` unchanged. `prompt` is reserved for placements ②③ (not wired yet).
     """
-    if not items or not config.load().get("jev", {}).get("enabled"):
+    notes = [it for it in items if held(it[1])]
+    if not notes or not config.load().get("jev", {}).get("enabled"):
         return items
     try:
         from . import jev
-        scores = jev.classify_pointers(items, deadline=deadline)
+        scores = jev.classify_pointers(notes, deadline=deadline)
         if not scores:
             return items
         out = []
         for path, ptr in items:
             p = (scores.get(str(ptr.get("unit"))) or {}).get("wake_now")
-            if not is_urgent(ptr) and isinstance(p, (int, float)) and p >= jev.ACT:
+            if held(ptr) and isinstance(p, (int, float)) and p >= jev.ACT:
                 ptr = {**ptr, "urgent": True}
             out.append((path, ptr))
-        return [it for it in out if is_urgent(it[1])] + [it for it in out if not is_urgent(it[1])]
+        return [it for it in out if not held(it[1])] + [it for it in out if held(it[1])]
     except Exception as exc:  # noqa: BLE001 - Jev is optional and fail-open
         log.log("hooks", f"jev skipped: {exc}")
         return items
@@ -223,6 +318,15 @@ def handle_prompt(payload, started, r, who) -> str:
     me = who.session
     if me is None:
         return ""
+    try:
+        return _prompt_text(payload, started, r, who, me)
+    finally:
+        # After the drain, never before: a nudger waiting on the lock must not see "no marker" while
+        # the reports this prompt injects are still pending (a second wake into an empty inbox).
+        unmark(me)
+
+
+def _prompt_text(payload, started, r, who, me) -> str:
     terms = orca.Terminals(orca.hook_deadline(started))
     units.touch_activity(me)
     _reconcile(r, who, terms)
@@ -233,11 +337,13 @@ def handle_prompt(payload, started, r, who) -> str:
         times = [t for t in (pointer_time(p, x) for p, x in items) if t is not None]
         drain_all = (DRAIN_RE.match(prompt) or NUDGE_RE.match(prompt) or STATUS_RE.search(prompt)
                      or len(items) >= DRAIN_COUNT or (times and units.now() - min(times) > DRAIN_AGE))
-        inject = items if drain_all else [it for it in items if is_urgent(it[1])]
+        inject = [it for it in items if drain_all or not held(it[1])]
         if inject:
             out.append(render(inject, _stalled(r, inject, terms)))
             drain([p for p, _x in inject])
-        held = len(items) - len(inject)
-        if held:
-            out.append(f"[orche] inbox: {held} pending (not urgent) — say [drain] to read")
+        waiting = len(items) - len(inject)
+        if waiting:
+            out.append(f"[orche] inbox: {waiting} note(s) held — FYI from ORCHE, no action needed; [drain] shows them")
+        if inject and who.member is not None and who.member.kind == "main":
+            out.append(REPORT_LINE)  # ORCHE's own order, last in every block Main gets (§14.2)
     return "\n\n".join(out)

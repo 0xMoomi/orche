@@ -37,6 +37,8 @@ FEATURE_STATUSES = ("active", "paused", "retired", "onboarding")
 EVENT_TYPES = ("create", "sleep", "wake", "retire", "freeze", "unfreeze", "stage")
 
 PROJECT_STR_KEYS = ("repo_id", "path", "main_session", "card", "standing")
+# Optional `orche_version`: the ORCHE version whose templates last rendered the project's files (orche init).
+ORCHE_VERSION = re.compile(r"^\d+\.\d+\.\d+$")
 DIVISION_STR_KEYS = ("worktree", "branch", "session", "model", "last_activity")
 FEATURE_STR_KEYS = ("name", "worktree", "branch", "session", "created", "last_activity", "reason")
 EVENT_STR_KEYS = ("at", "project", "unit", "by")
@@ -171,6 +173,18 @@ def divisions_of(proj: dict) -> list:
     return [d for d in DIVISIONS if d in divisions] + list(proj.get("custom_divisions") or {})
 
 
+def upgrade(proj: dict, current: str):
+    """{"rendered_by", "now"} when the project's `orche_version` is missing (rendered_by None) or is not
+    `current`; else None."""
+    rendered_by = proj.get("orche_version")
+    return None if rendered_by == current else {"rendered_by": rendered_by, "now": current}
+
+
+def upgrade_text(key: str, up: dict) -> str:
+    """`<key> rendered by <version | an earlier version>, now <version> — run orche init <key>`."""
+    return f"{key} rendered by {up['rendered_by'] or 'an earlier version'}, now {up['now']} — run orche init {key}"
+
+
 def _validate_division(name, div, where, errors, customs=()):
     if name not in DIVISIONS and name not in customs:
         errors.append(f"{where}: unknown division {name!r} (allowed: {'|'.join(DIVISIONS)} "
@@ -233,6 +247,9 @@ def _validate_project(key, proj, errors):
         errors.append(f"{where}.aliases: must be a list of strings")
     if "secrets" in proj:
         _validate_secrets(proj["secrets"], f"{where}.secrets", errors)
+    if "orche_version" in proj and not (isinstance(proj["orche_version"], str)
+                                        and ORCHE_VERSION.fullmatch(proj["orche_version"])):
+        errors.append(f"{where}.orche_version: must be a version like 0.6.0")
     customs = proj.get("custom_divisions", {})
     if not isinstance(customs, dict):
         errors.append(f"{where}.custom_divisions: must be an object")
