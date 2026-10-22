@@ -75,6 +75,10 @@ _Avoid_: unit for a division or feature agent (say member); the old `units.Unit`
 One `claude -p` process that ORCHE starts, feeds, waits for and cleans up (`lib/orche/headless.py`): a unit worker, an intake sweep, a Liaison answer or card refresh, or a triage classification.
 _Avoid_: worker (say unit worker), runner (that is `orche run`).
 
+**Headless token**:
+The Claude OAuth token (`claude setup-token`) that `orche auth set` stores and every headless call gets as `CLAUDE_CODE_OAUTH_TOKEN`; panes keep the interactive login.
+_Avoid_: API key (it is a subscription token), Jev key (stored separately).
+
 **Unit worker**:
 The headless call that carries out one unit in its target's worktree. `orche run` (the runner) starts it and files its result.
 _Avoid_: runner, headless worker.

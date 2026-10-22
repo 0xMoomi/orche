@@ -206,7 +206,7 @@ export PATH="$HOME/orche/bin:$PATH"
 orche version
 ```
 
-Success: `orche 0.6.0` (or the version you cloned).
+Success: `orche 0.6.1` (or the version you cloned).
 
 To make it permanent, add the same line to your login profile. ORCHE's panes and `orche doctor` use a
 login shell (`$SHELL -lc`), and a zsh login shell does not read `~/.zshrc`, so use:
@@ -727,6 +727,44 @@ deletes it.
 
 Non-interactive installs: `orche install --no-jev` never asks; `orche install --jev-key-stdin
 --jev-kind gateway` reads the key from stdin.
+
+</details>
+
+<details>
+<summary><b>Headless auth (optional)</b></summary>
+
+## Headless auth (optional)
+
+Every unit worker, intake sweep, Liaison answer and triage call is a headless `claude -p` run. By
+default those runs use the same Claude login as your panes. Give them their own long-lived token and
+they stop depending on that login: a pane that logs out or switches accounts no longer breaks them.
+Usage limits are per account, so a token from the same account still shares the panes' limits; separate
+limits need a token made on another account.
+
+### Step 1. Make a token
+
+In any terminal, run `claude setup-token` and sign in. It prints a token that lasts one year. It needs
+a Pro or Max plan.
+
+### Step 2. Store it
+
+Run `orche auth set` and paste the token at the hidden prompt (nothing is shown while you paste). From
+a script, pipe it on stdin instead. The token is never taken from the command line, and ORCHE never
+prints or logs it.
+
+### Step 3. Check it
+
+`orche auth status` (or `orche doctor`, row `oauth token`) says where the token comes from: `env`,
+`keychain`, `file` or not set. It never shows the value.
+
+What changes:
+
+- Only headless runs get the token (as `CLAUDE_CODE_OAUTH_TOKEN`). Panes keep the interactive login.
+- A `CLAUDE_CODE_OAUTH_TOKEN` already in ORCHE's environment wins; the stored token is not read then.
+- Storage: on macOS the login keychain (service `orche`, account `CLAUDE_CODE_OAUTH_TOKEN`), elsewhere
+  `~/.claude/orche/secrets/oauth.token`, mode 0600. The Jev key is stored separately.
+- Without a token nothing changes: headless runs use the login, as before.
+- `orche auth rm` deletes the stored token. When it expires, run Step 1 and Step 2 again.
 
 </details>
 

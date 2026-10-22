@@ -8,7 +8,7 @@ import shlex
 import shutil
 import sys
 
-from .. import __version__, config, headless, jev_setup, orca, paths, procs, registry, runs, shell
+from .. import __version__, config, headless, jev_setup, oauth, orca, paths, procs, registry, runs, shell
 from . import careful, settings, statusline
 
 TOOLS = ("gcloud", "gh", "vercel", "age", "zstd")
@@ -181,6 +181,7 @@ def checks(ctx) -> list:
         found = shutil.which(tool)
         add("OK" if found else "WARN", f"tool {tool}", found or "not found on PATH")
     add(*jev_setup.doctor_row())
+    add(*oauth.doctor_row())
     level, detail = _orche_home()
     add(level, "orche_home", detail)
     for row in disk_checks():

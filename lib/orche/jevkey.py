@@ -8,18 +8,23 @@ Storage (`set_key` / `remove` / `stored`):
   not even read to report where it is.
 - elsewhere: `ORCHE_HOME/secrets/jev.key`, mode 0600.
 
+The same store keeps the Claude OAuth token from `claude setup-token` (`orche auth`): account
+`CLAUDE_CODE_OAUTH_TOKEN`, file `ORCHE_HOME/secrets/oauth.token`; pass `account=OAUTH_ACCOUNT`.
+
 Every message that can carry text from `security` passes `scrub` (the key replaced, then
 `mask.redact`). Nothing here prints; callers decide what to show.
 """
 import os
 import sys
 
-from . import shell, util
+from . import paths, shell, util
 from .secrets import store
 from .secrets.backends_keychain import _quote
 
 SERVICE = "orche"
 ACCOUNT = "JEV_API_KEY"
+OAUTH_ACCOUNT = "CLAUDE_CODE_OAUTH_TOKEN"
+FILES = {ACCOUNT: "jev.key", OAUTH_ACCOUNT: "oauth.token"}
 NOT_FOUND = 44  # `security` exit status for "item could not be found"
 # Seams for tests: the `security` executable (resolved on PATH) and the platform.
 SECURITY = "security"
@@ -34,16 +39,24 @@ def backend() -> str:
     return "keychain" if PLATFORM == "darwin" else "file"
 
 
-def key_file():
-    return store.secrets_dir() / "jev.key"
+def key_file(account=ACCOUNT):
+    return store.secrets_dir() / FILES[account]
+
+
+def _stored_file(account):
+    """The key file's path without creating the secrets dir (reads run in every headless env())."""
+    return paths.orche_home() / "secrets" / FILES[account]
 
 
 def scrub(text, key=None) -> str:
     return store.scrub(text, key)
 
 
+SECURITY_TIMEOUT = 15   # seconds; a test patches it
+
+
 def _security(args, stdin=None):
-    return shell.run([SECURITY, *args], input=stdin, timeout=15)
+    return shell.run([SECURITY, *args], input=stdin, timeout=SECURITY_TIMEOUT)
 
 
 def _failure(what, result, key=None) -> KeyStoreError:
@@ -65,11 +78,11 @@ def check(key) -> str:
     return key
 
 
-def set_key(key) -> str:
+def set_key(key, account=ACCOUNT) -> str:
     """Store the key; returns the backend name."""
     key = check(key)
     if backend() == "keychain":
-        cmd = f"add-generic-password -U -s {_quote(SERVICE)} -a {_quote(ACCOUNT)} -w {_quote(key)}\n"
+        cmd = f"add-generic-password -U -s {_quote(SERVICE)} -a {_quote(account)} -w {_quote(key)}\n"
         try:
             result = _security(["-i"], stdin=cmd)
         except OSError as exc:
@@ -78,35 +91,45 @@ def set_key(key) -> str:
             raise _failure("write", result, key)
         return "keychain"
     try:
-        util.atomic_write(key_file(), key + "\n", mode=0o600)
+        util.atomic_write(key_file(account), key + "\n", mode=0o600)
     except OSError as exc:
-        raise KeyStoreError(f"cannot write {key_file().name}: {exc.strerror or exc}") from None
+        raise KeyStoreError(f"cannot write {key_file(account).name}: {exc.strerror or exc}") from None
     return "file"
 
 
-def get():
-    """The stored key, or None when nothing is stored or the store cannot be read."""
+def read(account=ACCOUNT):
+    """(value or None, error or None). The error is None when nothing is stored (`security` exit 44,
+    no file); otherwise it names the failure ("exit N", "keychain unavailable", ...) and never
+    carries the value or `security`'s output."""
     if backend() == "keychain":
         try:
-            result = _security(["find-generic-password", "-s", SERVICE, "-a", ACCOUNT, "-w"])
-        except OSError:
-            return None
+            result = _security(["find-generic-password", "-s", SERVICE, "-a", account, "-w"])
+        except OSError as exc:
+            return None, f"keychain unavailable: {scrub(exc.strerror or exc)}"
+        if result.code == NOT_FOUND:
+            return None, None
         if not result.ok:
-            return None
-        key = result.out.strip()
-        return key or None
+            return None, f"exit {result.code}"
+        return result.out.strip() or None, None
     try:
-        key = key_file().read_text(encoding="utf-8").strip()
-    except OSError:
-        return None
-    return key or None
+        key = _stored_file(account).read_text(encoding="utf-8").strip()
+    except FileNotFoundError:
+        return None, None
+    except OSError as exc:
+        return None, f"cannot read {FILES[account]}: {exc.strerror or exc}"
+    return key or None, None
 
 
-def stored():
+def get(account=ACCOUNT):
+    """The stored key, or None when nothing is stored or the store cannot be read."""
+    return read(account)[0]
+
+
+def stored(account=ACCOUNT):
     """(present, error): whether a key is stored, without reading the value from the keychain."""
     if backend() == "keychain":
         try:
-            result = _security(["find-generic-password", "-s", SERVICE, "-a", ACCOUNT])
+            result = _security(["find-generic-password", "-s", SERVICE, "-a", account])
         except OSError as exc:
             return False, f"keychain unavailable: {scrub(exc.strerror or exc)}"
         if result.ok:
@@ -114,15 +137,15 @@ def stored():
         if result.code == NOT_FOUND:
             return False, None
         return False, str(_failure("lookup", result))
-    path = key_file()
+    path = _stored_file(account)
     return path.is_file() and path.stat().st_size > 0, None
 
 
-def remove() -> bool:
+def remove(account=ACCOUNT) -> bool:
     """Delete the stored key; True when one was there."""
     if backend() == "keychain":
         try:
-            result = _security(["delete-generic-password", "-s", SERVICE, "-a", ACCOUNT])
+            result = _security(["delete-generic-password", "-s", SERVICE, "-a", account])
         except OSError as exc:
             raise KeyStoreError(f"keychain unavailable: {scrub(exc.strerror or exc)}") from None
         if result.ok:
@@ -131,12 +154,12 @@ def remove() -> bool:
             return False
         raise _failure("delete", result)
     try:
-        key_file().unlink()
+        key_file(account).unlink()
         return True
     except FileNotFoundError:
         return False
     except OSError as exc:
-        raise KeyStoreError(f"cannot remove {key_file().name}: {exc.strerror or exc}") from None
+        raise KeyStoreError(f"cannot remove {key_file(account).name}: {exc.strerror or exc}") from None
 
 
 def resolve(env_name=ACCOUNT):

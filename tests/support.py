@@ -24,21 +24,29 @@ _NO_CLAUDE_DIR = None
 NO_CLAUDE = "#!/bin/sh\necho 'tests never run the real claude (support.NO_CLAUDE)' >&2\nexit 1\n"
 NO_ORCA = "#!/bin/sh\necho 'tests never run the real orca (support.NO_ORCA)' >&2\nexit 1\n"
 NO_WAKE = {"inbox": {"wake": False}}     # every test home's config: no test types into a pane
+# An empty keychain for child processes (`bin/orche.py run|intake|card` read the stored OAuth token
+# through `security` on macOS); each call is recorded, argv only, in $ORCHE_HOME/security-calls.log.
+NO_SECURITY = ("#!/bin/sh\n"
+               "[ -n \"$ORCHE_HOME\" ] && printf '%s\\n' \"$*\" >> \"$ORCHE_HOME/security-calls.log\" 2>/dev/null\n"
+               "echo 'security: The specified item could not be found in the keychain.' >&2\n"
+               "exit 44\n")
+SECURITY_CALLS = "security-calls.log"
 
 
 def no_claude_dir() -> str:
-    """A directory whose `claude` and `orca` always fail. It goes first on PATH for the whole test
-    process (below), so code that falls back to the default `claude_bin` (e.g. the intake at the end
-    of `orche init`) or `orca_bin` (a nudger) can never start the developer's real Claude Code or
-    reach the live Orca, whatever the test's base class; tests that want a worker set config
-    `claude_bin`, tests that want Orca use ORCHE_FAKE_ORCA=1."""
+    """A directory whose `claude`, `orca` and `security` always fail. It goes first on PATH for the
+    whole test process (below), so code that falls back to the default `claude_bin` (e.g. the intake
+    at the end of `orche init`) or `orca_bin` (a nudger) can never start the developer's real Claude
+    Code or reach the live Orca, and no child process reads the real keychain (it sees an empty one),
+    whatever the test's base class; tests that want a worker set config `claude_bin`, tests that
+    want Orca use ORCHE_FAKE_ORCA=1, keychain tests put their own fake `security` before it."""
     global _NO_CLAUDE_DIR
     if _NO_CLAUDE_DIR is None:
         import atexit
         import shutil
         _NO_CLAUDE_DIR = tempfile.mkdtemp(prefix="orche-no-claude-")
         atexit.register(shutil.rmtree, _NO_CLAUDE_DIR, True)
-        for name, text in (("claude", NO_CLAUDE), ("orca", NO_ORCA)):
+        for name, text in (("claude", NO_CLAUDE), ("orca", NO_ORCA), ("security", NO_SECURITY)):
             stub = Path(_NO_CLAUDE_DIR) / name
             stub.write_text(text)
             stub.chmod(0o755)
@@ -51,6 +59,7 @@ def no_wake(cfg: dict) -> dict:
     return {**cfg, "inbox": {**NO_WAKE["inbox"], **inbox}}
 
 
+SCRUBBED_ENV = ("ORCHE_", "ORCA_", "CLAUDE_CODE_OAUTH_TOKEN", "CLAUDE_CONFIG_DIR")
 os.environ["PATH"] = no_claude_dir() + os.pathsep + os.environ.get("PATH", "")
 
 
@@ -67,11 +76,14 @@ class TempHomeCase(unittest.TestCase):
         self.home = Path(self._tmp.name)
         (self.home / "config.json").write_text(json.dumps(NO_WAKE))
         # An ORCHE pane exports ORCHE_SESSION / ORCA_TERMINAL_HANDLE (and maybe more): every test
-        # starts without any ORCHE_* / ORCA_* variable, and the caller's values come back after.
-        self._saved_env = {k: v for k, v in os.environ.items() if k.startswith(("ORCHE_", "ORCA_"))}
+        # starts without any ORCHE_* / ORCA_* variable (nor a Claude OAuth token, which headless
+        # runs and doctor would pick up), and the caller's values come back after.
+        self._saved_env = {k: v for k, v in os.environ.items() if k.startswith(SCRUBBED_ENV)}
         for key in self._saved_env:
             del os.environ[key]
         os.environ["ORCHE_HOME"] = str(self.home)
+        # Claude Code's transcripts (wake resolves a session id there) live in the temp home too.
+        os.environ["CLAUDE_CONFIG_DIR"] = str(self.home / "claude")
         # The Jev key store must never reach the developer's real keychain nor pop a real dialog:
         # every test starts on the file backend (under this temp ORCHE_HOME) with no `security`
         # or `osascript`; keychain/dialog tests put fakes on PATH and switch these seams back.
@@ -85,7 +97,7 @@ class TempHomeCase(unittest.TestCase):
         from orche import jev_setup, jevkey
         woke = (self.home / "logs" / "nudge.log").exists() and not getattr(self, "wakes", False)
         jevkey.PLATFORM, jevkey.SECURITY, jev_setup.OSASCRIPT = self._jev_seams
-        for key in [k for k in os.environ if k.startswith(("ORCHE_", "ORCA_"))]:
+        for key in [k for k in os.environ if k.startswith(SCRUBBED_ENV)]:
             del os.environ[key]
         os.environ.update(self._saved_env)
         os.environ["PATH"] = self._saved_path

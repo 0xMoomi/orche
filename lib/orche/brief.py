@@ -87,62 +87,130 @@ def _is_comment(line):
     return line.lstrip().startswith("#")
 
 
-def _codec(lines, supersedes=False):
-    """The §5.3 line rules over `lines` (the verb line excluded for AMEND/STOP).
-    Returns (every key name in text order, {known KEY: value} with the last value winning, the last
-    SUPERSEDES text; "" unless `supersedes`)."""
-    names, fields, note, cur = [], {}, "", None
-    for raw in lines:
-        if not raw.strip():
+_NOTE = "\0note"                 # _codec's cursor while plain text feeds the AMEND note / STOP reason
+_DUP = "Write each key once; continue a value on the lines below it."
+_FIX = "start each field with its exact KEY"
+
+
+def _quote(text):
+    """`text` as one quoted line of at most 60 chars, for refusals."""
+    return '"%s"' % " ".join(str(text).split())[:60]
+
+
+def _keylike(token):
+    return token.upper() in KEYS or (len(token) > 1 and token.isupper() and token.replace("_", "").isalpha())
+
+
+def _merged(n, text, key, kind):
+    """G2: refuse a plain line that shows two blocks run together or a pasted code sample: a code
+    fence anywhere, a valid STOP/AMEND verb line inside a brief or AMEND body, or a KEY line other
+    than TO inside a STOP."""
+    at = f"line {n} {_quote(text)}"
+    if text.startswith(("```", "~~~")):
+        raise Refusal(f"{REFUSE}{at} is a code fence inside a dispatch block; "
+                      "code samples go indented by two spaces.")
+    if kind != "stop":
+        m = _STOP.fullmatch(text) or _AMEND.fullmatch(text)
+        if m and unit_id_error(m.group(1)) is None:
+            raise Refusal(f"{REFUSE}{at} starts another block; put it in its own dispatch block.")
+    elif key in KEYS and key != "TO":
+        raise Refusal(f"{REFUSE}{at} is a {key} line inside a STOP; a STOP takes only TO and the reason.")
+
+
+def _codec(lines, kind="brief", skip=None):
+    """The §5.3 line rules over `lines` after index `skip` (the AMEND/STOP verb line; None: all).
+    A plain line whose first token is a key the kind allows (STOP: TO only) opens that field; any other
+    plain line, and every line indented by two spaces (G1: even one starting with "#"), continues the
+    current field. Before any key, AMEND text feeds the note, and a SUPERSEDES line restarts the note;
+    every other plain line of a STOP is reason. Raises Refusal for the merged-block lines of
+    _merged. Returns (names [(KEY, line no, text)] in text order,
+    {KEY: value} with the last value winning, the note / reason lines joined by "\n", absorbed
+    [(line no, text, KEY)] for plain lines that continued a field, and the first plain line of a brief
+    before any key as (line no, text) or None)."""
+    allowed = ("TO",) if kind == "stop" else KEYS
+    names, fields, notes, absorbed, stray = [], {}, [], [], None
+    cur = None if kind == "brief" else _NOTE
+
+    def extend(piece):
+        if cur == _NOTE:
+            notes.append(piece)
+        elif cur is not None:
+            fields[cur] = f"{fields[cur]}\n{piece}" if fields[cur] else piece
+
+    for n, raw in enumerate(lines, 1):
+        if (skip is not None and n - 1 <= skip) or not raw.strip():   # up to the verb: blanks, comments
             continue
         if raw.startswith("  "):
-            if cur is not None:     # G1: content even when it starts with "#"
-                piece = raw[2:].rstrip()
-                fields[cur] = f"{fields[cur]}\n{piece}" if fields[cur] else piece
+            extend(raw[2:].rstrip())
             continue
         if _is_comment(raw):
             continue
-        if supersedes:
-            m = _SUPERSEDES.match(raw)
-            if m:
-                note = m.group(1).strip()
-                continue
-        key, _, value = raw.strip().partition(" ")
-        names.append(key)
-        cur = key if key in KEYS else None
-        if cur:
-            fields[key] = value.strip()
-    return names, fields, note
+        text = raw.strip()
+        key, _, value = text.partition(" ")
+        _merged(n, text, key, kind)
+        m = _SUPERSEDES.match(text) if kind == "amend" else None
+        if m:
+            notes[:], cur = [m.group(1).strip()], _NOTE
+        elif key in allowed:
+            names.append((key, n, text))
+            cur, fields[key] = key, value.strip()
+        elif kind == "stop":
+            cur = _NOTE
+            notes.append(text)
+        elif cur is None:
+            stray = stray or (n, text)
+        else:
+            if cur != _NOTE:
+                absorbed.append((n, text, cur))
+            extend(text)
+    return names, fields, "\n".join(notes), absorbed, stray
 
 
 def parse(body: str) -> Block:
     """One block body -> a valid Block (§5.3). Raises Refusal (§5.4); the first fault wins:
-    empty, verb syntax, unknown keys, duplicate keys, then the Block's own checks."""
+    empty, verb syntax, a brief that opens with prose, duplicate keys, then the Block's own checks.
+    Each refusal quotes the line at fault (60 chars) and says the fix."""
     lines = (body or "").splitlines()
     i = next((i for i, ln in enumerate(lines) if ln.strip() and not _is_comment(ln)), None)
     if i is None:
         raise _missing(_REQUIRED)
-    verb, rest = lines[i].strip(), lines[:i] + lines[i + 1:]
-    unit, rev, reason = "", 0, ""
+    verb, at = lines[i].strip(), f"line {i + 1} {_quote(lines[i])}"
+    unit, rev, reason, skip = "", 0, "", i
     if verb.startswith("AMEND"):
         m = _AMEND.fullmatch(verb)
         if not m:
-            raise Refusal(f"{REFUSE}AMEND needs 'AMEND <unit> rev <N>'.")
-        kind, unit, rev, allowed = "amend", m.group(1), int(m.group(2)), KEYS
+            raise Refusal(f"{REFUSE}AMEND needs 'AMEND <unit> rev <N>'; {at} does not match.")
+        kind, unit, rev = "amend", m.group(1), int(m.group(2))
     elif verb.startswith("STOP"):
         m = _STOP.fullmatch(verb)
         if not m:
-            raise Refusal(f"{REFUSE}STOP needs 'STOP <unit>'.")
-        kind, unit, allowed, reason = "stop", m.group(1), ("TO",), (m.group(2) or "").strip()
+            raise Refusal(f"{REFUSE}STOP needs 'STOP <unit>'; {at} does not match.")
+        kind, unit, reason = "stop", m.group(1), (m.group(2) or "").strip()
     else:
-        kind, allowed, rest = "brief", KEYS, lines
-    names, fields, note = _codec(rest, supersedes=kind == "amend")
-    _refuse_unknown(names, allowed)
-    dups = [k for k in dict.fromkeys(names) if names.count(k) > 1]
+        kind, skip = "brief", None
+    names, fields, note, absorbed, stray = _codec(lines, kind, skip)
+    if stray:
+        raise Refusal(f"{REFUSE}line {stray[0]} {_quote(stray[1])} is not a KEY line; a brief starts with TO.")
+    keys = [k for k, _n, _t in names]
+    dups = [k for k in dict.fromkeys(keys) if keys.count(k) > 1]
     if dups:
-        raise Refusal(f"{REFUSE}duplicate keys {', '.join(dups)}. Write each key once; continue a value on "
-                      "lines indented by two spaces.")
-    return Block(kind, fields, unit, rev, reason if kind == "stop" else note)
+        n, text = next((n, t) for j, (k, n, t) in enumerate(names) if k in keys[:j])
+        raise Refusal(f"{REFUSE}duplicate keys {', '.join(dups)}; line {n} {_quote(text)} repeats one. {_DUP}")
+    if kind == "stop":
+        note = "\n".join(p for p in (reason, note) if p)
+    try:
+        return Block(kind, fields, unit, rev, note)
+    except Refusal as exc:
+        msg = str(exc)
+        if msg.startswith(f"{REFUSE}missing"):
+            hint = next((a for a in absorbed if _keylike(a[1].split()[0])), None)
+        elif msg.startswith(f"{REFUSE}TIER"):
+            hint = next((a for a in absorbed if a[2] == "TIER"), None)
+        else:
+            hint = None
+        if hint is None:
+            raise
+        raise Refusal(f"{msg} Line {hint[0]} {_quote(hint[1])} was read as part of {hint[2]}; {_FIX}.") from None
 
 
 def _not_relayed(lines, spans):

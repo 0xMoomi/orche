@@ -823,7 +823,7 @@ class FeatSleepWakeTest(FeatCase):
         code, out, _ = self.orche("feat", "wake", "acme", "search")
         self.assertEqual((code, out), (0, "feat-acme-shop-search active\n"))
         pane = self.orca_calls("terminal create")[0]
-        self.assertEqual(pane[pane.index("--command") + 1], f"{PANE}ORCHE_SESSION=feat-acme-shop-search claude --permission-mode bypassPermissions --resume feat-acme-shop-search")
+        self.assertEqual(pane[pane.index("--command") + 1], f"{PANE}ORCHE_SESSION=feat-acme-shop-search claude --permission-mode bypassPermissions --name feat-acme-shop-search")
         code, _, err = self.orche("feat", "sleep", "acme", "search")
         self.assertEqual(code, 3)
         self.assertIn("HANDOFF.md is stale (missing:", err)
@@ -835,7 +835,7 @@ class FeatSleepWakeTest(FeatCase):
         self.assertEqual((code, out), (0, "feat-acme-shop-checkout pane reopened\n"))
         [pane] = self.orca_calls("terminal create")
         self.assertEqual(pane[pane.index("--command") + 1],
-                         f"{PANE}ORCHE_SESSION=feat-acme-shop-checkout claude --permission-mode bypassPermissions --resume feat-acme-shop-checkout")
+                         f"{PANE}ORCHE_SESSION=feat-acme-shop-checkout claude --permission-mode bypassPermissions --name feat-acme-shop-checkout")
         self.calls.clear()
         self.terminals = [{"handle": "t-3", "title": "feat-acme-shop-checkout"}]
         code, out, _ = self.orche("feat", "wake", "acme", "checkout")

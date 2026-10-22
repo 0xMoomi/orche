@@ -1714,6 +1714,30 @@ class RoundFourTest(RunnerCase):
         self.assertIsNone(other.poll())
 
 
+class KeychainHermeticTest(RunnerCase):
+    """T1: a child `orche run` reads the empty stub keychain of support.no_claude_dir, never the
+    real one, so its `claude -p` carries an OAuth token only when the test passes one."""
+
+    def test_child_run_hits_the_stub_and_carries_no_token(self):
+        self.assertEqual(shutil.which("security"), str(Path(support.no_claude_dir()) / "security"))
+        unit = self.brief()
+        self.reply("STATUS: blocked\nfirst")
+        env = {k: v for k, v in os.environ.items() if k != "CLAUDE_CODE_OAUTH_TOKEN"}
+        self.assertEqual(self.spawn(unit, env=env).wait(timeout=20), 0)
+        self.assertNotIn("CLAUDE_CODE_OAUTH_TOKEN=", (self.fake / "env.txt").read_text())
+        if sys.platform == "darwin":       # elsewhere the store is a file under the temp ORCHE_HOME
+            calls = (self.home / support.SECURITY_CALLS).read_text().split()
+            self.assertEqual(calls[:5], ["find-generic-password", "-s", "orche", "-a", "CLAUDE_CODE_OAUTH_TOKEN"])
+
+    def test_child_run_carries_a_token_only_when_the_test_sets_it(self):
+        unit = self.brief()
+        self.reply("STATUS: blocked\nfirst")
+        token = "tok-test-" + "Z9" * 8
+        env = {**os.environ, "CLAUDE_CODE_OAUTH_TOKEN": token}
+        self.assertEqual(self.spawn(unit, env=env).wait(timeout=20), 0)
+        self.assertIn(f"CLAUDE_CODE_OAUTH_TOKEN={token}", (self.fake / "env.txt").read_text())
+
+
 if __name__ == "__main__":
     import unittest
     unittest.main()

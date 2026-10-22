@@ -12,7 +12,7 @@ from unittest import mock
 
 import support
 from orche import __version__ as VERSION
-from orche import headless, registry, shell
+from orche import headless, oauth, registry, shell
 from orche.paths import PLUGIN_ROOT
 from orche.install import MIGRATION_LINE, doctor
 from test_hr import HrCase
@@ -804,7 +804,7 @@ class DoctorTest(InstallCase):
         self.install("--mode", "settings", "--yes")
         code, out, _ = self.doctor(missing=())
         self.assertEqual([l for l in out.splitlines() if not l.startswith("OK\t")],
-                         ["WARN\tjev\tnot configured (Haiku fallback)"])
+                         ["WARN\tjev\tnot configured (Haiku fallback)", f"WARN\toauth token\t{oauth.UNSET_LINE}"])
 
     def test_warn_for_a_project_rendered_by_another_version_only(self):
         reg = registry.empty()
