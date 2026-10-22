@@ -16,11 +16,11 @@ NUDGED_TTL = _dt.timedelta(minutes=10)
 WAKE_TEXT = "[orche] inbox: new reports"
 REPORT_LINE = ("[orche] Act on the inbox above now: read each report named (Read tool), then end this turn with "
                "your report to the user in this pane — outcome · what landed · what failed · decisions needed "
-               "(recommendation + default) · next step — followed by the next dispatch block or the question the "
-               "user must answer. Never only acknowledge. When several reports are listed, write one "
+               "(recommendation + default) · next step — after running `orche dispatch` for the next unit, or with "
+               "the question the user must answer. Never only acknowledge. When several reports are listed, write one "
                "consolidated report and put anything the owner must do first. Finish with one line to the owner: "
                "the state (nothing to do / running: <what> / all done) and either the decision you need with its "
-               "default or the question what to do next; dispatch blocks go before that line.")
+               "default or the question what to do next; run `orche dispatch` before writing that line.")
 _SAFE = re.compile(r"^[A-Za-z0-9._-]+$")
 DRAIN_RE = re.compile(r"^\s*(\[drain\]|/drain)", re.IGNORECASE)
 NUDGE_RE = re.compile(r"^\s*\[orche\] inbox:")

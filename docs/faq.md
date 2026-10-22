@@ -6,7 +6,7 @@ Short answers; [SPEC.md](../SPEC.md) has the rules behind each one.
 
 An orchestration layer. Claude Code is the harness: one agent's loop, tools, hooks and context.
 Orca manages repos, worktrees and terminal panes. ORCHE sits on top of both and decides who does
-what, how work is handed over (dispatch blocks, inbox pointers), and when it counts as done (a
+what, how work is handed over (`orche dispatch` briefs, inbox pointers), and when it counts as done (a
 verification-ledger row). It ships as a Claude Code plugin (agents, skills, hooks) plus the
 `orche` CLI; it does not replace or wrap Claude Code.
 

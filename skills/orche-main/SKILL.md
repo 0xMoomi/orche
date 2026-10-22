@@ -1,6 +1,6 @@
 ---
 name: orche-main
-description: Main role rulebook. Use in a project's Main session when writing dispatch blocks, draining reports, asking the user a question, or reporting to the user.
+description: Main role rulebook. Use in a project's Main session when dispatching work with `orche dispatch`, draining reports, asking the user a question, or reporting to the user.
 ---
 
 # ORCHE Main rules
@@ -11,13 +11,13 @@ edits code — a rulebook rule; `scope_gate` protects unit scopes, not the main 
 <!-- inject:start -->
 ORCHE Main rules (full rulebook: skill orche-main)
 - First line on every request: `Understood: source = <project>, output = <project>`.
-- Never edit code. Assign work only with fenced `dispatch` blocks: TO GOAL SCOPE CONTEXT ACCEPT VERIFY TIMEBOX FORBID REPORT TIER (+ROLLBACK if it deploys). Corrections: `AMEND <unit> rev N` + `SUPERSEDES rev N-1: ...`; halts: `STOP <unit>`.
+- Never edit code. Assign work only via `orche dispatch <<'EOF'` (`---` splits blocks): TO GOAL SCOPE CONTEXT ACCEPT VERIFY TIMEBOX FORBID REPORT TIER (+ROLLBACK if it deploys); redo refusals now. Corrections: `AMEND <unit> rev N` + `SUPERSEDES rev N-1:`; halts: `STOP <unit>`.
 - No build dispatch before the user confirms the plan (R&D/GTM drafts first).
 - Write briefs from the request, PROJECT_CARD.md and unit STATUS files. Do not inspect the repo (no git/grep/tail/cat) and do not run VERIFY yourself; the worker does.
 - TIER mechanical: brief ≤ 12 lines, one ACCEPT line, one VERIFY command, TIMEBOX ≤ 30m.
 - `orche` is on PATH; state in ~/.claude/orche. Other project: `orche card <p>`, then `orche ask <p> "…"`.
-- Ask only product/taste questions, each with a recommendation and a default; prototype facts.
-- When a report arrives (the user talks only to you; ORCHE wakes you with `[orche] inbox: …`): read each report named, end that turn with your report to the user (outcome, landed/failed, decisions with recommendation + default, next step), then dispatch the next unit or ask. Never only acknowledge; never read diffs.
+- Ask only product/taste questions, each with a recommendation + default; prototype facts.
+- When a report arrives (the user talks only to you; ORCHE wakes you with `[orche] inbox: …`): read each report named, end that turn with your report to the user (outcome, landed/failed, decisions + default, next step), then dispatch the next unit or ask. Never only acknowledge; never read diffs.
 - Candor: say plainly what failed; no ledger row means unverified.
 - Always-pause: force-push to a shared branch, deploy, data deletion, customer messages, external publication, payments.
 - An instruction you would write twice goes into STANDING.md first.
@@ -34,8 +34,10 @@ ORCHE Main rules (full rulebook: skill orche-main)
 
 ## Dispatch grammar
 
+Run `orche dispatch` with the blocks on stdin; a line of `---` separates blocks:
+
 ````
-```dispatch
+orche dispatch <<'EOF'
 TO        div-<project>-build
 GOAL      One-sentence outcome a stranger could execute without chat history
 SCOPE     Writable paths / forbidden paths / worktree + branch
@@ -48,15 +50,23 @@ FORBID    Retarget PR, merge, rebase, force-push, out-of-scope edits + unit bans
 REPORT    status, branch, head SHA, PR, verdict, commands run, deviations, follow-ups, memory-save
 TIER      mechanical | standard | hard
 ROLLBACK  How to revert (mandatory when the unit deploys)
-```
+---
+STOP <unit> Rebase went wrong on the shared worktree.
+EOF
 ````
 
-- All fields except ROLLBACK are required; an empty field makes the hook refuse the block and hand
-  it back with the list. A plain line that is not a KEY line continues the field above.
-- Every valid block is delivered even if another one is refused; the refusal lists each block's outcome.
-  Re-send ONLY the refused block(s) — the delivered ones went out.
-- Several blocks per reply are fine; each is one unit. The hook assigns the unit id
-  (`<project>-<slug>-<yyyymmdd>-<n>`) and files an info pointer with the unit id and delivery state
+- All fields except ROLLBACK are required; an empty field refuses the block with the list. A plain
+  line that is not a KEY line continues the field above.
+- The command prints one line per block (`block N: delivered …`, `block N: refused — …`,
+  `block N: skipped …`) and exits 2 when any block was refused. Every valid block is delivered even
+  if another one is refused; fix ONLY the refused block(s) and run `orche dispatch` again in the same
+  turn — re-sending a delivered block is skipped, not duplicated.
+- A fenced block in your reply is plain text: nothing reads it, nothing is sent.
+- When a brief's text would trip a command gate (for example it quotes `sed -i` on a code file or a
+  `>` redirect into one), write the blocks to `.orche/outbox/<name>.md` and run
+  `orche dispatch --file .orche/outbox/<name>.md`. `orche --dry-run dispatch` checks without sending.
+- Several blocks per run are fine; each is one unit. ORCHE assigns the unit id
+  (`<project>-<slug>-<yyyymmdd>-<n>`), prints it with the delivery state and files an info pointer
   (`relayed <unit> → <target> rev N (<state>)`); a delivery that fails reaches you at once as an urgent
   pointer naming the fix (`orche deliver <unit>`, `orche wake <session>`). You never paste STANDING.md; it is prepended.
 - `TO` must be a session of your own project. `TO <other project>` (key, alias, or its Main's session
@@ -67,11 +77,7 @@ ROLLBACK  How to revert (mandatory when the unit deploys)
 - Budget every unit with a realistic TIMEBOX: the runner's turn cap is 3 turns per TIMEBOX minute (30–400).
 - Corrections are new revisions, never chat: `AMEND <unit> rev N` on the first line, then
   `SUPERSEDES rev N-1: <what>`, then the changed fields. A permanent correction also goes into
-  STANDING.md. `STOP <unit> <reason>` halts a unit at a safe boundary; the reason may span lines:
-  ```dispatch
-  STOP <unit> Rebase went wrong on the shared worktree.
-  Wait for the replacement brief below.
-  ```
+  STANDING.md. `STOP <unit> <reason>` halts a unit at a safe boundary; the reason may span lines.
 - Write each key once; continue a value on the lines below it, indented by two spaces (a `#` there is content, an
   unindented `#` line is a comment).
 - If a correction conflicts with a standing order, ask one line: "Conflicts with standing order N.
@@ -90,7 +96,7 @@ the question into CONTEXT for the worker, or ask the user one line with a defaul
 1. A request that needs a plan goes to R&D (product/architecture) or GTM (content/launch); a project
    without them (or with a custom division that fits better) uses the fitting one of the project's
    divisions (see `orche depts`).
-2. Show the draft to the user, ketchup style, with defaults.
+2. Show the draft to the user, as a status card, with defaults.
 3. Revise until the user confirms. No build dispatch before confirmation.
 4. Dispatch the confirmed plan to Build.
 
@@ -101,11 +107,11 @@ you are idle. The injected inbox ends with ORCHE's line `[orche] Act on the inbo
 notice. In the same turn:
 
 1. Read each report named (Read tool).
-2. End the turn with your report to the user in this pane, unasked, in the ketchup format below: outcome · what
-   landed · what failed · decisions needed (recommendation + default) · next step.
-3. Follow it with the next dispatch block, or the question the user must answer (record the default with `orche decide`).
+2. End the turn with your report to the user in this pane, unasked: a one-line outcome, then the status card below
+   (what the owner must do, counts, what runs, decisions with recommendation + default, next step, pointers).
+3. Run `orche dispatch` for the next unit, or ask the question the user must answer (record the default with `orche decide`).
 4. Finish with one line to the owner: the state (nothing to do / running: <what> / all done) and either the decision
-   you need with its default or the question what to do next; dispatch blocks go before that line.
+   you need with its default or the question what to do next; run `orche dispatch` before writing that line.
 
 Several reports in one wake (ORCHE waits for a quiet moment, so a batch arrives together) get one consolidated
 report, with anything the owner must do first.
@@ -138,17 +144,26 @@ pointers.
   `orche ask`.
 - Do not `orche ask` your own project instead of reading PROJECT_CARD.md and the units' STATUS files.
 
-## Ketchup report format
+## Status card
+
+Report order: one-line outcome (prose) → the status card → the closing line to the owner; nothing else goes in the
+reply. Dispatch happens through `orche dispatch` during the turn, never as a block in the reply. The card is
+a fenced block (so it renders apart from prose), Korean labels, these glyphs, at most 6 lines, nothing else inside:
 
 ```
-<outcome in one line>
-<counts: landed N · verifying N · failed N>
-Decisions: <question> — recommend <X>; default <X> if no answer
-Next: <the dispatch below, or the question you need answered>
-Pointers: <unit ids, PRs, ledger rows>
+⛔ 사장님 할 일: <command or decision>
+🟢 완료 N · 🟡 검증중 N · 🔴 실패 N · ⏸ 보류 N
+▶ 진행: <what is running, where>
+❓ 결정: <question> — 권장 <X>, 기본 <X>
+➡ 다음: <next step or the question you need answered>
+🔗 참조: <unit ids, PRs, ledger rows>
 ```
 
-No process narration, no restating the request.
+- ⛔ only when the owner must act, and then always the first line.
+- Counts come from this wake's reports: 완료 = done/landed, 검증중 = needs a verification unit, 실패 = failed,
+  보류 = blocked or waiting on the owner.
+- Omit ❓ and 🔗 when empty. Never invent extra categories (no "zombie", "noise", "drain").
+- The card never contains prose paragraphs. No process narration, no restating the request.
 
 ## Candor
 

@@ -3,6 +3,7 @@ import datetime as dt
 import fcntl
 import json
 import os
+import re
 import shlex
 import subprocess
 import sys
@@ -132,11 +133,24 @@ class DispatchRelayTest(HookCase):
         path = self.transcript(text, msg_id=msg_id, first_ts=first_ts)
         return self.run_hook("dispatch_relay.py", self.payload("stop.json", transcript_path=path, **over))
 
+    def send(self, text, cwd=None, args=(), **env):
+        """`orche dispatch` with `text` on stdin; fenced blocks in `text` are unwrapped and joined by `---`."""
+        if "```" in text:
+            text = "\n---\n".join(re.findall(r"^```(?:dispatch|amend|stop)\n(.*?)^```", text, re.S | re.M))
+        clean = {k: v for k, v in os.environ.items()
+                 if not k.startswith(("ORCA_", "ORCHE_", "CLAUDE"))}
+        clean.update({"ORCHE_HOME": str(self.home), "ORCHE_FAKE_ORCA": "1",
+                      "ORCHE_SCRATCH_ROOT": str(self.root / "scratch"), "ORCHE_SESSION": "main-acme"}, **env)
+        return subprocess.run([sys.executable, str(support.ROOT / "bin" / "orche.py"), "dispatch", *args],
+                              input=text, env=clean, cwd=str(cwd or self.repo),
+                              capture_output=True, text=True, timeout=30)
+
     def test_valid_dispatch_writes_brief_pointer_and_nudges(self):
-        res = self.run_hook("dispatch_relay.py", self.payload("stop.json", transcript_path=str(SAMPLE)))
-        self.assertEqual((res.returncode, res.stdout, res.stderr), (0, "", ""))
+        res = self.send(DISPATCH_OK)
         unit = self.only_unit()
         self.assertEqual(unit, f"acme-add-coupon-field-to-{dt.date.today():%Y%m%d}-1")
+        self.assertEqual((res.returncode, res.stderr, res.stdout),
+                         (0, "", f"block 1: delivered {unit} → div-acme-build (rev 1, deliverer-started)\n"))
         brief = (self.units_dir() / unit / "BRIEF.md").read_text()
         self.assertTrue(brief.startswith(
             f"rev: 1\nunit: {unit}\nto: div-acme-build   from: main-acme\n"
@@ -160,59 +174,20 @@ class DispatchRelayTest(HookCase):
         self.assertEqual(send, [["orca", "terminal", "send", "--terminal", "t-build", "--text",
                                  f"[orche] inbox: {unit} rev 1", "--enter", "--wait-submit", "20",
                                  "--json"]])
-        # The same assistant message is never relayed twice.
-        self.run_hook("dispatch_relay.py", self.payload("stop.json", transcript_path=str(SAMPLE)))
-        self.only_unit()
-
-    # -- F1: the hook input's last_assistant_message wins over a lagging transcript ----------
-    def test_payload_last_message_relays_when_transcript_lags(self):
-        lagging = self.transcript("Let me draft the brief first.")
-        res = self.run_hook("dispatch_relay.py", self.payload("stop.json", transcript_path=lagging,
-                                                              last_assistant_message=DISPATCH_OK))
-        self.assertEqual((res.returncode, res.stdout, res.stderr), (0, "", ""))
-        unit = self.only_unit()
-        self.assertTrue((self.units_dir() / unit / "BRIEF.md").is_file())
-        [ptr] = [json.loads(p.read_text()) for p in self.inbox("div-acme-build")]
-        self.assertEqual((ptr["unit"], ptr["brief_rev"]), (unit, 1))
-        self.assertIn(f"unit={unit} rev=1 to=div-acme-build by=main-acme delivery=deliverer-started", self.events())
-        marker = json.loads((self.home / "sessions" / "sess-main-0001.relayed.json").read_text())
-        self.assertEqual(len(marker["text_hash"]), 16)
-
-    def test_payload_same_text_twice_relays_once(self):
-        lagging = self.transcript("thinking")
-        payload = self.payload("stop.json", transcript_path=lagging, last_assistant_message=DISPATCH_OK)
-        self.assertEqual(self.run_hook("dispatch_relay.py", payload).returncode, 0)
-        again = self.run_hook("dispatch_relay.py", {**payload, "stop_hook_active": True})
-        self.assertEqual((again.returncode, again.stderr), (0, ""))
-        self.only_unit()
-        self.assertEqual(len(self.inbox("div-acme-build")), 1)
-        other = DISPATCH_OK.replace("Add coupon field", "Add gift card field")
-        self.run_hook("dispatch_relay.py", {**payload, "last_assistant_message": other})
-        self.assertEqual(len(list(self.units_dir().iterdir())), 2)
-
-    def test_old_msg_id_marker_still_dedupes_transcript_fallback(self):
-        marker = self.home / "sessions" / "sess-main-0001.relayed.json"
-        marker.parent.mkdir(parents=True, exist_ok=True)
-        marker.write_text(json.dumps({"msg_id": "msg_1", "at": "2026-10-16T00:00:00Z"}))
-        res = self.stop(DISPATCH_OK)
-        self.assertEqual((res.returncode, res.stderr), (0, ""))
-        self.assertFalse(self.units_dir().exists())
-
-    def test_no_payload_field_falls_back_to_transcript(self):
-        payload = self.payload("stop.json", transcript_path=self.transcript(DISPATCH_OK))
-        self.assertNotIn("last_assistant_message", payload)
-        res = self.run_hook("dispatch_relay.py", payload)
-        self.assertEqual((res.returncode, res.stderr), (0, ""))
+        # The same block sent again within the window is skipped, not delivered twice.
+        res = self.send(DISPATCH_OK)
+        self.assertEqual((res.returncode, res.stdout), (0, f"block 1: skipped — identical to {unit} → "
+                                                           "div-acme-build, delivered in the last 10 min; not sent again\n"))
         self.only_unit()
 
     def test_relay_touches_sender_and_target_activity(self):
-        res = self.run_hook("dispatch_relay.py", self.payload("stop.json", transcript_path=str(SAMPLE)))
+        res = self.send(DISPATCH_OK)
         self.assertEqual(res.returncode, 0)
         self.assertEqual(sorted(p.name for p in (self.home / "activity").iterdir()),
                          ["div-acme-build", "main-acme"])
 
     def test_sender_gets_feedback_pointer_with_unit_and_state(self):
-        self.run_hook("dispatch_relay.py", self.payload("stop.json", transcript_path=str(SAMPLE)))
+        self.send(DISPATCH_OK)
         unit = self.only_unit()
         [ptr] = [json.loads(p.read_text()) for p in self.inbox("main-acme")]
         self.assertEqual((ptr["unit"], ptr["from"], ptr["status"], ptr["urgent"]), (unit, "orche", "info", False))
@@ -228,8 +203,8 @@ class DispatchRelayTest(HookCase):
         proj["divisions"]["design"] = {**proj["divisions"]["rnd"], "worktree": f"repo-acme::{self.root / 'acme-design'}",
                                        "branch": "div/design", "session": "div-acme-design"}
         (self.home / "registry.json").write_text(json.dumps(reg))
-        res = self.stop(DISPATCH_OK.replace("TO        build", "TO        design"))
-        self.assertEqual(res.returncode, 0, res.stderr)
+        res = self.send(DISPATCH_OK.replace("TO        build", "TO        design"))
+        self.assertEqual(res.returncode, 0, res.stdout)
         brief = (self.units_dir() / self.only_unit() / "BRIEF.md").read_text()
         self.assertIn(f"to: div-acme-design   from: main-acme\nworktree: {self.root / 'acme-design'}", brief)
         self.assertIn("to=div-acme-design by=main-acme delivery=deliverer-started", self.events())
@@ -242,7 +217,7 @@ class DispatchRelayTest(HookCase):
         return [p for p in ptrs if p["from"] == "orche" and p["urgent"]]
 
     def test_needs_wake_failure_pointer_carries_wake_hint(self):
-        self.stop(DISPATCH_OK.replace("TO        build", "TO        div-acme-rnd"))
+        self.send(DISPATCH_OK.replace("TO        build", "TO        div-acme-rnd"))
         unit = self.only_unit()
         [ptr] = self.not_delivered()
         self.assertEqual((ptr["unit"], ptr["status"], ptr["to"]), (unit, "info", "main-acme"))
@@ -253,7 +228,7 @@ class DispatchRelayTest(HookCase):
 
     def test_wake_requested_division_failure_pointer_carries_wake_hint(self):
         self.fake_orca({"terminal list": {"terminals": []}})  # Build is dormant: no pane
-        self.stop(DISPATCH_OK)
+        self.send(DISPATCH_OK)
         unit = self.only_unit()
         self.assertIn("to=div-acme-build by=main-acme delivery=deliverer-started", self.events())
         [ptr] = self.not_delivered()
@@ -262,9 +237,8 @@ class DispatchRelayTest(HookCase):
                                          f"has no pane: run `orche wake div-acme-build`, then `orche deliver {unit}`")
 
     def test_wake_requested_main_failure_pointer_has_no_hint(self):
-        res = self.run_hook("dispatch_relay.py", self.payload(
-            "stop.json", transcript_path=self.transcript(DISPATCH_OK.replace("TO        build\n", "TO        shop\n")),
-            cwd=str(self.root / "acme-build")), ORCHE_SESSION="div-acme-build")
+        res = self.send(DISPATCH_OK.replace("TO        build\n", "TO        shop\n"),
+                        cwd=self.root / "acme-build", ORCHE_SESSION="div-acme-build")
         self.assertEqual((res.returncode, res.stderr), (0, ""))
         unit = self.only_unit()
         [ptr] = self.not_delivered("div-acme-build")
@@ -284,15 +258,15 @@ class DispatchRelayTest(HookCase):
 
     def test_cross_project_session_target_refused(self):
         self.add_project_b()
-        res = self.stop(DISPATCH_OK.replace("TO        build", "TO        div-beta-build"))
+        res = self.send(DISPATCH_OK.replace("TO        build", "TO        div-beta-build"))
         self.assertEqual(res.returncode, 2)
-        self.assertIn("div-beta-build belongs to project beta, not acme", res.stderr)
+        self.assertIn("div-beta-build belongs to project beta, not acme", res.stdout)
         self.assertFalse(self.units_dir().exists())
         self.assertEqual(self.inbox("div-beta-build"), [])
 
     def test_other_project_key_files_external_request(self):
         self.add_project_b()
-        res = self.stop(DISPATCH_OK.replace("TO        build", "TO        bee"))
+        res = self.send(DISPATCH_OK.replace("TO        build", "TO        bee"))
         self.assertEqual((res.returncode, res.stderr), (0, ""))
         self.assertFalse(self.units_dir().exists())
         self.assertFalse((self.root / "beta" / ".orche").exists())
@@ -310,7 +284,7 @@ class DispatchRelayTest(HookCase):
                 + "\n\n" + DISPATCH_OK.split("Relaying the first build unit.", 1)[1]
                 .replace("TO        build", "TO        bee")
                 .replace("GOAL      Add coupon field", f"GOAL      Use {canary} for"))
-        res = self.stop(text)
+        res = self.send(text)
         self.assertEqual((res.returncode, res.stderr), (0, ""))
         unit = self.only_unit()
         self.assertIn("redacted", unit)
@@ -323,66 +297,62 @@ class DispatchRelayTest(HookCase):
 
     def test_relay_goal_summary_is_masked(self):
         canary = "sk-" + "A1b2C3d4E5f6G7h8I9j0K1l2"
-        self.stop(DISPATCH_OK.replace("GOAL      Add coupon field", f"GOAL      Add coupon field {canary}"))
+        self.send(DISPATCH_OK.replace("GOAL      Add coupon field", f"GOAL      Add coupon field {canary}"))
         [ptr] = self.inbox("div-acme-build")
         self.assertNotIn(canary, ptr.read_text())
 
     def test_missing_verify_refused_naming_field(self):
-        res = self.stop(DISPATCH_OK.replace("VERIFY    scripts/verify-checkout.sh\n", ""))
+        res = self.send(DISPATCH_OK.replace("VERIFY    scripts/verify-checkout.sh\n", ""))
         self.assertEqual(res.returncode, 2)
-        self.assertIn("[orche] dispatch refused: missing VERIFY. Fill every field or drop the block.", res.stderr)
+        self.assertIn("block 1: refused — missing VERIFY. Fill every field or drop the block.", res.stdout)
         self.assertFalse(self.units_dir().exists())
         self.assertEqual(self.orca_calls(), [])
 
     def test_unknown_key_line_continues_the_field_and_bad_tier_refused(self):
-        res = self.stop(DISPATCH_OK.replace("TIER      standard", "TIER      epic\nOWNER     me"))
+        res = self.send(DISPATCH_OK.replace("TIER      standard", "TIER      epic\nOWNER     me"))
         self.assertEqual(res.returncode, 2)
-        self.assertIn("TIER must be one of mechanical|standard|hard", res.stderr)
-        self.assertIn('was read as part of TIER; start each field with its exact KEY.', res.stderr)
+        self.assertIn("TIER must be one of mechanical|standard|hard", res.stdout)
+        self.assertIn('was read as part of TIER; start each field with its exact KEY.', res.stdout)
 
     # -- C10: one refused block no longer drops the reply ------------------------------------
     def test_two_blocks_second_refused_delivers_the_first_once(self):
         bad = DISPATCH_OK.split("\n\n", 1)[1].replace("Add coupon field", "Add gift card field")
         text = DISPATCH_OK + "\n\n" + bad.replace("VERIFY    scripts/verify-checkout.sh\n", "")
-        res = self.stop(text)
+        res = self.send(text)
         self.assertEqual(res.returncode, 2)
         unit = self.only_unit()
-        self.assertEqual(res.stderr.strip().splitlines(), [
-            "[orche] dispatch refused: 1 of 2 blocks refused. Re-send ONLY the refused block; the delivered "
-            "ones went out and must not be sent again.",
-            f"block 1: delivered {unit} → div-acme-build",
-            "block 2: refused — missing VERIFY. Fill every field or drop the block."])
+        self.assertEqual(res.stdout.strip().splitlines(), [
+            f"block 1: delivered {unit} → div-acme-build (rev 1, deliverer-started)",
+            "block 2: refused — missing VERIFY. Fill every field or drop the block.",
+            "1 of 2 refused: fix the refused block(s) and run `orche dispatch` again; the delivered ones went "
+            "out (re-sending them unchanged is skipped)."])
         self.assertEqual(len(self.inbox("div-acme-build")), 1)
         events = self.events()
         self.assertIn(f"dispatch kind=brief unit={unit} rev=1 to=div-acme-build by=main-acme", events)
-        self.assertIn("dispatch refused by=main-acme blocks=2 reason=1 of 2 blocks refused. Re-send ONLY", events)
-        marker = self.home / "sessions" / "sess-main-0001.relayed.json"
-        self.assertEqual(list(json.loads(marker.read_text())["delivered"].values()), [f"{unit} → div-acme-build"])
-        # The same reply again under stop_hook_active: block 1 is not delivered twice; the refusal is parked.
-        res = self.stop(text, stop_hook_active=True)
-        self.assertEqual((res.returncode, res.stderr), (0, ""))
+        self.assertIn("dispatch refused by=main-acme blocks=2 reason=missing VERIFY.", events)
+        seen = json.loads((self.home / "sessions" / "main-acme.dispatched.json").read_text())
+        self.assertEqual([e["routed"] for e in seen.values()], [f"{unit} → div-acme-build"])
+        # The same batch again: block 1 is skipped, block 2 is still refused.
+        res = self.send(text)
+        self.assertEqual(res.returncode, 2)
+        self.assertIn(f"block 1: skipped — identical to {unit} → div-acme-build", res.stdout)
         self.only_unit()
         self.assertEqual(len(self.inbox("div-acme-build")), 1)
-        [parked] = [json.loads(p.read_text()) for p in self.inbox("main-acme")
-                    if json.loads(p.read_text())["unit"] == "dispatch-refused"]
-        self.assertIn(f"block 1: delivered {unit} → div-acme-build (earlier)", parked["summary"])
-        self.assertIn("block 2: refused — missing VERIFY.", parked["summary"])
-        # Re-sending only the fixed block delivers it and clears the no-redelivery set.
-        res = self.stop("Fixed.\n\n" + bad, msg_id="msg_2")
+        # The fixed batch re-run: block 1 skipped, block 2 delivered.
+        res = self.send(DISPATCH_OK + "\n\n" + bad)
         self.assertEqual((res.returncode, res.stderr), (0, ""))
         self.assertEqual(len(list(self.units_dir().iterdir())), 2)
-        self.assertNotIn("delivered", json.loads(marker.read_text()))
 
     def _partly_refused(self):
         """Turn 1: block 1 delivered, block 2 refused (missing VERIFY). Returns (unit, fixed block 2)."""
         bad = DISPATCH_OK.split("\n\n", 1)[1].replace("Add coupon field", "Add gift card field")
-        res = self.stop(DISPATCH_OK + "\n\n" + bad.replace("VERIFY    scripts/verify-checkout.sh\n", ""))
+        res = self.send(DISPATCH_OK + "\n\n" + bad.replace("VERIFY    scripts/verify-checkout.sh\n", ""))
         self.assertEqual(res.returncode, 2)
         return self.only_unit(), bad
 
     def test_d1_identical_block_in_a_later_turn_within_the_window_is_skipped_with_feedback(self):
         unit, fixed = self._partly_refused()
-        res = self.stop(DISPATCH_OK + "\n\n" + fixed, msg_id="msg_2")
+        res = self.send(DISPATCH_OK + "\n\n" + fixed)
         self.assertEqual((res.returncode, res.stderr), (0, ""))
         self.assertEqual(len(list(self.units_dir().iterdir())), 2)          # block 1 not written again
         self.assertEqual(len(self.inbox("div-acme-build")), 2)
@@ -394,54 +364,51 @@ class DispatchRelayTest(HookCase):
 
     def test_d1_after_the_window_the_identical_block_is_delivered(self):
         unit, fixed = self._partly_refused()
-        marker = self.home / "sessions" / "sess-main-0001.relayed.json"
+        marker = self.home / "sessions" / "main-acme.dispatched.json"
         seen = json.loads(marker.read_text())
-        self.assertIsInstance(seen["delivered_at"], float)
-        marker.write_text(json.dumps({**seen, "delivered_at": seen["delivered_at"] - 601}))
-        res = self.stop(DISPATCH_OK + "\n\n" + fixed, msg_id="msg_2")
+        marker.write_text(json.dumps({h: {**e, "at": e["at"] - 601} for h, e in seen.items()}))
+        res = self.send(DISPATCH_OK + "\n\n" + fixed)
         self.assertEqual((res.returncode, res.stderr), (0, ""))
         self.assertEqual(len(list(self.units_dir().iterdir())), 3)
         self.assertNotIn("dispatch skipped", self.events())
 
     def test_d4_every_block_refused_says_none_was_delivered(self):
         bad = DISPATCH_OK.split("\n\n", 1)[1].replace("VERIFY    scripts/verify-checkout.sh\n", "")
-        res = self.stop(DISPATCH_OK.replace("VERIFY    scripts/verify-checkout.sh\n", "") + "\n\n" + bad)
+        res = self.send(DISPATCH_OK.replace("VERIFY    scripts/verify-checkout.sh\n", "") + "\n\n" + bad)
         self.assertEqual(res.returncode, 2)
-        self.assertEqual(res.stderr.strip().splitlines(), [
-            "[orche] dispatch refused: all 2 blocks refused; no block was delivered. Fix them and send them again.",
+        self.assertEqual(res.stdout.strip().splitlines(), [
             "block 1: refused — missing VERIFY. Fill every field or drop the block.",
-            "block 2: refused — missing VERIFY. Fill every field or drop the block."])
+            "block 2: refused — missing VERIFY. Fill every field or drop the block.",
+            "nothing was delivered: fix the block(s) and run `orche dispatch` again."])
         self.assertFalse(self.units_dir().exists())
-        self.assertFalse((self.home / "sessions" / "sess-main-0001.relayed.json").exists())
+        self.assertFalse((self.home / "sessions" / "main-acme.dispatched.json").exists())
 
     def test_d4_a_refused_block_first_then_a_valid_one(self):
         good = DISPATCH_OK.split("\n\n", 1)[1]
-        res = self.stop(DISPATCH_OK.replace("VERIFY    scripts/verify-checkout.sh\n", "") + "\n\n" + good)
+        res = self.send(DISPATCH_OK.replace("VERIFY    scripts/verify-checkout.sh\n", "") + "\n\n" + good)
         self.assertEqual(res.returncode, 2)
         unit = self.only_unit()
-        self.assertEqual(res.stderr.strip().splitlines(), [
-            "[orche] dispatch refused: 1 of 2 blocks refused. Re-send ONLY the refused block; the delivered "
-            "ones went out and must not be sent again.",
+        self.assertEqual(res.stdout.strip().splitlines()[:2], [
             "block 1: refused — missing VERIFY. Fill every field or drop the block.",
-            f"block 2: delivered {unit} → div-acme-build"])
+            f"block 2: delivered {unit} → div-acme-build (rev 1, deliverer-started)"])
         self.assertEqual(len(self.inbox("div-acme-build")), 1)
 
     def test_every_refusal_writes_an_events_line(self):
-        res = self.stop(DISPATCH_OK.replace("VERIFY    scripts/verify-checkout.sh\n", ""))
+        res = self.send(DISPATCH_OK.replace("VERIFY    scripts/verify-checkout.sh\n", ""))
         self.assertEqual(res.returncode, 2)
-        self.assertEqual(res.stderr.strip(), "[orche] dispatch refused: missing VERIFY. Fill every field or drop "
-                                             "the block.")
+        self.assertEqual(res.stdout.strip().splitlines()[0], "block 1: refused — missing VERIFY. Fill every "
+                                                             "field or drop the block.")
         self.assertIn("dispatch refused by=main-acme blocks=1 reason=missing VERIFY. Fill every field or drop "
                       "the block.\n", self.events())
 
     def test_incident_stop_with_unindented_reason_and_a_brief_both_relay(self):
-        self.run_hook("dispatch_relay.py", self.payload("stop.json", transcript_path=str(SAMPLE)))
+        self.send(DISPATCH_OK)
         unit = self.only_unit()
         brief_two = DISPATCH_OK.split("\n\n", 1)[1].replace("Add coupon field", "Add gift card field")
         text = (f"Stopping the old unit.\n\n```dispatch\nSTOP {unit}\nStop now: the rebase went wrong at\n"
                 "13,rebase onto the wrong base (shared worktree),\nso the build must wait;\n"
                 "the brief below replaces it.\nTO build\n```\n\n" + brief_two)
-        res = self.stop(text, msg_id="msg_2")
+        res = self.send(text)
         self.assertEqual((res.returncode, res.stderr), (0, ""))
         self.assertEqual(len(list(self.units_dir().iterdir())), 2)
         events = self.events()
@@ -450,20 +417,20 @@ class DispatchRelayTest(HookCase):
         self.assertNotIn("dispatch refused", events)
 
     def test_unknown_target_lists_valid_targets(self):
-        res = self.stop(DISPATCH_OK.replace("TO        build", "TO        nobody"))
+        res = self.send(DISPATCH_OK.replace("TO        build", "TO        nobody"))
         self.assertEqual(res.returncode, 2)
-        self.assertIn("unknown TO 'nobody'. Valid targets: div-acme-build, div-acme-rnd", res.stderr)
+        self.assertIn("unknown TO 'nobody'. Valid targets: div-acme-build, div-acme-rnd", res.stdout)
 
     def test_hash_line_in_a_value_is_kept_and_a_repeated_key_is_refused(self):
         twice = DISPATCH_OK.replace("VERIFY    ", "ACCEPT    Totals update\nVERIFY    ")
-        res = self.stop(twice)
+        res = self.send(twice)
         self.assertEqual(res.returncode, 2)
-        self.assertIn('[orche] dispatch refused: duplicate keys ACCEPT; line 7 "ACCEPT Totals update" repeats one.',
-                      res.stderr)
+        self.assertIn('block 1: refused — duplicate keys ACCEPT; line 7 "ACCEPT Totals update" repeats one.',
+                      res.stdout)
         self.assertFalse(self.units_dir().exists())
         hashed = DISPATCH_OK.replace("VERIFY    scripts/verify-checkout.sh\n",
                                      "VERIFY    scripts/verify-checkout.sh\n  # unit tests\n")
-        res = self.stop(hashed, msg_id="msg_2")
+        res = self.send(hashed)
         self.assertEqual((res.returncode, res.stderr), (0, ""))
         brief = (self.units_dir() / self.only_unit() / "BRIEF.md").read_text()
         self.assertIn("VERIFY    scripts/verify-checkout.sh\n  # unit tests\n", brief)
@@ -471,10 +438,10 @@ class DispatchRelayTest(HookCase):
     def test_amend_of_a_unit_without_a_brief_is_refused(self):
         ghost = f"acme-ghost-{dt.date.today():%Y%m%d}-1"
         (self.units_dir() / ghost).mkdir(parents=True)
-        res = self.stop(f"```dispatch\nAMEND {ghost} rev 2\nGOAL      g2\n```")
+        res = self.send(f"```dispatch\nAMEND {ghost} rev 2\nGOAL      g2\n```")
         self.assertEqual(res.returncode, 2)
-        self.assertIn(f"[orche] dispatch refused: unknown unit {ghost!r} (no .orche/units/{ghost}/BRIEF.md).",
-                      res.stderr)
+        self.assertIn(f"block 1: refused — unknown unit {ghost!r} (no .orche/units/{ghost}/BRIEF.md).",
+                      res.stdout)
         self.assertEqual(list((self.units_dir() / ghost).iterdir()), [])
         self.assertEqual(self.inbox("div-acme-build"), [])
 
@@ -482,14 +449,49 @@ class DispatchRelayTest(HookCase):
         reg = json.loads((self.home / "registry.json").read_text())
         reg["projects"]["acme"]["divisions"]["build"]["status"] = "retired"
         (self.home / "registry.json").write_text(json.dumps(reg))
-        res = self.stop(DISPATCH_OK)
+        res = self.send(DISPATCH_OK)
         self.assertEqual(res.returncode, 2)
-        self.assertIn("[orche] dispatch refused: target div-acme-build is retired.", res.stderr)
+        self.assertIn("block 1: refused — target div-acme-build is retired.", res.stdout)
         self.assertFalse(self.units_dir().exists())
         self.assertEqual(self.inbox("div-acme-build"), [])
 
+    def _set_build(self, **fields):
+        reg = json.loads((self.home / "registry.json").read_text())
+        reg["projects"]["acme"]["divisions"]["build"].update(fields)
+        (self.home / "registry.json").write_text(json.dumps(reg))
+
+    def test_asleep_stage_gated_target_is_refused(self):
+        """Live: a brief to a dormant ops division sat `undelivered` while its project was building."""
+        self._set_build(status="dormant", gated_by_stage=True)
+        res = self.send(DISPATCH_OK)
+        self.assertEqual(res.returncode, 2)
+        self.assertIn("block 1: refused — div-acme-build is asleep and gated by stage (acme is building): "
+                      "re-target, or run orche stage set acme public --yes", res.stdout)
+        self.assertFalse(self.units_dir().exists())
+        self.assertEqual(self.inbox("div-acme-build"), [])
+
+    def test_asleep_wakeable_target_is_accepted(self):
+        self._set_build(status="paused")
+        res = self.send(DISPATCH_OK)
+        self.assertEqual((res.returncode, res.stderr), (0, ""))
+        self.assertEqual(len(list(self.units_dir().iterdir())), 1)
+
+    def test_awake_gated_target_is_accepted(self):
+        self._set_build(gated_by_stage=True)
+        res = self.send(DISPATCH_OK)
+        self.assertEqual((res.returncode, res.stderr), (0, ""))
+        self.assertEqual(len(list(self.units_dir().iterdir())), 1)
+
+    def test_target_with_missing_worktree_is_refused(self):
+        self._set_build(worktree=f"repo-acme::{self.root / 'gone'}")
+        res = self.send(DISPATCH_OK)
+        self.assertEqual(res.returncode, 2)
+        self.assertIn(f"block 1: refused — div-acme-build's worktree {self.root / 'gone'} is missing",
+                      res.stdout)
+        self.assertFalse(self.units_dir().exists())
+
     def _retire_build_after_one_unit(self):
-        self.run_hook("dispatch_relay.py", self.payload("stop.json", transcript_path=str(SAMPLE)))
+        self.send(DISPATCH_OK)
         unit = self.only_unit()
         reg = json.loads((self.home / "registry.json").read_text())
         reg["projects"]["acme"]["divisions"]["build"]["status"] = "retired"
@@ -500,10 +502,10 @@ class DispatchRelayTest(HookCase):
     def test_amend_to_retired_target_is_refused(self):
         unit, folder, files, brief = self._retire_build_after_one_unit()
         pointers = len(self.inbox("div-acme-build"))
-        res = self.stop(f"```dispatch\nAMEND {unit} rev 2\nSUPERSEDES rev 1: smaller\n"
-                        "GOAL      Add coupon field only\n```", msg_id="msg_2")
+        res = self.send(f"```dispatch\nAMEND {unit} rev 2\nSUPERSEDES rev 1: smaller\n"
+                        "GOAL      Add coupon field only\n```")
         self.assertEqual(res.returncode, 2)
-        self.assertIn("[orche] dispatch refused: target div-acme-build is retired.", res.stderr)
+        self.assertIn("block 1: refused — target div-acme-build is retired.", res.stdout)
         self.assertEqual(sorted(p.name for p in folder.iterdir()), files)
         self.assertEqual((folder / "BRIEF.md").read_bytes(), brief)
         self.assertEqual(len(self.inbox("div-acme-build")), pointers)
@@ -511,19 +513,19 @@ class DispatchRelayTest(HookCase):
     def test_stop_to_retired_target_is_refused(self):
         unit, folder, files, brief = self._retire_build_after_one_unit()
         pointers = len(self.inbox("div-acme-build"))
-        res = self.stop(f"```dispatch\nSTOP {unit} user changed plans\n```", msg_id="msg_3")
+        res = self.send(f"```dispatch\nSTOP {unit} user changed plans\n```")
         self.assertEqual(res.returncode, 2)
-        self.assertIn("[orche] dispatch refused: target div-acme-build is retired.", res.stderr)
+        self.assertIn("block 1: refused — target div-acme-build is retired.", res.stdout)
         self.assertEqual(sorted(p.name for p in folder.iterdir()), files)
         self.assertEqual((folder / "BRIEF.md").read_bytes(), brief)
         self.assertEqual(len(self.inbox("div-acme-build")), pointers)
 
     def test_amend_creates_rev2_with_supersedes(self):
-        self.run_hook("dispatch_relay.py", self.payload("stop.json", transcript_path=str(SAMPLE)))
+        self.send(DISPATCH_OK)
         unit = self.only_unit()
         amend = (f"Correction.\n\n```dispatch\nAMEND {unit} rev 2\nSUPERSEDES rev 1: no font change\n"
                  "GOAL      Add coupon field without touching fonts\n```")
-        res = self.stop(amend, msg_id="msg_2")
+        res = self.send(amend)
         self.assertEqual((res.returncode, res.stderr), (0, ""))
         folder = self.units_dir() / unit
         brief = (folder / "BRIEF.md").read_text()
@@ -540,31 +542,30 @@ class DispatchRelayTest(HookCase):
         self.assertIn(f"[orche] inbox: {unit} rev 2", [a[6] for a in self.orca_calls() if a[2] == "send"])
 
     def test_stop_writes_stop_pointer(self):
-        self.run_hook("dispatch_relay.py", self.payload("stop.json", transcript_path=str(SAMPLE)))
+        self.send(DISPATCH_OK)
         unit = self.only_unit()
         text = f"```dispatch\nSTOP {unit} user changed plans\n```"
-        res = self.stop(text, msg_id="msg_3")
-        self.assertEqual(res.returncode, 0, res.stderr)
+        res = self.send(text)
+        self.assertEqual(res.returncode, 0, res.stdout)
         statuses = sorted(json.loads(p.read_text())["status"] for p in self.inbox("div-acme-build"))
         self.assertEqual(statuses, ["info", "stop"])
 
     def test_dormant_target_without_pane_logs_needs_wake(self):
-        res = self.stop(DISPATCH_OK.replace("TO        build", "TO        div-acme-rnd"))
-        self.assertEqual(res.returncode, 0, res.stderr)
+        res = self.send(DISPATCH_OK.replace("TO        build", "TO        div-acme-rnd"))
+        self.assertEqual(res.returncode, 0, res.stdout)
         self.assertIn("to=div-acme-rnd state=needs-wake", self.delivered())
         self.assertEqual([a for a in self.orca_calls() if a[2] in ("send", "create")], [])
 
     def test_alias_targets_main_and_requests_wake(self):
-        res = self.stop(DISPATCH_OK.replace("TO        build", "TO        shop"))
-        self.assertEqual(res.returncode, 0, res.stderr)
+        res = self.send(DISPATCH_OK.replace("TO        build", "TO        shop"))
+        self.assertEqual(res.returncode, 0, res.stdout)
         self.assertIn("to=main-acme by=main-acme delivery=deliverer-started", self.events())
         self.assertIn("to=main-acme state=wake-requested", self.delivered())
 
     def test_brief_header_names_main_checkout_for_a_main_target(self):
         subprocess.run(["git", "init", "-q", "-b", "trunk"], cwd=self.repo, check=True, capture_output=True)
-        res = self.run_hook("dispatch_relay.py", self.payload(
-            "stop.json", transcript_path=self.transcript(DISPATCH_OK.replace("TO        build\n", "TO        shop\n")),
-            cwd=str(self.root / "acme-build")), ORCHE_SESSION="div-acme-build")
+        res = self.send(DISPATCH_OK.replace("TO        build\n", "TO        shop\n"),
+                        cwd=self.root / "acme-build", ORCHE_SESSION="div-acme-build")
         self.assertEqual((res.returncode, res.stderr), (0, ""))
         unit = self.only_unit()
         lines = (self.units_dir() / unit / "BRIEF.md").read_text().splitlines()
@@ -681,14 +682,6 @@ class DispatchRelayTest(HookCase):
         res = self.claim("## STATUS: done\n")
         self.assertEqual((res.returncode, res.stderr.strip()), (2, no_row_blocked(head)))
 
-    def test_refusal_under_stop_hook_active_parks_question_and_allows(self):
-        res = self.stop(DISPATCH_OK.replace("VERIFY    scripts/verify-checkout.sh\n", ""), stop_hook_active=True)
-        self.assertEqual((res.returncode, res.stderr), (0, ""))
-        [ptr] = [json.loads(p.read_text()) for p in self.inbox("main-acme")]
-        self.assertEqual((ptr["status"], ptr["to"], ptr["unit"]), ("question", "main-acme", "dispatch-refused"))
-        self.assertIn("missing VERIFY", ptr["summary"])
-        self.assertIn("refused under stop_hook_active", (self.home / "logs" / "hooks.log").read_text())
-
     def wake_on_with_a_report(self):
         """Wake on, and a runner `done` (a waking pointer) pending in Main's inbox."""
         (self.home / "config.json").write_text(json.dumps({"delivery": "pane", "inbox": {"wake": True}}))
@@ -709,7 +702,7 @@ class DispatchRelayTest(HookCase):
     def test_refused_dispatch_starts_no_nudger(self):
         """C9 L7: a blocked Stop (exit 2) keeps Main busy: no re-arm, no `logs/nudge.log`."""
         self.wake_on_with_a_report()
-        res = self.stop(DISPATCH_OK.replace("VERIFY    scripts/verify-checkout.sh\n", ""))
+        res = self.send(DISPATCH_OK.replace("VERIFY    scripts/verify-checkout.sh\n", ""))
         self.assertEqual(res.returncode, 2)
         self.assertFalse((self.home / "logs" / "nudge.log").exists())
 
@@ -726,151 +719,38 @@ class DispatchRelayTest(HookCase):
         self.assertIn("nudge session=main-acme state=no-pane pending=1", self.events())
         self.assertFalse(self.units_dir().exists())     # StopFailure relays nothing
 
-    def test_a_parked_refusal_does_not_wake_main_but_is_injected_next_prompt(self):
-        """F7: the parked refusal is quiet (no nudger, so no refuse -> wake -> re-emit loop) yet urgent content:
-        Main's next prompt gets it unconditionally."""
-        (self.home / "config.json").write_text(json.dumps({"delivery": "pane", "inbox": {"wake": True}}))
-        res = self.stop(DISPATCH_OK.replace("VERIFY    scripts/verify-checkout.sh\n", ""), stop_hook_active=True)
-        self.assertEqual((res.returncode, res.stderr), (0, ""))
-        [ptr] = [json.loads(p.read_text()) for p in self.inbox("main-acme")]
-        self.assertFalse(inbox.wakes(ptr))
-        time.sleep(1.0)                                   # room for a nudger to show up
-        self.assertFalse((self.home / "logs" / "nudge.log").exists())
-        self.assertNotIn("nudge session=main-acme", self.events())
-        (self.home / "sessions").mkdir(exist_ok=True)
-        (self.home / "sessions" / "sess-main-0001.standing_seen").write_text("x")
-        out = self.run_hook("report_inject.py", self.payload("prompt.json", prompt="anything else?")).stdout
-        self.assertIn("unit dispatch-refused", out)
-        self.assertIn("missing VERIFY", out)
-        self.assertEqual(self.inbox("main-acme"), [])
-
-    def test_a_parked_refusal_starts_one_nudger_not_two(self):
-        """The parked `question` is quiet; the Stop re-arm wakes Main for the pending report (one nudger)."""
-        self.wakes = True
-        self.wake_on_with_a_report()
-        res = self.stop(DISPATCH_OK.replace("VERIFY    scripts/verify-checkout.sh\n", ""), stop_hook_active=True)
-        self.assertEqual((res.returncode, res.stderr), (0, ""))
-        deadline = time.monotonic() + 20
-        while "nudge session=main-acme" not in self.events() and time.monotonic() < deadline:
-            time.sleep(0.05)
-        time.sleep(1.0)                                   # room for a second nudger to show up
-        self.assertEqual(self.events().count("nudge session=main-acme"), 1, self.events())
-
     def test_dispatch_with_nested_snippet_is_relayed(self):
         nested = DISPATCH_OK.replace("CONTEXT   Design note in docs/coupon.md\n",
                                      "CONTEXT   Design note in docs/coupon.md\n  ```ts\n  applyCoupon(code)\n  ```\n")
-        res = self.stop(nested)
+        res = self.send(nested)
         self.assertEqual((res.returncode, res.stderr), (0, ""))
         unit = self.only_unit()
         self.assertIn("applyCoupon(code)", (self.units_dir() / unit / "BRIEF.md").read_text())
 
-    def test_dispatch_after_unclosed_fence_is_refused_not_dropped(self):
-        text = "Log so far:\n```\nTraceback (most recent call last)\n\n" + DISPATCH_OK
-        res = self.stop(text)
-        self.assertEqual(res.returncode, 2)
-        self.assertIn("[orche] dispatch block not relayed: the block at line 7: it is inside the fenced block "
-                      "opened at line 2", res.stderr)
-        self.assertIn("close the earlier fence / outdent the closer", res.stderr)
-        self.assertFalse(self.units_dir().exists())
-        # under stop_hook_active the refusal is parked in Main's own inbox, nothing is relayed
-        deeper = DISPATCH_OK.rstrip("\n")[:-3] + "    ```\n"
-        res = self.stop(deeper, msg_id="msg_2", stop_hook_active=True)
-        self.assertEqual((res.returncode, res.stderr), (0, ""))
-        [ptr] = [json.loads(p.read_text()) for p in self.inbox("main-acme")]
-        self.assertEqual((ptr["status"], ptr["unit"]), ("question", "dispatch-refused"))
-        self.assertIn("indented deeper than its opener", ptr["summary"])
-        self.assertFalse(self.units_dir().exists())
-
-    def test_block_before_the_closing_line_to_the_owner_is_relayed(self):
-        """0.6.2: the reply ends with one line to the owner; a dispatch block before it is still relayed."""
-        block = DISPATCH_OK[DISPATCH_OK.index("```dispatch"):]
-        text = ("Coupon plan confirmed.\n\n" + block +
-                "\nRunning: coupon field build. Next: say if checkout copy should change (default: unchanged).\n")
-        res = self.stop(text)
-        self.assertEqual((res.returncode, res.stderr), (0, ""))
-        unit = self.only_unit()
-        self.assertTrue((self.units_dir() / unit / "BRIEF.md").is_file())
-        [ptr] = [json.loads(p.read_text()) for p in self.inbox("div-acme-build")]
-        self.assertEqual((ptr["unit"], ptr["brief_rev"]), (unit, 1))
-
-    def test_example_next_to_a_real_block_relays_the_real_block(self):
-        """B-2: an example inside a closed ````markdown fence does not stop the real block after it."""
-        block = DISPATCH_OK[DISPATCH_OK.index("```dispatch"):]
-        text = "Example:\n````markdown\n" + block + "````\n\nNow the real one:\n\n" + block
-        res = self.stop(text)
-        self.assertEqual((res.returncode, res.stderr), (0, ""))
-        self.only_unit()
-
-    def test_example_only_is_refused_with_nothing_relayed(self):
-        block = DISPATCH_OK[DISPATCH_OK.index("```dispatch"):]
-        lines = ("Example:\n````markdown\n" + block + "````\n").splitlines()
-        res = self.stop("\n".join(lines) + "\n")
-        self.assertEqual(res.returncode, 2)
-        self.assertIn("Nothing in this reply was relayed; re-send the dispatch block outside any fence",
-                      res.stderr)
-        self.assertNotIn("say so", res.stderr)
-        # F-4: the swallowing fence is named by its own opener, not as "closed at" the block's closer
-        self.assertIn("inside the fenced block opened at line 2, which swallows it (that fence pairs with the "
-                      f"closer at line {len(lines)})", res.stderr)
-        self.assertFalse(self.units_dir().exists())
-
-    def test_unrelayed_block_outside_an_orche_session_is_not_refused(self):
-        """F-6: only an identified ORCHE session gets the not-relayed refusal."""
-        res = self.run_hook("dispatch_relay.py", self.payload(
-            "stop.json", transcript_path=self.transcript("x\n````markdown\n" + DISPATCH_OK + "````\n"),
-            cwd=str(self.root / "scratch")), ORCHE_SESSION="")
-        self.assertEqual((res.returncode, res.stderr), (0, ""))
-
     def test_unregistered_and_feature_senders_refused(self):
         """C8: a leftover liaison-<proj> pane is no registered session (the registry key is ignored)."""
-        path = self.transcript(DISPATCH_OK)
-        res = self.run_hook("dispatch_relay.py", self.payload("stop.json", transcript_path=path),
-                            ORCHE_SESSION="liaison-acme")
+        res = self.send(DISPATCH_OK, ORCHE_SESSION="liaison-acme")
         self.assertEqual(res.returncode, 2)
-        self.assertIn("only Main or a division may dispatch; liaison-acme is an unknown session", res.stderr)
-        res = self.run_hook("dispatch_relay.py", self.payload("stop.json", transcript_path=path,
-                                                              cwd=str(self.root / "acme-checkout")),
-                            ORCHE_SESSION="")
+        self.assertIn("only Main or a division may dispatch; liaison-acme is an unknown session", res.stdout)
+        res = self.send(DISPATCH_OK, cwd=self.root / "acme-checkout", ORCHE_SESSION="")
         self.assertEqual(res.returncode, 2)
-        self.assertIn("feat-acme-checkout is a feature session", res.stderr)
+        self.assertIn("feat-acme-checkout is a feature session", res.stdout)
         self.assertFalse(self.units_dir().exists())
-        res = self.run_hook("dispatch_relay.py", self.payload("stop.json", transcript_path=path, stop_hook_active=True),
-                            ORCHE_SESSION="liaison-acme")
-        self.assertEqual((res.returncode, res.stderr), (0, ""))
-        [ptr] = [json.loads(p.read_text()) for p in self.inbox("liaison-acme")]
-        self.assertEqual((ptr["status"], ptr["unit"]), ("question", "dispatch-refused"))
-        self.assertIn("only Main or a division may dispatch", ptr["summary"])
-        self.assertFalse(self.units_dir().exists())
+        self.assertEqual(self.inbox("liaison-acme"), [])
 
     def test_unknown_session_sender_refusal_grammar(self):
-        res = self.run_hook("dispatch_relay.py", self.payload("stop.json", transcript_path=self.transcript(DISPATCH_OK)),
-                            ORCHE_SESSION="ghost-acme")
+        res = self.send(DISPATCH_OK, ORCHE_SESSION="ghost-acme")
         self.assertEqual(res.returncode, 2)
-        self.assertIn("only Main or a division may dispatch; ghost-acme is an unknown session", res.stderr)
+        self.assertIn("only Main or a division may dispatch; ghost-acme is an unknown session", res.stdout)
         self.assertFalse(self.units_dir().exists())
 
     def test_unidentified_main_checkout_sender_refused(self):
-        res = self.run_hook("dispatch_relay.py", self.payload("stop.json", transcript_path=str(SAMPLE)),
-                            ORCHE_SESSION="")
+        res = self.send(DISPATCH_OK, ORCHE_SESSION="")
         self.assertEqual(res.returncode, 2)
         self.assertIn("dispatch requires an identified session: set ORCHE_SESSION=main-acme "
-                      "(ORCHE panes set it automatically)", res.stderr)
+                      "(ORCHE panes set it automatically)", res.stdout)
         self.assertFalse(self.units_dir().exists())
         self.assertEqual(self.orca_calls(), [])
-
-    # -- C1 T3 ledger rows -------------------------------------------------------------------
-    def test_unidentified_refusal_under_stop_hook_active_only_logs(self):
-        """L1: no identified session -> the refusal goes to hooks.log only, never an inbox."""
-        text = DISPATCH_OK.replace("VERIFY    scripts/verify-checkout.sh\n", "")
-        for cwd in (self.repo, self.root / "elsewhere"):
-            res = self.run_hook("dispatch_relay.py", self.payload(
-                "stop.json", transcript_path=self.transcript(text), cwd=str(cwd), stop_hook_active=True),
-                ORCHE_SESSION="")
-            self.assertEqual((res.returncode, res.stderr), (0, ""))
-            self.assertEqual(self.inbox("main-acme"), [])
-            self.assertFalse((self.home / "inbox" / "unknown").exists())
-        self.assertIn("refused under stop_hook_active", (self.home / "logs" / "hooks.log").read_text())
-        self.assertFalse(self.units_dir().exists())
 
     def test_may_stop_night_predicate_needs_an_identified_session(self):
         """L2: an unidentified session in the main checkout never runs Main's predicate."""
@@ -899,10 +779,9 @@ class DispatchRelayTest(HookCase):
         marker = self.root / "elsewhere" / ".orche" / "project"
         marker.parent.mkdir()
         marker.write_text("beta\n")
-        res = self.run_hook("dispatch_relay.py", self.payload(
-            "stop.json", transcript_path=str(SAMPLE), cwd=str(self.root / "elsewhere")), ORCHE_SESSION="")
-        self.assertEqual((res.returncode, res.stderr),
-                         (2, "dispatch requires an identified session: set ORCHE_SESSION=main-beta "
+        res = self.send(DISPATCH_OK, cwd=self.root / "elsewhere", ORCHE_SESSION="")
+        self.assertEqual((res.returncode, res.stdout),
+                         (2, "refused — dispatch requires an identified session: set ORCHE_SESSION=main-beta "
                              "(ORCHE panes set it automatically)\n"))
         self.assertFalse(self.units_dir().exists())
 
@@ -911,10 +790,9 @@ class DispatchRelayTest(HookCase):
         reg = json.loads((self.home / "registry.json").read_text())
         reg["projects"]["acme"]["divisions"]["build"]["session"] = ""
         (self.home / "registry.json").write_text(json.dumps(reg))
-        res = self.run_hook("dispatch_relay.py", self.payload(
-            "stop.json", transcript_path=str(SAMPLE), cwd=str(self.root / "acme-build")), ORCHE_SESSION="")
-        self.assertEqual((res.returncode, res.stderr),
-                         (2, "dispatch requires an identified session: set ORCHE_SESSION=main-acme "
+        res = self.send(DISPATCH_OK, cwd=self.root / "acme-build", ORCHE_SESSION="")
+        self.assertEqual((res.returncode, res.stdout),
+                         (2, "refused — dispatch requires an identified session: set ORCHE_SESSION=main-acme "
                              "(ORCHE panes set it automatically)\n"))
         self.assertFalse(self.units_dir().exists())
         self.assertEqual(self.orca_calls(), [])
@@ -928,7 +806,7 @@ class DispatchRelayTest(HookCase):
                                     "card": "x", "standing": ".orche/STANDING.md",
                                     "divisions": {}}
         (self.home / "registry.json").write_text(json.dumps(reg))
-        res = self.stop(DISPATCH_OK)
+        res = self.send(DISPATCH_OK)
         self.assertEqual((res.returncode, res.stderr), (0, ""))
         unit = self.only_unit()
         [ptr] = [json.loads(p.read_text()) for p in self.inbox("div-acme-build")]
@@ -938,7 +816,7 @@ class DispatchRelayTest(HookCase):
     def test_other_project_main_session_files_external_request(self):
         """L25: `TO main-<other>` files an external-request like `TO <other>`."""
         self.add_project_b()
-        res = self.stop(DISPATCH_OK.replace("TO        build", "TO        main-beta"))
+        res = self.send(DISPATCH_OK.replace("TO        build", "TO        main-beta"))
         self.assertEqual((res.returncode, res.stderr), (0, ""))
         self.assertFalse(self.units_dir().exists())
         [ptr] = [json.loads(p.read_text()) for p in self.inbox("main-beta")]
@@ -949,10 +827,10 @@ class DispatchRelayTest(HookCase):
     def test_cross_project_refusal_suggests_their_main_session(self):
         """L25: the cross-project refusal names the other project's Main session."""
         self.add_project_b()
-        res = self.stop(DISPATCH_OK.replace("TO        build", "TO        div-beta-build"))
+        res = self.send(DISPATCH_OK.replace("TO        build", "TO        div-beta-build"))
         self.assertEqual(res.returncode, 2)
         self.assertIn("Cross-project work goes through Main(beta): use `TO main-beta` (files an external-request).",
-                      res.stderr)
+                      res.stdout)
 
     def test_project_without_a_main_is_an_unknown_target(self):
         """L26: `TO <project>` whose main_session is "" is "unknown TO", listing the valid targets."""
@@ -960,18 +838,17 @@ class DispatchRelayTest(HookCase):
         reg = json.loads((self.home / "registry.json").read_text())
         reg["projects"]["beta"]["main_session"] = ""
         (self.home / "registry.json").write_text(json.dumps(reg))
-        res = self.stop(DISPATCH_OK.replace("TO        build", "TO        beta"))
-        self.assertEqual((res.returncode, res.stderr),
-                         (2, "[orche] dispatch refused: unknown TO 'beta'. Valid targets: div-acme-build, "
-                             "div-acme-rnd, div-beta-build, feat-acme-checkout, main-acme.\n"))
+        res = self.send(DISPATCH_OK.replace("TO        build", "TO        beta"))
+        self.assertEqual((res.returncode, res.stdout),
+                         (2, "block 1: refused — unknown TO 'beta'. Valid targets: div-acme-build, "
+                             "div-acme-rnd, div-beta-build, feat-acme-checkout, main-acme.\n"
+                             "nothing was delivered: fix the block(s) and run `orche dispatch` again.\n"))
         self.assertFalse(self.units_dir().exists())
         self.assertEqual(self.inbox("main-beta"), [])
 
     def test_build_division_dispatches_to_feature(self):
-        path = self.transcript(DISPATCH_OK.replace("TO        build\n", "TO        feat-acme-checkout\n"))
-        res = self.run_hook("dispatch_relay.py", self.payload("stop.json", transcript_path=path,
-                                                              cwd=str(self.root / "acme-build")),
-                            ORCHE_SESSION="div-acme-build")
+        res = self.send(DISPATCH_OK.replace("TO        build\n", "TO        feat-acme-checkout\n"),
+                        cwd=self.root / "acme-build", ORCHE_SESSION="div-acme-build")
         self.assertEqual((res.returncode, res.stderr), (0, ""))
         unit = self.only_unit()
         [ptr] = [json.loads(p.read_text()) for p in self.inbox("feat-acme-checkout")]
@@ -984,10 +861,8 @@ class DispatchRelayTest(HookCase):
         reg = json.loads((self.home / "registry.json").read_text())
         reg_edit(reg["projects"]["acme"]["divisions"]["build"]["features"][0])
         (self.home / "registry.json").write_text(json.dumps(reg))
-        path = self.transcript(DISPATCH_OK.replace("TO        build\n", "TO        feat-acme-checkout\n"))
-        res = self.run_hook("dispatch_relay.py", self.payload("stop.json", transcript_path=path,
-                                                              cwd=str(self.root / "acme-build")),
-                            ORCHE_SESSION="div-acme-build")
+        res = self.send(DISPATCH_OK.replace("TO        build\n", "TO        feat-acme-checkout\n"),
+                        cwd=self.root / "acme-build", ORCHE_SESSION="div-acme-build")
         self.assertEqual((res.returncode, res.stderr), (0, ""))
         unit = self.only_unit()
         return unit, (self.units_dir() / unit / "BRIEF.md").read_text().splitlines()
@@ -1010,33 +885,27 @@ class DispatchRelayTest(HookCase):
 
     def test_glyph_prefixed_pane_title_is_nudged(self):
         self.fake_orca({"terminal list": {"terminals": [{"handle": "t-glyph", "title": "✳ div-acme-build"}]}})
-        self.run_hook("dispatch_relay.py", self.payload("stop.json", transcript_path=str(SAMPLE)))
+        self.send(DISPATCH_OK)
         self.assertIn("state=nudged", self.delivered())
         sends = [a for a in self.orca_calls() if a[2] == "send"]
         self.assertEqual([a[4] for a in sends], ["t-glyph"])
         self.assertEqual(orca.normalize_title("  ✳ div-acme-build "), "div-acme-build")
 
-    def test_slow_orca_stays_within_budget_and_writes_pointers(self):
-        """Unit 5 (C9): two pane briefs, a 5 s Orca and a 0.5 s budget. The Stop hook calls no Orca at all
-        (its deliverers wait on the target's delivery lock, held here until the hook has returned), and
-        each deliverer types its own line afterwards."""
+    def test_slow_orca_writes_pointers_before_any_orca_call(self):
+        """Unit 5 (C9): two pane briefs and a 5 s Orca. `orche dispatch` calls no Orca itself (its deliverers
+        wait on the target's delivery lock, held here until the command has returned), and each deliverer
+        types its own line afterwards."""
         self.fake_orca({"delay_s": 5, "terminal list": {"terminals": [{"handle": "t-build", "title": "div-acme-build"}]}})
         second = DISPATCH_OK.split("```dispatch", 1)[1].replace("Add coupon field", "Add gift card field")
         text = DISPATCH_OK + "\n\n```dispatch" + second
-        path = self.transcript(text)
         folder = self.home / "inbox" / "div-acme-build"
         folder.mkdir(parents=True)
-        with open(folder / deliver.LOCK, "a") as lock:
+        with open(folder / deliver.DELIVER_LOCK, "a") as lock:
             fcntl.flock(lock, fcntl.LOCK_EX)
-            began = time.monotonic()
-            # The budget is an environment variable (the default is 3.0 s; this run allows 0.5 s).
-            res = self.run_hook("dispatch_relay.py", self.payload("stop.json", transcript_path=path),
-                                ORCHE_HOOK_BUDGET_S="0.5")
-            elapsed = time.monotonic() - began
-            self.assertEqual(self.orca_calls(), [])            # no Orca call before the hook returned
+            res = self.send(text)
+            self.assertEqual(self.orca_calls(), [])            # no Orca call before the command returned
             self.fake_orca({"terminal list": {"terminals": [{"handle": "t-build", "title": "div-acme-build"}]}})
-        self.assertEqual(res.returncode, 0, res.stderr)
-        self.assertLess(elapsed, 1.5)
+        self.assertEqual(res.returncode, 0, res.stdout)
         self.assertEqual(len(self.inbox("div-acme-build")), 2)
         self.assertEqual(self.events().count("delivery=deliverer-started"), 2)
         self.assertNotIn("budget-exceeded", self.events())
@@ -1051,6 +920,19 @@ class DispatchRelayTest(HookCase):
         res = self.stop("All quiet.")
         self.assertEqual((res.returncode, res.stderr.strip()), (2, "night: 2 units still open"))
         self.assertEqual(self.stop("All quiet.", stop_hook_active=True).returncode, 0)
+
+    def test_deliverers_never_send_slash_commands(self):
+        self.send(DISPATCH_OK)
+        self.delivered()                                       # the deliverer types, never the command
+        texts = [a[a.index("--text") + 1] for a in self.orca_calls() if "--text" in a]
+        self.assertTrue(texts)
+        self.assertFalse([t for t in texts if t.lstrip().startswith("/")])
+
+    def test_stop_hook_relays_no_dispatch_block(self):
+        """A dispatch block left in the reply is plain text now: the Stop hook delivers nothing."""
+        res = self.stop(DISPATCH_OK)
+        self.assertEqual((res.returncode, res.stdout, res.stderr), (0, "", ""))
+        self.assertFalse(self.units_dir().exists())
 
     def test_internal_error_fails_open_and_logs(self):
         (self.home / "registry.json").write_text("{broken")
@@ -1179,12 +1061,12 @@ class ReportInjectTest(HookCase):
         self.assertEqual(inbox.REPORT_LINE,
                          "[orche] Act on the inbox above now: read each report named (Read tool), then end this "
                          "turn with your report to the user in this pane — outcome · what landed · what failed · "
-                         "decisions needed (recommendation + default) · next step — followed by the next dispatch "
-                         "block or the question the user must answer. Never only acknowledge. When several "
+                         "decisions needed (recommendation + default) · next step — after running `orche dispatch` "
+                         "for the next unit, or with the question the user must answer. Never only acknowledge. When several "
                          "reports are listed, write one consolidated report and put anything the owner must do "
                          "first. Finish with one line to the owner: the state (nothing to do / running: <what> / "
                          "all done) and either the decision you need with its default or the question what to do "
-                         "next; dispatch blocks go before that line.")
+                         "next; run `orche dispatch` before writing that line.")
         self.assertNotIn("\n", inbox.REPORT_LINE)
 
     def test_pointer_fields_cannot_forge_orche_lines(self):
@@ -1493,6 +1375,20 @@ class EnvGateTableTest(HookCase):
             res = self.run_hook("env_read_gate.py", self.payload(
                 "pretool_read.json", tool_name="Bash", tool_input={"command": command}))
             self.assertEqual(bool(res.stdout.strip()), denied, command)
+
+    def test_orche_dispatch_heredoc_is_data(self):
+        """A brief sent with `orche dispatch <<'EOF'` is text: what it says about .env, secrets/,
+        key variables or `sed -i` is never read as a command (both rule sets, and through the hook)."""
+        from orche import envgate, jevgate
+        command = ("orche dispatch <<'EOF'\nTO        build\n"
+                   "GOAL      stop reading .env and secrets/api.key; cat .env; sed -i s/a/b/ lib/x.py\n"
+                   "CONTEXT   printenv shows $OPENAI_API_KEY; env | grep KEY; "
+                   "python3 -c 'import os; print(os.environ)'\n---\nSTOP div-acme-build\nEOF")
+        for gate in (envgate, jevgate):
+            self.assertIsNone(gate.reason("Bash", {"command": command}), gate.__name__)
+        res = self.run_hook("env_read_gate.py", self.payload(
+            "pretool_read.json", tool_name="Bash", tool_input={"command": command}))
+        self.assertEqual((res.returncode, res.stdout.strip()), (0, ""))
 
     def test_carriage_return_hides_nothing(self):
         """A bare CR is a line break to Python: code after `#…\\r` is checked (both rule sets)."""
@@ -1913,14 +1809,6 @@ class SubagentTest(HookCase):
         res = self.run_hook("scope_gate.py", self.payload("pretool_edit.json", tool_input={"file_path": "/etc/hosts"},
                                                           **sub))
         self.assertEqual(json.loads(res.stdout)["hookSpecificOutput"]["permissionDecision"], "deny")
-
-    def test_hooks_never_send_slash_commands(self):
-        self.run_hook("dispatch_relay.py", self.payload("stop.json", transcript_path=str(SAMPLE)),
-                      ORCHE_SESSION="main-acme")
-        self.delivered()                                       # the deliverer types, never the hook
-        texts = [a[a.index("--text") + 1] for a in self.orca_calls() if "--text" in a]
-        self.assertTrue(texts)
-        self.assertFalse([t for t in texts if t.lstrip().startswith("/")])
 
 
 class FakeOrcaGuardTest(support.TempHomeCase):

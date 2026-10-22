@@ -89,8 +89,8 @@ customise. In chat there is no terminal, so the setup goes through a JSON file. 
    division, also by name). Only the status-line cell uses the label (`Design` → `DES○`).
 6. Hand over in three lines: Orca has switched to the Main tab (`main-<proj>`; if init warned that it could
    not switch, `orche wake main-<proj>` opens or switches to it), that the user types the first request
-   there in plain language (Main echoes `Understood: source = <proj>, output = <proj>` and ends with a
-   dispatch block), and that `[drain]` shows finished work.
+   there in plain language (Main echoes `Understood: source = <proj>, output = <proj>` and runs
+   `orche dispatch`), and that `[drain]` shows finished work.
 
 ## Later changes
 

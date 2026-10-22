@@ -10,6 +10,7 @@ import io
 import json
 import os
 import sys
+import threading
 import time
 import unittest
 from contextlib import redirect_stderr, redirect_stdout
@@ -38,7 +39,7 @@ class NudgeCase(HookCase):
         super().setUp()
         os.environ["ORCHE_FAKE_ORCA"] = "1"
         self.canned()
-        for name, value in (("LOCK_WAIT_S", 0.3), ("POLL_S", 0.05)):
+        for name, value in (("LOCK_WAIT_S", 0.3), ("WAKE_HOLD_S", 0.3), ("NOTIFY_WAIT_S", 2.0), ("POLL_S", 0.05)):
             patcher = mock.patch.object(deliver, name, value)
             patcher.start()
             self.addCleanup(patcher.stop)
@@ -176,15 +177,37 @@ class NudgeTest(NudgeCase):
         self.assertEqual(self.calls(), [["terminal", "list"], ["terminal", "wait"]])
         self.assertFalse(self.marker().exists())
 
+    def quiet_cap(self, cap):
+        cfg = json.loads((self.home / "config.json").read_text())
+        cfg["inbox"] = {**cfg.get("inbox", {}), "quiet_max_s": cap}
+        (self.home / "config.json").write_text(json.dumps(cfg))
+
     def test_locked(self):
         self.report()
+        self.quiet_cap(0)
         folder = inbox.box("main-acme")
-        with open(folder / deliver.LOCK, "a") as fh:
+        with open(folder / deliver.WAKE_LOCK, "a") as fh:
             fcntl.flock(fh, fcntl.LOCK_EX | fcntl.LOCK_NB)
             self.assertEqual(self.nudge(), (1, "locked"))
         self.assertEqual(self.orca_calls(), [])
         self.assertIn("nudge session=main-acme state=locked pending=1", self.events())
         self.assertEqual(self.nudge(), (0, "nudged"))             # released: the next nudger types
+
+    def test_the_wake_lock_wait_follows_the_quiet_cap(self):
+        self.assertEqual(deliver.wake_wait_s({"quiet_max_s": 30}), deliver.WAKE_HOLD_S + 30)
+        self.report()
+        self.quiet_cap(0.6)
+        with open(inbox.box("main-acme") / deliver.WAKE_LOCK, "a") as fh:
+            fcntl.flock(fh, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            began = time.monotonic()
+            self.assertEqual(self.nudge(), (1, "locked"))
+            self.assertGreaterEqual(time.monotonic() - began, 0.85)   # WAKE_HOLD_S 0.3 + quiet_max_s 0.6
+
+    def test_a_deliverers_lock_never_holds_up_a_wake(self):
+        self.report()
+        with open(inbox.box("main-acme") / deliver.DELIVER_LOCK, "a") as fh:
+            fcntl.flock(fh, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            self.assertEqual(self.nudge(), (0, "nudged"))
 
     def failing_on(self, sub, exc):
         def fake(name, *args, **kw):
@@ -445,11 +468,18 @@ class DeliverTest(NudgeCase):
 
     def test_locked(self):
         b = self.dispatched()
-        with open(inbox.box("div-acme-build") / deliver.LOCK, "a") as fh:
+        with open(inbox.box("div-acme-build") / deliver.DELIVER_LOCK, "a") as fh:
             fcntl.flock(fh, fcntl.LOCK_EX | fcntl.LOCK_NB)
             self.assertEqual(self.deliver(b.unit), (1, "locked"))
         self.assertEqual(self.orca_calls(), [])
         self.assertEqual(len(self.failures()), 1)
+
+    def test_a_nudgers_wake_lock_never_holds_up_a_delivery(self):
+        b = self.dispatched()
+        with open(inbox.box("div-acme-build") / deliver.WAKE_LOCK, "a") as fh:
+            fcntl.flock(fh, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            self.assertEqual(self.deliver(b.unit), (0, "nudged"))
+        self.assertEqual(self.failures(), [])
 
     def test_the_failure_pointer_wakes_the_sender(self):
         b = self.dispatched("div-acme-rnd")
@@ -605,6 +635,23 @@ class NotifyTest(NudgeCase):
                 with mock.patch.object(deliver, "PLATFORM", "linux" if name == "linux" else "darwin"):
                     deliver.notify_owner(to)
                 self.assertEqual(self.notes(), [])
+
+    def test_concurrent_notifiers_notify_once(self):
+        self.report(status="blocked")
+        real = deliver.shell.run
+
+        def slow(*args, **kw):
+            time.sleep(0.3)                                        # both notifiers overlap here
+            return real(*args, **kw)
+        with mock.patch.object(deliver.shell, "run", side_effect=slow):
+            threads = [threading.Thread(target=deliver.notify_owner, args=("main-acme",)) for _ in range(2)]
+            for t in threads:
+                t.start()
+            for t in threads:
+                t.join()
+        self.assertEqual(len(self.notes()), 1)
+        self.assertEqual((inbox.box("main-acme") / deliver.NOTIFIED).read_text().split(),
+                         [p.name for p, _x in inbox.pending("main-acme")])
 
     def test_a_failing_osascript_is_logged_and_never_raises(self):
         self.report(status="blocked")

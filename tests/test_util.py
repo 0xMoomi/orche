@@ -92,20 +92,6 @@ class FenceSpansTest(unittest.TestCase):
             # A plain block has no such rule: an indented bare fence closes it.
             self.assertEqual(self.spans(f"{f}\n  {f}\nx\n{f}"), [(0, 1, ""), (3, None, "")], f)
 
-    def test_brief_scan_reads_tilde_blocks_and_nested_snippets(self):
-        from orche import brief
-
-        def find_blocks(text):
-            return list(brief.scan(text).bodies)
-        nested = ("CONTEXT see:\n  ```py\n  parse(x)\n  ```\n  ~~~\n  y\n  ~~~\nTIER standard")
-        for f in ("```", "~~~", "````", "~~~~"):
-            text = f"Done.\n\n{f}dispatch\nTO build\nGOAL g\n{nested}\n{f}\n\nSTATUS: waiting"
-            self.assertEqual(find_blocks(text), [f"TO build\nGOAL g\n{nested}"], f)
-        self.assertEqual(find_blocks("~~~dispatch\nTO a\n```\n~~~dispatch\nTO b\n~~~"),
-                         ["TO a\n```\n~~~dispatch\nTO b"])                              # inner lines are content
-        self.assertEqual(find_blocks("```dispatch\nTO a\n```\n~~~dispatch\nTO b\n~~~"), ["TO a", "TO b"])
-        self.assertEqual(find_blocks("```dispatch\nTO a\n~~~"), [])                 # never closed
-
 
 class PathsLogConfigTest(support.TempHomeCase):
     def test_orche_home_and_dirs(self):
