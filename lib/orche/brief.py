@@ -1,4 +1,4 @@
-"""Briefs: the ```dispatch block grammar, unit ids, the unit folder and BRIEF.md revisions.
+"""Briefs: the dispatch block grammar (brief / AMEND / STOP), unit ids, the unit folder and BRIEF.md revisions.
 Callers route (roster) and deliver (dispatch); this module never does either.
 """
 import re
@@ -21,7 +21,6 @@ _UNIT_ID = re.compile(r"^[a-z0-9][a-z0-9-]*-\d{8}-\d+$")
 _AMEND = re.compile(r"AMEND\s+(\S+)\s+rev\s+(\d+)")
 _STOP = re.compile(r"STOP\s+(\S+)(?:\s+(.*))?")
 _SUPERSEDES = re.compile(r"^SUPERSEDES\s+(.*)$")
-_OPENER = re.compile(r"^([ \t]*)(`{3,}|~{3,})[ \t]*dispatch[ \t]*$")
 _REV = re.compile(r"^rev:\s*(\d+)\s*$", re.MULTILINE)
 _MARK = re.compile(r"^## Brief\b.*$", re.MULTILINE)
 _ORDER = re.compile(r"-(\d{8})-(\d+)$")
@@ -30,7 +29,7 @@ _MAIN_CHECKOUT = " (main checkout)"
 
 
 class Refusal(Exception):
-    """A dispatch block, or a dispatch routing check, that goes back to its author (Stop hook exit 2).
+    """A dispatch block, or a dispatch routing check, that goes back to its author (`orche dispatch` prints it, exit 2).
     str(exc) is the full message."""
 
 
@@ -75,12 +74,6 @@ class Block:
             err = unit_id_error(self.unit)
             if err:
                 raise Refusal(f"{REFUSE}{err}.")
-
-
-@dataclass(frozen=True)
-class Scan:
-    bodies: tuple[str, ...]         # bodies of the closed dispatch blocks, in order
-    unrelayed: str | None           # when bodies is empty and dispatch openers exist: the S1 message
 
 
 def _is_comment(line):
@@ -211,45 +204,6 @@ def parse(body: str) -> Block:
         if hint is None:
             raise
         raise Refusal(f"{msg} Line {hint[0]} {_quote(hint[1])} was read as part of {hint[2]}; {_FIX}.") from None
-
-
-def _not_relayed(lines, spans):
-    """[(line, reason)] (1-based) for each dispatch opener in a reply that yields no relayed block."""
-    out = []
-    for i, line in enumerate(lines):
-        m = _OPENER.match(line)
-        if not m:
-            continue
-        outer = next(((s, e) for s, e, _info in spans if s < i and (e is None or e > i)), None)
-        if outer is not None:
-            reason = (f"it is inside the fenced block opened at line {outer[0] + 1}"
-                      + (", which is never closed" if outer[1] is None else
-                         f", which swallows it (that fence pairs with the closer at line {outer[1] + 1})"))
-        else:
-            indent, char = len(m.group(1).expandtabs()), m.group(2)[0]
-            deeper = next((j for j in range(i + 1, len(lines))
-                           if lines[j].strip().strip(char) == "" and lines[j].strip().startswith(char * 3)
-                           and len(lines[j]) - len(lines[j].lstrip()) > indent), None)
-            reason = ("its closing fence at line %d is indented deeper than its opener" % (deeper + 1)
-                      if deeper is not None else "it is never closed")
-        out.append((i + 1, reason))
-    return out
-
-
-def scan(text: str) -> Scan:
-    """The reply's dispatch blocks, with one util.fence_spans pass. Never raises."""
-    lines = (text or "").splitlines()
-    spans = util.fence_spans(lines)
-    bodies = tuple("\n".join(lines[s + 1:e]).rstrip("\n") for s, e, info in spans
-                   if e is not None and info == "dispatch")
-    if bodies:
-        return Scan(bodies, None)
-    found = _not_relayed(lines, spans)
-    if not found:
-        return Scan((), None)
-    where = "; ".join(f"the block at line {n}: {reason}" for n, reason in found)
-    return Scan((), f"[orche] dispatch block not relayed: {where}. Nothing in this reply was relayed; re-send "
-                    "the dispatch block outside any fence (close the earlier fence / outdent the closer).")
 
 
 # ---- BRIEF.md: the unit folder, revisions, writer and reader -------------

@@ -206,7 +206,7 @@ export PATH="$HOME/orche/bin:$PATH"
 orche version
 ```
 
-Success: `orche 0.6.2` (or the version you cloned).
+Success: `orche 0.6.3` (or the version you cloned).
 
 To make it permanent, add the same line to your login profile. ORCHE's panes and `orche doctor` use a
 login shell (`$SHELL -lc`), and a zsh login shell does not read `~/.zshrc`, so use:
@@ -561,11 +561,13 @@ Main's first line echoes what it understood:
 Understood: source = my-app, output = my-app
 ```
 
-Main gets a plan confirmed with you, then ends its reply with a dispatch block. The Stop hook writes
-the brief to `.orche/units/<unit>/BRIEF.md` and starts the unit; Main spends no turn on delivery:
+Main gets a plan confirmed with you, then runs `orche dispatch` with the dispatch block on stdin
+(`---` between blocks; `--file <path>` also works). The command writes
+the brief to `.orche/units/<unit>/BRIEF.md` starts the unit and prints `block N: delivered …` or `block N: refused — …`, so Main fixes a refusal
+in the same turn. A block written in the reply is plain text and is not sent:
 
-````
-```dispatch
+```
+orche dispatch <<'EOF'
 TO        div-my-app-build
 GOAL      Add a date filter to the history API
 SCOPE     src/api/history/**, tests/api/** ; branch div/build
@@ -577,8 +579,8 @@ TIMEBOX   2h; on overrun report partial result and stop
 FORBID    merge, rebase, force-push, edits outside SCOPE
 REPORT    status, branch, head SHA, PR, verdict, commands run, memory-save
 TIER      standard
+EOF
 ```
-````
 
 ### Step 3. Watch it run
 
@@ -823,7 +825,7 @@ the clone (`~/orche`) and the PATH line from your login profile.
 ## How units run
 
 By default (config `delivery: runner`) every new brief to a division or feature agent runs as a
-lean headless worker: the Stop hook spawns `orche run <unit>` detached and returns at once, and
+lean headless worker: `orche dispatch` spawns `orche run <unit>` detached and returns at once, and
 the runner calls `claude -p --output-format json` in the unit's worktree with project settings
 only (`--setting-sources project`), ORCHE's secret-read and scope gates (passed with
 `--settings`; no other ORCHE hook runs there), no MCP servers (its own empty `--mcp-config`,
@@ -989,7 +991,7 @@ the prompt to Main unchanged):
    that one, and their Korean equivalents); questions (ending in `?`, starting with a question
    word, or ending in a Korean question form even without `?`); and replies to a question Main
    just asked go to Main. For the last one, Main's last message is read from the transcript, its
-   trailing fenced blocks (Main's ```` ```dispatch ```` block, with ```` ``` ```` or `~~~` fences)
+   trailing fenced blocks (any ```` ``` ```` or `~~~` fence)
    and `STATUS:` lines are dropped, and what is
    left must end with `?` or a confirmation request ("Shall I …", "Want me to …", …).
 3. **Heuristics** (no model). Only a request that is an instruction AND names a concrete target
@@ -1075,7 +1077,7 @@ Why: in practice most token spend is a big orchestrator context re-read on every
 
 ```
 User ──(talks to Main; may open any panel)──▶ Main (per project)
-                                               │ ```dispatch block → [Stop hook] → relay
+                                               │ orche dispatch <<'EOF' … EOF → relay
                ┌──────────┬───────────┬────────┼────────┬──────────┐
                ▼          ▼           ▼        ▼        ▼
               R&D      Research     Build     GTM      Ops (dormant while stage=building)
@@ -1089,7 +1091,7 @@ Liaison (headless) ── orche ask <proj> · orche card refresh <proj> (read-on
 
 | Piece | What it does |
 |---|---|
-| Dispatch relay (Stop hook) | Parses `dispatch` blocks, refuses incomplete ones, writes `BRIEF.md` revisions, starts the runner (or `orche deliver` for a pane); gates completion claims (`STATUS: done` / `release-ready`) through the done gate |
+| Dispatch (`orche dispatch`) | Parses dispatch blocks from stdin or `--file`, refuses incomplete ones with a printed reason, writes `BRIEF.md` revisions, starts the runner (or `orche deliver` for a pane); gates completion claims (`STATUS: done` / `release-ready`) through the done gate |
 | Runner | `orche run <unit>`: one headless `claude -p` worker per unit in its worktree; records `RUN.json`, files the pointer through the done gate |
 | Report inject (UserPromptSubmit hook) | Injects every report at the next prompt (notes at drain triggers); ORCHE wakes an idle Main |
 | Verification ledger | `orche ledger record/check`; verdicts `live-ui-verified`, `unit-test-verified`, `type-check-only`, `verifier-blocked`, `verifier-failed`. CI green is not a verdict |

@@ -47,7 +47,7 @@ asking. "No" is a valid answer; a stopped action is never retried without a new 
   If the context fills mid-unit, compact then and only then.
 
 ## Report format
-REPORT.md, ketchup style, ≤200 words: the first line is `STATUS: done | blocked | failed | stop`
+REPORT.md, status card, ≤200 words: the first line is `STATUS: done | blocked | failed | stop`
 (the Stop hook checks `STATUS: done` and `STATUS: release-ready` claims against the ledger), then
 outcome in one sentence, branch, head SHA, PR, verdict, commands actually run with results,
 deviations, `Decisions needed → default applied` (each with your recommendation), follow-ups,

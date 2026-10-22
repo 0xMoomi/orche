@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
-"""Stop hook: relay ```dispatch blocks, gate completion claims, run the overnight predicate.
+"""Stop hook: gate completion claims, run the overnight predicate, re-arm the inbox wake.
+It relays nothing: briefs go out through `orche dispatch` (a fenced block in the reply is plain text).
 
 Exit 2 + stderr makes the model continue with the message; exit 0 lets it stop. Fail-open.
 StopFailure (a turn ended on an API error) only re-arms the inbox wake; its output is ignored.

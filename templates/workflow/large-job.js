@@ -12,7 +12,7 @@ export const meta = {
 // ORCHE large-job skeleton for the Claude Code Workflow tool.
 //
 // Use it for ONE-OFF large jobs only: a repo-wide audit, a mechanical migration across many files,
-// a research sweep. The daily division flow (Main -> dispatch block -> division/feature unit ->
+// a research sweep. The daily division flow (Main -> orche dispatch -> division/feature unit ->
 // inbox pointer) does not use workflows; keep using briefs for that.
 //
 // Shape: fan-out -> verify -> collect.

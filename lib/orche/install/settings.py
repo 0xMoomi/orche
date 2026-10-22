@@ -10,9 +10,11 @@ import re
 from pathlib import Path
 
 from .. import util
-from . import careful, write_file
+from . import write_file
 
 STEP = "settings"
+# The gstack careful hook is not ORCHE's: never registered or removed, only flagged by doctor.
+CAREFUL_MARKER = "check-careful.sh"
 CLEANUP_DAYS = 3650
 ENV_SET = {"CLAUDE_AUTOCOMPACT_PCT_OVERRIDE": "50"}
 ENV_UNTOUCHED = "CLAUDE_CODE_SUBAGENT_PROMPT_CACHE_TTL"
@@ -150,17 +152,6 @@ def install(ctx, mode, state) -> None:
             env[key] = value
     ctx.note(STEP, "keep", None, f"env.{ENV_UNTOUCHED} left untouched "
                                  f"({'set' if ENV_UNTOUCHED in env else 'absent'}; ORCHE never writes it)")
-    script = careful.script(ctx.home)
-    careful_cmd = None
-    if not script.is_file():
-        ctx.note(STEP, "skip", script, "gstack careful hook not installed; no careful hook registered")
-    elif any(careful.is_careful(cmd) for ev, cmd in iter_commands(new) if ev == "PreToolUse"):
-        ctx.note(STEP, "ok", None, "careful hook already registered (PreToolUse Bash)")
-    else:
-        careful_cmd = careful.command(ctx.home)
-        add_hook(new, "PreToolUse", "Bash", careful_cmd)
-        changes.append(f"add hook PreToolUse[Bash] {careful_cmd}")
-        added.append({"event": "PreToolUse", "command": careful_cmd})
     replaced = []
     if mode == "plugin":
         # The plugin's hooks.json registers the hooks: settings-mode entries left by an earlier
@@ -208,19 +199,17 @@ def install(ctx, mode, state) -> None:
             present.append(h)
     known[:] = present
     state["added_hooks"] = known
-    if careful_cmd:
-        state["careful_command"] = careful_cmd
 
 
 def orche_hook_pairs(plugin_root, state=None) -> set:
     """(event, command) of every settings-mode ORCHE hook entry: the six plugin hooks in both shapes
     (`"<root>/hooks/run.sh" <hook>` and the older `python3 "<root>/hooks/<hook>.py"`), plus the
-    recorded `added_hooks` in both shapes. The careful hook is not ORCHE's and is never included."""
+    recorded `added_hooks` in both shapes."""
     pairs = set()
     for event, _, command in plugin_hooks(plugin_root):
         pairs |= {(event, command), (event, legacy_command(plugin_root, command))}
     for event, command in _added_pairs(state or {}, plugin_root):
-        if command and not careful.is_careful(command):
+        if command:
             pairs.add((event, command))
     return pairs
 
@@ -232,11 +221,11 @@ def settings_hooks(data, plugin_root) -> list:
 
 
 def _added_pairs(state, plugin_root) -> set:
-    """Recorded hook commands, each in both shapes (`python3 "<root>/hooks/x.py"` and `run.sh x`)."""
+    """Recorded hook commands, each in both shapes (`python3 "<root>/hooks/x.py"` and `run.sh x`).
+    A gstack careful entry an older ORCHE recorded is skipped: ORCHE no longer owns it."""
     hooks = state.get("added_hooks") if isinstance(state.get("added_hooks"), list) else []
-    pairs = {(h.get("event"), h.get("command")) for h in hooks if isinstance(h, dict)}
-    if state.get("careful_command"):  # install.json written before added_hooks existed
-        pairs.add(("PreToolUse", state["careful_command"]))
+    pairs = {(h.get("event"), h.get("command")) for h in hooks
+             if isinstance(h, dict) and CAREFUL_MARKER not in str(h.get("command"))}
     for event, command in list(pairs):
         other = legacy_command(plugin_root, command or "") or current_command(plugin_root, command)
         if other:
@@ -302,7 +291,7 @@ def uninstall(ctx, state) -> None:
             ctx.note(STEP, verb, None, detail)
         write_file(ctx, STEP, path, dump(new), f"{len(removed)} hook(s) removed, {len(restored)} value(s) restored")
     if not ctx.dry_run:
-        for key in ("added_hooks", "careful_command", "originals"):
+        for key in ("added_hooks", "originals"):
             state.pop(key, None)
 
 

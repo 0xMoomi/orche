@@ -1295,17 +1295,20 @@ class RelayRunnerTest(RunnerCase):
 
 
 class RelayRunnerHookTest(RunnerCase):
-    """End to end: the Stop hook spawns `bin/orche run`, which runs the fake claude and files the pointer."""
+    """End to end: `orche dispatch` spawns `bin/orche run`, which runs the fake claude and files the pointer."""
 
-    def test_hook_returns_within_budget_and_the_run_completes(self):
+    def test_dispatch_returns_within_budget_and_the_run_completes(self):
         self.commit_action(verdict="type-check-only")
         self.reply("STATUS: done\nshipped")
-        path = self.transcript("Relaying.\n\n```dispatch\n" + BODY.format(to="build", tier="standard") + "\n```")
+        clean = {k: v for k, v in os.environ.items() if not k.startswith(("ORCA_", "ORCHE_", "CLAUDE"))}
+        clean.update({"ORCHE_HOME": str(self.home), "ORCHE_FAKE_ORCA": "1",
+                      "ORCHE_SCRATCH_ROOT": str(self.root / "scratch"), "ORCHE_SESSION": "main-acme"})
         started = time.monotonic()
-        res = self.run_hook("dispatch_relay.py", self.payload("stop.json", transcript_path=path),
-                            ORCHE_SESSION="main-acme")
+        res = subprocess.run([sys.executable, str(support.ROOT / "bin" / "orche.py"), "dispatch"],
+                             input=BODY.format(to="build", tier="standard"), env=clean, cwd=str(self.repo),
+                             capture_output=True, text=True, timeout=30)
         self.assertLess(time.monotonic() - started, 3.0 + 1.5)
-        self.assertEqual((res.returncode, res.stderr), (0, ""))
+        self.assertEqual((res.returncode, res.stderr), (0, ""), res.stdout)
         unit = self.only_unit()
         record = self.units_dir() / unit / "RUN.json"
         deadline = time.monotonic() + 30
@@ -1315,7 +1318,7 @@ class RelayRunnerHookTest(RunnerCase):
         self.assertTrue(record.exists(), (self.home / "logs" / "runs" / f"{unit}.log").read_text())
         self.assertEqual(json.loads(record.read_text())["status"], "done")
         statuses = sorted(p["status"] for p in self.pointers("main-acme"))
-        self.assertEqual(statuses, ["done", "info"])   # the run's done + the relay feedback
+        self.assertEqual(statuses, ["done", "info"])   # the run's done + the dispatch feedback
 
 
 class GateScopeTest(RunnerCase):

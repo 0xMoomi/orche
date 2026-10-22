@@ -257,52 +257,6 @@ class BlockTest(unittest.TestCase):
         self.assertEqual(Block("brief", triage.brief_fields(d)).fields["TIER"], "standard")
 
 
-class ScanTest(unittest.TestCase):
-    def test_bodies(self):
-        for name, text, want in [
-            ("backtick and tilde in order", "a\n```dispatch\nTO x\n```\nb\n~~~dispatch\nTO y\n~~~\n",
-             ("TO x", "TO y")),
-            ("nested indented snippet stays inside",
-             "```dispatch\nCONTEXT see\n  ```py\n  x = 1\n  ```\nTO x\n```",
-             ("CONTEXT see\n  ```py\n  x = 1\n  ```\nTO x",)),
-            ("space before info", "``` dispatch\nTO x\n```", ("TO x",)),
-            ("trailing blank lines trimmed", "```dispatch\nTO x\n\n\n```", ("TO x",)),
-            ("real block next to an example", "````md\n```dispatch\nTO ex\n```\n````\n```dispatch\nTO real\n```",
-             ("TO real",)),
-        ]:
-            with self.subTest(name):
-                self.assertEqual(brief.scan(text), brief.Scan(want, None))
-
-    def test_not_blocks(self):
-        for name, text in [
-            ("dispatchx", "```dispatchx\nTO x\n```"),
-            ("dispatch extra", "```dispatch extra\nTO x\n```"),
-            ("plain fence", "```\nTO x\n```"),
-            ("no fence", "TO x"),
-            ("empty", ""),
-            ("None", None),
-        ]:
-            with self.subTest(name):
-                self.assertEqual(brief.scan(text), brief.Scan((), None))
-
-    def test_unrelayed(self):
-        tail = (". Nothing in this reply was relayed; re-send the dispatch block outside any fence "
-                "(close the earlier fence / outdent the closer).")
-        for name, text, want in [
-            ("never closed", "hi\n```dispatch\nTO x", "the block at line 2: it is never closed"),
-            ("inside a 4-backtick fence", "````md\n```dispatch\nTO x\n```\n````",
-             "the block at line 2: it is inside the fenced block opened at line 1, which swallows it "
-             "(that fence pairs with the closer at line 5)"),
-            ("inside a never-closed fence", "```md\n```dispatch\nTO x",
-             "the block at line 2: it is inside the fenced block opened at line 1, which is never closed"),
-            ("closer indented deeper", "```dispatch\nTO x\n    ```",
-             "the block at line 1: its closing fence at line 3 is indented deeper than its opener"),
-        ]:
-            with self.subTest(name):
-                s = brief.scan(text)
-                self.assertEqual(s, brief.Scan((), f"[orche] dispatch block not relayed: {want}{tail}"))
-
-
 class UnitIdTest(unittest.TestCase):
     def test_valid(self):
         for unit in (U, "orche-c6-brief-20261019-12", "a-20261019-1"):
@@ -708,8 +662,8 @@ class ByteIdentityTest(StoreCase):
 
     def test_fixtures(self):
         subprocess.run(["git", "init", "-q", "-b", "trunk"], cwd=self.repo, check=True, capture_output=True)
-        sample = brief.parse(brief.scan(json.loads(SAMPLE.read_text().splitlines()[1])
-                                        ["message"]["content"][0]["text"]).bodies[0]).fields
+        text = json.loads(SAMPLE.read_text().splitlines()[1])["message"]["content"][0]["text"]
+        sample = brief.parse(text.split("```dispatch\n", 1)[1].split("\n```", 1)[0]).fields
         amend = brief.parse("AMEND acme-x-20261019-1 rev 2\nSUPERSEDES rev 1: no font change\n"
                             "GOAL      Add coupon field without touching fonts")
         drift = Block("amend", {"VERIFY": "make check\n  # still content"}, "acme-x-20261019-1", 7)

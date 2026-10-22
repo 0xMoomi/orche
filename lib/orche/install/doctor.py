@@ -9,7 +9,7 @@ import shutil
 import sys
 
 from .. import __version__, config, headless, jev_setup, oauth, orca, paths, procs, registry, runs, shell
-from . import careful, settings, statusline
+from . import settings, statusline
 
 TOOLS = ("gcloud", "gh", "vercel", "age", "zstd")
 
@@ -250,6 +250,7 @@ def checks(ctx) -> list:
         add("WARN", "codex AGENTS.md", f"{agents} missing but {recovered.name} exists (run: orche install --yes)")
     else:
         add("OK", "codex AGENTS.md", "skipped (not present)")
-    script = careful.script(ctx.home)
-    add("OK", "careful hook", f"{script} present" if script.is_file() else "skipped (not present)")
+    if any(settings.CAREFUL_MARKER in cmd for _, cmd in settings.iter_commands(data)):
+        add("WARN", "careful hook", "careful hook registered in settings.json — its approval dialogs stall "
+                                    "unattended ORCHE panes; remove it or keep it only for your own sessions")
     return out

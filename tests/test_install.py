@@ -184,7 +184,7 @@ class InstallTest(InstallCase):
                 self.assertEqual(data[key], value, key)
         self.assertEqual(data["cleanupPeriodDays"], 3650)
         self.assertEqual(data["env"], {**self.settings["env"], "CLAUDE_AUTOCOMPACT_PCT_OVERRIDE": "50"})
-        self.assertEqual(data["hooks"], self.settings["hooks"])  # plugin mode, no careful script
+        self.assertEqual(data["hooks"], self.settings["hooks"])  # plugin mode
         self.assertIn("CLAUDE_CODE_SUBAGENT_PROMPT_CACHE_TTL left untouched", out)
         # Status line: one guarded block appended after the original bytes.
         script = (self.c / "statusline-command.sh").read_text()
@@ -242,7 +242,7 @@ class InstallTest(InstallCase):
         self.assertEqual([e.get("matcher") for e in pre[1:]], ["Read|Bash|Grep|Edit|Write",
                                                                "Edit|Write|NotebookEdit|MultiEdit"])
         self.assertNotIn("/plugin install", out)
-        self.assertIn("gstack careful hook not installed", out)
+        self.assertNotIn("careful", out)
 
     def legacy_install(self):
         """Settings + install-state.json as a pre-run.sh `orche install --mode settings` left them."""
@@ -293,14 +293,18 @@ class InstallTest(InstallCase):
         self.assertEqual(self.read_settings()["hooks"], self.settings["hooks"])
         self.assertEqual(self.state()["added_hooks"], [])
 
-    def test_plugin_install_keeps_careful_hook(self):
-        self.careful_script()
-        self.install("--mode", "settings")
-        self.install()
-        cmds = self.commands(self.read_settings())
-        self.assertEqual([c for c in cmds if c in PLUGIN_CMDS], [])
-        self.assertEqual(len([c for c in cmds if "check-careful" in c]), 1)
-        self.assertEqual([h["event"] for h in self.state()["added_hooks"]], ["PreToolUse"])
+    def test_careful_hook_recorded_by_an_older_install_is_left_alone(self):
+        script = self.careful_script()
+        cmd = f'bash "{script}"'
+        self.settings["hooks"]["PreToolUse"].append({"matcher": "Bash", "hooks": [{"type": "command", "command": cmd}]})
+        (self.c / "settings.json").write_text(json.dumps(self.settings, indent=2) + "\n")
+        (self.home / "install-state.json").write_text(json.dumps(
+            {"added_hooks": [{"event": "PreToolUse", "command": cmd}], "careful_command": cmd}))
+        for mode in ("settings", "plugin", "settings"):
+            self.install("--mode", mode)
+            self.assertEqual(sum("check-careful" in c for c in self.commands(self.read_settings())), 1, mode)
+        self.assertEqual(self.orche("uninstall", "--home", str(self.h))[0], 0)
+        self.assertEqual(self.read_settings(), self.settings)
 
     def add_stop_hook_by_hand(self, command):
         data = self.read_settings()
@@ -309,12 +313,10 @@ class InstallTest(InstallCase):
 
     def test_settings_reinstall_with_both_shapes_keeps_the_record(self):
         """Review I-1: the python3 shape added by hand is replaced; the run.sh record survives uninstall."""
-        self.careful_script()
         self.install("--mode", "settings")
         self.add_stop_hook_by_hand(LEGACY_CMDS[0])
         self.install("--mode", "settings")
-        self.assertEqual(sorted(h["command"] for h in self.state()["added_hooks"] if "check-careful" not in h["command"]),
-                         sorted(PLUGIN_CMDS))
+        self.assertEqual(sorted(h["command"] for h in self.state()["added_hooks"]), sorted(PLUGIN_CMDS))
         cmds = self.commands(self.read_settings())
         stop = self.commands(self.read_settings(), "Stop")
         self.assertEqual(([c for c in cmds if c in LEGACY_CMDS], stop.count(PLUGIN_CMDS[0])), ([], 1))
@@ -350,28 +352,22 @@ class InstallTest(InstallCase):
         self.assertEqual(self.orche("uninstall", "--home", str(self.h))[0], 0)
         self.assertEqual(self.read_settings(), self.settings)
 
-    def test_careful_hook_only_when_script_exists_and_once(self):
-        self.install()
-        self.assertFalse(any("check-careful" in c for c in self.commands(self.read_settings())))
-        script = self.c / "skills" / "gstack" / "careful" / "bin" / "check-careful.sh"
-        script.parent.mkdir(parents=True)
-        script.write_text("#!/bin/bash\n")
-        self.install()
-        self.install()
-        pre = self.read_settings()["hooks"]["PreToolUse"]
-        careful = [e for e in pre if any("check-careful" in h["command"] for h in e["hooks"])]
-        self.assertEqual(careful, [{"matcher": "Bash", "hooks": [{"type": "command", "command": f'bash "{script}"'}]}])
+    def test_careful_script_is_never_registered(self):
+        self.careful_script()
+        for mode in ("plugin", "settings"):
+            out = self.install("--mode", mode)
+            self.assertFalse(any("check-careful" in c for c in self.commands(self.read_settings())), mode)
+            self.assertNotIn("careful", out)
 
-    def test_gstack_own_careful_registration_is_not_duplicated(self):
-        script = self.c / "skills" / "gstack" / "careful" / "bin" / "check-careful.sh"
-        script.parent.mkdir(parents=True)
-        script.write_text("#!/bin/bash\n")
+    def test_gstack_own_careful_registration_is_left_alone(self):
+        self.careful_script()
         own = 'bash -c "exec bash \\"$HOME/.claude/skills/gstack/careful/bin/check-careful.sh\\""'
         self.settings["hooks"]["PreToolUse"].append({"matcher": "Bash", "hooks": [{"type": "command", "command": own}]})
         (self.c / "settings.json").write_text(json.dumps(self.settings, indent=2) + "\n")
-        out = self.install()
-        self.assertIn("careful hook already registered", out)
+        self.install("--mode", "settings")
         self.assertEqual(sum("check-careful" in c for c in self.commands(self.read_settings())), 1)
+        self.assertEqual(self.orche("uninstall", "--home", str(self.h))[0], 0)
+        self.assertEqual(self.read_settings(), self.settings)
 
     def test_agents_md_moved_only_with_yes(self):
         self.install()
@@ -389,9 +385,6 @@ class InstallTest(InstallCase):
         self.assertIn("settings: error", out)
 
     def test_uninstall_removes_blocks_links_and_hooks_keeps_backups(self):
-        script = self.c / "skills" / "gstack" / "careful" / "bin" / "check-careful.sh"
-        script.parent.mkdir(parents=True)
-        script.write_text("#!/bin/bash\n")
         self.install("--mode", "settings")
         installed, backups = tree_digest(self.home), self.backups()
         code, out, err = self.orche("--dry-run", "uninstall", "--home", str(self.h))
@@ -450,7 +443,6 @@ class InstallTest(InstallCase):
         self.assertEqual(self.read_settings(), self.settings)
 
     def test_step_error_is_reported_other_steps_run_and_state_survives(self):
-        script = self.careful_script()
         (self.c / "statusline-command.sh").write_bytes(b"#!/bin/bash\necho \xff\n")
         code, out, err = self.orche("install", "--home", str(self.h))
         self.assertEqual((code, err), (1, ""), out)
@@ -460,10 +452,10 @@ class InstallTest(InstallCase):
         self.assertNotIn("Traceback", out)
         self.assertIn("<!-- >>> orche >>> -->", (self.c / "fable" / "fable.md").read_text())  # later steps ran
         self.assertTrue((self.c / "agents" / "exec.md").is_symlink())
-        self.assertEqual(self.state()["careful_command"], f'bash "{script}"')
+        self.assertIn("originals", self.state())
         code, out, _ = self.orche("uninstall", "--home", str(self.h))
         self.assertEqual(code, 1)  # the statusline step fails again, the others still run
-        self.assertFalse(any("check-careful" in c for c in self.commands(self.read_settings())), out)
+        self.assertEqual(self.read_settings(), self.settings, out)
         self.assertFalse((self.c / "agents" / "exec.md").exists())
 
     def test_corrupt_state_uninstall_refuses_settings_and_keeps_the_file(self):
@@ -504,13 +496,12 @@ class InstallTest(InstallCase):
         self.assertIn("settings: kept env.CLAUDE_AUTOCOMPACT_PCT_OVERRIDE=70 (changed after install)", out)
 
     def test_hand_edited_added_hooks_does_not_raise(self):
-        self.careful_script()
         (self.home / "install-state.json").write_text(json.dumps({"added_hooks": "oops"}))
-        code, out, _ = self.orche("install", "--home", str(self.h))
+        code, out, _ = self.orche("install", "--home", str(self.h), "--mode", "settings")
         self.assertEqual(code, 0, out)
-        self.assertEqual([h["event"] for h in self.state()["added_hooks"]], ["PreToolUse"])
+        self.assertEqual(sorted(h["command"] for h in self.state()["added_hooks"]), sorted(PLUGIN_CMDS))
         self.assertEqual(self.orche("uninstall", "--home", str(self.h))[0], 0)
-        self.assertFalse(any("check-careful" in c for c in self.commands(self.read_settings())))
+        self.assertEqual(self.read_settings(), self.settings)
 
     def test_state_save_failure_reported_once(self):
         from orche import paths
@@ -526,13 +517,13 @@ class InstallTest(InstallCase):
         self.assertEqual(self.read_settings()["cleanupPeriodDays"], 3650)  # install itself went ahead
 
     def test_legacy_install_json_is_read_and_migrated(self):
-        script = self.careful_script()
-        cmd = f'bash "{script}"'
-        self.settings["hooks"]["PreToolUse"].append({"matcher": "Bash", "hooks": [{"type": "command", "command": cmd}]})
+        cmd = PLUGIN_CMDS[0]
+        self.settings["hooks"]["Stop"].append({"hooks": [{"type": "command", "command": cmd}]})
         (self.c / "settings.json").write_text(json.dumps(self.settings, indent=2) + "\n")
-        (self.home / "install.json").write_text(json.dumps({"plugin_root": str(PLUGIN_ROOT), "careful_command": cmd}))
+        (self.home / "install.json").write_text(json.dumps(
+            {"plugin_root": str(PLUGIN_ROOT), "added_hooks": [{"event": "Stop", "command": cmd}]}))
         self.assertEqual(self.orche("uninstall", "--home", str(self.h))[0], 0)
-        self.assertFalse(any("check-careful" in c for c in self.commands(self.read_settings())))
+        self.assertNotIn(cmd, self.commands(self.read_settings()))
         self.assertFalse((self.home / "install.json").exists())
         self.assertTrue((self.home / "install-state.json").is_file())
 
@@ -826,12 +817,21 @@ class DoctorTest(InstallCase):
         _, out, _ = self.doctor()
         lines = out.splitlines()
         self.assertIn("OK\tcodex AGENTS.md\tskipped (not present)", lines)
-        self.assertTrue(any(l.startswith("OK\tcareful hook\t") for l in lines), out)
+        self.assertFalse(any("careful" in l for l in lines), out)
         (self.h / ".codex").mkdir(exist_ok=True)
         (self.h / ".codex" / "AGENTS.md.recovered").write_text("x")
         _, out, _ = self.doctor()
         self.assertTrue(any(l.startswith("WARN\tcodex AGENTS.md\t") and "recovered" in l
                             for l in out.splitlines()), out)
+
+    def test_careful_hook_in_settings_warns(self):
+        registry.save(registry.empty())
+        own = 'bash -c "exec bash \\"$HOME/.claude/skills/gstack/careful/bin/check-careful.sh\\""'
+        self.settings["hooks"]["PreToolUse"].append({"matcher": "Bash", "hooks": [{"type": "command", "command": own}]})
+        (self.c / "settings.json").write_text(json.dumps(self.settings, indent=2) + "\n")
+        _, out, _ = self.doctor()
+        self.assertIn("WARN\tcareful hook\tcareful hook registered in settings.json — its approval dialogs stall "
+                      "unattended ORCHE panes; remove it or keep it only for your own sessions", out.splitlines())
 
     def test_hooks_registered_twice_warns(self):
         registry.save(registry.empty())

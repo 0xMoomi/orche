@@ -3,6 +3,25 @@
 All notable changes to ORCHE are listed here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow semantic versioning.
 
+## 0.6.3 — 2026-10-22
+
+### Removed
+- `orche install` no longer registers gstack's careful PreToolUse hook (and no longer mentions it): its `ask`
+  dialogs stalled unattended panes. ORCHE's own gates (`env-read-gate`, `scope-gate`) and each brief's FORBID
+  lines are the safety net. An existing careful entry in `settings.json` is left alone by install and uninstall.
+- The Stop hook no longer relays dispatch blocks from the reply (a fenced block there is plain text); `brief.scan` is removed.
+
+### Added
+- `orche doctor` WARNs when the careful hook (`check-careful.sh`) is registered in `settings.json`: its approval
+  dialogs stall unattended ORCHE panes; remove it or keep it only for your own sessions.
+
+### Changed
+- Main hands work out with `orche dispatch` (blocks on stdin or `--file`, `---` between blocks; `orche --dry-run dispatch` checks only); each block's outcome prints in the same turn and a refusal exits 2, so Main fixes and re-runs without an extra Stop-hook turn.
+- Personas name the report format a status card (was ketchup style); `orche init` re-renders them.
+- Main's report to the owner is a status card: a fenced block of at most 6 lines with Korean labels and fixed glyphs (⛔ 사장님 할 일 first when the owner must act, then 🟢 완료 · 🟡 검증중 · 🔴 실패 · ⏸ 보류 counts, ▶ 진행, ❓ 결정, ➡ 다음, 🔗 참조); it replaces the ketchup counts.
+- A dispatch or AMEND to a target that cannot be reached is refused by `orche dispatch`: an asleep division gated by stage while its project is building (`… is asleep and gated by stage (<proj> is building): re-target, or run orche stage set <proj> public --yes`), or a division/feature whose worktree is missing; before, such a brief sat `undelivered`.
+- The nudger and the deliverer take separate locks (`.wake.lock`, `.deliver.lock`), so a brief is no longer held up behind a wake's quiet window; the nudger's lock wait follows `inbox.quiet_max_s` (360 s + the cap) instead of a fixed 600 s, and urgent notifications are recorded under their own `.notify.lock` so two nudgers never show one twice.
+
 ## 0.6.2 — 2026-10-22
 
 ### Added

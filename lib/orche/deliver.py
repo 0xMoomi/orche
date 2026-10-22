@@ -2,7 +2,7 @@
 `orche deliver <unit>` (a dispatched brief, design §4.5). No hook calls Orca to type (ruling 2).
 
 A waking pointer posted to a session starts `orche nudge <session>` (inbox.wake). The nudger holds
-`inbox/<session>/.deliver.lock`, and types the fixed WAKE_TEXT only when a waking pointer is still
+`inbox/<session>/.wake.lock`, and types the fixed WAKE_TEXT only when a waking pointer is still
 pending, the pane's agent is idle (`orca terminal wait --for tui-idle`: status running, no
 blockedReason, satisfied) and the composer draft is empty (`orca terminal read`). The `.nudged`
 marker is written before the send and removed when the send fails (a receipt without a proven
@@ -11,7 +11,8 @@ wake (or any prompt) arrives. A draft that is ORCHE's own stale line is `nudge-f
 over. The text typed is never pointer content.
 
 The Stop hook writes a pane unit's pointer (`via: dispatch`) and starts `orche deliver <unit>`
-(spawn). The deliverer holds the same lock, waits up to DELIVER_WAIT_S for the target to be idle
+(spawn). The deliverer holds the target's own `.deliver.lock` (never the wake lock: a brief is not
+held up behind a wake's quiet window), waits up to DELIVER_WAIT_S for the target to be idle
 (then types anyway: a division pane has no human and Claude Code queues typed input), never types
 into a draft or a dialog, and types `[orche] inbox: <unit> rev <N>`; a send into a pane that was still
 busy, accepted without a turn start, is `queued` (not failed). A failed delivery posts an
@@ -26,11 +27,11 @@ import time
 
 from . import brief, config, inbox, log, orca, paths, procs, roster, runs, shell, util
 
-LOCK = ".deliver.lock"
-# A nudger holds the lock for at most list + idle wait + quiet window + read + wait/read again +
-# send (~20 + 130 + 240 + 20 + 130 + 20 + 30 s); a later nudger waits that long, then sees the
-# marker (`already-nudged`), never a spurious `locked`.
-LOCK_WAIT_S = 600.0
+WAKE_LOCK = ".wake.lock"        # one nudger per session
+DELIVER_LOCK = ".deliver.lock"  # one deliverer per target pane
+NOTIFY_LOCK = ".notify.lock"    # one `.notified` read-notify-write per session
+LOCK_WAIT_S = 600.0             # a deliverer waits this long for earlier deliverers to the same pane
+NOTIFY_WAIT_S = 30.0            # … and notify_owner for another notifier (osascript: 5 s per pointer)
 POLL_S = 0.5
 NOTIFIED = ".notified"      # pointer file names the owner was notified about (one name per line)
 PLATFORM = sys.platform    # the notification is macOS only (a seam for tests)
@@ -41,17 +42,26 @@ IDLE_WAIT_S = 120          # `terminal wait --for tui-idle` before a wake
 DELIVER_WAIT_S = 60        # … before a brief nudge (then it is typed anyway)
 WAIT_SLACK_S = 10          # the wait call's timeout beyond its --timeout-ms
 CALL_S = 20                # list and read (send: SUBMIT_WAIT_S + WAIT_SLACK_S)
+# A nudger holds the wake lock for list + (idle wait + read) twice + send, plus its quiet window
+# (inbox.quiet_max_s at most): a later nudger waits that long (wake_wait_s), then sees the marker
+# (`already-nudged`), never a spurious `locked`.
+WAKE_HOLD_S = CALL_S + 2 * (IDLE_WAIT_S + WAIT_SLACK_S + CALL_S) + SUBMIT_WAIT_S + 2 * WAIT_SLACK_S
 OK_STATES = ("nudged", "already-nudged", "nothing-pending")
 FAILED = ("no-pane", "needs-wake", "wake-requested", "dialog", "no-agent", "refused", "nudge-failed", "locked")
 
 
+def wake_wait_s(cfg) -> float:
+    """How long a nudger waits for the wake lock: WAKE_HOLD_S plus the quiet cap (`inbox.quiet_max_s`)."""
+    return WAKE_HOLD_S + float(cfg.get("quiet_max_s", 240))
+
+
 @contextlib.contextmanager
-def _lock(session, wait_s=LOCK_WAIT_S, poll_s=POLL_S):
-    """Hold `inbox/<session>/.deliver.lock` (flock, polled every `poll_s` for up to `wait_s`);
-    yields True when held, False when another deliverer kept it."""
+def _lock(session, name, wait_s, poll_s=POLL_S):
+    """Hold `inbox/<session>/<name>` (flock, polled every `poll_s` for up to `wait_s`);
+    yields True when held, False when another process kept it."""
     folder = inbox.box(session)
     folder.mkdir(parents=True, exist_ok=True)
-    with open(folder / LOCK, "a") as fh:
+    with open(folder / name, "a") as fh:
         end, ok = time.monotonic() + wait_s, False
         while True:
             try:
@@ -234,32 +244,42 @@ def _quiet(session, cfg) -> int:
 
 def notify_owner(session) -> None:
     """A macOS notification per urgent waking pointer pending for a `main-*` session, once each
-    (`inbox/<session>/.notified`); config `inbox.notify`. The text holds only the unit's short id
-    and its status. Never raises (failures go to hooks.log)."""
+    (`inbox/<session>/.notified`, read and written under `.notify.lock`, so two nudgers never notify
+    twice); config `inbox.notify`. The text holds only the unit's short id and its status. Never
+    raises (failures go to hooks.log)."""
     try:
         if not session.startswith("main-") or PLATFORM != "darwin" or not config.load()["inbox"].get("notify", True):
             return
-        marker = inbox.box(session) / NOTIFIED
-        seen = set(marker.read_text().split()) if marker.is_file() else set()
-        items = [(x, p) for x, p in inbox.pending(session) if inbox.wakes(p) and inbox.is_urgent(p)]
-        project = session[len("main-"):]
-        for path, ptr in items:
-            if path.name in seen:
-                continue
-            unit = str(ptr.get("unit") or "")
-            short = unit[len(project) + 1:] if unit.startswith(project + "-") else unit
-            text = json.dumps(f"{short} {ptr.get('status')} — Main에 보고가 있습니다", ensure_ascii=False)
-            title = json.dumps(f"ORCHE {project}", ensure_ascii=False)
-            res = shell.run(["osascript", "-e", f'display notification {text} with title {title} sound name "Glass"'],
-                            timeout=5)
-            if not res.ok:
-                log.log("hooks", f"deliver: notify {session}: osascript exit {res.code}")
-            seen.add(path.name)
-        live = {x.name for x, _p in items}
-        if items or marker.is_file():
-            marker.write_text("".join(f"{name}\n" for name in sorted(seen & live)))
+        with _lock(session, NOTIFY_LOCK, NOTIFY_WAIT_S) as ok:
+            if not ok:
+                log.log("hooks", f"deliver: notify {session}: another notifier kept the lock")
+                return
+            _notify(session)
     except Exception as exc:  # noqa: BLE001 - a notification is best-effort
         log.log("hooks", f"deliver: notify {session}: {type(exc).__name__}: {exc}")
+
+
+def _notify(session) -> None:
+    """notify_owner's body, under the notify lock."""
+    marker = inbox.box(session) / NOTIFIED
+    seen = set(marker.read_text().split()) if marker.is_file() else set()
+    items = [(x, p) for x, p in inbox.pending(session) if inbox.wakes(p) and inbox.is_urgent(p)]
+    project = session[len("main-"):]
+    for path, ptr in items:
+        if path.name in seen:
+            continue
+        unit = str(ptr.get("unit") or "")
+        short = unit[len(project) + 1:] if unit.startswith(project + "-") else unit
+        text = json.dumps(f"{short} {ptr.get('status')} — Main에 보고가 있습니다", ensure_ascii=False)
+        title = json.dumps(f"ORCHE {project}", ensure_ascii=False)
+        res = shell.run(["osascript", "-e", f'display notification {text} with title {title} sound name "Glass"'],
+                        timeout=5)
+        if not res.ok:
+            log.log("hooks", f"deliver: notify {session}: osascript exit {res.code}")
+        seen.add(path.name)
+    live = {x.name for x, _p in items}
+    if items or marker.is_file():
+        marker.write_text("".join(f"{name}\n" for name in sorted(seen & live)))
 
 
 def nudge(session) -> tuple:
@@ -273,7 +293,7 @@ def nudge(session) -> tuple:
         quiet[0] = _quiet(session, config.load()["inbox"])
         return quiet[0]
     try:
-        with _lock(session, LOCK_WAIT_S, POLL_S) as ok:
+        with _lock(session, WAKE_LOCK, wake_wait_s(config.load()["inbox"])) as ok:
             if not ok:
                 state, waited = "locked", int(time.monotonic() - started)
             elif inbox.nudged(session):
@@ -393,7 +413,7 @@ def _pane(r, b, to, sent):
     sent.append(found[1])
     path = found[0]
     started = time.monotonic()
-    with _lock(to, LOCK_WAIT_S, POLL_S) as ok:
+    with _lock(to, DELIVER_LOCK, LOCK_WAIT_S) as ok:
         if not ok:
             return "locked", int(time.monotonic() - started)
         if not path.exists():

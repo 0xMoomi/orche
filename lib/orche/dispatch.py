@@ -1,15 +1,15 @@
-"""Dispatch relay: route ```dispatch blocks (lib/orche/brief.py parses and stores them) and deliver.
+"""Dispatch relay: route brief / AMEND / STOP blocks (lib/orche/brief.py parses and stores them) and
+deliver them. `orche dispatch` (cmd_dispatch) and triage are the callers.
 
-The Stop hook's stop decision (the done gate, then the night predicate) is donegate.may_stop.
+The Stop hook relays nothing; its stop decision (the done gate, then the night predicate) is
+donegate.may_stop.
 """
 import hashlib
 import os
-import re
-import time
 from dataclasses import dataclass
 from pathlib import Path
 
-from . import (brief, config, deliver, donegate, inbox, log, mask, orca, paths, registry, roster, runs, transcript,
+from . import (brief, config, deliver, donegate, inbox, log, mask, orca, registry, roster, runs, transcript,
                units, util)
 
 # ---- targets -------------------------------------------------------------
@@ -52,6 +52,23 @@ def _retired_error(t):
     return f"{brief.REFUSE}target {t.session} is retired."
 
 
+ASLEEP = ("dormant", "paused")
+
+
+def _check_reachable(r, t):
+    """Refuse a target the brief can never reach: asleep and stage-gated (the rule `orche wake` applies,
+    hr.limits.stage_gated), or a division/feature whose recorded worktree is gone."""
+    if t.status in ASLEEP:
+        from .hr import limits
+        if limits.stage_gated(r.reg, t):
+            stage = r.reg["projects"][t.project].get("stage")
+            raise brief.Refusal(f"{brief.REFUSE}{t.session} is asleep and gated by stage ({t.project} is {stage}): "
+                                f"re-target, or run orche stage set {t.project} public --yes")
+    wt = t.worktree
+    if wt is not None and not wt.exists():
+        raise brief.Refusal(f"{brief.REFUSE}{t.session}'s worktree {wt} is missing: re-target, or recreate it.")
+
+
 def plan_blocks(r, bodies, frm) -> list:
     """Parse + resolve every block before any write: one Plan per block, or its refusal text.
 
@@ -60,7 +77,8 @@ def plan_blocks(r, bodies, frm) -> list:
 
     Targets must belong to the sender's project (R-XPROJ): a brief whose TO resolves to another
     project's Main becomes an external-request pointer to it; any other cross-project target is refused.
-    A retired target is refused. AMEND/STOP need the unit's BRIEF.md.
+    A retired target is refused; so are an asleep stage-gated target and a missing worktree (not for
+    STOP). AMEND/STOP need the unit's BRIEF.md.
     """
     plans = []
     for body in bodies:
@@ -77,6 +95,7 @@ def plan_blocks(r, bodies, frm) -> list:
                         raise brief.Refusal(_cross_project_error(r, t.session, t.project, frm.project))
                     plans.append(Plan(block, t.session, t.project, external=True))
                     continue
+                _check_reachable(r, t)
                 plans.append(Plan(block, t.session, t.project))
                 continue
             prior = brief.find(r.reg, block.unit)
@@ -93,6 +112,8 @@ def plan_blocks(r, bodies, frm) -> list:
                 raise brief.Refusal(_retired_error(t))
             if t.project != frm.project:
                 raise brief.Refusal(_cross_project_error(r, t.session, t.project, frm.project))
+            if block.kind != "stop":
+                _check_reachable(r, t)
             plans.append(Plan(block, t.session, prior.project, prior, block.unit))
         except brief.Refusal as exc:
             plans.append(str(exc))
@@ -100,12 +121,12 @@ def plan_blocks(r, bodies, frm) -> list:
 
 
 def body_hash(body) -> str | None:
-    """A block text's identity for the Stop hook's no-redelivery set (None for a built Block)."""
+    """A block text's identity for `orche dispatch`'s delivered map (None for a built Block)."""
     return hashlib.sha256(body.encode("utf-8")).hexdigest()[:16] if isinstance(body, str) else None
 
 
 def _partial_refusal(lines, refused, total):
-    """One Refusal for a reply whose blocks were not all delivered. A single block keeps its bare reason."""
+    """One Refusal for a dispatch whose blocks were not all delivered. A single block keeps its bare reason."""
     if total == 1:
         return brief.Refusal(refused[0])
     if len(refused) == total:
@@ -244,15 +265,20 @@ def _skipped(frm, routed, by=None):
         log.log("hooks", f"dispatch: cannot file skip feedback for {frm!r}: {exc}")
 
 
-def relay_detail(r, bodies, frm, deadline=None, by=None, skip=None) -> list:
-    """relay(), returning `{"unit", "to", "state"}` per delivered block. `by` (e.g. `triage`) is who
-    relayed: it names the events line's `by=` and words the sender's feedback pointer.
+@dataclass
+class Outcome:
+    done: list          # {"unit", "to", "state", "rev"} per delivered block, in order
+    lines: list         # one "block N: …" line per block, in order
+    refused: list       # the refusal texts
+    delivered: dict     # {body_hash: "<unit> → <to>"} for the blocks delivered now
 
-    Every valid block is delivered; when any block is refused, one Refusal lists each block in order
-    ("block N: delivered <unit> → <to>" / "block N: refused — <reason>") and carries `delivered`
-    ({body_hash: "<unit> → <to>"}, `skip` included) so the Stop hook never delivers a block twice.
-    `skip` is that map from an earlier refusal of the same reply: those blocks are not relayed again.
 
+def relay_outcome(r, bodies, frm, deadline=None, by=None, skip=None) -> Outcome:
+    """Plan every block, then deliver each valid one; never raises for a refused block.
+
+    `by` (e.g. `triage`) is who relayed: it names the events line's `by=` and words the sender's
+    feedback pointer. `skip` ({body_hash: "<unit> → <to>"}) holds blocks already delivered from this
+    session (`orche dispatch`'s delivered map): an identical block is not relayed again.
     `frm` must be the Member returned by `check_sender`; nothing here re-checks the sender's role.
     """
     sender, sender_proj = frm.session, frm.project
@@ -262,12 +288,13 @@ def relay_detail(r, bodies, frm, deadline=None, by=None, skip=None) -> list:
     planned = dict(zip(fresh, plan_blocks(r, [bodies[i] for i in fresh], frm)))
     terms = orca.Terminals(deadline if deadline is not None else orca.hook_deadline())   # remaining() only
     cfg = config.load()
-    done, lines, refused, delivered = [], [], [], dict(skip)
+    done, lines, refused, delivered = [], [], [], {}
     for i in range(len(bodies)):
         plan = planned.get(i)
         if plan is None:
             _skipped(sender, skip[hashes[i]], by)
-            lines.append(f"block {i + 1}: delivered {skip[hashes[i]]} (earlier)")
+            lines.append(f"block {i + 1}: skipped — identical to {skip[hashes[i]]}, delivered in the last "
+                         f"{DELIVERED_TTL // 60} min; not sent again")
             continue
         if isinstance(plan, str):
             refused.append(plan)
@@ -275,55 +302,47 @@ def relay_detail(r, bodies, frm, deadline=None, by=None, skip=None) -> list:
             continue
         block = plan.block
         if plan.external:
+            rev = 0
             state = _external(plan, sender, sender_proj)
-            _feedback(sender, plan.unit, plan.to, 0, state)
+            _feedback(sender, plan.unit, plan.to, rev, state)
         elif block.kind == "stop":
+            rev = plan.prior.rev
             state = _deliver(r, plan, plan.prior, "stop", block.note or "STOP requested", sender, terms, cfg, by)
-            _feedback(sender, plan.unit, plan.to, plan.prior.rev, state, kind="stop", by=by)
+            _feedback(sender, plan.unit, plan.to, rev, state, kind="stop", by=by)
         else:
             b = brief.write(block, r.member(plan.to), sender, standing_text(r.reg, plan.proj),
                             prior=plan.prior, timeout=min(0.5, terms.remaining()))
-            plan.unit = b.unit
+            plan.unit, rev = b.unit, b.rev
             goal = mask.redact(b.fields.get("GOAL", "").split("\n")[0])[0]
             state = _deliver(r, plan, b, "info", goal, sender, terms, cfg, by)
-            _feedback(sender, plan.unit, plan.to, b.rev, state, by=by)
-        done.append({"unit": plan.unit, "to": plan.to, "state": state})
-        lines.append(f"block {i + 1}: delivered {plan.unit} → {plan.to}")
+            _feedback(sender, plan.unit, plan.to, rev, state, by=by)
+        done.append({"unit": plan.unit, "to": plan.to, "state": state, "rev": rev})
+        lines.append(f"block {i + 1}: delivered {plan.unit} → {plan.to} (rev {rev}, {state})")
         if hashes[i] is not None:
             delivered[hashes[i]] = f"{plan.unit} → {plan.to}"
     if refused:
-        exc = _partial_refusal(lines, refused, len(bodies))
-        exc.delivered = delivered
-        raise exc
-    return done
+        log_refusal(sender, len(bodies), "\n".join(refused))
+    return Outcome(done, lines, refused, delivered)
+
+
+def relay_detail(r, bodies, frm, deadline=None, by=None) -> list:
+    """relay_outcome(), returning `{"unit", "to", "state", "rev"}` per delivered block; when any block
+    is refused, one Refusal lists each block in order (the valid ones were still delivered)."""
+    o = relay_outcome(r, bodies, frm, deadline, by)
+    if o.refused:
+        raise _partial_refusal(o.lines, o.refused, len(bodies))
+    return o.done
+
+
+DELIVERED_TTL = 600     # seconds `orche dispatch` remembers a delivered block (no identical re-send)
+
+
+def log_refusal(me, blocks, message):
+    reason = " ".join(message.removeprefix(brief.REFUSE).split())[:100]
+    log.log("events", f"dispatch refused by={me or 'unknown'} blocks={blocks} reason={reason}")
 
 
 # ---- Stop hook entry -----------------------------------------------------
-
-DELIVERED_TTL = 600     # seconds a marker's `delivered` map is honoured after it was written
-
-
-def _relayed_marker(session_id):
-    safe = re.sub(r"[^A-Za-z0-9_-]", "", str(session_id or "")) or "unknown"
-    return paths.orche_home() / "sessions" / f"{safe}.relayed.json"
-
-
-def _refusal_to_self(me, message):
-    """Under stop_hook_active a refusal must not loop: log it, and park it in the session's own inbox
-    when the session is identified (`me` None: hooks.log only). The parked note is `quiet`: it does not
-    wake `me` (a woken Main re-emitting the bad block would loop) but is injected at its next prompt."""
-    log.log("hooks", f"dispatch refused under stop_hook_active: {message}")
-    if not me:
-        return
-    try:
-        inbox.post(inbox.make("dispatch-refused", "orche", me, "question", summary=message, quiet=True))
-    except ValueError as exc:
-        log.log("hooks", f"dispatch: cannot park refusal for {me!r}: {exc}")
-
-
-def _log_refusal(me, blocks, message):
-    reason = " ".join(message.removeprefix(brief.REFUSE).split())[:100]
-    log.log("events", f"dispatch refused by={me or 'unknown'} blocks={blocks} reason={reason}")
 
 
 def handle_stop_failure(payload: dict) -> None:
@@ -349,52 +368,17 @@ def final_text(payload: dict):
 
 
 def handle_stop(payload: dict, started=None):
-    """(exit_code, stderr_message) for the Stop hook."""
+    """(exit_code, stderr_message) for the Stop hook. It relays nothing: briefs go out through
+    `orche dispatch`, and a fenced block left in the reply is plain text."""
     deadline = orca.hook_deadline(started)
     cwd = payload.get("cwd") or os.getcwd()
     tpath = payload.get("transcript_path")
-    msg_id, text = final_text(payload)
+    _msg_id, text = final_text(payload)
     r = roster.Roster(registry.load())
     who = r.identify(cwd)
     me = who.session
     if me:
         units.touch_activity(me)
-    s = brief.scan(text)
-    # A reply whose dispatch openers yield no relayable block at all (an example inside another fence,
-    # an unclosed earlier fence, …) is refused so Main learns why instead of believing it dispatched;
-    # a well-formed block outside any fence is relayed even next to an example. ORCHE sessions only.
-    unrelayed = s.unrelayed if me else None
-    if s.bodies or unrelayed:
-        marker = _relayed_marker(payload.get("session_id"))
-        seen = util.read_json(marker, default={}) or {}
-        text_hash = hashlib.sha256(text.encode("utf-8")).hexdigest()[:16]
-        if not (seen.get("text_hash") == text_hash or (msg_id is not None and seen.get("msg_id") == msg_id)):
-            # `delivered`: blocks of a partly refused reply that already went out, never relayed twice
-            # (the re-sent reply, or the same reply once more under stop_hook_active); a clean relay clears it.
-            # It is honoured for DELIVERED_TTL after it was written (`delivered_at`, epoch seconds).
-            delivered = seen.get("delivered") if isinstance(seen.get("delivered"), dict) else {}
-            at = seen.get("delivered_at")
-            if not (isinstance(at, (int, float)) and 0 <= time.time() - at <= DELIVERED_TTL):
-                delivered = {}
-            try:
-                if unrelayed:
-                    raise brief.Refusal(unrelayed)
-                relay_detail(r, list(s.bodies), check_sender(r, who), deadline, skip=delivered)
-                delivered = {}
-            except brief.Refusal as exc:
-                _log_refusal(me, len(s.bodies), str(exc))
-                delivered = getattr(exc, "delivered", delivered)
-                if not payload.get("stop_hook_active"):
-                    if delivered:
-                        try:
-                            util.write_json(marker, {**seen, "delivered": delivered,
-                                                     "delivered_at": time.time(), "at": util.now_iso()})
-                        except OSError as err:
-                            log.log("hooks", f"dispatch: cannot write the relayed marker {marker}: {err}")
-                    return 2, str(exc)
-                _refusal_to_self(me, str(exc))
-            util.write_json(marker, {"text_hash": text_hash, "msg_id": msg_id, "at": util.now_iso(),
-                                     **({"delivered": delivered, "delivered_at": time.time()} if delivered else {})})
     code, msg = donegate.may_stop(text, r, who, cwd, tpath, deadline,
                                   stop_hook_active=bool(payload.get("stop_hook_active")))
     if code == 0 and me:

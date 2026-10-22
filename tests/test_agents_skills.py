@@ -249,7 +249,7 @@ class SkillsTest(unittest.TestCase):
     def test_rulebooks_cover_their_topics(self):
         main = (SKILLS / "orche-main" / "SKILL.md").read_text()
         for heading in ("## Dispatch grammar", "## When a report arrives", "## Question discipline",
-                        "## Ketchup report format", "## Echo-back", "## Candor"):
+                        "## Status card", "## Echo-back", "## Candor"):
             self.assertIn(heading, main)
         build = (SKILLS / "orche-build" / "SKILL.md").read_text()
         self.assertIn("Tags, releases and deploys need user approval (STANDING 5); Main approves integration.",

@@ -107,7 +107,7 @@ Claude Code's `--effort` level. A unit worker's effort comes from its TIER (mech
 _Avoid_: tier (TIER is the brief's field).
 
 **Dispatch block**:
-A fenced block tagged `dispatch` at the end of a Main or division reply. The Stop hook reads it as a new brief, an AMEND (a correction) or a STOP (a halt); `brief.parse` holds the grammar.
+One block of text a Main or division sends with `orche dispatch` (stdin or `--file`; a `---` line separates blocks). ORCHE reads it as a new brief, an AMEND (a correction) or a STOP (a halt); `brief.parse` holds the grammar.
 _Avoid_: brief (that is the stored file), order, ticket.
 
 **Brief**:
@@ -196,7 +196,7 @@ _Avoid_: debounce, delay.
 - "unknown session" meant both unidentified and unregistered: two terms now.
 - "runner" meant both `orche run` and the claude it starts. Now the runner is `orche run`, and the claude it starts is the unit worker.
 - "run id" (a lock field) and the worker's `ORCHE_RUN_ID` are the same value: the run tag.
-- "brief" meant both the fenced block and the stored file (SPEC §16): Dispatch block vs Brief.
+- "brief" meant both the fenced block and the stored file (SPEC §16): Dispatch block vs Brief. Since Unreleased a fenced block in a reply is plain text; only `orche dispatch` sends.
 - "rev" (`rev:`, `brief_rev`, `AMEND … rev N`) is always a Revision number; the N in an AMEND is the author's guess, the written number is prior + 1.
 - "completion gate", "done gate" and "ledger gate" named one thing in three places: it is the Done gate, and the ledger row is one of its checks.
 - "gated" meant both the ledger gate (`gated_sender`) and the stage gate (`gated_by_stage`): say ledger-gated member.

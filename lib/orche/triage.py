@@ -274,7 +274,7 @@ def _closing_block_start(lines):
 
 
 def strip_trailer(text: str) -> str:
-    """`text` without its trailing fenced blocks (Main's ```dispatch or ~~~dispatch block), STATUS
+    """`text` without its trailing fenced blocks (a fenced block Main left in its reply), STATUS
     lines and blank lines."""
     lines = (text or "").rstrip().splitlines()
     while lines:

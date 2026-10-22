@@ -86,9 +86,15 @@ def need_awake(reg, n=1, *, plan=False) -> None:
         raise AwakeLimit(cli.EXIT_BLOCKED, f"awake limit {what}; sleep a unit first (orche sleep <unit>)")
 
 
+def stage_gated(reg, unit) -> bool:
+    """A unit recorded `gated_by_stage` whose project is building: `orche wake` refuses it."""
+    return bool((unit.entry or {}).get("gated_by_stage")) and \
+        reg["projects"][unit.project].get("stage") == "building"
+
+
 def unit_gate(reg, unit) -> None:
     """Refuse waking a unit recorded `gated_by_stage` while its project is building (wake)."""
-    if unit.entry.get("gated_by_stage") and reg["projects"][unit.project].get("stage") == "building":
+    if stage_gated(reg, unit):
         raise book.Refused(cli.EXIT_BLOCKED, f"{unit.session} is gated by stage and {unit.project} is "
                                              f"building (run: orche stage set {unit.project} public --yes)")
 
