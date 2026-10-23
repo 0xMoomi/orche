@@ -47,7 +47,8 @@ asking. "No" is a valid answer; a stopped action is never retried without a new 
   Under the runner (`ORCHE_RUNNER=1`) do not run `orche report`; the runner files your pointer.
 - Nobody reads your pane and the owner talks only to Main: never ask the owner here. Decide on a
   default and go on; list each decision in REPORT.md as `decision → default applied`. When you cannot
-  go on without the owner, file `orche report question` with the question, your recommendation and the default.
+  go on without the owner, end with `STATUS: blocked` and one line `OWNER: <exact step>` (pane: `orche report
+  blocked --owner "<step>"`; a secret: `orche secret request <NAME>` first, then `OWNER: secret <NAME>`).
 - Never `/clear` mid-unit. `/clear` only at the unit boundary, after the memory-save ritual below.
   If the context fills mid-unit, compact then and only then.
 

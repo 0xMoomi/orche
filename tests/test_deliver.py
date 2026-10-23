@@ -17,7 +17,8 @@ from contextlib import redirect_stderr, redirect_stdout
 from unittest import mock
 
 import support
-from orche import brief, deliver, inbox, orca, procs, registry, roster, runs
+import contextlib
+from orche import brief, deliver, inbox, notify, orca, procs, registry, roster, runs, util
 from test_hooks import HookCase
 from test_registry import load_cli
 
@@ -39,7 +40,7 @@ class NudgeCase(HookCase):
         super().setUp()
         os.environ["ORCHE_FAKE_ORCA"] = "1"
         self.canned()
-        for name, value in (("LOCK_WAIT_S", 0.3), ("WAKE_HOLD_S", 0.3), ("NOTIFY_WAIT_S", 2.0), ("POLL_S", 0.05)):
+        for name, value in (("LOCK_WAIT_S", 0.3), ("WAKE_HOLD_S", 0.3), ("POLL_S", 0.05)):
             patcher = mock.patch.object(deliver, name, value)
             patcher.start()
             self.addCleanup(patcher.stop)
@@ -191,7 +192,10 @@ class NudgeTest(NudgeCase):
             self.assertEqual(self.nudge(), (1, "locked"))
         self.assertEqual(self.orca_calls(), [])
         self.assertIn("nudge session=main-acme state=locked pending=1", self.events())
+        last = folder / deliver.LAST_NUDGE
+        self.assertFalse(last.exists())                            # a `locked` nudger records nothing
         self.assertEqual(self.nudge(), (0, "nudged"))             # released: the next nudger types
+        self.assertEqual(json.loads(last.read_text())["state"], "nudged")   # written under the wake lock
 
     def test_the_wake_lock_wait_follows_the_quiet_cap(self):
         self.assertEqual(deliver.wake_wait_s({"quiet_max_s": 30}), deliver.WAKE_HOLD_S + 30)
@@ -333,17 +337,16 @@ class DeliverTest(NudgeCase):
         start.assert_not_called()
 
     def test_already_ran_never_runs_again(self):
-        for name in ("RUN.json", "REPORT.md"):
-            with self.subTest(name):
-                b = self.brief()
-                (b.folder / name).write_text("{}")
-                with mock.patch.object(runs, "start") as start:
-                    self.assertEqual(self.deliver(b.unit, {"delivery": "runner"}), (0, "already-ran"))
-                start.assert_not_called()
-                old = b.path.stat().st_mtime - 60              # an earlier revision's record
-                os.utime(b.folder / name, (old, old))
-                with mock.patch.object(runs, "start") as start:
-                    self.assertEqual(self.deliver(b.unit, {"delivery": "runner"}), (0, "runner-started"))
+        b = self.brief()
+        util.write_json(b.folder / "RUN.json", {"started": util.now_iso()})
+        with mock.patch.object(runs, "start") as start:
+            self.assertEqual(self.deliver(b.unit, {"delivery": "runner"}), (0, "already-ran"))
+        start.assert_not_called()
+        earlier = _dt.datetime.fromtimestamp(b.path.stat().st_mtime - 60).astimezone().isoformat(timespec="seconds")
+        util.write_json(b.folder / "RUN.json", {"started": earlier})     # an earlier revision's run, written later
+        (b.folder / "REPORT.md").write_text("done")                       # REPORT.md names no revision
+        with mock.patch.object(runs, "start") as start:
+            self.assertEqual(self.deliver(b.unit, {"delivery": "runner"}), (0, "runner-started"))
 
     def test_a_runner_that_cannot_start_is_runner_failed(self):
         b = self.brief()
@@ -404,15 +407,7 @@ class DeliverTest(NudgeCase):
         self.assertEqual(self.failures(), [])
 
     def test_failures_post_an_urgent_pointer_to_the_sender_with_the_fix(self):
-        rest = [{"handle": "t-main", "title": "main-acme"}]
-        no_build = {"terminal_list": {"terminals": rest}}
         cases = [  # (to, sender, canned, state, hint)
-            ("div-acme-rnd", "main-acme", {}, "needs-wake",
-             "target has no pane: run `orche wake div-acme-rnd`, then `orche deliver {u}`"),
-            ("div-acme-build", "main-acme", no_build, "wake-requested",
-             "target has no pane: run `orche wake div-acme-build`, then `orche deliver {u}`"),
-            ("feat-acme-checkout", "div-acme-build", {}, "no-pane",
-             "target has no pane: run `orche wake feat-acme-checkout`, then `orche deliver {u}`"),
             ("main-acme", "div-acme-build", {"terminal_list": {"terminals": []}}, "wake-requested", None),
             ("div-acme-build", "main-acme", {"terminal_wait": {"wait": {"satisfied": False, "status": "running",
                                                                          "blockedReason": "permission"}}},
@@ -484,9 +479,173 @@ class DeliverTest(NudgeCase):
     def test_the_failure_pointer_wakes_the_sender(self):
         b = self.dispatched("div-acme-rnd")
         (self.home / "config.json").write_text(json.dumps({"delivery": "pane", "inbox": {"wake": True}}))
-        with mock.patch.object(procs, "spawn_detached") as spawn:
+        with mock.patch.object(procs, "spawn_detached") as spawn, \
+                mock.patch.object(runs, "start", side_effect=OSError("no slot")):
             self.assertEqual(self.deliver(b.unit), (1, "needs-wake"))
         spawn.assert_called_once_with(WakeTest.ARGV, self.home / "logs" / "nudge.log")
+
+    def test_a_division_or_feature_without_a_pane_runs_headless(self):
+        rest = [{"handle": "t-main", "title": "main-acme"}]
+        cases = [("div-acme-rnd", "main-acme", {}, "needs-wake"),
+                 ("div-acme-build", "main-acme", {"terminal_list": {"terminals": rest}}, "wake-requested"),
+                 ("feat-acme-checkout", "div-acme-build", {}, "no-pane")]
+        for to, sender, over, state in cases:
+            with self.subTest(state=state, to=to):
+                self.canned(**over)
+                b = self.dispatched(to, sender)
+                with mock.patch.object(runs, "start") as start:
+                    self.assertEqual(self.deliver(b.unit), (0, "runner-fallback"))
+                start.assert_called_once_with(b.unit)
+                self.assertEqual(self.failures(sender), [])
+                self.assertIn(f"deliver unit={b.unit} rev=1 to={to} state=runner-fallback", self.events())
+                with mock.patch.object(runs, "start", side_effect=OSError("no slot")):
+                    self.assertEqual(self.deliver(b.unit), (1, state))
+                [ptr] = self.failures(sender)
+                self.assertEqual(ptr["summary"], f"not delivered: {b.unit} → {to} rev 1 ({state}) — target has no "
+                                                 f"pane: run `orche wake {to}`, then `orche deliver {b.unit}`")
+                for path, _x in inbox.pending(sender):
+                    path.unlink()
+
+    def test_a_second_failed_deliver_files_no_second_failure_while_the_first_is_pending(self):
+        self.canned(terminal_list={"terminals": [{"handle": "t-main", "title": "main-acme"}]})
+        b = self.dispatched("div-acme-build", "main-acme")
+        with mock.patch.object(runs, "start", side_effect=OSError("fork failed")):
+            first, second = self.deliver(b.unit), self.deliver(b.unit)
+        self.assertEqual(first, (1, "wake-requested"))
+        self.assertEqual(second, first)
+        self.assertEqual(len(self.failures("main-acme")), 1)
+
+    def test_a_revision_that_ran_or_runs_is_already_ran_and_its_pointer_drained(self):
+        b = self.dispatched("div-acme-rnd")
+        util.write_json(b.folder / "RUN.json", {"started": util.now_iso()})
+        with mock.patch.object(runs, "start") as start:
+            self.assertEqual(self.deliver(b.unit), (0, "already-ran"))
+        start.assert_not_called()
+        self.assertEqual(inbox.pending("div-acme-rnd"), [])
+        b = self.dispatched()                      # a pane target: running → drained, nothing typed
+        with mock.patch.object(runs, "running", return_value={"pid": 1, "rev": 1}):
+            self.assertEqual(self.deliver(b.unit), (0, "already-ran"))
+        self.assertNotIn(["terminal", "send"], self.calls())
+        self.assertEqual([p for _x, p in inbox.pending("div-acme-build") if p["unit"] == b.unit], [])
+        self.assertEqual(deliver.last_delivery("div-acme-build", b.unit)["state"], "already-ran")
+
+    # -- STOP and AMEND (review B2) -------------------------------------------------------
+    def stop_pointer(self, b, to, sender="main-acme"):
+        inbox.write(inbox.make(b.unit, sender, to, "stop", report_path=str(b.path), brief_rev=b.rev,
+                               summary="STOP requested", via="dispatch"))
+
+    def amend(self, b, to):
+        """BRIEF.md moved to rev 2 (what an AMEND writes) and its dispatch pointer."""
+        b.path.write_text(b.path.read_text().replace("rev: 1", "rev: 2", 1))
+        b = brief.find(registry.load(), b.unit)
+        inbox.write(inbox.make(b.unit, "main-acme", to, "info", report_path=str(b.path), brief_rev=2, via="dispatch"))
+        return b
+
+    def test_a_stop_stops_a_live_run_and_is_drained(self):
+        b = self.brief("div-acme-rnd")
+        self.stop_pointer(b, "div-acme-rnd")
+        with mock.patch.object(runs, "running", return_value={"pid": 1, "rev": 1}), \
+                mock.patch.object(runs, "stop", return_value=True) as stop, \
+                mock.patch.object(runs, "start", side_effect=AssertionError("a STOP never starts a run")):
+            self.assertEqual(self.deliver(b.unit), (0, "stopped"))
+        self.assertEqual(stop.call_args[0], (b.project, b.unit))
+        self.assertEqual(inbox.pending("div-acme-rnd"), [])
+        self.assertNotIn(["terminal", "send"], self.calls())
+
+    def test_a_stop_with_no_pane_and_nothing_live_is_dropped(self):
+        b = self.brief("div-acme-rnd")                      # no pane titled div-acme-rnd
+        self.stop_pointer(b, "div-acme-rnd")
+        with mock.patch.object(runs, "start", side_effect=AssertionError("a STOP never starts a run")), \
+                mock.patch.object(runs, "restart", side_effect=AssertionError("restarted")):
+            self.assertEqual(self.deliver(b.unit), (0, "stop-idle"))
+        self.assertEqual(inbox.pending("div-acme-rnd"), [])
+        self.assertEqual(self.failures(), [])
+
+    def test_a_stop_after_a_blocked_report_is_typed_not_drained(self):
+        b = self.brief()                                    # div-acme-build has a pane
+        inbox.write(inbox.make(b.unit, "div-acme-build", "main-acme", "blocked", brief_rev=1))
+        self.stop_pointer(b, "div-acme-build")
+        self.assertEqual(self.deliver(b.unit), (0, "nudged"))
+        self.assertIn(self.send_argv(b.unit), self.orca_calls())
+        self.assertEqual([p["status"] for _x, p in inbox.pending("div-acme-build")], ["stop"])
+
+    def test_an_amend_while_the_old_revision_runs_is_delivered_never_drained(self):
+        b = self.amend(self.dispatched(), "div-acme-build")          # a pane target
+        with mock.patch.object(runs, "running", return_value={"pid": 1, "rev": 1}):
+            self.assertEqual(self.deliver(b.unit), (0, "nudged"))
+        self.assertIn(["terminal", "send"], self.calls())
+        self.assertEqual(len(inbox.pending("div-acme-build")), 2)
+        c = self.amend(self.dispatched("div-acme-rnd"), "div-acme-rnd")   # no pane: the old run is restarted
+        with mock.patch.object(runs, "running", return_value={"pid": 1, "rev": 1}), \
+                mock.patch.object(runs, "restart", return_value=True) as restart, \
+                mock.patch.object(runs, "start", side_effect=AssertionError("start beside a live run")):
+            self.assertEqual(self.deliver(c.unit), (0, "runner-fallback"))
+        self.assertEqual(restart.call_args[0], (c.project, c.unit))
+        self.assertEqual(deliver.last_delivery("div-acme-rnd", c.unit)["state"], "runner-fallback")
+
+    def test_a_unit_settled_while_waiting_for_the_lock_is_drained_not_typed(self):
+        b = self.dispatched()
+        box = inbox.box("div-acme-build")
+        held = open(box / deliver.DELIVER_LOCK, "a")
+        fcntl.flock(held, fcntl.LOCK_EX | fcntl.LOCK_NB)     # a first deliverer holds the pane
+        waiting, got, real = threading.Event(), [], deliver._lock
+
+        @contextlib.contextmanager
+        def watched(session, name, wait_s, poll_s=0.05):
+            if wait_s:
+                waiting.set()
+            with real(session, name, wait_s, 0.05) as ok:
+                yield ok
+        with mock.patch.object(deliver, "_lock", watched), mock.patch.object(deliver, "LOCK_WAIT_S", 5.0):
+            t = threading.Thread(target=lambda: got.append(self.deliver(b.unit)))
+            t.start()
+            self.assertTrue(waiting.wait(5))
+            inbox.write(inbox.make(b.unit, "div-acme-build", "main-acme", "done", brief_rev=1))   # settles meanwhile
+            fcntl.flock(held, fcntl.LOCK_UN)
+            held.close()
+            t.join(5)
+        self.assertEqual(got, [(0, "already-ran")])
+        self.assertNotIn(["terminal", "send"], self.calls())
+        self.assertEqual([p for _x, p in inbox.pending("div-acme-build") if p.get("via") == "dispatch"], [])
+
+    # -- `--remind` (S5, S10) -------------------------------------------------------------
+    def test_remind_takes_only_the_two_reasons(self):
+        b = self.dispatched()
+        for bad in ("idle 5 min\nrm -rf ~", "please report", "idle 5 min ", "TIMEBOX 100h0m passed", ""):
+            with self.subTest(bad=bad):
+                self.assertEqual(deliver.remind(registry.load(), b.unit, bad), (2, "bad-reason"))
+                with redirect_stderr(io.StringIO()), redirect_stdout(io.StringIO()):
+                    self.assertEqual(load_cli().main(["deliver", "--remind", bad, b.unit]), 2)
+        self.assertNotIn(["terminal", "send"], self.calls())
+
+    def test_remind_types_once_and_never_after_a_report(self):
+        b = self.dispatched()
+        inbox.drain([p for p, _x in inbox.pending("div-acme-build")])       # delivered
+        self.assertEqual(deliver.remind(registry.load(), b.unit, "idle 25 min"), (0, "nudged"))
+        [send] = [a for a in self.orca_calls() if a[1:3] == ["terminal", "send"]]
+        self.assertTrue(send[send.index("--text") + 1].startswith(f"[orche] report due: {b.unit} rev 1 — idle 25 min;"))
+
+        def report_during_the_wait(sub, *args, **kw):
+            if sub == "wait":
+                inbox.write(inbox.make(b.unit, "div-acme-build", "main-acme", "stop", brief_rev=1))
+            return REAL_TERMINAL(sub, *args, **kw)
+        with mock.patch.object(orca, "terminal", report_during_the_wait):     # still_needed() false: no send
+            self.assertEqual(deliver.remind(registry.load(), b.unit, "TIMEBOX 0h20m passed"), (0, "already-reported"))
+        self.assertEqual(deliver.remind(registry.load(), b.unit, "idle 30 min"), (0, "already-reported"))
+        self.assertEqual(len([a for a in self.orca_calls() if a[1:3] == ["terminal", "send"]]), 1)
+        self.assertIn(f"remind unit={b.unit} rev=1 to=div-acme-build state=already-reported", self.events())
+
+    def test_a_report_at_this_revision_is_already_ran(self):
+        b = self.dispatched()
+        inbox.write(inbox.make(b.unit, "div-acme-build", "main-acme", "done", brief_rev=1))
+        self.assertEqual(self.deliver(b.unit), (0, "already-ran"))
+        self.assertNotIn(["terminal", "send"], self.calls())
+
+    def test_a_retry_posts_no_failure_pointer(self):
+        b = self.dispatched()
+        self.canned(terminal_send={"send": {"accepted": False}})
+        self.assertEqual(deliver.deliver_unit(registry.load(), b.unit, retry=True), (1, "refused"))
+        self.assertEqual(self.failures(), [])
 
     def test_unknown_unit_or_target_is_exit_2(self):
         self.assertEqual(self.deliver("acme-nope-20261021-1"), (2, "no-brief"))
@@ -584,80 +743,19 @@ class QuietTest(NudgeCase):
         self.assertIn("waited=0s quiet=0s", self.events())
 
 
-class NotifyTest(NudgeCase):
-    """0.6.2: the nudger notifies the owner (macOS) once per urgent pointer for a Main session."""
+class NudgeNotifiesNothingTest(NudgeCase):
+    """R26: the 0.6.2 per-pointer notification is gone — an urgent report to Main wakes its pane and
+    nothing else; the owner hears Main's own closing line (flow.owner, tests/test_owner.py)."""
 
-    def setUp(self):
-        super().setUp()
-        patcher = mock.patch.object(deliver, "PLATFORM", "darwin")
-        patcher.start()
-        self.addCleanup(patcher.stop)
-
-    def notes(self):
-        log_ = self.home / support.OSASCRIPT_CALLS
-        return log_.read_text().splitlines() if log_.is_file() else []
-
-    def test_one_notification_per_urgent_pointer(self):
-        self.report(status="blocked")
-        with mock.patch.object(deliver.shell, "run", wraps=deliver.shell.run) as run:
-            self.nudge()
-        run.assert_called_once_with(["osascript", "-e", 'display notification "blocked-20261021-1 blocked — Main에 '
-                                     '보고가 있습니다" with title "ORCHE acme" sound name "Glass"'], timeout=5)
-        self.assertEqual(len(self.notes()), 1)
-        self.marker().unlink(missing_ok=True)
-        self.nudge()                                               # the same pointer: no second notification
-        self.assertEqual(len(self.notes()), 1)
-        self.report(status="question")
-        self.marker().unlink(missing_ok=True)
-        self.nudge()
-        self.assertEqual(len(self.notes()), 2)
-        self.assertIn("question-20261021-1 question", self.notes()[1])
-
-    def test_an_urgent_report_notifies_while_a_wake_is_fresh(self):
-        self.marker().parent.mkdir(parents=True, exist_ok=True)
-        self.marker().write_text("x")
-        self.report(status="failed")
-        self.assertEqual(self.nudge(), (0, "already-nudged"))
-        self.assertEqual(len(self.notes()), 1)
-        self.assertIn("failed-20261021-1 failed", self.notes()[0])
-        self.assertEqual(self.nudge(), (0, "already-nudged"))       # a re-run never re-notifies
-        self.assertEqual(len(self.notes()), 1)
-
-    def test_no_notification(self):
-        cases = {"done": ("done", {}, "main-acme"), "notify-off": ("blocked", {"notify": False}, "main-acme"),
-                 "not-main": ("blocked", {}, "div-acme-build"), "linux": ("blocked", {}, "main-acme")}
-        for name, (status, cfg, to) in cases.items():
-            with self.subTest(name):
-                (self.home / "config.json").write_text(json.dumps(
-                    {"delivery": "pane", "inbox": {"wake": False, "quiet_s": 0, **cfg}}))
-                inbox.write(inbox.make(f"acme-{name}-20261021-1", "main-acme" if to != "main-acme" else
-                                       "div-acme-build", to, status, via="runner"))
-                with mock.patch.object(deliver, "PLATFORM", "linux" if name == "linux" else "darwin"):
-                    deliver.notify_owner(to)
-                self.assertEqual(self.notes(), [])
-
-    def test_concurrent_notifiers_notify_once(self):
-        self.report(status="blocked")
-        real = deliver.shell.run
-
-        def slow(*args, **kw):
-            time.sleep(0.3)                                        # both notifiers overlap here
-            return real(*args, **kw)
-        with mock.patch.object(deliver.shell, "run", side_effect=slow):
-            threads = [threading.Thread(target=deliver.notify_owner, args=("main-acme",)) for _ in range(2)]
-            for t in threads:
-                t.start()
-            for t in threads:
-                t.join()
-        self.assertEqual(len(self.notes()), 1)
-        self.assertEqual((inbox.box("main-acme") / deliver.NOTIFIED).read_text().split(),
-                         [p.name for p, _x in inbox.pending("main-acme")])
-
-    def test_a_failing_osascript_is_logged_and_never_raises(self):
-        self.report(status="blocked")
-        with mock.patch.object(deliver.shell, "run", return_value=deliver.shell.Result(1, "", "boom", [])):
-            deliver.notify_owner("main-acme")
-        self.assertIn("deliver: notify main-acme: osascript exit 1", (self.home / "logs" / "hooks.log").read_text())
+    def test_an_urgent_report_to_main_shows_no_notification(self):
+        with mock.patch.object(notify, "PLATFORM", "darwin"):
+            for status in inbox.URGENT:
+                self.report(status=status)
+                self.marker().unlink(missing_ok=True)
+                self.assertEqual(self.nudge()[0], 0)
+        self.assertFalse((self.home / support.OSASCRIPT_CALLS).exists())
+        self.assertFalse((inbox.box("main-acme") / ".notified").exists())
+        self.assertNotIn("owner notify", (self.home / "logs" / "events.log").read_text())
 
 
 class WakeTest(support.TempHomeCase):
@@ -684,7 +782,7 @@ class WakeTest(support.TempHomeCase):
         for ptr in (self.ptr("info", via=None), self.ptr("info", via="dispatch"), self.ptr("done", via="dispatch")):
             self.assertTrue(inbox.post(ptr).is_file())
         self.spawn.assert_not_called()
-        inbox.post(self.ptr("info", via=None, urgent=True))       # an urgent note wakes
+        inbox.post(self.ptr("blocked", via=None, urgent=True))    # an urgent note wakes (not a repeat)
         self.assertEqual(self.spawn.call_count, 1)
 
     def test_wake_off_spawns_nothing(self):
@@ -698,10 +796,9 @@ class WakeTest(support.TempHomeCase):
         (folder / inbox.NUDGED).write_text("x")
         inbox.post(self.ptr())
         self.spawn.assert_not_called()
-        for status in inbox.URGENT:                               # an urgent pointer still reaches the nudger
-            inbox.post(self.ptr(status))                           # (it notifies, then exits already-nudged)
-        self.assertEqual(self.spawn.call_count, len(inbox.URGENT))
-        self.spawn.reset_mock()
+        for status in inbox.URGENT:                               # urgent or not: the fresh wake covers it
+            inbox.post(self.ptr(status))                           # (R26: no nudger spawned to notify)
+        self.spawn.assert_not_called()
         unit_box = inbox.box("div-acme-build")
         unit_box.mkdir(parents=True, exist_ok=True)
         (unit_box / inbox.NUDGED).write_text("x")

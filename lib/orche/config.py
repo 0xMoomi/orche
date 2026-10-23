@@ -6,6 +6,8 @@ from . import log, paths, util
 DEFAULTS = {
     "orca_bin": "orca",
     "claude_bin": "claude",
+    # macOS notifications (lib/orche/notify.py): Main's OWNER:/DONE: closing lines, a parked guard
+    # refusal, HR, the Keymaster and the heartbeat's escalations. false: none.
     "notify": True,
     "lang": "en",
     # How the Stop hook delivers a brief to a division/feature: `runner` spawns `orche run <unit>`
@@ -36,9 +38,15 @@ DEFAULTS = {
     # The wake (R-INBOX-4): posting a waking pointer starts `orche nudge <recipient>`, which types
     # `[orche] inbox: new reports` into the recipient's idle pane. false: reports wait for a prompt.
     # quiet_s: the nudger waits until the newest waking pointer is this old (one wake per batch),
-    # at most quiet_max_s more; an urgent pointer (inbox.URGENT) skips the wait. notify: a macOS
-    # notification per urgent pointer to a Main session (off on other platforms).
-    "inbox": {"wake": True, "quiet_s": 90, "quiet_max_s": 240, "notify": True},
+    # at most quiet_max_s more; an urgent pointer (inbox.URGENT) skips the wait.
+    "inbox": {"wake": True, "quiet_s": 90, "quiet_max_s": 240},
+    # The heartbeat (lib/orche/reconcile.py): `orche reconcile` runs one bounded pass every every_s
+    # (the LaunchAgent `orche install` writes, or the hook kick when the heartbeat is stale) that
+    # re-nudges unread sessions and re-delivers undelivered briefs (tries and backoff are constants in
+    # reconcile.py), then one escalation. false: the pass only writes the heartbeat.
+    "reconcile": {"enabled": True, "every_s": 300},
+    # Flow guarantees (C10): the autonomy window's quiet hours and the headless spend caps.
+    "flow": {"enabled": True, "quiet_hours": "23:00-08:00", "max_unit_cost_usd": 10, "max_project_cost_usd": 30},
 }
 
 

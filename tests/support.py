@@ -86,6 +86,10 @@ class TempHomeCase(unittest.TestCase):
         self._tmp = tempfile.TemporaryDirectory()
         self.home = Path(self._tmp.name)
         (self.home / "config.json").write_text(json.dumps(NO_WAKE))
+        # A fresh hook-kick marker: no hook a test runs starts a detached `orche reconcile` pass
+        # (reconcile.kick waits every_s after it); kick tests remove it and stub the spawn.
+        (self.home / "reconcile").mkdir()
+        (self.home / "reconcile" / ".kicked").touch()
         # An ORCHE pane exports ORCHE_SESSION / ORCA_TERMINAL_HANDLE (and maybe more): every test
         # starts without any ORCHE_* / ORCA_* variable (nor a Claude OAuth token, which headless
         # runs and doctor would pick up), and the caller's values come back after.
@@ -107,6 +111,7 @@ class TempHomeCase(unittest.TestCase):
     def tearDown(self):
         from orche import jev_setup, jevkey
         woke = (self.home / "logs" / "nudge.log").exists() and not getattr(self, "wakes", False)
+        kicked = (self.home / "logs" / "reconcile.log").exists()
         jevkey.PLATFORM, jevkey.SECURITY, jev_setup.OSASCRIPT = self._jev_seams
         for key in [k for k in os.environ if k.startswith(SCRUBBED_ENV)]:
             del os.environ[key]
@@ -114,6 +119,9 @@ class TempHomeCase(unittest.TestCase):
         os.environ["PATH"] = self._saved_path
         self._tmp.cleanup()
         super().tearDown()
+        if kicked:
+            self.fail("a reconcile pass was started (logs/reconcile.log): keep reconcile/.kicked fresh "
+                      "or stub procs.spawn_detached")
         if woke:
             self.fail("a nudger was started (logs/nudge.log): keep the test home's inbox.wake false "
                       "(support.no_wake) or set self.wakes = True and wait for its events line")

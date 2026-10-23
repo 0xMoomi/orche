@@ -20,6 +20,7 @@ import sys
 from pathlib import Path
 
 from . import brief, donegate, inbox, mask, registry, roster, units, util
+from .flow import lineage, owner
 
 EXIT_OK, EXIT_USER, EXIT_RUNNER, EXIT_BLOCKED = 0, 1, 2, 3
 ADHOC_STATUSES = ("external-request", "question", "info")
@@ -35,6 +36,8 @@ def register(subparsers):
     p.add_argument("--urgent", action="store_true",
                    help="mark an `info` note urgent: it is injected at once and wakes the recipient "
                         "(every other status always is)")
+    p.add_argument("--owner", help="the one step or decision only the owner can take (`secret NAME[, NAME]` "
+                                   "after `orche secret request`): Main sees it first as OWNER STEP")
     p.set_defaults(func=cmd_report)
 
 
@@ -103,7 +106,8 @@ def cmd_report(args):
         ptr = inbox.make(unit, me, to, args.status, report_path=report, head_sha=proof.head or "",
                          ledger_row=proof.row is not None,
                          brief_rev=b.rev if b else 1,
-                         urgent=args.urgent, summary=summary)
+                         urgent=args.urgent, summary=summary, owner=owner.step(args.owner or ""),
+                         **lineage.fields(b))
         path = None if args.dry_run else inbox.post(ptr)
         if not args.dry_run:
             units.touch_activity(me)

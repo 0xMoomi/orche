@@ -735,8 +735,28 @@ def start(unit) -> None:
     """Start `orche run <unit>` detached (procs.spawn_detached: its own session, output appended to
     logs/runs/<unit>.log, the plugin bin first on PATH, ORCHE_RUN_ID dropped); never waits.
     SINCE_ENV (now, ns) dates the request: a STOP marker written after it stops the run even before
-    the new process got going; an older marker never does."""
+    the new process got going; an older marker never does. The dispatch pointers this run replaces
+    (the unit's, at the current revision or older, in its target's inbox) are drained once the spawn
+    succeeded: a failed spawn (it raises) leaves the brief pending for the pane or the heartbeat.
+    The run drains again after it acquires its slot (job.run)."""
     procs.spawn_detached(_argv(unit), logs_dir() / f"{unit}.log", **{SINCE_ENV: str(time.time_ns())})
+    drain_replaced(unit)
+
+
+def drain_replaced(unit) -> None:
+    """Drain the pending dispatch pointers of `unit` (brief_rev <= its current rev) in its target's
+    inbox, unless a deliverer holds the target's pane; never raises (logged)."""
+    try:
+        from .. import brief, deliver, roster
+        reg = registry.load()
+        b = brief.find(reg, unit)
+        t = roster.Roster(reg).resolve_to(b.to, b.project) if b is not None and b.rev else None
+        if t is not None and deliver.lock_free(t.session):
+            deliver.drain_dispatch(t.session, unit, b.rev)
+        elif t is not None:
+            log.log("events", f"run unit={unit} lock-held")
+    except Exception as exc:  # noqa: BLE001 - the run starts either way
+        log.log("hooks", f"runner: {unit}: cannot drain the dispatch pointer: {exc}")
 
 
 def restart(proj: str, unit: str, timeout=PS_TIMEOUT_S, reg=None) -> bool:

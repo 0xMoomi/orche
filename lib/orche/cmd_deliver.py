@@ -8,9 +8,16 @@ user-typing, refused, nudge-failed, locked (exit 1). An unsafe session name exit
 
 `orche deliver` delivers a dispatched unit. The Stop hook starts it detached for every pane unit;
 run it by hand after a failed delivery (the urgent pointer and `orche status` name it). Prints the
-state: runner-started, running, already-ran, picked-up, nudged, queued, user-typing (exit 0); no-pane,
-needs-wake, wake-requested, dialog, no-agent, refused, nudge-failed, locked, runner-failed (exit 1);
-no-brief, unknown-target, retired-target (exit 2).
+state: runner-started, running, already-ran, runner-fallback, picked-up, nudged, queued, user-typing,
+stopped, stop-idle (exit 0); no-pane, needs-wake, wake-requested, dialog, no-agent, refused,
+nudge-failed, locked, runner-failed (exit 1); no-brief, unknown-target, retired-target (exit 2). A pane
+unit whose current revision is settled (it ran, runs or was reported on) drains its dispatch pointer
+(`already-ran`); a division/feature target without a pane gets the headless run (`runner-fallback`).
+A STOP stops a live run (`stopped`), is dropped when nothing runs and the target has no pane
+(`stop-idle`), else is typed. `--retry` (reconcile's attempts) posts no failure pointer.
+`--remind REASON` types the report-due line once instead; REASON is `idle <m> min` or
+`TIMEBOX <h>h<m>m passed` (anything else exits 2; states: nudged, queued, user-typing,
+already-reported exit 0; the pane failures exit 1).
 """
 from . import cli
 
@@ -23,6 +30,8 @@ def register(subparsers):
     p = subparsers.add_parser("deliver", help="deliver a dispatched unit: start its run, or type its inbox line "
                                               "into the target pane; ORCHE starts this by itself")
     p.add_argument("unit", help="the unit id")
+    p.add_argument("--retry", action="store_true", help="a retry by reconcile: a failure posts no pointer")
+    p.add_argument("--remind", metavar="REASON", help="type the report-due line for a silent unit instead")
     p.set_defaults(func=cmd_deliver)
 
 
@@ -45,10 +54,15 @@ def cmd_deliver(args):
     bad = brief.unit_id_error(args.unit)
     if bad:
         return cli.fail(cli.EXIT_NOT_FOUND, bad)
+    if args.remind is not None and not deliver.REMIND_REASON.fullmatch(args.remind):
+        return cli.fail(cli.EXIT_NOT_FOUND, "--remind takes `idle <m> min` or `TIMEBOX <h>h<m>m passed`")
     if args.dry_run:
-        cli.dry(f"would deliver {args.unit}")
+        cli.dry(f"would {'remind' if args.remind else 'deliver'} {args.unit}")
         return cli.EXIT_OK
-    code, state = deliver.deliver_unit(registry.load(), args.unit)
+    if args.remind:
+        code, state = deliver.remind(registry.load(), args.unit, args.remind)
+    else:
+        code, state = deliver.deliver_unit(registry.load(), args.unit, retry=args.retry)
     if code == cli.EXIT_NOT_FOUND:
         return cli.fail(code, f"{state}: {args.unit}")
     print(state)

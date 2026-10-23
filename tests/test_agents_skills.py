@@ -263,6 +263,15 @@ class SkillsTest(unittest.TestCase):
         for part in ("## Commands", "## Cross-project requests", "`[project]`", "`[drain]`"):
             self.assertIn(part, help_)
 
+    def test_no_card_template_or_readme_names_the_removed_owner_notification(self):
+        """C10 T11: `inbox.notify` and the per-pointer owner notification are gone (0.7.0)."""
+        files = sorted(SKILLS.rglob("*.md")) + sorted((support.ROOT / "templates").rglob("*.md"))
+        files.append(support.ROOT / "README.md")
+        for path in files:
+            text = path.read_text()
+            for stale in ("inbox.notify", "notifies the owner on blocked"):
+                self.assertNotIn(stale, text, path)
+
 
 def load_session_start():
     spec = importlib.util.spec_from_file_location("session_start_hook", support.ROOT / "hooks" / "session_start.py")

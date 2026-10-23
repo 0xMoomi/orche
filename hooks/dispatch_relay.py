@@ -21,6 +21,19 @@ if not pyguard.check_hook("dispatch_relay"):
     sys.exit(0)  # fail-open: the hook does nothing, a gate allows
 
 
+def _kick():
+    """Start a reconcile pass when the heartbeat is stale (reconcile.kick); never fails the hook."""
+    try:
+        from orche import reconcile
+        reconcile.kick()
+    except Exception as exc:  # noqa: BLE001 - fail-open
+        try:
+            from orche import log
+            log.log("hooks", f"reconcile kick: {type(exc).__name__}: {exc}")
+        except Exception:  # noqa: BLE001
+            pass
+
+
 def main():
     try:
         payload = json.load(sys.stdin)
@@ -31,6 +44,7 @@ def main():
             dispatch.handle_stop_failure(payload)
             return 0
         code, message = dispatch.handle_stop(payload, STARTED)
+        _kick()
     except Exception as exc:  # noqa: BLE001 - fail-open
         try:
             from orche import log

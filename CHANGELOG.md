@@ -3,6 +3,130 @@
 All notable changes to ORCHE are listed here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow semantic versioning.
 
+## 0.7.0 — 2026-10-23
+
+### Added
+- `orche reconcile` (C10): one pass repairs stuck flow — an unread waking pointer gets a nudge, an undelivered
+  dispatch is delivered again — with backoff 10/20/40 min (cap 3) and an urgent escalation after that; `--dry-run`
+  prints what it would do. Each pass writes `ORCHE_HOME/reconcile/heartbeat.json`; `orche status` prints a
+  `heartbeat:` line (last pass, interval, repairs today, or STALE / never / off) and `orche doctor` a `heartbeat`
+  row. Config: `"reconcile": {"enabled": true, "every_s": 300}`; the backoff (STALL_S 600 s), attempt cap (CAP 3)
+  and pass budget (BUDGET_S 60 s) are constants in `lib/orche/reconcile.py`.
+- `orche install` writes the LaunchAgent `~/Library/LaunchAgents/com.orche.reconcile.plist` (`orche reconcile`
+  every `reconcile.every_s`, and at load; output to `ORCHE_HOME/logs/reconcile.log`) and loads it with
+  `launchctl bootout` + `bootstrap gui/<uid>` (only for the real home; `--no-reconcile` skips it). `orche uninstall`
+  removes it; `orche doctor` row `reconcile job` checks it is loaded and its interval matches.
+- Hook kick: the prompt and Stop hooks start one detached `orche reconcile` when the heartbeat is missing or
+  older than 3 × `every_s` (at most once per `every_s`), so flow repairs without launchd too.
+- Reconcile repairs (C10 T3/T4): a dispatch pointer whose revision already ran or was reported on is drained; a
+  run stopped `busy` is restarted once; a closed Main with waiting reports is reopened without a focus switch and
+  an active division or feature is woken (2 a day, not in `flow.quiet_hours`, then one owner notification; a dormant
+  or paused unit only gets an urgent info to Main); a silent pane unit idle 20 min or 1.5 × TIMEBOX old gets one
+  report-due reminder, then 30 min later (or at 2 × TIMEBOX) one urgent info to the brief's sender with a default.
+  A still-loaded pre-0.6.0 `com.orche.main-waker` job gets one owner notification a day.
+- Config `flow`: `{"enabled": true, "quiet_hours": "23:00-08:00", "max_unit_cost_usd": 10,
+  "max_project_cost_usd": 30}`. `orche status` shows `stalled:` lines
+  (`--json`: `stalled`).
+- Flow guards (C10 T5): `orche dispatch` refuses, inside the project's autonomy window (since the later of local
+  midnight and the owner's last prompt to Main), a fourth AMEND to one unit (three revisions pass, G1), an AMEND or same-GOAL brief to a
+  unit that reported blocked twice in a row (G2), and the 21st brief or AMEND in an hour (G3); each refusal asks
+  for `OWNER: <the decision>` and logs `flow refused rule=<G> by=<s> unit=<u> n=<count>`. The third refusal in a
+  row (G7) adds "stop re-sending; tell the user what you tried". STOP always passes; `flow.enabled false` turns
+  G1–G7 off (the pause, G8, stays). `orche flow pause <p> [--reason]` / `orche flow resume <p>` hold all relays (G8; resume needs
+  an owner prompt newer than the pause, else exit 3); reconcile only drains a paused project. `orche status`
+  shows `looping:` and `paused:` lines.
+- Run history and caps (C10 T6): every finished, unrun or lost run appends one line to
+  `ORCHE_HOME/runs/<p>/history.jsonl` (`{unit, rev, to, model, effort, status, stop_reason, cost_usd, num_turns,
+  started, finished}`). Inside the autonomy window, a project that spent `flow.max_project_cost_usd` (30) on
+  headless runs refuses every brief, AMEND and run, and a unit that spent `flow.max_unit_cost_usd` (10) refuses
+  its AMENDs and runs (G4); a unit's 5th run refuses (G5). G5 also refuses, at the relay, an AMEND the runner would run, and both caps are
+  checked again once a run holds its slot. A malformed cap falls back to its default; a guard that raises fails open
+  (`flow guard-error by=<s> unit=<u> <Type>`). A brief to another project's Main passes the sender's guards (G8
+  pause included); G3 counts the blocks ahead in the same dispatch; resume needs a prompt over a second after the
+  pause; a quiet repeat is not a second blocked report (G2); `flow.enabled false` also drops the G7 suffix. A refused run exits 3, starts no claude, writes no
+  RUN.json and files one quiet info pointer "not started: …; ask the owner". `orche status` shows
+  `paused: autonomous spend $X since HH:MM (cap $30) — until the owner answers` (`--json`: a `paused` entry with `by: spend`; `looping` and `paused` entries
+  have one shape each).
+- Repeated reports stay quiet (C10 T6): a unit session's report with the same `brief_rev` and `status` as its
+  previous one to the same inbox since W gets `quiet: true` and `repeat: <n>` (no wake), urgent or not; runner
+  filings, external requests and brief-less (`adhoc-`/`xreq-`) units are never shaped.
+  `orche status` shows `looping: <unit> — same report n× (<status>, rev <rev>): repeats did not wake Main` from n 3.
+- Lineage and chain caps (C10 T7): every brief carries `lineage: <id>   parent: <unit|->` under its `to:` line
+  (AMEND keeps both; a pre-C10 brief reads as its own lineage, no parent). A division's brief inherits the lineage
+  of the division's newest brief and names it as parent. Main's briefs from one owner turn share one new lineage;
+  a wake turn with exactly one injected lineage joins it; triage starts a new one. Report pointers (`orche
+  report`, runner filings, unrun and lost) carry `lineage` and `parent`. G6: a division's brief is refused when
+  its parent is already 3 briefs deep or already has 5 child briefs; Main is not capped; STOP passes.
+- Lineage close (C10 T8): in a lineage of two or more units, done and stopped reports arrive quiet; failed,
+  blocked and question still wake Main. When every unit has ended, ORCHE writes `.orche/units/<L>/LINEAGE.md`
+  (one row per unit) and posts one waking close pointer from `orche` (`lineage L closed: n units — …`), once per
+  lineage state; reconcile reposts a close a crash missed (≤ 24 h). Main's inbox block gains one
+  `[orche] lineage L: closed|open — …` line per lineage.
+- Owner's voice (C10 T9): Main's closing line is the owner's notification. A Main session's Stop hook (also under
+  `stop_hook_active`) reads the last non-empty line outside fences: `OWNER: …` records the project's ask
+  (`ORCHE_HOME/flow/<p>/ask.json` `{text, at, kind: owner|secret|guard, source[, unit][, closed_at]}`) and
+  notifies; `DONE: …` closes the open ask and notifies once; `RUNNING: …` or no tag notifies nothing (no tag logs
+  `owner untagged`). A first notification while the owner prompted Main under 2 min ago is skipped, not delayed (an ask is still
+  re-notified from it; a DONE is not sent: the owner watched it land); at most one per project
+  per 5 min (`flow/<p>/notified.json`). A runner's refused start (G4/G5) records a `guard` ask and notifies. A
+  worker's last `OWNER:` line (runner) or `orche report --owner "<text>"` (pane) is the pointer field `owner`;
+  Main's inbox shows it first as `OWNER STEP:`. One notify path, `lib/orche/notify.py` (`on run argv`: body and
+  title are osascript arguments, masked, one line; config `notify`; macOS only), also carries HR, Keymaster and
+  heartbeat notifications. Events name ids and kinds, never the text.
+- Owner re-notification (C10 T10): the heartbeat re-notifies an open ask 30, 60, 120 and 240 min after it, then
+  never (the `owner:` line stays); inside `flow.quiet_hours` a first notification is silent, re-notifications wait
+  and the first pass after them sends one. The ask is answered (`answered_at`; events `owner answered project=<p>
+  by=prompt|secret after=<m>m`) by the owner's next prompt in Main (the prompt hook) or once every secret a
+  `secret …` ask names is filled; a filled secret also posts one urgent `info` to Main per asking unit — a unit whose
+  report since the request names the secret, once every secret its owner step names is filled — `owner step done:
+  secret <NAME>[, <NAME>] filled at HH:MM — resume <unit> (AMEND or orche run <unit>)` — from the Keymaster dialog
+  after `store.mark_filled`, or from the heartbeat for a day (a dialog that died, a report filed after the fill);
+  such a fill counts as the owner's word (`owner-seen`), so G1 lets the resume AMEND through. Fallback (R26): a report to Main that
+  waits on the owner (blocked, question, failed, an owner step, a lineage close) for 10 min with no tagged Main
+  turn begun after it (a tag stamps the turn's start), owner prompt or ask since notifies `<unit>: <owner step or status>` once — an ask for blocked, question and
+  owner steps, a one-off notice otherwise. A DONE, an escalation (`stuck`) and a fallback notice are recorded in
+  `flow/<p>/<kind>.json` before they are tried, so one held back (gap, lock) goes once at a later pass; a failed show
+  (osascript exit or timeout) is a try — the next waits for the next 30/60/120/240-min slot, at most 5 for an ask or
+  a notice — and a fallback held back prints as `held`. The open ask's text again, or the last DONE again with no ask since, is a repeat (nothing sent).
+  `orche status` prints `owner: asked HH:MM (<m> min, notified n×[, next HH:MM | waiting for quiet hours to end])
+  — <ask>` (`--json`: `owner`). The closing line also tolerates a quote, a bullet, backticks, `__bold__`, a space
+  before the colon and a full-width colon, and a snippet fence indented inside ```` ```dispatch ```` no longer ends
+  the block early. The Keymaster dialog is a fixed `on run argv` script with the request text as its argument; a
+  notification argument starting with `-` gets a leading space.
+### Changed
+- `orche run` drains the dispatch pointers it replaces after the spawn succeeded (a failed spawn leaves the brief
+  pending), and a foreground run drains again once it holds its slot; a held target lock logs `run unit=<u> lock-held`.
+- Main's report line (and skill orche-main): a closed lineage with nothing more to dispatch gets the full report
+  (outcome · landed · failed · decisions + default · next step); otherwise Main dispatches and writes one progress
+  line; every reply ends with exactly one `RUNNING:`, `OWNER:` or `DONE:` line. This supersedes the C9 ruling A
+  ("report after every wake"): one full report per lineage, a progress line otherwise.
+- Cards and rulebooks (skills orche-main, orche, orche-build; division and feature personas; the runner footer;
+  the Fable block): a unit only the owner can unblock ends `STATUS: blocked` with one `OWNER: <exact step>` line
+  (`orche report blocked --owner "<step>"` in a pane; a secret: `orche secret request <NAME>`, then
+  `OWNER: secret <NAME>`) instead of filing `orche report question`; Main's waker check reads the `heartbeat:` line
+  of `orche status`. SPEC rows R-FLOW-1…8 and R-RECONCILE-1…6.
+- `orche janitor install-schedule|uninstall-schedule` use `launchctl bootstrap|bootout gui/<uid>` instead of
+  the deprecated `load -w` / `unload -w`.
+
+### Removed
+- The 0.6.2 per-pointer owner notification (R26): `deliver.notify_owner`, `inbox/<s>/.notified` and config
+  `inbox.notify` are gone (a stale `inbox.notify` key is ignored; the top-level `notify` gates every notification),
+  and `inbox.wake` no longer starts a nudger for an urgent Main pointer while a wake is fresh (9aafc26). Urgent
+  reports still wake Main at once; the owner hears Main's `OWNER:` / `DONE:` line instead.
+- Config keys `reconcile.stall_s`, `reconcile.cap` and `reconcile.budget_s` (now constants).
+- The Main card line "An instruction you would write twice goes into STANDING.md first." (the card had to make
+  room for the closing-line rule; STANDING.md itself is unchanged).
+
+### Upgrading
+- Run `orche install --mode settings` to write and load the `com.orche.reconcile` LaunchAgent (until then the
+  hooks kick a pass when the heartbeat is stale).
+- Restart Main and the division panes so they load the new cards.
+- `inbox.notify`, the per-pointer owner notification and the 9aafc26 exception are gone; drop `inbox.notify` from
+  `config.json` (it is ignored).
+- Drop `reconcile.stall_s`, `reconcile.cap` and `reconcile.budget_s` from `config.json` (ignored; constants now).
+- Main must end every reply with `RUNNING:`, `OWNER:` or `DONE:` — only OWNER and DONE notify the owner.
+- The C9 ruling A "report after every wake" is superseded by one full report per lineage.
+
 ## 0.6.3 — 2026-10-22
 
 ### Removed

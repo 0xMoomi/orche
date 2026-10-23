@@ -16,6 +16,25 @@ from orche.secrets import VALUE_PLACEHOLDER, SecretError, store  # noqa: E402
 
 PASTE, ENTER, CANCEL = "Paste from clipboard", "Enter", "Cancel"
 MAX_ATTEMPTS = 3
+# Fixed words only: the request's text is `item 1 of argv` (dialog_argv), never AppleScript.
+DIALOG = ("on run argv",
+          f'display dialog (item 1 of argv) default answer "" with hidden answer '
+          f'buttons {{"{PASTE}","{ENTER}","{CANCEL}"}} default button "{PASTE}"',
+          "end run")
+
+
+def dialog_argv(text) -> list:
+    """The osascript argv: the fixed DIALOG lines, then `text` as the one argument (control characters
+    but newlines dropped; a leading `-` gets a space before it, never an osascript option)."""
+    plain = "".join(ch if ch == "\n" or ch >= " " else " " for ch in str(text))
+    return ["osascript", *(x for line in DIALOG for x in ("-e", line)), " " + plain if plain.startswith("-") else plain]
+
+
+def _resume(project, name, rid, filled_at) -> None:
+    """Tell flow.owner the secret is in: the owner's ask is answered and Main hears, once, which unit
+    to resume (owner.secret_filled never raises)."""
+    from orche.flow import owner
+    owner.secret_filled(project, name, rid, filled_at=filled_at)
 
 
 class OsaUI:
@@ -31,9 +50,7 @@ class OsaUI:
                f"Get it at: {req.get('how_url') or '-'}\n(The clipboard will be cleared.)"
         if error:
             text = f"Rejected: {error}\n\n{text}"
-        script = (f"display dialog {store._as_string(text)} default answer \"\" with hidden answer "
-                  f"buttons {{\"{PASTE}\",\"{ENTER}\",\"{CANCEL}\"}} default button \"{PASTE}\"")
-        result = shell.run(["osascript", "-e", script], timeout=3600)
+        result = shell.run(dialog_argv(text), timeout=3600)
         if not result.ok:
             return CANCEL, ""
         return parse_answer(result.out)
@@ -105,10 +122,11 @@ def handle(rid, req, ui, ex, reg) -> str:
             return "failed"
     finally:
         value = None
-    store.mark_filled(rid)
+    filled = store.mark_filled(rid)
     store.audit("filled", req.get("project"), name, ",".join(envs), "-", "human", rid)
     log.log("keymaster", f"filled {rid} envs={','.join(envs)}")
     ui.notify(f"{name} stored ({','.join(envs)})")
+    _resume(req.get("project"), name, rid, filled.get("filled_at"))
     return "filled"
 
 

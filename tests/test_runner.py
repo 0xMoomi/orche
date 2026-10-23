@@ -19,7 +19,7 @@ from pathlib import Path
 from unittest import mock
 
 import support
-from orche import brief, dispatch, headless, procs, registry, roster, runs
+from orche import brief, dispatch, headless, inbox, procs, registry, roster, runs
 from orche.runs import job as runner
 from support import write_fake_claude
 from test_hooks import GIT_ENV, HookCase
@@ -354,6 +354,20 @@ class StatusTest(RunnerCase):
         self.assertEqual(runner.status_of("Status: Done.\nx")[0], "done")
         self.assertEqual(runner.status_of("End with `STATUS: done|blocked|failed`")[0], None)
         self.assertEqual(runner.status_of("STATUS: done|blocked|failed\nSTATUS: failed\nboom")[0], "failed")
+
+    def test_owner_of_is_the_last_owner_line_outside_fences(self):
+        """C10 T9 (§5.1)."""
+        self.assertEqual(runner.owner_of("STATUS: blocked\nneed a key\nOWNER: secret STRIPE_KEY"), "secret STRIPE_KEY")
+        self.assertIsNone(runner.owner_of("STATUS: done\n```\nOWNER: in a fence\n```"))
+        self.assertIsNone(runner.owner_of(None))
+
+    def test_an_owner_line_rides_on_the_runners_pointer(self):
+        unit = self.brief()
+        self.reply("Stripe needs a live key.\nSTATUS: blocked\nOWNER: secret STRIPE_KEY")
+        code, out, err = self.orche("run", unit)
+        self.assertEqual(code, 0, out + err)
+        [ptr] = self.pointers("main-acme")
+        self.assertEqual((ptr["status"], ptr["owner"]), ("blocked", "secret STRIPE_KEY"))
 
 
 class RunTest(RunnerCase):
@@ -909,6 +923,8 @@ class ConcurrencyTest(RunnerCase):
         self.assertEqual((ptr["from"], ptr["status"], ptr["summary"], ptr["report_path"], ptr["via"]),
                          ("div-acme-build", "info", f"runner busy: 4 live runs, retry with `orche run {unit}`",
                           "", "runner"))
+        # C10 §2.3: a busy pointer is a retry, not a run's end: `retry` and `quiet` (it wakes nobody)
+        self.assertEqual((ptr.get("retry"), ptr.get("quiet"), inbox.wakes(ptr)), (True, True, False))
         rec = self.run_record(unit)
         self.assertEqual((rec["status"], rec["stop_reason"], rec["error"]), ("info", "busy", "runner busy: 4 live runs"))
 
@@ -935,6 +951,7 @@ class ConcurrencyTest(RunnerCase):
         self.assertEqual((ptr["status"], ptr["via"]), ("info", "runner"))
         self.assertTrue(ptr["summary"].startswith(f"not started: {unit} is already running (pid {pid}, "
                                                   "started ?)"), ptr["summary"])
+        self.assertEqual((ptr.get("retry"), ptr.get("quiet"), inbox.wakes(ptr)), (True, True, False))
         self.assertFalse((self.units_dir() / unit / "RUN.json").exists())   # the live run writes its own
 
     def test_a_unit_being_stopped_is_waited_for_not_refused(self):

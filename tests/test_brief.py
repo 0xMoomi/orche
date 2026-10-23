@@ -1,6 +1,7 @@
 import dataclasses
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -325,8 +326,8 @@ class WriteReadTest(StoreCase):
         self.assertEqual((b.folder, b.path), (self.units_dir() / u, self.units_dir() / u / "BRIEF.md"))
         self.assertEqual(b.path.read_text(), b.text)
         self.assertEqual((b.folder / "BRIEF.rev1.md").read_text(), b.text)
-        self.assertEqual(b.text.splitlines()[:7], [
-            "rev: 1", f"unit: {u}", "to: div-acme-build   from: main-acme",
+        self.assertEqual(b.text.splitlines()[:8], [
+            "rev: 1", f"unit: {u}", "to: div-acme-build   from: main-acme", f"lineage: {u}   parent: -",
             f"worktree: {self.root / 'acme-build'}   branch: div/build",
             f"project root: {self.repo}   (brief + REPORT.md live under project root/.orche/units/{u}/)",
             "Work only inside `worktree`. SCOPE paths are relative to it.", ""])
@@ -421,7 +422,7 @@ class HeaderTest(StoreCase):
     def header(self, to, frm="div-acme-build", timeout=0.3):
         b = self.write({}, to=to, frm=frm, timeout=timeout)
         self.assertNotIn("worktree: .", b.text)
-        return b.text.splitlines()[3]
+        return b.text.splitlines()[4]
 
     def test_division_uses_recorded_worktree(self):
         self.assertEqual(self.header("div-acme-build", "main-acme"),
@@ -633,8 +634,9 @@ class ByteIdentityTest(StoreCase):
     """brief.write renders every dispatch fixture byte for byte like the dispatch writer it replaces."""
 
     def snapshot(self):
-        return {f"{d.name}/{f.name}": f.read_bytes() for d in sorted(self.units_dir().iterdir())
-                for f in sorted(d.iterdir())}
+        """The old writer predates C10's lineage line, so it is dropped before comparing."""
+        return {f"{d.name}/{f.name}": re.sub(rb"(?m)^lineage: \S+   parent: \S+\n", b"", f.read_bytes())
+                for d in sorted(self.units_dir().iterdir()) for f in sorted(d.iterdir())}
 
     def old(self, fields, to, frm, amend):
         from orche import dispatch, roster
@@ -702,3 +704,14 @@ class ImportTest(unittest.TestCase):
                              text=True, check=True).stdout.split()
         self.assertLessEqual(set(out), CLOSURE)
         self.assertIn("orche.brief", out)
+
+
+class LineageHeaderTest(unittest.TestCase):
+    def test_header_round_trip_and_pre_c10_defaults(self):
+        text = "rev: 1\nunit: u1\nto: a   from: b\nlineage: L1   parent: u0\n"
+        b = brief.Brief("u1", "p", Path("/x"), 1, {}, text)
+        self.assertEqual((b.lineage, b.parent), ("L1", "u0"))
+        b = brief.Brief("u1", "p", Path("/x"), 1, {}, text.replace("parent: u0", "parent: -"))
+        self.assertEqual((b.lineage, b.parent), ("L1", ""))
+        b = brief.Brief("u1", "p", Path("/x"), 1, {}, "rev: 1\nunit: u1\nto: a   from: b\n")
+        self.assertEqual((b.lineage, b.parent), ("u1", ""))

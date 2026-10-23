@@ -9,6 +9,7 @@ import subprocess
 import sys
 import tempfile
 import time
+import unittest
 from pathlib import Path
 
 import support
@@ -59,6 +60,12 @@ class HookCase(support.TempHomeCase):
                > self.events().count("deliver unit=") + getattr(self, "captured_deliverers", 0)
                and time.monotonic() < deadline):
             time.sleep(0.05)
+        # A deliverer's runner fallback started `orche run` (detached): wait until that process is gone.
+        for unit in re.findall(r"deliver unit=(\S+) rev=\d+ to=\S+ state=runner-fallback", self.events()):
+            while unit in subprocess.run(["ps", "-axo", "command"], capture_output=True, text=True,
+                                         errors="replace").stdout \
+                    and time.monotonic() < deadline + 30:
+                time.sleep(0.1)
         super().tearDown()
 
     # -- helpers -------------------------------------------------------------
@@ -153,7 +160,7 @@ class DispatchRelayTest(HookCase):
                          (0, "", f"block 1: delivered {unit} → div-acme-build (rev 1, deliverer-started)\n"))
         brief = (self.units_dir() / unit / "BRIEF.md").read_text()
         self.assertTrue(brief.startswith(
-            f"rev: 1\nunit: {unit}\nto: div-acme-build   from: main-acme\n"
+            f"rev: 1\nunit: {unit}\nto: div-acme-build   from: main-acme\nlineage: {unit}   parent: -\n"
             f"worktree: {self.root / 'acme-build'}   branch: div/build\n"
             f"project root: {self.repo}   (brief + REPORT.md live under project root/.orche/units/{unit}/)\n"
             "Work only inside `worktree`. SCOPE paths are relative to it.\n\n"), brief)
@@ -205,10 +212,11 @@ class DispatchRelayTest(HookCase):
         (self.home / "registry.json").write_text(json.dumps(reg))
         res = self.send(DISPATCH_OK.replace("TO        build", "TO        design"))
         self.assertEqual(res.returncode, 0, res.stdout)
-        brief = (self.units_dir() / self.only_unit() / "BRIEF.md").read_text()
-        self.assertIn(f"to: div-acme-design   from: main-acme\nworktree: {self.root / 'acme-design'}", brief)
+        unit = self.only_unit()
+        brief = (self.units_dir() / unit / "BRIEF.md").read_text()
+        self.assertIn(f"to: div-acme-design   from: main-acme\nlineage: {unit}   parent: -\nworktree: {self.root / 'acme-design'}", brief)
         self.assertIn("to=div-acme-design by=main-acme delivery=deliverer-started", self.events())
-        self.assertIn("to=div-acme-design state=needs-wake", self.delivered())
+        self.assertIn("to=div-acme-design state=runner-fallback", self.delivered())
 
     def not_delivered(self, session="main-acme"):
         """The deliverer's urgent pointers from orche in `session`'s inbox (after it finished)."""
@@ -216,25 +224,20 @@ class DispatchRelayTest(HookCase):
         ptrs = [json.loads(p.read_text()) for p in self.inbox(session)]
         return [p for p in ptrs if p["from"] == "orche" and p["urgent"]]
 
-    def test_needs_wake_failure_pointer_carries_wake_hint(self):
+    def test_a_needs_wake_division_runs_headless_without_a_failure_pointer(self):
         self.send(DISPATCH_OK.replace("TO        build", "TO        div-acme-rnd"))
         unit = self.only_unit()
-        [ptr] = self.not_delivered()
-        self.assertEqual((ptr["unit"], ptr["status"], ptr["to"]), (unit, "info", "main-acme"))
-        self.assertEqual(ptr["summary"], f"not delivered: {unit} → div-acme-rnd rev 1 (needs-wake) — target has no "
-                                         f"pane: run `orche wake div-acme-rnd`, then `orche deliver {unit}`")
-        [fb] = [json.loads(p.read_text()) for p in self.inbox("main-acme") if not json.loads(p.read_text())["urgent"]]
-        self.assertEqual(fb["summary"], f"relayed {unit} → div-acme-rnd rev 1 (deliverer-started)")
+        self.assertIn(f"deliver unit={unit} rev=1 to=div-acme-rnd state=runner-fallback", self.delivered())
+        self.assertEqual([p for p in self.not_delivered() if p["summary"].startswith("not delivered:")], [])
+        fb = [json.loads(p.read_text()) for p in self.inbox("main-acme")
+              if json.loads(p.read_text())["summary"].startswith("relayed ")]
+        self.assertEqual([p["summary"] for p in fb], [f"relayed {unit} → div-acme-rnd rev 1 (deliverer-started)"])
 
-    def test_wake_requested_division_failure_pointer_carries_wake_hint(self):
+    def test_a_wake_requested_division_runs_headless(self):
         self.fake_orca({"terminal list": {"terminals": []}})  # Build is dormant: no pane
         self.send(DISPATCH_OK)
         unit = self.only_unit()
-        self.assertIn("to=div-acme-build by=main-acme delivery=deliverer-started", self.events())
-        [ptr] = self.not_delivered()
-        self.assertIn(f"deliver unit={unit} rev=1 to=div-acme-build state=wake-requested", self.events())
-        self.assertEqual(ptr["summary"], f"not delivered: {unit} → div-acme-build rev 1 (wake-requested) — target "
-                                         f"has no pane: run `orche wake div-acme-build`, then `orche deliver {unit}`")
+        self.assertIn(f"deliver unit={unit} rev=1 to=div-acme-build state=runner-fallback", self.delivered())
 
     def test_wake_requested_main_failure_pointer_has_no_hint(self):
         res = self.send(DISPATCH_OK.replace("TO        build\n", "TO        shop\n"),
@@ -329,7 +332,7 @@ class DispatchRelayTest(HookCase):
         self.assertEqual(len(self.inbox("div-acme-build")), 1)
         events = self.events()
         self.assertIn(f"dispatch kind=brief unit={unit} rev=1 to=div-acme-build by=main-acme", events)
-        self.assertIn("dispatch refused by=main-acme blocks=2 reason=missing VERIFY.", events)
+        self.assertIn("dispatch refused by=main-acme blocks=2 refused=1 rules=-", events)
         seen = json.loads((self.home / "sessions" / "main-acme.dispatched.json").read_text())
         self.assertEqual([e["routed"] for e in seen.values()], [f"{unit} → div-acme-build"])
         # The same batch again: block 1 is skipped, block 2 is still refused.
@@ -398,8 +401,7 @@ class DispatchRelayTest(HookCase):
         self.assertEqual(res.returncode, 2)
         self.assertEqual(res.stdout.strip().splitlines()[0], "block 1: refused — missing VERIFY. Fill every "
                                                              "field or drop the block.")
-        self.assertIn("dispatch refused by=main-acme blocks=1 reason=missing VERIFY. Fill every field or drop "
-                      "the block.\n", self.events())
+        self.assertIn("dispatch refused by=main-acme blocks=1 refused=1 rules=-\n", self.events())
 
     def test_incident_stop_with_unindented_reason_and_a_brief_both_relay(self):
         self.send(DISPATCH_OK)
@@ -530,7 +532,7 @@ class DispatchRelayTest(HookCase):
         folder = self.units_dir() / unit
         brief = (folder / "BRIEF.md").read_text()
         self.assertTrue(brief.startswith("rev: 2\nsupersedes: rev 1\nsupersedes-note: rev 1: no font change\n"
-                                         f"unit: {unit}\nto: div-acme-build   from: main-acme\n"
+                                         f"unit: {unit}\nto: div-acme-build   from: main-acme\nlineage: {unit}   parent: -\n"
                                          f"worktree: {self.root / 'acme-build'}   branch: div/build\n"), brief)
         self.assertIn("GOAL      Add coupon field without touching fonts", brief)
         self.assertIn("VERIFY    scripts/verify-checkout.sh", brief)
@@ -553,7 +555,7 @@ class DispatchRelayTest(HookCase):
     def test_dormant_target_without_pane_logs_needs_wake(self):
         res = self.send(DISPATCH_OK.replace("TO        build", "TO        div-acme-rnd"))
         self.assertEqual(res.returncode, 0, res.stdout)
-        self.assertIn("to=div-acme-rnd state=needs-wake", self.delivered())
+        self.assertIn("to=div-acme-rnd state=runner-fallback", self.delivered())
         self.assertEqual([a for a in self.orca_calls() if a[2] in ("send", "create")], [])
 
     def test_alias_targets_main_and_requests_wake(self):
@@ -569,8 +571,8 @@ class DispatchRelayTest(HookCase):
         self.assertEqual((res.returncode, res.stderr), (0, ""))
         unit = self.only_unit()
         lines = (self.units_dir() / unit / "BRIEF.md").read_text().splitlines()
-        self.assertEqual(lines[1:6], [
-            f"unit: {unit}", "to: main-acme   from: div-acme-build", f"worktree: {self.repo}   branch: trunk",
+        self.assertEqual(lines[1:7], [
+            f"unit: {unit}", "to: main-acme   from: div-acme-build", f"lineage: {unit}   parent: -", f"worktree: {self.repo}   branch: trunk",
             f"project root: {self.repo}   (brief + REPORT.md live under project root/.orche/units/{unit}/)",
             "Work only inside `worktree`. SCOPE paths are relative to it."])
 
@@ -871,8 +873,8 @@ class DispatchRelayTest(HookCase):
     def test_feature_without_worktree_header_names_main_checkout(self):
         subprocess.run(["git", "init", "-q", "-b", "trunk"], cwd=self.repo, check=True, capture_output=True)
         unit, lines = self.feature_brief(lambda feat: feat.update(worktree=""))
-        self.assertEqual(lines[1:6], [
-            f"unit: {unit}", "to: feat-acme-checkout   from: div-acme-build",
+        self.assertEqual(lines[1:7], [
+            f"unit: {unit}", "to: feat-acme-checkout   from: div-acme-build", f"lineage: {unit}   parent: -",
             f"worktree: {self.repo} (main checkout)   branch: feat/checkout",
             f"project root: {self.repo}   (brief + REPORT.md live under project root/.orche/units/{unit}/)",
             "Work only inside `worktree`. SCOPE paths are relative to it."])
@@ -881,7 +883,7 @@ class DispatchRelayTest(HookCase):
     def test_feature_without_worktree_or_branch_uses_main_checkout_branch(self):
         subprocess.run(["git", "init", "-q", "-b", "trunk"], cwd=self.repo, check=True, capture_output=True)
         _, lines = self.feature_brief(lambda feat: feat.update(worktree="", branch=""))
-        self.assertEqual(lines[3], f"worktree: {self.repo} (main checkout)   branch: trunk")
+        self.assertEqual(lines[4], f"worktree: {self.repo} (main checkout)   branch: trunk")
 
     def test_glyph_prefixed_pane_title_is_nudged(self):
         self.fake_orca({"terminal list": {"terminals": [{"handle": "t-glyph", "title": "✳ div-acme-build"}]}})
@@ -939,6 +941,55 @@ class DispatchRelayTest(HookCase):
         res = self.run_hook("dispatch_relay.py", self.payload("stop.json", transcript_path=str(SAMPLE)))
         self.assertEqual((res.returncode, res.stdout, res.stderr), (0, "", ""))
         self.assertIn("dispatch_relay: RegistryError", (self.home / "logs" / "hooks.log").read_text())
+
+
+class OwnerVoiceHookTest(HookCase):
+    """C10 T9: a Main session's Stop hook hands its closing line to flow.owner, also under
+    stop_hook_active; the notification reaches the recording `osascript` stub (support) as arguments."""
+
+    def stop(self, text, session="main-acme", **over):
+        return self.run_hook("dispatch_relay.py", self.payload("stop.json", last_assistant_message=text, **over),
+                             ORCHE_SESSION=session)
+
+    def notes(self):
+        path = self.home / support.OSASCRIPT_CALLS
+        return path.read_text().splitlines() if path.exists() else []
+
+    def ask(self):
+        path = self.home / "flow" / "acme" / "ask.json"
+        return json.loads(path.read_text()) if path.exists() else None
+
+    @unittest.skipUnless(sys.platform == "darwin", "the notification is macOS only")
+    def test_main_owner_line_records_the_ask_and_notifies_under_stop_hook_active(self):
+        line = 'OWNER: 결제 키 "STRIPE" \\ 넣어 주세요 (기본: 보류)'
+        res = self.stop(f"Research done.\n\n{line}\n", stop_hook_active=True)
+        self.assertEqual((res.returncode, res.stderr), (0, ""))
+        ask = self.ask()
+        self.assertEqual((ask["text"], ask["kind"], ask["source"]), (line[len("OWNER: "):], "owner", "main"))
+        [note] = self.notes()                       # the stub joins its argv: the body arrives verbatim
+        self.assertTrue(note.startswith("-e on run argv -e display notification (item 1 of argv)"), note)
+        self.assertIn(f"-e end run {line} ORCHE acme", note)
+        self.assertNotIn("결제", self.events())
+
+    def test_a_tag_stamps_the_turns_start_from_the_prompt_hooks_record(self):
+        start = dt.datetime(2026, 10, 20, 11, 58).astimezone()
+        turn = self.home / "sessions" / "main-acme.turn.json"
+        turn.parent.mkdir(parents=True, exist_ok=True)
+        turn.write_text(json.dumps({"owner": False, "lineages": [], "at": start.isoformat(timespec="seconds"),
+                                    "started": None}))
+        self.assertEqual(self.stop("Dispatched.\nRUNNING: build runs the coupon tests").returncode, 0)
+        self.assertEqual((self.home / "flow" / "acme" / "tagged").stat().st_mtime, start.timestamp())
+        turn.unlink()                                       # no record: no stamp (a mid-turn report stays uncovered)
+        (self.home / "flow" / "acme" / "tagged").unlink()
+        self.assertEqual(self.stop("RUNNING: still").returncode, 0)
+        self.assertFalse((self.home / "flow" / "acme" / "tagged").exists())
+
+    def test_running_and_division_lines_notify_nothing(self):
+        self.assertEqual(self.stop("Dispatched.\nRUNNING: build runs the coupon tests").returncode, 0)
+        res = self.stop("OWNER: approve", session="div-acme-build", cwd=str(self.root / "acme-build"))
+        self.assertEqual(res.returncode, 0)
+        self.assertEqual((self.ask(), self.notes()), (None, []))
+        self.assertNotIn("owner untagged", self.events())
 
 
 class ReportInjectTest(HookCase):
@@ -1057,16 +1108,16 @@ class ReportInjectTest(HookCase):
         self.assertNotIn(inbox.REPORT_LINE, res.stdout)
 
     def test_report_line_text_is_pinned(self):
-        """Ruling A's text, verbatim (plan Appendix C8; the consolidation and closing-line sentences since 0.6.2)."""
+        """C10 design §4.4: the full report when a lineage closes, one progress line otherwise, one closing line."""
         self.assertEqual(inbox.REPORT_LINE,
-                         "[orche] Act on the inbox above now: read each report named (Read tool), then end this "
-                         "turn with your report to the user in this pane — outcome · what landed · what failed · "
-                         "decisions needed (recommendation + default) · next step — after running `orche dispatch` "
-                         "for the next unit, or with the question the user must answer. Never only acknowledge. When several "
-                         "reports are listed, write one consolidated report and put anything the owner must do "
-                         "first. Finish with one line to the owner: the state (nothing to do / running: <what> / "
-                         "all done) and either the decision you need with its default or the question what to do "
-                         "next; run `orche dispatch` before writing that line.")
+                         "[orche] Act on the inbox above now: read each report named (Read tool). Where a lineage "
+                         "line says closed and you dispatch nothing more for it, write your full report to the user "
+                         "— outcome · what landed · what failed · decisions needed (recommendation + default) · next "
+                         "step; otherwise dispatch the next step and write one progress line. Anything the owner "
+                         "must decide or do goes first. Never only acknowledge. Dispatch blocks go before your "
+                         "closing line, and the reply ends with exactly one closing line: RUNNING: <what runs now> "
+                         "when nothing is needed from the owner, OWNER: <the decision or step, with its default> "
+                         "when something is, DONE: <the result> when the work is done.")
         self.assertNotIn("\n", inbox.REPORT_LINE)
 
     def test_pointer_fields_cannot_forge_orche_lines(self):

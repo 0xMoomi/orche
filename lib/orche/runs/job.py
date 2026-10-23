@@ -50,7 +50,7 @@ from dataclasses import dataclass, field, replace
 from pathlib import Path
 
 from .. import brief, config, donegate, headless, intake, log, mask, procs, roster, runs, shell, units, util
-from . import filing
+from . import filing, history
 
 EXIT_OK, EXIT_USER, EXIT_NOT_FOUND, EXIT_BLOCKED, EXIT_DUPLICATE, EXIT_UNFILED = 0, 1, 2, 3, 4, 5
 OPUS = "claude-opus-5-5"
@@ -68,7 +68,9 @@ GRACE_S = 60
 FOOTER = ("You run headless. Work only inside {worktree}. Do not commit, push, merge or rebase unless "
           "the brief allows it. Run VERIFY yourself and paste its output. Do not run `orche report`: "
           "the runner files your pointer from your final message. End with one line "
-          "`STATUS: done|blocked|failed` and a ≤5-line summary. Your final message is filed as the "
+          "`STATUS: done|blocked|failed` and a ≤5-line summary. When only the owner can unblock you, "
+          "end `STATUS: blocked` and add one line `OWNER: <exact step>` (a secret: run `orche secret "
+          "request <NAME>` first, then `OWNER: secret <NAME>`). Your final message is filed as the "
           "unit's REPORT.md.")
 STOPPED = "stopped by Main"
 STOPPED_BEFORE_START = "stopped by Main before start"
@@ -226,6 +228,13 @@ def status_of(result) -> tuple:
     return c.word, c.line, "\n".join(summary)
 
 
+def owner_of(result):
+    """The pointer field `owner` from the worker's last message: its last `OWNER:` line outside
+    fences (flow.owner.step_of: masked, one line, <= 200 chars), or None."""
+    from ..flow import owner
+    return owner.step_of(str(result or ""))
+
+
 def decide(reg, job, data, error, code=0, head_before=None, head=None):
     """(pointer status, summary) for the run outcome."""
     if error:
@@ -287,6 +296,9 @@ def execute(reg, unit, cfg) -> Outcome:
             j = exc.job
             filing.unrun(reg, who(j), j.rev, j.unit_dir, "failed", f"run failed: {exc}", str(exc), "error")
         return Outcome(exc.code, stderr=(f"orche: {exc}",))
+    capped = _cap_check(job)
+    if capped is not None:
+        return _capped(reg, job, capped)
     try:
         call = call_for(job, cfg, procs.run_id(job.unit, "<started_ns>"))
         headless.argv(call, cfg)               # a bad config fails here, before a slot: still a pointer
@@ -300,6 +312,8 @@ def execute(reg, unit, cfg) -> Outcome:
         # files `failed` "runner died" (the next `orche` command or Main's next prompt).
         return Outcome(EXIT_UNFILED, stderr=(f"orche: cannot file the result of {job.unit}: {exc}; "
                                              "the run's lock stays for reconcile",))
+    except Capped as exc:
+        return _capped(reg, job, exc.refused)
     except runs.Busy as exc:
         return _unrun(reg, job, "info", f"{exc}, retry with `orche run {job.unit}`", str(exc), "busy",
                       EXIT_BLOCKED)
@@ -309,6 +323,31 @@ def execute(reg, unit, cfg) -> Outcome:
     except Exception as exc:  # noqa: BLE001 - never end a spawned run without a pointer
         return _runner_error(reg, job, exc)
     return Outcome(EXIT_USER if rec["status"] == "failed" else EXIT_OK, rec)
+
+
+class Capped(Exception):
+    """G4/G5 refused the run after it took its slot (another run finished in between)."""
+    def __init__(self, refused):
+        super().__init__(refused.text)
+        self.refused = refused
+
+
+def _cap_check(job):
+    """G4/G5 for this run (guard.run_refusal), failing open when the guard itself breaks."""
+    from ..flow import guard
+    return guard.safe(guard.run_refusal, roster.actor(), job.unit, job.project, job.unit)
+
+
+def _capped(reg, job, capped) -> Outcome:
+    """G4/G5: never started; no RUN.json or history line (the last run's stay), one quiet `info`, and
+    the project's ask (flow.owner.parked): the quiet pointer waits for Main's next prompt, the owner
+    hears of it now."""
+    from ..flow import guard, owner
+    guard.logged(capped.rule, roster.actor(), job.unit, capped.n)
+    out = _unrun(reg, job, "info", f"not started: {capped.text}; ask the owner", f"not started: {capped.text}",
+                 "capped", EXIT_BLOCKED, record=False)
+    owner.parked(job.project, job.unit, f"not started: {capped.text}")
+    return out
 
 
 def _unrun(reg, job, status, summary, error, stop_reason, code, record=True) -> Outcome:
@@ -379,7 +418,7 @@ def run(reg, job, call, cfg) -> dict:
     REPORT.md, the pointer and an events line. A STOP marker or SIGTERM (headless.Stop) while
     waiting or before claude starts files the pointer here, inside the lock (claude never runs).
 
-    Raises runs.Busy / runs.Duplicate before anything runs.
+    Raises runs.Busy / runs.Duplicate / Capped before anything runs.
     """
     rcfg = cfg.get("runner") or {}
     since = run_since()
@@ -397,6 +436,10 @@ def run(reg, job, call, cfg) -> dict:
                 return rec
             keep = False
             try:
+                capped = _cap_check(job)     # again inside the slot: a run that just finished counts
+                if capped is not None:
+                    raise Capped(capped)
+                runs.drain_replaced(job.unit)    # a foreground `orche run` replaces the pane's dispatch too
                 rec, clear_at = _run_locked(reg, job, replace(call, tag=runs.run_id_of(lock)), cfg, lock,
                                             since, stop)
                 return rec
@@ -466,11 +509,13 @@ def _run_locked(reg, job, call, cfg, lock, since, stop) -> tuple:
         util.write_json(job.unit_dir / "RUN.json", record)
     except OSError as exc:
         raise filing.FilingError(f"RUN.json: {exc}") from exc
+    history.append(job.project, record, job.rev)
     if worker_filed:
         log.log("hooks", f"runner: {job.unit}: the worker filed its own pointer; the runner files none")
     else:
         try:
-            filing.file_pointer(reg, w, job.rev, job.unit_dir, status, summary, head)  # logs: unroutable
+            filing.file_pointer(reg, w, job.rev, job.unit_dir, status, summary, head,   # logs: unroutable
+                                extra={"owner": owner_of(result)})
         except OSError as exc:
             raise filing.FilingError(f"pointer: {exc}") from exc
     units.touch_activity(job.to)

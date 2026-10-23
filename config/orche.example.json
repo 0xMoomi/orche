@@ -44,7 +44,16 @@
   "inbox": {
     "wake": true,
     "quiet_s": 90,
-    "quiet_max_s": 240,
-    "notify": true
+    "quiet_max_s": 240
+  },
+  "reconcile": {
+    "enabled": true,
+    "every_s": 300
+  },
+  "flow": {
+    "enabled": true,
+    "quiet_hours": "23:00-08:00",
+    "max_unit_cost_usd": 10,
+    "max_project_cost_usd": 30
   }
 }

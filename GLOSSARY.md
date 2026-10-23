@@ -52,6 +52,14 @@ _Avoid_: lost, stuck.
 An `orche status` line: a session with waking pointers (reports) in its inbox for 10 minutes or more. Fix with `orche nudge <session>`.
 _Avoid_: undelivered (that is a brief, not a report).
 
+**Stalled**:
+An `orche status` line: a repair `orche reconcile` has tried (`ORCHE retrying (k/cap)`) or escalated (`waiting on you`), e.g. an unread report, an undelivered or silent unit, a closed Main.
+_Avoid_: stuck, hung.
+
+**Reminder**:
+The one `orche deliver --remind` line reconcile types into a silent pane unit's pane (report due: TIMEBOX + 10 min passed, pane idle), once per revision.
+_Avoid_: nudge (that wakes a session to read its inbox).
+
 **Queued**:
 A delivery state: the line was typed into a busy pane and accepted without a turn start, so Claude Code holds it for the pane's next turn. It counts as delivered, not failed.
 _Avoid_: pending, failed.
@@ -167,12 +175,68 @@ _Avoid_: run log (that is `logs/runs/<unit>.log`).
 _Avoid_: zombie lock.
 
 **Urgent pointer**:
-A waking pointer whose status is `blocked`, `question` or `failed`, or that carries `urgent: true`. It wakes Main without the quiet window and, on macOS, shows one notification.
+A waking pointer whose status is `blocked`, `question` or `failed`, or that carries `urgent: true`. It wakes Main without the quiet window; the owner is notified only by Main's closing line.
 _Avoid_: priority, alert.
 
 **Quiet window**:
 How long the nudger waits after the newest waking pointer before it wakes Main (`inbox.quiet_s`, default 90 s, capped by `inbox.quiet_max_s`, 240 s), so a batch of reports is one wake. Skipped when an urgent pointer is pending.
 _Avoid_: debounce, delay.
+
+**Reconcile**:
+One `orche reconcile` pass: finds unread and undelivered pointers stuck past STALL_S (10 min, a constant in `lib/orche/reconcile.py`), nudges or re-delivers them with backoff, and escalates once the cap is reached. Run by the LaunchAgent every `reconcile.every_s` and by the hook kick.
+_Avoid_: watchdog, cron job.
+
+**Heartbeat**:
+`ORCHE_HOME/reconcile/heartbeat.json`, written last by every reconcile pass. Its age tells `orche status` and `orche doctor` whether the flow is being watched; a heartbeat older than 3 × `every_s` makes the next hook start a pass (the hook kick).
+_Avoid_: ping, liveness.
+
+**Autonomy window**:
+The span since the later of local midnight and the owner's last prompt to Main (`flow/<slug>/owner-seen`). Flow guards count only inside it; the owner's next word resets it.
+_Avoid_: session, day.
+
+**Guard**:
+One flow check (G1 revisions, G2 blocked twice, G3 rate, G4 spend, G5 runs, G6 chain, G7 refusal streak, G8 pause) at `orche dispatch` (G4 and G5 also at `orche run`) that refuses until the owner decides. `flow.enabled false` turns G1–G7 off, never G8. STOP is never guarded.
+_Avoid_: limit, throttle.
+
+**Run history**:
+`ORCHE_HOME/runs/<p>/history.jsonl`, one line per run record written (finished, unrun or lost). The spend cap and the run cap count it.
+_Avoid_: run log, ledger.
+
+**Spend cap**:
+The G4 guard: once a project ($30) or a unit ($10) spent that much on headless runs inside the autonomy window, its briefs, AMENDs and runs wait for the owner.
+_Avoid_: budget, quota.
+
+**Lineage**:
+The id shared by every brief that grew from one owner request, written as `lineage:` in each brief header and carried on its report pointers. It is the first brief's unit.
+_Avoid_: thread, chain id.
+
+**Lineage close**:
+The one waking pointer from `orche` to Main when every unit of a multi-unit lineage has ended (done, failed or stopped); it names `.orche/units/<L>/LINEAGE.md`. Until then done and stopped reports in that lineage arrive quiet.
+_Avoid_: lineage done, final report.
+
+**Closing line**:
+The last non-empty line outside fences of Main's reply: `RUNNING: …`, `OWNER: …` or `DONE: …`. It is the only thing ORCHE notifies the owner about (`flow.owner`); an untagged reply notifies nothing.
+_Avoid_: last line, sign-off, footer.
+
+**Ask**:
+The project's one open owner-facing item, `flow/<p>/ask.json`: written by Main's `OWNER:` closing line, a refused run start (a guard) or a fallback notification, replaced by the next ask, closed by `DONE:`, answered by the owner's next prompt in Main or by the secrets it names being filled.
+_Avoid_: question, ticket, escalation.
+
+**Re-notification**:
+The heartbeat's repeat of an open ask's notification, 30, 60, 120 and 240 min after the ask, then never; none inside `flow.quiet_hours`, one at their end. The `owner:` status line stays until the ask is answered or closed.
+_Avoid_: reminder, retry, nag.
+
+**Fallback notification**:
+The heartbeat's notification for a report to Main that waits on the owner (blocked, question, failed, an owner step, a lineage close) for 10 min with no tagged Main turn, owner prompt or ask since: `<unit>: <owner step or status>`, once per cause (R26). It covers a Main that forgot its closing tag.
+_Avoid_: safety net, auto-escalation.
+
+**Owner step**:
+A unit's `OWNER:` line (the runner reads it from the final message; a pane unit passes `orche report --owner`), carried as the pointer field `owner` and shown first in Main's inbox as `OWNER STEP:`.
+_Avoid_: blocker, request.
+
+**Parent**:
+The unit whose work led to a brief: for a division's brief, the division's newest brief. Main's briefs have none (`parent: -`). G6 caps parent depth at 3 and children at 5.
+_Avoid_: caller, origin.
 
 ## Relationships
 

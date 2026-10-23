@@ -12,18 +12,15 @@ turns the refresh off.
 Logic lives in `orche.janitor`; this module only parses arguments and prints.
 """
 import json
-import os
 import sys
 from pathlib import Path
-from xml.sax.saxutils import escape
 
-from . import config, intake, janitor, log, paths, registry, runs, shell, templates, util
+from . import config, intake, janitor, log, paths, registry, runs, util
+from .install import launchd
 from .janitor import archive, trash
 
 EXIT_OK, EXIT_USER, EXIT_NOT_FOUND, EXIT_BLOCKED = 0, 1, 2, 3
 LABEL = "com.orche.janitor"
-PLIST_TEMPLATE = templates.TEMPLATES_ROOT / "launchd" / f"{LABEL}.plist"
-ORCHE_BIN = templates.TEMPLATES_ROOT.parent / "bin" / "orche"
 
 
 def register(subparsers):
@@ -134,47 +131,40 @@ def cmd_disable(args):
 
 
 def plist_path() -> Path:
-    return Path.home() / "Library" / "LaunchAgents" / f"{LABEL}.plist"
+    return launchd.plist_path(LABEL)
 
 
 def render_plist() -> str:
-    vals = {"ORCHE_BIN": str(ORCHE_BIN), "ORCHE_HOME": str(paths.orche_home()),
-            "PATH": os.environ.get("PATH", "/usr/bin:/bin:/usr/sbin:/sbin")}
-    return templates.render(PLIST_TEMPLATE.read_text(encoding="utf-8"),
-                            **{k: escape(v) for k, v in vals.items()})
+    return launchd.render(LABEL)
 
 
 def cmd_install(args):
-    target = plist_path()
-    argv = ["launchctl", "load", "-w", str(target)]
     text = render_plist()
-    data = {"plist": str(target), "argv": argv, "dry_run": args.dry_run}
+    if not args.dry_run:
+        paths.ensure_dirs()
+    res = launchd.install(LABEL, text, dry_run=args.dry_run)
+    target, argv = res["plist"], res["argv"]
+    data = {"plist": target, "argv": argv, "dry_run": args.dry_run}
     if args.dry_run:
-        _out(args, {**data, "content": text}, [f"would write {target}", "would run: " + " ".join(argv)])
+        _out(args, {**data, "content": text},
+             [f"would write {target}"] + ["would run: " + " ".join(a) for a in argv])
         return EXIT_OK
-    paths.ensure_dirs()
-    if target.exists():
-        shell.run(["launchctl", "unload", str(target)])
-    util.atomic_write(target, text, mode=0o644)
-    res = shell.run(argv)
-    if not res.ok:
-        return _fail(EXIT_USER, f"launchctl load failed: {res.err.strip() or res.out.strip()}")
+    if res["error"]:
+        return _fail(EXIT_USER, f"launchctl bootstrap failed: {res['error']}")
     _out(args, data, [f"installed {target}", "janitor runs daily at 04:00"])
     return EXIT_OK
 
 
 def cmd_uninstall(args):
-    target = plist_path()
-    argv = ["launchctl", "unload", "-w", str(target)]
-    data = {"plist": str(target), "argv": argv, "dry_run": args.dry_run}
+    res = launchd.uninstall(LABEL, dry_run=args.dry_run)
+    target, argv = res["plist"], res["argv"]
+    data = {"plist": target, "argv": argv, "dry_run": args.dry_run}
     if args.dry_run:
-        _out(args, data, ["would run: " + " ".join(argv), f"would remove {target}"])
+        _out(args, data, ["would run: " + " ".join(a) for a in argv] + [f"would remove {target}"])
         return EXIT_OK
-    if not target.exists():
+    if res["missing"]:
         return _fail(EXIT_NOT_FOUND, f"not installed: {target}")
-    res = shell.run(argv)
-    if not res.ok:
-        print(f"orche: warning: launchctl unload failed: {res.err.strip()}", file=sys.stderr)
-    target.unlink()
+    if res["error"]:
+        print(f"orche: warning: launchctl bootout failed: {res['error']}", file=sys.stderr)
     _out(args, data, [f"removed {target}"])
     return EXIT_OK

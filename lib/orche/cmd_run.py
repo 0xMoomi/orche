@@ -5,7 +5,8 @@ The Stop hook starts it detached for every new brief (and AMEND) to a division o
 writes nothing; `--json` prints the RUN record. Exit 0 when the run finished (done, unverified,
 blocked, stopped by Main — also before start), 1 when it failed (crash, timeout, `STATUS: failed`,
 a runner error, SIGTERM), 2 for a missing brief/worktree or a retired target, 3 when the project's
-run slots (or the target's one) stay taken for `runner.queue_wait_s` ("runner busy"), 4 when the
+run slots (or the target's one) stay taken for `runner.queue_wait_s` ("runner busy") or a flow cap
+holds the unit (G4 spend, G5 runs per unit: "not started: …; ask the owner", one quiet `info`), 4 when the
 unit is already running (that run files its own result), 5 when RUN.json, REPORT.md or the pointer
 cannot be written (ENOSPC, EACCES, …): the error goes to stderr (the run log) and the run's lock
 stays, so reconcile files `failed` once the filesystem takes writes again. Each run first deletes

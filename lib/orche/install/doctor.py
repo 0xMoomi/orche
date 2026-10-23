@@ -172,6 +172,41 @@ def upgrade_checks(reg) -> list:
             for up in [registry.upgrade(projects[key], __version__)] if up]
 
 
+def heartbeat_rows() -> list:
+    """The reconcile heartbeat (lib/orche/reconcile.py): WARN when stale or never, OK otherwise."""
+    from .. import reconcile
+    try:
+        return [reconcile.doctor_row()]
+    except Exception as exc:  # noqa: BLE001 - a doctor row never fails the doctor
+        return [("WARN", "heartbeat", f"unreadable: {type(exc).__name__}: {exc}")]
+
+
+def reconcile_job_rows(home) -> list:
+    """The reconcile LaunchAgent (design c10 §2.4): loaded, and its StartInterval matches every_s."""
+    import plistlib
+    from .. import reconcile
+    from . import launchd
+    name = "reconcile job"
+    if sys.platform != "darwin":
+        return [("OK", name, "not macOS: run `orche reconcile` every 5 min (cron/systemd)")]
+    cfg = reconcile.settings()
+    if not cfg.get("enabled", True):
+        return [("OK", name, "off (reconcile.enabled false)")]
+    path = launchd.plist_path(launchd.RECONCILE, home)
+    if not path.is_file():
+        return [("WARN", name, "not installed — run orche install")]
+    try:
+        interval = plistlib.loads(path.read_bytes()).get("StartInterval")
+    except Exception as exc:  # noqa: BLE001 - a doctor row never fails the doctor
+        return [("WARN", name, f"plist unreadable ({type(exc).__name__}) — run orche install")]
+    every = int(cfg.get("every_s", 300))
+    if interval != every:
+        return [("WARN", name, f"plist runs every {interval}s, reconcile.every_s is {every} — run orche install")]
+    if not launchd.loaded(launchd.RECONCILE):
+        return [("WARN", name, f"not loaded: launchctl bootstrap {launchd.domain()} {path}")]
+    return [("OK", name, f"loaded, every {every}s")]
+
+
 def checks(ctx) -> list:
     out = []
 
@@ -197,7 +232,7 @@ def checks(ctx) -> list:
     add(*oauth.doctor_row())
     level, detail = _orche_home()
     add(level, "orche_home", detail)
-    for row in disk_checks() + main_waker_rows():
+    for row in disk_checks() + main_waker_rows() + heartbeat_rows() + reconcile_job_rows(ctx.home):
         add(*row)
     try:
         reg = registry.load()

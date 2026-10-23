@@ -16,7 +16,7 @@ from unittest import mock
 import support
 import test_hr
 
-from orche import hr, janitor, orca, registry, roster, shell, statusline
+from orche import hr, janitor, notify, orca, registry, roster, shell, statusline
 from orche.hr import audit, book, limits, onboarding, transitions
 
 
@@ -53,7 +53,7 @@ class BookTest(test_hr.HrCase):
         self.assertEqual([re.sub(r"^- \S+ ", "- <ts> ", l) for l in text.splitlines()[2:]],
                          ["- <ts> one", "- <ts> two"])
 
-    def test_notify_on_off_and_platform(self):  # B4
+    def test_notify_on_off_and_platform(self):  # B4: through notify.send, the text an argument
         posted = []
 
         def runner(argv, *, timeout, input):
@@ -63,16 +63,17 @@ class BookTest(test_hr.HrCase):
             return self.fake_runner(argv, timeout=timeout, input=input)
 
         shell.RUNNER = runner
-        secret = "token sk-ant-api03-" + "A" * 40
+        secret = 'token "x" sk-ant-api03-' + "A" * 40
         for on in (False, True):
             (self.home / "config.json").write_text(json.dumps({"notify": on}))
             for platform in ("linux", "darwin"):
-                with mock.patch.object(book.sys, "platform", platform):
+                with mock.patch.object(notify, "PLATFORM", platform):
                     book.notify(secret)
         self.assertEqual(len(posted), 1)
-        self.assertEqual(posted[0][:2], ["osascript", "-e"])
-        self.assertNotIn("A" * 40, posted[0][2])
-        self.assertIn('with title "ORCHE"', posted[0][2])
+        self.assertEqual(posted[0][:-2], notify.argv("", "")[:-2])         # the fixed script, no sound
+        self.assertNotIn("A" * 40, " ".join(posted[0]))
+        self.assertTrue(posted[0][-2].startswith('token "x" '))
+        self.assertEqual(posted[0][-1], "ORCHE")
 
 
 class LimitsTest(test_hr.FeatCase):
@@ -680,7 +681,7 @@ class StructureTest(test_hr.HrCase):
     ALLOWED = set("""orche orche.bip39 orche.brief orche.cli orche.config orche.headless orche.hr orche.hr.audit
         orche.hr.book orche.hr.create orche.hr.limits orche.hr.onboarding orche.hr.panes orche.hr.refresh
         orche.hr.retire orche.hr.transitions orche.janitor orche.janitor.archive orche.janitor.discover orche.janitor.graveyard
-        orche.log orche.mask orche.metrics orche.orca orche.paths orche.procs orche.registry orche.roster
+        orche.log orche.mask orche.metrics orche.notify orche.orca orche.paths orche.procs orche.registry orche.roster
         orche.runs orche.setup_flow orche.shell orche.statusline orche.templates orche.units orche.util""".split())
     FORBIDDEN = re.compile(r"orche\.(cmd_\w+|dispatch|runner|inbox|intake|triage|ledger|jev\w*)$")
 

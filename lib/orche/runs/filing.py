@@ -11,6 +11,7 @@ import os
 from pathlib import Path
 
 from .. import brief, inbox, ledger, log, mask, roster, runs, units, util
+from . import history
 
 VIA = "runner"       # pointer field `via` on every pointer the runner files
 TAIL_CHARS = 2000
@@ -113,7 +114,7 @@ def filed_since(rcpt, unit, to, started) -> bool:
     return False
 
 
-def file_pointer(reg, who, rev, folder, status, summary, head=None, link_report=True) -> bool:
+def file_pointer(reg, who, rev, folder, status, summary, head=None, link_report=True, extra=None) -> bool:
     """The pointer from who["to"] to its recipient, `via: runner`, `brief_rev` `rev`, REPORT.md
     linked when asked and present, the summary masked then inbox.clip'ped. False (logged to
     hooks.log) when the target routes nowhere."""
@@ -123,11 +124,13 @@ def file_pointer(reg, who, rev, folder, status, summary, head=None, link_report=
         return False
     report = folder / "REPORT.md"
     linked = link_report and report.is_file()
+    from ..flow import lineage     # flow imports inbox; filing stays importable without it at load
+    carried = lineage.fields(brief.find(reg, who["unit"], project=who["project"]))
     inbox.post(inbox.make(who["unit"], who["to"], to, status, report_path=str(report) if linked else "",
                           head_sha=head or "",
                           ledger_row=bool(head) and ledger.row_for_sha(who["project"], head) is not None,
                           brief_rev=rev,
-                          summary=inbox.clip(mask.redact(summary)[0]) or status, via=VIA))
+                          summary=inbox.clip(mask.redact(summary)[0]) or status, via=VIA, **{**carried, **(extra or {})}))
     return True
 
 
@@ -152,11 +155,14 @@ def unrun(reg, who, rev, folder, status, summary, error, stop_reason, record=Tru
         routed = False
     rec = run_record(who, started=now, finished=now, status=status, stop_reason=stop_reason,
                      is_error=status == "failed", error=masked(error), pointer_filed=routed)
-    steps = [lambda: file_pointer(reg, who, rev, folder, status, summary, None, link_report=False),
+    extra = ({"retry": True, "quiet": True} if stop_reason in ("busy", "duplicate")
+             else {"quiet": True} if stop_reason == "capped" else None)
+    steps = [lambda: file_pointer(reg, who, rev, folder, status, summary, None, link_report=False, extra=extra),
              lambda: units.touch_activity(who["to"]),
              lambda: events(who, None, None, status, stop_reason)]
     if record:
-        steps.insert(0, lambda: util.write_json(folder / "RUN.json", rec))
+        steps[:0] = [lambda: util.write_json(folder / "RUN.json", rec),
+                     lambda: history.append(who["project"], rec, rev)]
     for step in steps:
         try:
             step()
@@ -192,9 +198,10 @@ def lost(reg, proj, data) -> str:
         return "stale-lock"
     error = f"runner process {pid} died without filing"
     if not record_since(folder, started):
-        util.write_json(folder / "RUN.json", run_record(
-            who, started=started, finished=util.now_iso(), status="failed", stop_reason="lost",
-            is_error=True, error=error, pointer_filed=bool(rcpt)))
+        rec = run_record(who, started=started, finished=util.now_iso(), status="failed", stop_reason="lost",
+                         is_error=True, error=error, pointer_filed=bool(rcpt))
+        util.write_json(folder / "RUN.json", rec)
+        history.append(proj, rec, rev)
     if not file_pointer(reg, who, rev, folder, "failed",
                         f"runner died: {unit} (pid {pid}, started {runs._clock(started)}); "
                         f"re-run with `orche run {unit}`", None, link_report=False):

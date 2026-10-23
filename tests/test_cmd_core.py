@@ -71,6 +71,9 @@ class CoreCase(support.TempHomeCase):
         self.write("inbox/main-docs-site/p3.json", {"unit": "u3", "status": "failed", "ledger_row": False})
 
 
+NEVER = "heartbeat: never — install the job with orche install"
+
+
 class StatusTest(CoreCase):
     def test_status_golden(self):
         self.counters()
@@ -80,13 +83,15 @@ class StatusTest(CoreCase):
             "acme-shop stage=building awake=2/12 divisions: rnd○ build●1"
             " · new:1 · keys:1 · unverified:1 · RUNNING 0\n"
             "docs-site stage=public awake=0/12 divisions: -"
-            " · new:0 · keys:1 · unverified:0 · RUNNING 0\n"))
+            " · new:0 · keys:1 · unverified:0 · RUNNING 0\n"
+            f"{NEVER}\n"))
 
     def test_status_without_counter_dirs(self):
         code, out, _ = self.orche("status", "shop")
         self.assertEqual(code, 0)
         self.assertEqual(out, "acme-shop stage=building awake=2/12 divisions: rnd○ build●1"
-                              " · new:1 · keys:0 · unverified:0 · RUNNING 0\n")
+                              " · new:1 · keys:0 · unverified:0 · RUNNING 0\n"
+                              f"{NEVER}\n")
 
     def test_status_json_and_unknown(self):
         code, out, _ = self.orche("--json", "status", "acme")
@@ -133,7 +138,8 @@ class StatusTest(CoreCase):
             "  undelivered: acme-shop-x-20261016-1 → div-acme-shop-build (rev 2, 12 min) — "
             "run `orche deliver acme-shop-x-20261016-1`",
             "  unread: main-acme-shop has 2 report(s) waiting (oldest 25 min) — run `orche nudge main-acme-shop`",
-            f"  blocked: u2 (question, since {hhmm(11)}, 11 min) — waiting on the owner; answer in main-acme-shop"])
+            f"  blocked: u2 (question, since {hhmm(11)}, 11 min) — waiting on the owner; answer in main-acme-shop",
+            NEVER])
         self.assertTrue(out.startswith("acme-shop stage=building "))
         row = json.loads(self.orche("--json", "status", "acme")[1])[0]
         self.assertEqual(row["undelivered"], [{"unit": "acme-shop-x-20261016-1", "to": "div-acme-shop-build",
