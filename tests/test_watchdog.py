@@ -260,3 +260,65 @@ class DeniedFolderTest(WatchdogCase):
         self.assertEqual(hb["enabled"], False)
         self.assertNotIn("job_at", hb)
         self.assertNotIn("unreadable", hb)
+
+
+class DeniedInsideTest(WatchdogCase):
+    """0.7.3 (CI red on 3.11): a denial anywhere a pass scans under a project root — `.orche/units`
+    alone, or `.orche` on a hook-kicked pass, or mid-scan — makes that project `unreadable` (one
+    events line), skips it and the pass still exits 0; on 3.11/3.12 pathlib raised there."""
+
+    def setUp(self):
+        super().setUp()
+        self.root = self.userhome / "Downloads" / "acme-shop"
+        self.dot = self.root / ".orche"
+        self.units = self.dot / "units"
+        self.units.mkdir(parents=True)
+        reg = registry.load()
+        reg["projects"]["acme-shop"]["path"] = str(self.root)
+        registry.save(reg)
+
+    def tearDown(self):
+        for path in (self.dot, self.units):
+            if path.exists():
+                os.chmod(path, 0o755)
+        super().tearDown()
+
+    def denials(self):
+        path = self.home / "logs" / "events.log"
+        lines = path.read_text().splitlines() if path.exists() else []
+        return [ln for ln in lines if "reconcile unreadable" in ln]
+
+    def assert_unreadable(self, where):
+        code, err, _ = self.run_pass()
+        self.assertEqual((code, err), (0, ""))
+        self.assertEqual(reconcile.read_heartbeat()["unreadable"], ["acme-shop"])
+        self.assertEqual(len(self.denials()), 1)
+        self.assertIn(f"reconcile unreadable project=acme-shop path={where}", self.denials()[0])
+
+    def test_a_denied_units_folder_is_unreadable(self):
+        os.chmod(self.units, 0)
+        self.assert_unreadable(self.units)
+
+    def test_a_denied_dot_orche_on_a_hook_pass_is_unreadable(self):
+        os.chmod(self.dot, 0)
+        self.assert_unreadable(self.dot)
+        os.chmod(self.dot, 0o755)                             # under Downloads: only the job's pass clears it
+        self.assertEqual(self.run_pass()[0], 0)
+        self.assertEqual(reconcile.read_heartbeat()["unreadable"], ["acme-shop"])
+        with mock.patch.dict(os.environ, {"XPC_SERVICE_NAME": "com.orche.reconcile"}):
+            self.assertEqual(self.run_pass()[0], 0)
+        self.assertNotIn("unreadable", reconcile.read_heartbeat())
+
+    def test_a_denial_mid_scan_skips_that_project_only(self):
+        real, seen = reconcile.observe, []
+
+        def observe(reg, now, keys, **kw):
+            seen.append(keys)
+            if len(seen) == 1:
+                raise PermissionError(13, "Permission denied", str(self.units / "u1"))
+            return real(reg, now, keys, **kw)
+        with mock.patch.object(reconcile, "observe", observe):
+            self.assert_unreadable(self.units / "u1")
+        self.assertIsNone(seen[0])
+        self.assertNotIn("acme-shop", seen[1])
+        self.assertIn("docs-site", seen[1])

@@ -3,6 +3,15 @@
 All notable changes to ORCHE are listed here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow semantic versioning.
 
+## 0.7.3 — 2026-10-23
+
+### Fixed
+- `orche reconcile`: a project folder the pass cannot list (`.orche`, `.orche/units`, … — macOS privacy or a chmod)
+  is `unreadable` on every pass, not only the LaunchAgent's: one events line `reconcile unreadable project=<key>
+  path=<path>`, that project is skipped for the rest of the pass (runs, observe, repairs), the others still run,
+  and the pass exits 0 and writes the heartbeat. On Python 3.11/3.12 the glob under a denied folder raised
+  PermissionError and failed the hook-kicked pass (CI red on 0.7.2).
+
 ## 0.7.2 — 2026-10-23
 
 ### Added
