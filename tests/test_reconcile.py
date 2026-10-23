@@ -412,7 +412,7 @@ class OwnerNoticeTest(ReconcileCase):
         with mock.patch.object(notify, "PLATFORM", "darwin"), \
                 mock.patch.object(shell, "run",
                                   lambda argv, **kw: calls.append(argv) or shell.Result(0, "", "", argv)):
-            reconcile._tell_owner("acme-shop", 'a "quoted" text; do shell script')
+            reconcile._tell_owner("acme-shop", 'a "quoted" text; do shell script', self.now)
         return calls
 
     def test_gates_and_quiet_hours(self):
@@ -464,7 +464,7 @@ class ClosedMainTest(ReconcileCase):
 
     def test_two_reopens_a_day_then_one_owner_escalation(self):
         notes = []
-        with mock.patch.object(reconcile, "_tell_owner", lambda p, t: notes.append(t)):
+        with mock.patch.object(reconcile, "_tell_owner", lambda p, t, now: notes.append(t)):
             got = [self.run_at(m)[1] for m in (0, 15, 30, 45, 60)]
         self.assertEqual(sum(1 for g in got for l in g if l.startswith("reopen ")), 2)
         self.assertEqual(len(notes), 1)
@@ -478,7 +478,7 @@ class ClosedMainTest(ReconcileCase):
             calls.append(1)
             raise orca.OrcaError("create failed")
         with mock.patch.object(hr, "project_pane", boom), \
-                mock.patch.object(reconcile, "_tell_owner", lambda p, t: notes.append(t)):
+                mock.patch.object(reconcile, "_tell_owner", lambda p, t, now: notes.append(t)):
             for m in range(0, 240, 5):
                 self.run_at(m)
         self.assertEqual((len(calls), len(notes)), (2, 1))

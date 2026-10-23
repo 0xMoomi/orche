@@ -346,7 +346,7 @@ def _capped(reg, job, capped) -> Outcome:
     guard.logged(capped.rule, roster.actor(), job.unit, capped.n)
     out = _unrun(reg, job, "info", f"not started: {capped.text}; ask the owner", f"not started: {capped.text}",
                  "capped", EXIT_BLOCKED, record=False)
-    owner.parked(job.project, job.unit, f"not started: {capped.text}")
+    owner.parked(job.project, job.unit, f"not started: {capped.text}", units.now())
     return out
 
 

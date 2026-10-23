@@ -202,7 +202,8 @@ def _busy(reg, now, keys) -> list:
 
 
 def in_quiet_hours(cfg_all, now) -> bool:
-    """flow.quiet_hours "HH:MM-HH:MM" (may cross midnight) holds `now`; False when unset or malformed."""
+    """flow.quiet_hours "HH:MM-HH:MM" (may cross midnight) holds `now`'s own wall time (the pass's clock,
+    not the host's zone); False when unset or malformed."""
     raw = str(((cfg_all or {}).get("flow") or {}).get("quiet_hours") or "")
     try:
         a, b = (int(h) * 60 + int(m) for h, m in (x.strip().split(":") for x in raw.split("-")))
@@ -516,13 +517,13 @@ def _post(unit, to, summary, rev=1) -> None:
     inbox.post(inbox.make(unit, "orche", to, "info", brief_rev=rev or 1, urgent=True, summary=summary))
 
 
-def _escalate(reg, action) -> None:
+def _escalate(reg, action, now) -> None:
     c, cap = action.cond, action.cap
     minutes, main = int(c.age_s // 60), f"main-{c.project}"
     if c.cls == "closed" and c.kind == "main":
         _tell_owner(c.project, f"{c.target} is closed with {c.count} report(s) waiting ({minutes} min) after "
                                f"{cap} reopens today — decide: `orche wake {c.target}` now, or leave it "
-                               f"(default: ORCHE reopens it tomorrow)")
+                               f"(default: ORCHE reopens it tomorrow)", now)
     elif c.cls == "closed":
         how = f"after {cap} wakes today" if c.status == "active" else f"while {c.status or 'asleep'}"
         _post(c.sender or c.target, main, f"closed: {c.target} has {c.count} report(s) waiting ({minutes} min) "
@@ -545,7 +546,7 @@ def _escalate(reg, action) -> None:
                                           f"waiting ({minutes} min) — check its pane, then `orche nudge {c.target}`")
     else:
         _tell_owner(c.project, f"Main has {c.count} report(s) unread {minutes} min after {cap} nudges; "
-                               f"last nudge: {_last_nudge(c.target)} — check the Main pane")
+                               f"last nudge: {_last_nudge(c.target)} — check the Main pane", now)
 
 
 def _hhmm(at) -> str:
@@ -579,16 +580,16 @@ def _last_nudge(session) -> str:
     return f"{last.get('state', '?')} at {at.astimezone().strftime('%H:%M') if at else '?'}"
 
 
-def _tell_owner(project, text) -> None:
+def _tell_owner(project, text, now) -> None:
     """An owner notification: a project's escalation is a `stuck` notice (flow.owner.announce: recorded
     first, the per-project gap, a held one sent by the next pass, no sound in quiet hours); the global
     waker notice goes through notify.send. Text and title travel as osascript arguments. One events
     line when shown."""
     if project:
-        shown = owner.announce(project, "stuck", text, units.now())
+        shown = owner.announce(project, "stuck", text, now)
     else:
         cfg_all = config.load()
-        shown = notify.enabled(cfg_all) and notify.send("ORCHE", text, sound=not in_quiet_hours(cfg_all, units.now()),
+        shown = notify.enabled(cfg_all) and notify.send("ORCHE", text, sound=not in_quiet_hours(cfg_all, now),
                                                         kind="reconcile")
     if shown:
         log.log("events", f"reconcile owner-notified project={project or '-'}")
@@ -600,7 +601,7 @@ def waker_loaded() -> bool:
     return bool(doctor.main_waker_rows())
 
 
-def apply(reg, action) -> None:
+def apply(reg, action, now) -> None:
     from . import deliver, runs
     c, kind = action.cond, action.kind
     if kind == "nudge":
@@ -617,9 +618,9 @@ def apply(reg, action) -> None:
         _remind(c.target, str(c.info.get("reason") or ""))
     elif kind == "notify":
         _tell_owner("", f"{WAKER} is still loaded: it predates 0.6.0 and doubles Main's wakes — run "
-                        f"launchctl bootout gui/{os.getuid()}/{WAKER}")
+                        f"launchctl bootout gui/{os.getuid()}/{WAKER}", now)
     else:
-        _escalate(reg, action)
+        _escalate(reg, action, now)
 
 
 def _record(new, a, now) -> None:
@@ -772,7 +773,7 @@ def _pass(cfg_all, cfg, now, started, dry_run, out, keys=None, as_json=False) ->
             break
         failed = ""
         try:
-            apply(reg, a)
+            apply(reg, a, now)
         except Exception as exc:  # noqa: BLE001 - one failed repair never stops the pass; it still counts
             failed = type(exc).__name__
             log.log("hooks", f"reconcile: {a.kind} {a.cond.target}: {failed}: {exc}")

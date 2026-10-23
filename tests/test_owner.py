@@ -179,7 +179,7 @@ class ClosingLineTest(OwnerCase):
         self.assertIn("owner held project=acme kind=secret reason=off\n", self.log())
 
     def test_no_sound_in_quiet_hours(self):
-        h = T0.astimezone().hour
+        h = T0.hour                                   # the clock passed, not the host's zone
         self.config({"flow": {"quiet_hours": f"{h:02d}:00-{(h + 1) % 24:02d}:00"}})
         owner.closing("acme", "OWNER: approve", now=T0)
         [call] = self.notes()

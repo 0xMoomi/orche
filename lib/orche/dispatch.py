@@ -425,6 +425,6 @@ def _closing(project, text, session) -> None:
     lineage.read_turn): a tag covers the reports that turn read; never fails the hook (the type only: no text)."""
     try:
         turn = lineage.read_turn(session) if session else None
-        owner.closing(project, text, turn_at=units.parse_iso((turn or {}).get("at")))
+        owner.closing(project, text, units.now(), turn_at=units.parse_iso((turn or {}).get("at")))
     except Exception as exc:  # noqa: BLE001 - fail-open
         log.log("hooks", f"dispatch: closing line for {project}: {type(exc).__name__}")
