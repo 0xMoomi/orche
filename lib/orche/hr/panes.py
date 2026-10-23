@@ -95,18 +95,65 @@ def unit_argv(unit, *, resume) -> tuple:
     return ("--worktree", f"id:{unit.entry['worktree']}", "--title", unit.session, "--command", command)
 
 
+def live_pane(term, title):
+    """The live pane behind `term` (found by `title` in a `terminal list`), else None.
+
+    A list read right after a pane was closed can still carry it, so Orca's `terminal read` of the
+    handle decides: `running` is live; a timeout cannot tell (kept: never a second pane on a slow
+    Orca) — any error naming one, as the CLI's own 10 s cut-off arrives as `bad_output` ("timeout
+    after 10s"); another error or status (`exited`) means that pane is gone. When the read says
+    neither, or the pane is gone, a fresh `terminal list` decides (a gone handle never counts).
+    Raises orca.OrcaError when that list fails.
+    """
+    handle = str((term or {}).get("handle") or "")
+    dead = not handle
+    if handle:
+        try:
+            res = orca.terminal("read", "--terminal", handle, timeout=10)
+        except orca.OrcaError as exc:
+            if "timeout" in f"{exc.code} {exc}".lower():
+                return term
+            dead = True
+        else:
+            info = res.get("terminal") if isinstance(res, dict) else None
+            status = info.get("status") if isinstance(info, dict) else None
+            if status == "running":
+                return term
+            dead = status is not None
+    want = orca.normalize_title(title)
+    fresh = [t for t in orca.terminals_of(orca.terminal("list", timeout=10))
+             if orca.normalize_title(t.get("title")) == want and not (dead and str(t.get("handle") or "") == handle)]
+    return fresh[0] if fresh else None
+
+
 def project_pane(proj, *, dry_run, switch=True) -> tuple:
     """Open the project's `main-<proj>` pane in its main checkout, or switch to it.
 
     One title lookup: no pane -> create one (`pane_command`: `claude --permission-mode
     bypassPermissions --name main-<proj>`, like every ORCHE pane); a pane -> `terminal switch` to it
-    (with switch=False it is left as it is). Returns (data, line); data["pane"] is "opened",
-    "switched" or (switch=False) "open". Under dry_run the create argv is printed and no writing
-    orca command runs. Raises orca.OrcaError.
+    (with switch=False it is left as it is). A pane found is verified by handle (`live_pane`; after
+    the switch attempt when switching): one Orca no longer has — the list lagged a close — is
+    created anew, and a failed switch to a live pane raises. Returns (data, line); data["pane"] is
+    "opened", "switched" or (switch=False) "open". Under dry_run the create argv is printed and no
+    writing orca command runs. Raises orca.OrcaError.
     """
     title = proj["main_session"]
     command = pane_command(title, resume=False)
     term = orca.find_terminal_by_title(title)
+    if term is not None and (dry_run or not switch):
+        term = live_pane(term, title)
+    elif term is not None:
+        try:
+            orca.terminal("switch", "--terminal", term["handle"])
+            failed = None
+        except orca.OrcaError as exc:
+            failed = exc
+        live = live_pane(term, title)
+        if live is not None and failed is not None:
+            raise failed
+        if live is not None and str(live.get("handle")) != str(term.get("handle")):
+            orca.terminal("switch", "--terminal", live["handle"])
+        term = live
     data = {"session": title, "pane": "opened" if term is None else "switched" if switch else "open"}
     if dry_run:
         data["dry_run"] = True
@@ -119,5 +166,4 @@ def project_pane(proj, *, dry_run, switch=True) -> tuple:
         return data, f"{title} pane already open"
     if dry_run:
         return data, f"would switch to {title}"
-    orca.terminal("switch", "--terminal", term["handle"])
     return data, f"{title} pane switched to"

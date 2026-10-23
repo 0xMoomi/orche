@@ -215,6 +215,61 @@ class WakeTest(TransitionsCase):
         self.assertEqual(self.log_lines(), ["reopen div-acme-shop-build pane by user"])
         self.assertEqual(self.refresh.call_count, 0)
 
+    def _read_says(self, answer):
+        """`orca terminal read` answers `answer` (an envelope); every other call goes to the fake Orca."""
+        def runner(argv, *, timeout, input):
+            if argv[:3] == ["orca", "terminal", "read"]:
+                self.calls.append(argv)
+                return shell.Result(0, json.dumps(answer), "", argv)
+            return self.fake_runner(argv, timeout=timeout, input=input)
+        shell.RUNNER = runner
+
+    def test_wake_active_with_a_closed_pane_still_listed_reopens_it(self):  # W4b (0.7.2)
+        for answer in ({"ok": False, "error": {"code": "terminal_not_found", "message": "no such terminal"}},
+                       {"ok": True, "result": {"terminal": {"handle": "t-old", "status": "exited"}}}):
+            with self.subTest(answer=answer):
+                self.calls.clear()
+                self.terminals = [{"handle": "t-old", "title": "✳ div-acme-shop-build"}]   # Orca still lists it
+                self._read_says(answer)
+                data, line = self.run_verb(transitions.wake, "div-acme-shop-build")
+                self.assertEqual((data.get("pane_reopened"), line), (True, "div-acme-shop-build pane reopened"))
+                self.assertEqual(self.orca_calls("terminal read"),
+                                 [["orca", "terminal", "read", "--terminal", "t-old", "--json"]])
+                self.assertEqual(len(self.orca_calls("terminal create")), 1)
+
+    def test_wake_active_with_a_list_that_lags_one_call_reopens_it(self):  # W4c (0.7.2)
+        self.terminals = [{"handle": "t-old", "title": "div-acme-shop-build"}]
+        lists = []
+
+        def runner(argv, *, timeout, input):
+            res = self.fake_runner(argv, timeout=timeout, input=input)
+            if argv[:3] == ["orca", "terminal", "list"]:
+                lists.append(argv)
+                self.terminals = [t for t in self.terminals if t["handle"] != "t-old"]   # dropped after one read
+            return res
+        shell.RUNNER = runner
+        _data, line = self.run_verb(transitions.wake, "div-acme-shop-build")
+        self.assertEqual(line, "div-acme-shop-build pane reopened")
+        self.assertEqual(len(lists), 2)
+        self.assertEqual(len(self.orca_calls("terminal create")), 1)
+
+    def test_wake_main_after_its_pane_closed_opens_it(self):  # 0.7.2: was "pane switched to", nothing opened
+        self.terminals = [{"handle": "t-main", "title": "✳ main-acme-shop"}]
+        self._read_says({"ok": False, "error": {"code": "terminal_not_found", "message": "no such terminal"}})
+        code, out, err = self.orche("wake", "main-acme-shop")
+        self.assertEqual((code, out, err), (0, "main-acme-shop pane opened\n", ""))
+        self.assertEqual(self.orca_calls("terminal switch"),
+                         [["orca", "terminal", "switch", "--terminal", "t-main", "--json"]])   # tried first
+        self.assertEqual([c[c.index("--title") + 1] for c in self.orca_calls("terminal create")], ["main-acme-shop"])
+
+    def test_wake_main_with_a_live_pane_switches_only(self):
+        self.terminals = [{"handle": "t-main", "title": "✳ main-acme-shop"}]
+        self._read_says({"ok": True, "result": {"terminal": {"handle": "t-main", "status": "running"}}})
+        code, out, _ = self.orche("wake", "main-acme-shop")
+        self.assertEqual((code, out), (0, "main-acme-shop pane switched to\n"))
+        self.assertEqual(self.orca_calls("terminal create"), [])
+        self.assertEqual(len(self.orca_calls("terminal list")), 1)   # a `running` read needs no second list
+
     def test_wake_retired_refused(self):  # W5
         self.edit(lambda p: p["divisions"]["build"]["features"][1].update(status="retired"))
         exc = self.refused(transitions.wake, "feat-acme-shop-search")
@@ -713,3 +768,26 @@ class StructureTest(test_hr.HrCase):
 
     def test_janitor_imports_no_hr(self):  # ST4
         self.assertEqual([m for m in self.loaded("orche.janitor") if m.startswith("orche.hr")], [])
+
+
+class LivePaneTest(support.TempHomeCase):
+    """0.7.2 review #3: the Orca CLI's own 10 s cut-off arrives as OrcaError `bad_output` ("timeout after
+    10s"), not a `timeout` code: the pane is kept (a slow Orca never gets a second pane)."""
+
+    def test_a_timed_out_read_keeps_the_pane(self):
+        from orche.hr import panes
+        calls = []
+
+        def runner(argv, *, timeout, input):
+            calls.append(argv[1:3])
+            if argv[1:3] == ["terminal", "read"]:
+                return shell.Result(124, "", f"timeout after {timeout}s", list(argv))   # _subprocess_runner's
+            return shell.Result(0, json.dumps({"ok": True, "result": {"terminals": []}}), "", list(argv))
+        term = {"handle": "t-1", "title": "div-x"}
+        with mock.patch.object(shell, "RUNNER", runner):
+            with self.assertRaises(orca.OrcaError) as caught:
+                orca.terminal("read", "--terminal", "t-1", timeout=10)
+            self.assertEqual(caught.exception.code, "bad_output")
+            calls.clear()
+            self.assertIs(panes.live_pane(term, "div-x"), term)
+        self.assertEqual(calls, [["terminal", "read"]])     # kept as is: no list, no new pane

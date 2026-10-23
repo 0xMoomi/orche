@@ -5,7 +5,8 @@ seconds; a hook starts it when the heartbeat is stale. One bounded, idempotent p
 runs are settled, unread reports are nudged and undelivered briefs re-delivered on a backoff
 (10, 20, 40 min), then escalated once. `--dry-run` prints the plan and writes nothing; `--project P`
 limits the pass to one project; `--json` prints one document (the actions taken or planned). Exit 0,
-also when another pass holds the lock; 1 when the registry cannot be read; 2 for an unknown project.
+also when another pass holds the lock; 1 when the registry cannot be read; 2 for an unknown project;
+3 when the watchdog aborted a pass that ran too long (reconcile/last-abort.json names its phase and path).
 """
 import sys
 

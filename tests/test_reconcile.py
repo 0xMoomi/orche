@@ -74,6 +74,19 @@ class PassTest(ReconcileCase):
         self.assertEqual(hb["at"], T0.isoformat(timespec="seconds"))
         self.assertTrue(any("action=nudge" in e and "target=main-acme-shop" in e for e in self.events()))
 
+    def test_an_abort_mid_apply_still_spends_the_attempt(self):
+        # 0.7.2 review #6: recorded before apply(), so a watchdog abort inside it cannot hand out fresh tries
+        self.pointer("main-acme-shop", 12)
+
+        def hang(*_a):
+            raise reconcile.Abort(None)
+        with mock.patch.object(reconcile, "apply", hang), redirect_stderr(io.StringIO()):
+            self.assertEqual(reconcile.run_pass(out=lambda *_: None), 3)
+        state = json.loads(reconcile.state_path().read_text())
+        self.assertEqual([len(e["attempts"]) for e in state.values() if isinstance(e, dict) and "attempts" in e], [1])
+        self.run_at(3)                       # 15 min: try 2 waits for 20 min, as after a completed try
+        self.assertEqual(self.spawned, [])
+
     def test_a_fresh_report_is_left_alone(self):
         self.pointer("main-acme-shop", 5)
         _code, lines = self.run_at(0)

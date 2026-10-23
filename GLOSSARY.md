@@ -190,6 +190,14 @@ _Avoid_: watchdog, cron job.
 `ORCHE_HOME/reconcile/heartbeat.json`, written last by every reconcile pass. Its age tells `orche status` and `orche doctor` whether the flow is being watched; a heartbeat older than 3 × `every_s` makes the next hook start a pass (the hook kick).
 _Avoid_: ping, liveness.
 
+**Pass watchdog**:
+The timer around one reconcile pass (`reconcile.watchdog`): 120 s after the pass took its lock it aborts it (SIGALRM; a thread 15 s later when a kernel wait ignores the signal), records `reconcile/last-abort.json` {at, phase, path, hint} and exits 3, so a stuck read never holds the lock for good.
+_Avoid_: calling reconcile itself a watchdog (see Reconcile).
+
+**Privacy grant**:
+The owner's switch that lets the heartbeat job read projects under `~/Desktop`, `~/Documents`, `~/Downloads`, iCloud Drive (`~/Library/Mobile Documents`), `~/Library/CloudStorage` or a volume under `/Volumes`: the job's `Python.app` (for Homebrew's python, `…/Python.framework/Versions/X.Y/Resources/Python.app`; for a uv, pyenv or conda Python its `python3.x` binary) switched on in System Settings › Privacy & Security › Full Disk Access. Only the user (or MDM) can grant it; `orche install --grant` opens Finder and that pane and verifies the grant by a pass of the job itself (`job_at` in `heartbeat.json`, with no `unreadable` project). Without it a read there is denied (the job's pass records the project as `unreadable`) or blocks (the watchdog aborts the pass with hint `privacy`, `reconcile/last-abort.json`).
+_Avoid_: TCC, FDA (in user-facing text).
+
 **Autonomy window**:
 The span since the later of local midnight and the owner's last prompt to Main (`flow/<slug>/owner-seen`). Flow guards count only inside it; the owner's next word resets it.
 _Avoid_: session, day.

@@ -172,13 +172,63 @@ def upgrade_checks(reg) -> list:
             for up in [registry.upgrade(projects[key], __version__)] if up]
 
 
-def heartbeat_rows() -> list:
-    """The reconcile heartbeat (lib/orche/reconcile.py): WARN when stale or never, OK otherwise."""
+def job_state(home) -> dict:
+    """What the heartbeat and privacy rows read once (0.7.2): macOS, the reconcile job loaded
+    (`launchctl print`), when it was loaded (its plist's mtime, whole seconds: orche install writes it
+    right before the bootstrap) and the registered projects under a protected folder."""
+    import datetime as dt
+    from .. import privacy
+    from . import launchd
+    st = {"darwin": sys.platform == "darwin", "loaded": False, "load_at": None, "protected": []}
+    try:
+        st["protected"] = privacy.protected_projects(registry.load())
+    except registry.RegistryError:
+        pass
+    if st["darwin"]:
+        try:
+            mtime = launchd.plist_path(launchd.RECONCILE, home).stat().st_mtime
+        except OSError:
+            return st
+        st["load_at"] = dt.datetime.fromtimestamp(int(mtime)).astimezone()
+        st["loaded"] = launchd.loaded(launchd.RECONCILE)
+    return st
+
+
+def heartbeat_rows(job=None) -> list:
+    """The reconcile heartbeat (lib/orche/reconcile.py): WARN when the job is blocked (a privacy
+    abort, or loaded with no pass yet), stale or never; OK otherwise."""
     from .. import reconcile
     try:
-        return [reconcile.doctor_row()]
+        return [reconcile.doctor_row(job=job)]
     except Exception as exc:  # noqa: BLE001 - a doctor row never fails the doctor
         return [("WARN", "heartbeat", f"unreadable: {type(exc).__name__}: {exc}")]
+
+
+def privacy_rows(job) -> list:
+    """`privacy` (0.7.2): OK when no registered project is under a folder macOS keeps from the
+    heartbeat job (Desktop, Documents, Downloads, iCloud Drive), or the job has passed since it loaded
+    and since its last privacy abort; WARN otherwise — run: orche install --grant."""
+    from .. import reconcile, units
+    name = "privacy"
+    if not job["darwin"]:
+        return [("OK", name, "not macOS")]
+    prot = job["protected"]
+    if not prot:
+        return [("OK", name, "no project under Desktop, Documents, Downloads, iCloud Drive, cloud storage or /Volumes")]
+    where = f"{len(prot)} project(s) under a protected folder ({prot[0][1]})"
+    if not job["loaded"]:
+        return [("OK", name, f"{where}; the heartbeat job is not loaded (see reconcile job)")]
+    hb = reconcile.read_heartbeat() or {}
+    job_at = units.parse_iso(hb.get("job_at"))
+    if hb.get("unreadable"):   # the job's own pass could not list them (a denial)
+        return [("WARN", name, f"{where}; the heartbeat job cannot read {', '.join(map(str, hb['unreadable']))} "
+                               "(macOS privacy) — run: orche install --grant")]
+    ab = reconcile.read_abort() or {}
+    marks = [job["load_at"], units.parse_iso(ab.get("at")) if ab.get("hint") == "privacy" else None]
+    since = max((t for t in marks if t is not None), default=None)
+    if job_at is not None and (since is None or job_at >= since):
+        return [("OK", name, f"{where}; the heartbeat job reads them (last pass {job_at.astimezone():%H:%M})")]
+    return [("WARN", name, f"{where}; no heartbeat job pass since it loaded — run: orche install --grant")]
 
 
 def reconcile_job_rows(home) -> list:
@@ -232,7 +282,9 @@ def checks(ctx) -> list:
     add(*oauth.doctor_row())
     level, detail = _orche_home()
     add(level, "orche_home", detail)
-    for row in disk_checks() + main_waker_rows() + heartbeat_rows() + reconcile_job_rows(ctx.home):
+    job = job_state(ctx.home)
+    for row in (disk_checks() + main_waker_rows() + heartbeat_rows(job) + reconcile_job_rows(ctx.home)
+                + privacy_rows(job)):
         add(*row)
     try:
         reg = registry.load()

@@ -33,13 +33,22 @@ an escalation outlives a pass that does not see its condition (Orca unreachable,
 while) until STATE_TTL, and is dropped only on positive resolution read from local files
 (resolved()). A repair whose apply raises still spends its attempt. Events lines carry ids,
 counts and times only.
+
+Watchdog (0.7.2): a pass still running WATCHDOG_S after it took the lock is aborted — SIGALRM raises
+Abort in the main thread, and when the signal cannot interrupt the call (a read blocked inside the
+kernel, e.g. by a macOS privacy check on ~/Downloads) a thread ends the process WATCHDOG_GRACE_S
+later. Either way `reconcile/last-abort.json` records {at, phase, path, hint} (hint `privacy` for a
+path under a protected folder, else `slow`), one events line is logged, the lock is released and
+the pass exits 3. A pass the LaunchAgent ran also stamps heartbeat.json's `job_at`.
 """
 import contextlib
 import datetime as _dt
 import fcntl
 import json
 import os
+import signal
 import sys
+import threading
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -63,6 +72,12 @@ KIND = {"unread": "nudge", "undelivered": "deliver", "busy": "restart", "drain":
 EVENT = {"drain": "drain-stale"}
 DAILY = ("reopens:", "waker")   # per-day counters, kept for the day
 WAKER = "com.orche.main-waker"
+WATCHDOG_S = 2 * BUDGET_S       # a pass still running this long after it took the lock is aborted (exit 3)
+WATCHDOG_GRACE_S = 15           # ... by a thread this much later when SIGALRM could not interrupt the call
+ABORT_EXIT = 3
+ABORT_TTL = _dt.timedelta(hours=24)   # `orche doctor` reads an abort this recent
+PHASE = "start"                 # the phase of the running pass (the abort record names it)
+_exit = os._exit                # test seam: the watchdog thread's exit
 
 
 def folder() -> Path:
@@ -644,17 +659,183 @@ def _record(new, a, now) -> None:
 
 @contextlib.contextmanager
 def _pass_lock():
+    """The lock file's handle while this process holds the pass lock, else None (another pass)."""
     folder().mkdir(parents=True, exist_ok=True)
     with open(folder() / ".lock", "a") as fh:
         try:
             fcntl.flock(fh, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except BlockingIOError:
-            yield False
+            yield None
             return
         try:
-            yield True
+            yield fh
         finally:
             fcntl.flock(fh, fcntl.LOCK_UN)
+
+
+# ---- watchdog (0.7.2) ----------------------------------------------------------------------------
+
+class Abort(BaseException):
+    """SIGALRM after WATCHDOG_S, raised in the main thread wherever the pass is: a BaseException, so
+    no `except Exception` around a repair swallows it. `frame` is where it rang."""
+
+    def __init__(self, frame):
+        super().__init__("reconcile pass ran too long")
+        self.frame = frame
+
+
+def _phase(name) -> None:
+    global PHASE
+    PHASE = name
+
+
+def abort_path() -> Path:
+    return folder() / "last-abort.json"
+
+
+def read_abort():
+    try:
+        data = util.read_json(abort_path(), default=None)
+    except (OSError, util.JsonError):
+        return None
+    return data if isinstance(data, dict) else None
+
+
+def _abs_path(value) -> str:
+    if isinstance(value, os.PathLike):
+        try:
+            value = os.fspath(value)
+        except TypeError:
+            return ""
+    return value if isinstance(value, str) and value.startswith("/") and "\n" not in value else ""
+
+
+ROOTS = ()   # the registered projects' paths, set by each pass for stuck_path
+
+
+def stuck_path(frame) -> str:
+    """The innermost project path on the stack from `frame` outwards, stopping at run_pass: the first
+    absolute path a local holds (a str or os.PathLike, in the frame's own order: arguments first —
+    `os.scandir`'s caller holds the directory it lists) that is under a registered project's root
+    (ROOTS), a protected folder or a volume under /Volumes (privacy.protected), else the next frame
+    out; "" when none. Values, not the formatted traceback (its file names are ORCHE's own); ORCHE's
+    own paths (bin/orche.py's __file__) and other strings never count."""
+    from . import privacy
+    stop = run_pass.__code__
+    while frame is not None and frame.f_code is not stop:
+        try:
+            values = list(frame.f_locals.values())
+        except Exception:  # noqa: BLE001 - a frame that cannot be read is skipped
+            values = []
+        found = next((p for p in map(_abs_path, values) if p and (privacy.within(p, ROOTS) or privacy.protected(p))),
+                     "")
+        if found:
+            return found
+        frame = frame.f_back
+    return ""
+
+
+def record_abort(frame) -> dict:
+    """reconcile/last-abort.json {at, phase, path, hint[, interpreter]} and one events line (phase and
+    hint); never raises. hint: `privacy` when the path is under a macOS-protected folder
+    (privacy.protected), else `slow`; the job's own aborts name its interpreter (privacy.python_app)."""
+    from . import privacy
+    path = stuck_path(frame)
+    rec = {"at": _iso(units.now()), "phase": PHASE, "path": path,
+           "hint": "privacy" if privacy.protected(path) else "slow"}
+    if is_job():
+        rec["interpreter"] = os.path.realpath(sys.executable)
+    with contextlib.suppress(Exception):
+        util.write_json(abort_path(), rec)
+    with contextlib.suppress(Exception):
+        log.log("events", f"reconcile abort phase={rec['phase']} hint={rec['hint']}")
+    return rec
+
+
+def abort_line(rec, seconds) -> str:
+    where = f" at {rec['path']}" if rec.get("path") else ""
+    tail = " (macOS privacy: run orche install --grant)" if rec.get("hint") == "privacy" else ""
+    return f"orche: reconcile: aborted after {seconds:g} s in phase {rec['phase']}{where}{tail}"
+
+
+def _last_words(line) -> None:
+    with contextlib.suppress(Exception):
+        print(line, file=sys.stderr)
+    for stream in (sys.stdout, sys.stderr):
+        with contextlib.suppress(Exception):
+            stream.flush()
+
+
+@contextlib.contextmanager
+def watchdog(seconds, fh):
+    """The pass watchdog (main thread only; `seconds` 0 or None: off). SIGALRM at `seconds` raises
+    Abort in the main thread; WATCHDOG_GRACE_S later a daemon thread ends a pass the signal could not
+    interrupt (a call blocked inside the kernel): it records the abort from the main thread's stack,
+    releases the lock on `fh` and exits ABORT_EXIT. Leaving the block disarms both."""
+    if not seconds or threading.current_thread() is not threading.main_thread():
+        yield
+        return
+    from . import privacy  # noqa: F401  (imported before arming: the last-resort thread never imports)
+    from .install import launchd  # noqa: F401  (is_job's, for the same reason)
+    done, gate, main = threading.Event(), threading.Lock(), threading.main_thread().ident
+
+    def ring(_signum, frame):
+        raise Abort(frame)
+
+    def last_resort():
+        if done.wait(seconds + WATCHDOG_GRACE_S):
+            return
+        with gate:
+            if done.is_set():
+                return
+            rec = record_abort(sys._current_frames().get(main))
+            with contextlib.suppress(OSError, ValueError):
+                fcntl.flock(fh, fcntl.LOCK_UN)
+            # the line for reconcile.log (the job's stdout/stderr) and every buffered line flushed, as
+            # _exit skips that; at most 1 s: a main thread stuck inside a write holds the stream's lock
+            say = threading.Thread(target=_last_words, args=(abort_line(rec, seconds),), daemon=True)
+            say.start()
+            say.join(1.0)
+            _exit(ABORT_EXIT)
+
+    old = signal.signal(signal.SIGALRM, ring)
+    signal.setitimer(signal.ITIMER_REAL, seconds)
+    threading.Thread(target=last_resort, name="reconcile-watchdog", daemon=True).start()
+    try:
+        yield
+    finally:
+        signal.setitimer(signal.ITIMER_REAL, 0)
+        signal.signal(signal.SIGALRM, old)
+        with gate:
+            done.set()
+
+
+JOB_ENV = "ORCHE_RECONCILE_JOB"   # the job's plist sets it to 1
+
+
+def is_job() -> bool:
+    """This process is the LaunchAgent's pass: its plist sets ORCHE_RECONCILE_JOB=1, and launchd sets
+    XPC_SERVICE_NAME to the job's label; either is enough."""
+    from .install import launchd
+    return os.environ.get(JOB_ENV) == "1" or os.environ.get("XPC_SERVICE_NAME") == launchd.RECONCILE
+
+
+def unreadable(reg, keys=None) -> list:
+    """The keys of the registered projects under a protected folder whose `.orche` this process cannot
+    list (0.7.2): a macOS privacy denial is an OSError (EPERM) here, while a glob there returns []
+    silently and the pass would look healthy. A missing `.orche` is not unreadable."""
+    from . import privacy
+    out = []
+    for key, path in privacy.protected_projects(reg):
+        if keys is not None and key not in keys:
+            continue
+        try:
+            os.listdir(Path(path) / ".orche")
+        except FileNotFoundError:
+            continue
+        except OSError:
+            out.append(key)
+    return out
 
 
 def read_heartbeat():
@@ -665,30 +846,57 @@ def read_heartbeat():
     return data if isinstance(data, dict) else None
 
 
-def write_heartbeat(now, cfg, took_s, actions, enabled=True) -> None:
+def write_heartbeat(now, cfg, took_s, actions, enabled=True, unreadable=None) -> None:
+    """heartbeat.json. Only a pass of the LaunchAgent itself that read the projects (enabled) stamps
+    `job_at` and sets `unreadable` (the protected projects it could not list; absent when none);
+    every other pass carries both over: it runs with another process's access."""
     old = read_heartbeat() or {}
     day = now.date().isoformat()
     today = (int(old.get("repairs_today") or 0) if old.get("day") == day else 0) + actions
-    util.write_json(heartbeat_path(), {"at": now.isoformat(timespec="seconds"), "every_s": int(cfg.get("every_s", 300)),
-                                       "version": __version__, "took_s": round(took_s, 2), "actions": actions,
-                                       "enabled": bool(enabled), "day": day, "repairs_today": today})
+    doc = {"at": now.isoformat(timespec="seconds"), "every_s": int(cfg.get("every_s", 300)),
+           "version": __version__, "took_s": round(took_s, 2), "actions": actions,
+           "enabled": bool(enabled), "day": day, "repairs_today": today}
+    job = is_job()
+    own = job and enabled
+    job_at = now.isoformat(timespec="seconds") if own else old.get("job_at")
+    if job_at:   # the LaunchAgent's last completed pass, carried over by the hook-kicked ones
+        doc["job_at"] = job_at
+    exe = os.path.realpath(sys.executable) if job else old.get("interpreter")
+    if exe:      # the job's interpreter: what Full Disk Access must list (privacy.python_app)
+        doc["interpreter"] = exe
+    blocked = sorted(unreadable or []) if own else old.get("unreadable")
+    if blocked:
+        doc["unreadable"] = blocked
+    util.write_json(heartbeat_path(), doc)
 
 
-def run_pass(dry_run=False, out=print, keys=None, as_json=False) -> int:
+def run_pass(dry_run=False, out=print, keys=None, as_json=False, watchdog_s=None) -> int:
     """One pass over the projects `keys` (default all). 0; 1 when the registry cannot be read; 2 for an
-    unknown project. `out` receives the human lines, or one JSON document with `as_json`."""
+    unknown project; 3 when the watchdog aborted it (`watchdog_s`, default WATCHDOG_S; 0: off).
+    `out` receives the human lines, or one JSON document with `as_json`."""
     started = time.monotonic()
+    _phase("start")
     cfg_all = config.load()
     cfg = settings(cfg_all)
     now = units.now()
     if dry_run:
         return _pass(cfg_all, cfg, now, started, True, out, keys, as_json)
-    with _pass_lock() as ok:
-        if not ok:
+    seconds = WATCHDOG_S if watchdog_s is None else watchdog_s
+    with _pass_lock() as fh:
+        if fh is None:
             out(json.dumps({"ran": False, "reason": "another pass is running"}) if as_json
                 else "reconcile: another pass is running")
             return 0
-        return _pass(cfg_all, cfg, now, started, False, out, keys, as_json)
+        try:
+            with watchdog(seconds, fh):
+                return _pass(cfg_all, cfg, now, started, False, out, keys, as_json)
+        except Abort as exc:
+            rec = record_abort(exc.frame)
+            if as_json:
+                out(json.dumps({"ran": False, "aborted": rec}, ensure_ascii=False))
+            else:
+                print(abort_line(rec, seconds), file=sys.stderr)
+            return ABORT_EXIT
 
 
 def _pass(cfg_all, cfg, now, started, dry_run, out, keys=None, as_json=False) -> int:
@@ -713,17 +921,27 @@ def _pass(cfg_all, cfg, now, started, dry_run, out, keys=None, as_json=False) ->
     if unknown:
         print(f"orche: reconcile: unknown project {unknown[0]!r}", file=sys.stderr)
         return 2
+    global ROOTS
+    ROOTS = tuple(str(p["path"]) for p in reg.get("projects", {}).values() if isinstance(p, dict) and p.get("path"))
+    blocked = None
+    if not dry_run and is_job():   # can the LaunchAgent read the projects under a protected folder?
+        _phase("privacy")
+        blocked = unreadable(reg, keys)
     from . import runs
+    _phase("runs")
     try:
         runs.reconcile_cli(reg, _Args(dry_run), keys)   # nothing under --dry-run
     except Exception as exc:  # noqa: BLE001 - lost runs never stop the pass
         log.log("hooks", f"reconcile: runs: {type(exc).__name__}: {exc}")
     # C10 T8: a lineage close a crash or a busy lock missed (never raises; dry-run takes no lock)
+    _phase("lineage")
     shut = [{"action": "lineage-close", "class": "lineage", "project": p, "target": lin, "rev": None,
              "attempt": 1, "cap": 1, "line": f"{'would close' if dry_run else 'closed'} lineage {lin} ({p})",
              "failed": None} for p, lin in lineage.repair(reg, dry_run, now=now, keys=keys)]
     # C10 T10: answered asks, missed secret resumes, the fallback, held notices, re-notifications
+    _phase("owner")
     notes = owner.heartbeat(reg, now, dry_run, keys)
+    _phase("observe")
     try:
         state = util.read_json(state_path(), default={})
     except util.JsonError:
@@ -754,6 +972,7 @@ def _pass(cfg_all, cfg, now, started, dry_run, out, keys=None, as_json=False) ->
             out("reconcile: nothing to repair")
         return done_json()
     done = 0
+    _phase("apply")
     util.write_json(state_path(), new)
     for row in shut:
         log.log("events", f"reconcile action=lineage-close project={row['project']} lineage={row['target']}")
@@ -772,13 +991,13 @@ def _pass(cfg_all, cfg, now, started, dry_run, out, keys=None, as_json=False) ->
         if time.monotonic() - started >= BUDGET_S:
             break
         failed = ""
+        _record(new, a, now)              # spent before it runs: an abort mid-apply still counts (2/day cap)
+        util.write_json(state_path(), new)
         try:
             apply(reg, a, now)
         except Exception as exc:  # noqa: BLE001 - one failed repair never stops the pass; it still counts
             failed = type(exc).__name__
             log.log("hooks", f"reconcile: {a.kind} {a.cond.target}: {failed}: {exc}")
-        _record(new, a, now)
-        util.write_json(state_path(), new)
         log.log("events", a.event() + (f" failed={failed}" if failed else ""))
         doc["actions"].append(_row(a, failed))
         if not as_json:
@@ -787,7 +1006,8 @@ def _pass(cfg_all, cfg, now, started, dry_run, out, keys=None, as_json=False) ->
     took = time.monotonic() - started
     if done:
         log.log("events", f"reconcile pass took={took:.1f}s actions={done}")
-    write_heartbeat(now, cfg, took, done)
+    _phase("heartbeat")
+    write_heartbeat(now, cfg, took, done, unreadable=blocked)
     return done_json()
 
 
@@ -894,6 +1114,8 @@ def heartbeat_line(now=None, cfg=None) -> str:
     if not cfg.get("enabled", True):
         return "heartbeat: off (reconcile.enabled false)"
     hb, age = heartbeat_age(now)
+    if job_blocked(now or units.now(), hb, None, every):   # without `job`: the privacy findings only
+        return "heartbeat: blocked by macOS privacy — run orche install --grant"
     if age is None:
         return "heartbeat: never — install the job with orche install"
     mins = max(0, int(age // 60))
@@ -913,13 +1135,50 @@ def heartbeat_json(now=None, cfg=None) -> dict:
             "stale": age is None or age > STALE_INTERVALS * every}
 
 
-def doctor_row(now=None, cfg=None):
-    """(level, "heartbeat", detail): WARN when stale or never ran, OK otherwise (off included)."""
+def privacy_abort(now, job_at):
+    """last-abort.json when it says `privacy`, is at most ABORT_TTL old and no job pass (`job_at`, an
+    aware datetime or None) came after it; else None. One rule for the doctor and the install."""
+    ab = read_abort() or {}
+    ab_at = units.parse_iso(ab.get("at"))
+    if (ab.get("hint") == "privacy" and ab_at is not None and now - ab_at <= ABORT_TTL
+            and (job_at is None or job_at < ab_at)):
+        return ab
+    return None
+
+
+def job_blocked(now, hb, job, every) -> str:
+    """The heartbeat row's finding about the LaunchAgent, "" when none (0.7.2): a `privacy` abort at
+    most ABORT_TTL old with no job pass after it; or, with `job` (doctor.job_state), a loaded job with
+    no pass of its own within STALE_INTERVALS × every_s of its load (the fix names `--grant` only
+    when a registered project is under a protected folder)."""
+    job, job_at = job or {}, units.parse_iso((hb or {}).get("job_at"))
+    keys = (hb or {}).get("unreadable")
+    if keys and job_at is not None and now - job_at <= ABORT_TTL:
+        return f"heartbeat job cannot read {', '.join(map(str, keys))} (macOS privacy) — run: orche install --grant"
+    ab = privacy_abort(now, job_at)
+    if ab is not None:
+        return (f"heartbeat job cannot read {ab.get('path') or 'a project folder'} (macOS privacy) — "
+                "run: orche install --grant")
+    load_at = job.get("load_at")
+    if (job.get("loaded") and load_at is not None and (now - load_at).total_seconds() > STALE_INTERVALS * every
+            and (job_at is None or job_at < load_at)):
+        fix = ("run: orche install --grant" if job.get("protected")
+               else f"run orche reconcile and read {paths.orche_home() / 'logs' / 'reconcile.log'}")
+        return f"heartbeat job loaded, no pass yet — {fix}"
+    return ""
+
+
+def doctor_row(now=None, cfg=None, job=None):
+    """(level, "heartbeat", detail): WARN when the job is blocked (job_blocked), stale or never ran,
+    OK otherwise (off included)."""
     cfg = settings(cfg)
     every = int(cfg.get("every_s", 300))
     if not cfg.get("enabled", True):
         return ("OK", "heartbeat", "off (reconcile.enabled false)")
-    _hb, age = heartbeat_age(now)
+    hb, age = heartbeat_age(now)
+    blocked = job_blocked(now or units.now(), hb, job, every)
+    if blocked:
+        return ("WARN", "heartbeat", blocked)
     if age is None:
         return ("WARN", "heartbeat", "no pass on file — install the job with orche install, or run orche reconcile")
     mins = max(0, int(age // 60))
