@@ -820,22 +820,74 @@ def is_job() -> bool:
     return os.environ.get(JOB_ENV) == "1" or os.environ.get("XPC_SERVICE_NAME") == launchd.RECONCILE
 
 
-def unreadable(reg, keys=None) -> list:
-    """The keys of the registered projects under a protected folder whose `.orche` this process cannot
-    list (0.7.2): a macOS privacy denial is an OSError (EPERM) here, while a glob there returns []
-    silently and the pass would look healthy. A missing `.orche` is not unreadable."""
-    from . import privacy
-    out = []
-    for key, path in privacy.protected_projects(reg):
-        if keys is not None and key not in keys:
-            continue
+def _denied(dot):
+    """The first folder of `dot` (a project's `.orche`) or of its subfolders (`units`, …) this process
+    cannot list, else None. Missing folders are not denied."""
+    try:
+        names = os.listdir(dot)
+    except FileNotFoundError:
+        return None
+    except OSError:
+        return str(dot)
+    for name in sorted(names):
+        sub = dot / name
         try:
-            os.listdir(Path(path) / ".orche")
+            if not sub.is_dir():
+                continue
+            os.listdir(sub)
         except FileNotFoundError:
             continue
         except OSError:
-            out.append(key)
+            return str(sub)
+    return None
+
+
+def unreadable(reg, keys=None) -> dict:
+    """{key: path} of the registered projects (`keys`: only those) whose `.orche`, or a folder in it
+    (`units`, …), this process cannot list (0.7.2, 0.7.3): a macOS privacy denial or a chmod is an
+    OSError here, while a glob there returns [] silently (3.13+) or raises mid-pass (3.11, 3.12).
+    A missing `.orche` is not unreadable."""
+    out = {}
+    for key in sorted(reg.get("projects") or {}):
+        proj = reg["projects"][key]
+        path = proj.get("path") if isinstance(proj, dict) else None
+        if not path or (keys is not None and key not in keys):
+            continue
+        where = _denied(Path(path) / ".orche")
+        if where is not None:
+            out[key] = where
     return out
+
+
+def _owner_of(reg, filename):
+    """The registered project whose root holds `filename` (the longest match), else None."""
+    if not filename:
+        return None
+    name, best = os.path.abspath(os.fsdecode(filename)), None
+    for key, proj in (reg.get("projects") or {}).items():
+        path = proj.get("path") if isinstance(proj, dict) else None
+        if not path:
+            continue
+        root = os.path.abspath(str(path))
+        if (name == root or name.startswith(root.rstrip(os.sep) + os.sep)) and (
+                best is None or len(root) > len(best[1])):
+            best = (key, root)
+    return best[0] if best else None
+
+
+def _denial(reg, exc, blocked):
+    """The project `exc` (an OSError other than FileNotFoundError, under a registered root not yet in
+    `blocked`) makes unreadable, else None."""
+    if not isinstance(exc, OSError) or isinstance(exc, FileNotFoundError):
+        return None
+    key = _owner_of(reg, exc.filename)
+    return key if key is not None and key not in blocked else None
+
+
+def _block(blocked, key, path, dry_run=False) -> None:
+    blocked[key] = str(path)
+    if not dry_run:
+        log.log("events", f"reconcile unreadable project={key} path={path}")
 
 
 def read_heartbeat():
@@ -846,10 +898,11 @@ def read_heartbeat():
     return data if isinstance(data, dict) else None
 
 
-def write_heartbeat(now, cfg, took_s, actions, enabled=True, unreadable=None) -> None:
+def write_heartbeat(now, cfg, took_s, actions, enabled=True, unreadable=None, readable=()) -> None:
     """heartbeat.json. Only a pass of the LaunchAgent itself that read the projects (enabled) stamps
-    `job_at` and sets `unreadable` (the protected projects it could not list; absent when none);
-    every other pass carries both over: it runs with another process's access."""
+    `job_at` and sets `unreadable` (the projects it could not list; absent when none); every other
+    pass carries both over (it runs with another process's access), adds the projects it could not
+    list itself, and drops those in `readable` (read by it, not under a protected folder)."""
     old = read_heartbeat() or {}
     day = now.date().isoformat()
     today = (int(old.get("repairs_today") or 0) if old.get("day") == day else 0) + actions
@@ -864,7 +917,13 @@ def write_heartbeat(now, cfg, took_s, actions, enabled=True, unreadable=None) ->
     exe = os.path.realpath(sys.executable) if job else old.get("interpreter")
     if exe:      # the job's interpreter: what Full Disk Access must list (privacy.python_app)
         doc["interpreter"] = exe
-    blocked = sorted(unreadable or []) if own else old.get("unreadable")
+    if own:
+        blocked = sorted(unreadable or [])
+    elif enabled:
+        carried = [k for k in (old.get("unreadable") or []) if k not in set(readable)]
+        blocked = sorted(set(carried) | set(unreadable or []))
+    else:
+        blocked = old.get("unreadable")
     if blocked:
         doc["unreadable"] = blocked
     util.write_json(heartbeat_path(), doc)
@@ -923,24 +982,40 @@ def _pass(cfg_all, cfg, now, started, dry_run, out, keys=None, as_json=False) ->
         return 2
     global ROOTS
     ROOTS = tuple(str(p["path"]) for p in reg.get("projects", {}).values() if isinstance(p, dict) and p.get("path"))
-    blocked = None
-    if not dry_run and is_job():   # can the LaunchAgent read the projects under a protected folder?
-        _phase("privacy")
-        blocked = unreadable(reg, keys)
+    # 0.7.2/0.7.3: a project whose `.orche` (or a folder in it) this process cannot list is
+    # `unreadable` (macOS privacy, a chmod): skipped for the rest of the pass, never an error
+    _phase("privacy")
+    every = sorted(reg.get("projects", {})) if keys is None else list(keys)
+    blocked = {}
+    for key, where in unreadable(reg, keys).items():
+        _block(blocked, key, where, dry_run)
+
+    def scope():
+        return keys if not blocked else [k for k in every if k not in blocked]
+
+    def denied(exc) -> bool:
+        key = _denial(reg, exc, blocked)
+        if key is not None:
+            _block(blocked, key, exc.filename, dry_run)
+        return key is not None
     from . import runs
     _phase("runs")
-    try:
-        runs.reconcile_cli(reg, _Args(dry_run), keys)   # nothing under --dry-run
-    except Exception as exc:  # noqa: BLE001 - lost runs never stop the pass
-        log.log("hooks", f"reconcile: runs: {type(exc).__name__}: {exc}")
+    for key in every:
+        if key in blocked:
+            continue
+        try:
+            runs.reconcile_cli(reg, _Args(dry_run), [key])   # nothing under --dry-run
+        except Exception as exc:  # noqa: BLE001 - lost runs never stop the pass
+            if not denied(exc):
+                log.log("hooks", f"reconcile: runs: {type(exc).__name__}: {exc}")
     # C10 T8: a lineage close a crash or a busy lock missed (never raises; dry-run takes no lock)
     _phase("lineage")
     shut = [{"action": "lineage-close", "class": "lineage", "project": p, "target": lin, "rev": None,
              "attempt": 1, "cap": 1, "line": f"{'would close' if dry_run else 'closed'} lineage {lin} ({p})",
-             "failed": None} for p, lin in lineage.repair(reg, dry_run, now=now, keys=keys)]
+             "failed": None} for p, lin in lineage.repair(reg, dry_run, now=now, keys=scope())]
     # C10 T10: answered asks, missed secret resumes, the fallback, held notices, re-notifications
     _phase("owner")
-    notes = owner.heartbeat(reg, now, dry_run, keys)
+    notes = owner.heartbeat(reg, now, dry_run, scope())
     _phase("observe")
     try:
         state = util.read_json(state_path(), default={})
@@ -951,8 +1026,15 @@ def _pass(cfg_all, cfg, now, started, dry_run, out, keys=None, as_json=False) ->
               if keys is not None and isinstance(v, dict) and v.get("project") and v.get("project") not in keys}
     mine = {k: v for k, v in state.items() if k not in others}
     wake = bool((cfg_all.get("inbox") or {}).get("wake", True))
-    conds = observe(reg, now, keys, wake=wake, terms=panes(mark_ok=not dry_run), cfg_all=cfg_all,
-                    hush=in_quiet_hours(cfg_all, now))
+    terms = panes(mark_ok=not dry_run)
+    while True:   # a denial mid-scan: that project is unreadable, the others are observed again
+        try:
+            conds = observe(reg, now, scope(), wake=wake, terms=terms, cfg_all=cfg_all,
+                            hush=in_quiet_hours(cfg_all, now))
+            break
+        except OSError as exc:
+            if not denied(exc):
+                raise
     held = {c.project for c in conds if guard.paused(c.project) is not None}
     conds = [c for c in conds if c.project not in held or c.cls == "drain"]   # G8: the owner paused it
     if not dry_run and waker_loaded():
@@ -990,6 +1072,8 @@ def _pass(cfg_all, cfg, now, started, dry_run, out, keys=None, as_json=False) ->
     for a in actions:
         if time.monotonic() - started >= BUDGET_S:
             break
+        if a.cond.project in blocked:     # denied by an earlier repair of this pass
+            continue
         failed = ""
         _record(new, a, now)              # spent before it runs: an abort mid-apply still counts (2/day cap)
         util.write_json(state_path(), new)
@@ -997,7 +1081,8 @@ def _pass(cfg_all, cfg, now, started, dry_run, out, keys=None, as_json=False) ->
             apply(reg, a, now)
         except Exception as exc:  # noqa: BLE001 - one failed repair never stops the pass; it still counts
             failed = type(exc).__name__
-            log.log("hooks", f"reconcile: {a.kind} {a.cond.target}: {failed}: {exc}")
+            if not denied(exc):
+                log.log("hooks", f"reconcile: {a.kind} {a.cond.target}: {failed}: {exc}")
         log.log("events", a.event() + (f" failed={failed}" if failed else ""))
         doc["actions"].append(_row(a, failed))
         if not as_json:
@@ -1007,7 +1092,10 @@ def _pass(cfg_all, cfg, now, started, dry_run, out, keys=None, as_json=False) ->
     if done:
         log.log("events", f"reconcile pass took={took:.1f}s actions={done}")
     _phase("heartbeat")
-    write_heartbeat(now, cfg, took, done, unreadable=blocked)
+    from . import privacy
+    shielded = {k for k, _ in privacy.protected_projects(reg)}
+    write_heartbeat(now, cfg, took, done, unreadable=sorted(blocked),
+                    readable=[k for k in every if k not in blocked and k not in shielded])
     return done_json()
 
 
