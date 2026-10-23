@@ -3,8 +3,9 @@
 install patches only: `~/.claude/settings.json`, `~/.claude/statusline-command.sh`,
 `~/.claude/agents/<ours>.md` (symlinks), `~/.claude/skills/<ours>` (symlinks, settings mode only;
 a plugin-mode install removes them), `~/.claude/fable/{fable,active}.md`,
-`~/.claude/fable/agents/runner.md`, and moves `~/.codex/AGENTS.md.recovered` into place
-(`--yes`). Every changed file is first copied to `<file>.bak-<ts>`; `--dry-run` prints the plan
+`~/.claude/fable/agents/runner.md`, `~/Library/LaunchAgents/com.orche.reconcile.plist` (macOS; the
+heartbeat job, loaded only when the target home is the real one; `--no-reconcile` skips it), and
+moves `~/.codex/AGENTS.md.recovered` into place (`--yes`). Every changed file is first copied to `<file>.bak-<ts>`; `--dry-run` prints the plan
 and writes nothing. `--home PATH` targets another home (tests); ORCHE_HOME then defaults to
 `PATH/.claude/orche` unless set.
 
@@ -13,11 +14,13 @@ skips it, `--jev-key-stdin [--jev-kind gateway|direct]` configures it without pr
 or failing Jev never fails the install.
 """
 import os
+import sys
 from pathlib import Path
 
-from . import jev_setup, paths, util
+from . import jev_setup, paths, reconcile, util
 from .cli import EXIT_OK, EXIT_USER, out
-from .install import MIGRATION_LINE, Ctx, backup, agents, apply_all, codex, doctor, fable, settings, skills, statusline
+from .install import (MIGRATION_LINE, Ctx, backup, agents, apply_all, codex, doctor, fable, launchd, settings, skills,
+                      statusline)
 
 STATE_FILE = "install-state.json"
 LEGACY_STATE_FILE = "install.json"  # read (and migrated) for one version
@@ -37,6 +40,8 @@ def register(subparsers):
     p.add_argument("--no-dialog", action="store_true", help="Jev key at a hidden terminal prompt, not the macOS dialog")
     p.add_argument("--no-plugin-hint", action="store_true",
                    help="plugin mode: do not print the two /plugin lines (install.sh runs those steps itself)")
+    p.add_argument("--no-reconcile", action="store_true",
+                   help="do not install the reconcile LaunchAgent (run `orche reconcile` every 5 min yourself)")
     p.set_defaults(func=cmd_install)
     p = subparsers.add_parser("uninstall", help="remove ORCHE blocks, hook entries and agent symlinks")
     p.add_argument("--home", help="home directory (default: $HOME)")
@@ -144,6 +149,44 @@ def _orche_home(ctx) -> None:
     ctx.note("orche_home", "create", home, f"dirs {','.join(missing)}")
 
 
+RECONCILE_STEP = "reconcile job"
+OFF_MACOS = "not macOS: run `orche reconcile` every 5 min (cron/systemd)"
+
+
+def _reconcile_job(ctx, args, new_state) -> None:
+    """The heartbeat LaunchAgent (design c10 §2.4): written always, loaded only for the real home."""
+    if sys.platform != "darwin":
+        ctx.note(RECONCILE_STEP, "skip", None, OFF_MACOS)
+        return
+    if args.no_reconcile:
+        ctx.note(RECONCILE_STEP, "skip", None, "--no-reconcile; run `orche reconcile` every 5 min yourself")
+        return
+    every = int(reconcile.settings().get("every_s", 300))
+    res = launchd.install(launchd.RECONCILE, launchd.reconcile_plist(every), ctx.home, ctx.dry_run)
+    if not ctx.dry_run:
+        new_state["reconcile_plist"] = res["plist"]
+    if res["argv"]:
+        how = "would load" if ctx.dry_run else ("loaded" if res["loaded"] else "not loaded")
+    else:
+        how = "not loaded: --home is not the real home"
+    ctx.note(RECONCILE_STEP, "write", res["plist"], f"every {every}s, {how}")
+    if res["error"]:
+        ctx.note(RECONCILE_STEP, "warn", None, f"launchctl bootstrap failed: {res['error']}; see orche doctor")
+
+
+def _reconcile_job_remove(ctx, state) -> None:
+    if sys.platform != "darwin":
+        return
+    res = launchd.uninstall(launchd.RECONCILE, ctx.home, ctx.dry_run)
+    if res["missing"]:
+        return
+    ctx.note(RECONCILE_STEP, "remove", res["plist"], "unloaded" if res["argv"] else "")
+    if res["error"]:
+        ctx.note(RECONCILE_STEP, "warn", None, f"launchctl bootout failed: {res['error']}")
+    if state is not None and not ctx.dry_run:
+        state.pop("reconcile_plist", None)
+
+
 def _jev_step(args, state, new_state):
     """The optional Jev key, asked once (first interactive install); None when nothing was done.
 
@@ -190,6 +233,7 @@ def cmd_install(args):
                                         ("skills", lambda: skills.install(ctx, args.mode)),
                                         ("runner.md", lambda: agents.flip_runner(ctx)),
                                         ("fable.md", lambda: fable.install(ctx)),
+                                        (RECONCILE_STEP, lambda: _reconcile_job(ctx, args, new_state)),
                                         ("AGENTS.md", lambda: codex.install(ctx))])
             jev_result = _jev_step(args, state, new_state)
         finally:
@@ -217,6 +261,7 @@ def cmd_uninstall(args):
         steps.append(("settings.json", lambda: settings.uninstall(ctx, state)))
     steps.append(("agents", lambda: agents.uninstall(ctx, state or {})))
     steps.append(("skills", lambda: skills.uninstall(ctx, state or {})))
+    steps.append((RECONCILE_STEP, lambda: _reconcile_job_remove(ctx, state)))
     try:
         _run_steps(ctx, "uninstall", steps)
     finally:

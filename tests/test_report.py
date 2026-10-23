@@ -66,6 +66,19 @@ class ReportTest(support.TempHomeCase):
         folder = self.home / "inbox" / session
         return [json.loads(p.read_text()) for p in sorted(folder.glob("*.json"))] if folder.exists() else []
 
+    def test_owner_flag_sets_the_pointer_field(self):
+        """C10 T9 (§5.1): `--owner` is the pointer's `owner` (masked, one line)."""
+        self.as_session("div-acme-shop-build")
+        self.brief("acme-shop-coupon-20261016-1", "div-acme-shop-build")
+        code, _, err = self.orche("report", "blocked", "--summary", "needs the key", "--owner",
+                                  "secret STRIPE_KEY\n sk-ant-api03-" + "A" * 40)
+        self.assertEqual(code, 0, err)
+        self.orche("report", "info", "--summary", "fyi")
+        by_status = {p["status"]: p for p in self.pointers("main-acme-shop")}
+        self.assertTrue(by_status["blocked"]["owner"].startswith("secret STRIPE_KEY "))
+        self.assertNotIn("A" * 40, by_status["blocked"]["owner"])
+        self.assertNotIn("owner", by_status["info"])
+
     def test_division_defaults_resolved(self):
         self.as_session("div-acme-shop-build")
         self.brief("acme-shop-old-20261015-1", "div-acme-shop-build", age=100)

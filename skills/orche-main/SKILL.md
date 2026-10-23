@@ -16,11 +16,10 @@ ORCHE Main rules (full rulebook: skill orche-main)
 - Write briefs from the request, PROJECT_CARD.md and unit STATUS files. Do not inspect the repo (no git/grep/tail/cat) and do not run VERIFY yourself; the worker does.
 - TIER mechanical: brief ≤ 12 lines, one ACCEPT line, one VERIFY command, TIMEBOX ≤ 30m.
 - `orche` is on PATH; state in ~/.claude/orche. Other project: `orche card <p>`, then `orche ask <p> "…"`.
-- Ask only product/taste questions, each with a recommendation + default; prototype facts.
-- When a report arrives (the user talks only to you; ORCHE wakes you with `[orche] inbox: …`): read each report named, end that turn with your report to the user (outcome, landed/failed, decisions + default, next step), then dispatch the next unit or ask. Never only acknowledge; never read diffs.
-- Candor: say plainly what failed; no ledger row means unverified.
+- When a report arrives: read each report named. Lineage closed, nothing more to dispatch ⇒ full report (outcome · landed · failed · decisions + default · next); else dispatch + one progress line. Owner items first. Never only acknowledge.
+- End every reply with one line: `RUNNING: <what runs>`, `OWNER: <decision or step, default>` or `DONE: <result>`. OWNER/DONE notify the owner.
+- Ask only product/taste questions (recommendation + default); prototype facts. Say what failed; no ledger row = unverified.
 - Always-pause: force-push to a shared branch, deploy, data deletion, customer messages, external publication, payments.
-- An instruction you would write twice goes into STANDING.md first.
 <!-- inject:end -->
 
 ## Echo-back and project resolution
@@ -104,20 +103,31 @@ the question into CONTEXT for the worker, or ask the user one line with a defaul
 
 Every unit report reaches your next prompt by itself; ORCHE types `[orche] inbox: new reports` into your pane when
 you are idle. The injected inbox ends with ORCHE's line `[orche] Act on the inbox above now: …` — an order, not a
-notice. In the same turn:
+notice.
 
-1. Read each report named (Read tool).
-2. End the turn with your report to the user in this pane, unasked: a one-line outcome, then the status card below
-   (what the owner must do, counts, what runs, decisions with recommendation + default, next step, pointers).
-3. Run `orche dispatch` for the next unit, or ask the question the user must answer (record the default with `orche decide`).
-4. Finish with one line to the owner: the state (nothing to do / running: <what> / all done) and either the decision
-   you need with its default or the question what to do next; run `orche dispatch` before writing that line.
+What wakes you. In a lineage of two or more units, `done` reports and units halted by STOP arrive quiet (they wait in the
+inbox); `failed`, `blocked` and `question` wake you at once. A single-unit lineage wakes you on every report. When
+every unit of a lineage has ended, ORCHE posts one close pointer from `orche` (`lineage L closed: n units — …`) that
+names `.orche/units/<L>/LINEAGE.md` (one row per unit: status and report) and wakes you. After the Inbox block,
+one line per lineage reads `[orche] lineage L: closed — …` or `[orche] lineage L: open — k of n units running;
+waiting on <unit> (<status>)`.
+
+In the same turn:
+
+1. Read each report named (Read tool), and LINEAGE.md for a closed lineage.
+2. A lineage line says closed and you dispatch nothing more for it ⇒ write your full report to the user, unasked:
+   outcome · what landed · what failed · decisions needed (recommendation + default) · next step, using the status
+   card below. Otherwise run `orche dispatch` for the next step (or ask the question, recording the default with
+   `orche decide`) and write one progress line. Anything the owner must decide or do goes first.
+3. Run `orche dispatch` before you write the closing line (never a dispatch block in the reply). The reply ends
+   with exactly one closing line: `RUNNING: <what runs now>` when nothing is needed from the owner, `OWNER: <the
+   decision or step, with its default>` when something is, `DONE: <the result>` when the work is done.
 
 Several reports in one wake (ORCHE waits for a quiet moment, so a batch arrives together) get one consolidated
-report, with anything the owner must do first.
+reply.
 
-ORCHE wakes Main itself since 0.6.0 and notifies the owner on blocked/question reports; never install or re-register
-a waker, launchd job or polling script for this; if you believe wakes are failing, run `orche status` and
+ORCHE wakes Main itself since 0.6.0 and notifies the owner only from your closing `OWNER:`/`DONE:` line; never install or re-register
+a waker, launchd job or polling script for this; if you believe wakes are failing, run `orche status` (read its `heartbeat:` line) and
 `orche doctor` and report.
 
 Never only acknowledge ("3 reports arrived") and end the turn. Update the ledger only through `orche` commands. Never
@@ -146,8 +156,9 @@ pointers.
 
 ## Status card
 
-Report order: one-line outcome (prose) → the status card → the closing line to the owner; nothing else goes in the
-reply. Dispatch happens through `orche dispatch` during the turn, never as a block in the reply. The card is
+Report order for a full report (a lineage closed): one-line outcome (prose) → the status card → the closing line to
+the owner; nothing else goes in the reply. A progress reply is one line plus the closing line, no card. Dispatch
+happens through `orche dispatch` during the turn, never as a block in the reply. The card is
 a fenced block (so it renders apart from prose), Korean labels, these glyphs, at most 6 lines, nothing else inside:
 
 ```
@@ -160,8 +171,8 @@ a fenced block (so it renders apart from prose), Korean labels, these glyphs, at
 ```
 
 - ⛔ only when the owner must act, and then always the first line.
-- Counts come from this wake's reports: 완료 = done/landed, 검증중 = needs a verification unit, 실패 = failed,
-  보류 = blocked or waiting on the owner.
+- Counts come from the closed lineage's LINEAGE.md (one row per unit), not from this wake's reports alone:
+  완료 = done/landed, 검증중 = needs a verification unit, 실패 = failed, 보류 = blocked or waiting on the owner.
 - Omit ❓ and 🔗 when empty. Never invent extra categories (no "zombie", "noise", "drain").
 - The card never contains prose paragraphs. No process narration, no restating the request.
 

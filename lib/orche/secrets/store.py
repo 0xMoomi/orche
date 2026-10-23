@@ -20,7 +20,7 @@ import sys
 from contextlib import contextmanager
 from pathlib import Path
 
-from .. import config, log, mask, paths, registry, roster, shell, util
+from .. import config, log, mask, notify as notice, paths, registry, roster, shell, util
 from . import ENVS, VALUE_PLACEHOLDER, SecretError, backends_gcp, backends_gh, backends_keychain, backends_vercel
 
 NAME_RX = re.compile(r"^[A-Z][A-Z0-9_]*$")
@@ -315,18 +315,16 @@ def get(ex, cfg, name, env) -> str:
 # ---------------------------------------------------------------- notifications and dialog process
 
 
+KEYMASTER = "ORCHE Keymaster"
+
+
 def notify(ex, text: str) -> None:
-    if not config.load().get("notify"):
-        return
-    safe, _ = mask.redact(text)
-    script = f"display notification {_as_string(safe)} with title \"ORCHE Keymaster\""
-    ex.run(["osascript", "-e", script], timeout=5)
-
-
-def _as_string(text: str) -> str:
-    """AppleScript string literal (quotes and backslashes escaped, control chars dropped)."""
-    clean = "".join(ch if ch == "\n" or ch >= " " else " " for ch in str(text))
-    return '"' + clean.replace("\\", "\\\\").replace('"', '\\"').replace("\n", "\\n") + '"'
+    """A Keymaster notification through notify.send (masked, an argument to a fixed script; config
+    `notify`, macOS only); a dry run only plans its osascript line."""
+    if not ex.dry_run:
+        notice.send(KEYMASTER, text, kind="keymaster")
+    elif notice.enabled():
+        ex.run(notice.argv(KEYMASTER, text))
 
 
 def _pid_path() -> Path:

@@ -14,13 +14,13 @@ DRAINED = ".drained"
 NUDGED = ".nudged"
 NUDGED_TTL = _dt.timedelta(minutes=10)
 WAKE_TEXT = "[orche] inbox: new reports"
-REPORT_LINE = ("[orche] Act on the inbox above now: read each report named (Read tool), then end this turn with "
-               "your report to the user in this pane — outcome · what landed · what failed · decisions needed "
-               "(recommendation + default) · next step — after running `orche dispatch` for the next unit, or with "
-               "the question the user must answer. Never only acknowledge. When several reports are listed, write one "
-               "consolidated report and put anything the owner must do first. Finish with one line to the owner: "
-               "the state (nothing to do / running: <what> / all done) and either the decision you need with its "
-               "default or the question what to do next; run `orche dispatch` before writing that line.")
+REPORT_LINE = ("[orche] Act on the inbox above now: read each report named (Read tool). Where a lineage line says "
+               "closed and you dispatch nothing more for it, write your full report to the user — outcome · what "
+               "landed · what failed · decisions needed (recommendation + default) · next step; otherwise dispatch the "
+               "next step and write one progress line. Anything the owner must decide or do goes first. Never only "
+               "acknowledge. Dispatch blocks go before your closing line, and the reply ends with exactly one closing "
+               "line: RUNNING: <what runs now> when nothing is needed from the owner, OWNER: <the decision or step, "
+               "with its default> when something is, DONE: <the result> when the work is done.")
 _SAFE = re.compile(r"^[A-Za-z0-9._-]+$")
 DRAIN_RE = re.compile(r"^\s*(\[drain\]|/drain)", re.IGNORECASE)
 NUDGE_RE = re.compile(r"^\s*\[orche\] inbox:")
@@ -29,7 +29,7 @@ DRAIN_COUNT = 4
 DRAIN_AGE = _dt.timedelta(minutes=90)
 STALL_AGE_MS = 20 * 60 * 1000
 IN_FLIGHT = ("blocked", "question", "info")
-URGENT = ("blocked", "question", "failed")   # wakes at once (no quiet window) and notifies the owner
+URGENT = ("blocked", "question", "failed")   # wakes at once (no quiet window)
 RECONCILE_RESERVE_S = 1.0   # of the prompt hook's budget, kept for the inbox, Jev and stall marks
 MAX_LINES = 5
 TRUNCATED = "[…truncated]"
@@ -66,10 +66,32 @@ def write(ptr: dict) -> Path:
 
 def post(ptr: dict) -> Path:
     """write(ptr), then wake its recipient when the pointer wakes (R-INBOX-4). Raises only what
-    write raises; the wake never does."""
-    target = write(ptr)
-    if wakes(ptr):
-        wake(ptr["to"], urgent=is_urgent(ptr))
+    write raises; the wake never does. Under the project's flow lock (a report that carries a lineage),
+    flow.shape marks a repeated report, or a done/stopped report to Main of a lineage with two or more
+    members, quiet first (a failure there is logged and the pointer is written as given); after the
+    write, the report that leaves every member of its lineage terminal posts the one close pointer
+    (flow.lineage). Without the lock (busy past LOCK_WAIT_S) no close is written: the heartbeat posts
+    it. A close that fails wakes the recipient, quiet or not (never a silent stall)."""
+    from .flow import lineage, shape
+    sc = lineage.scope(ptr)
+    closed, failed = None, False
+    with lineage.lock(sc) as held:
+        try:
+            shape.shape(ptr, sc)
+        except Exception as exc:  # noqa: BLE001 - shaping never costs a pointer
+            log.log("hooks", f"inbox: shape failed for {ptr.get('unit')}: {exc}")
+        target = write(ptr)
+        if held:
+            try:
+                closed = lineage.settle(sc)
+            except Exception as exc:  # noqa: BLE001 - a close never costs the report: wake instead
+                failed = True
+                log.log("hooks", f"inbox: lineage close failed for {ptr.get('unit')}: {type(exc).__name__}: {exc}")
+    woke = wakes(ptr) or failed
+    if woke:
+        wake(ptr["to"])
+    if closed is not None and (closed["to"] != ptr["to"] or not woke):
+        wake(closed["to"])
     return target
 
 
@@ -82,15 +104,11 @@ def nudged(session: str) -> bool:
     return age < NUDGED_TTL.total_seconds()
 
 
-def wake(session: str, urgent: bool = False) -> None:
+def wake(session: str) -> None:
     """Start `orche nudge <session>` detached (logs/nudge.log) unless config `inbox.wake` is off or
-    the session was nudged within NUDGED_TTL. An urgent pointer to a `main-*` session starts it even
-    then: the nudger notifies the owner (deduped per pointer) before its own `already-nudged` exit.
-    Never raises (a failure goes to hooks.log)."""
+    the session was nudged within NUDGED_TTL. Never raises (a failure goes to hooks.log)."""
     try:
-        if not config.load()["inbox"].get("wake", True):
-            return
-        if nudged(session) and not (urgent and session.startswith("main-")):
+        if not config.load()["inbox"].get("wake", True) or nudged(session):
             return
         procs.spawn_detached([sys.executable, str(paths.PLUGIN_ROOT / "bin" / "orche.py"), "nudge", "--", session],
                              paths.orche_home() / "logs" / "nudge.log")
@@ -121,9 +139,8 @@ def clip(summary: str) -> str:
     return "\n".join(lines[:MAX_LINES - 1] + [TRUNCATED]) if len(lines) > MAX_LINES else "\n".join(lines)
 
 
-def about(session: str, unit: str, frm: str) -> list:
-    """[(path, pointer)] in `session`'s inbox, pending and drained, for `unit` from `frm`; unreadable
-    files are skipped. Raises ValueError for an unsafe session name (box)."""
+def about_all(session: str) -> list:
+    """[(path, pointer)] in `session`'s inbox, pending and drained; unreadable files are skipped."""
     folder = box(session)
     out = []
     for path in list(folder.glob("*.json")) + list((folder / DRAINED).glob("*.json")):
@@ -131,9 +148,15 @@ def about(session: str, unit: str, frm: str) -> list:
             ptr = json.loads(path.read_text(encoding="utf-8"))
         except (OSError, ValueError):
             continue
-        if isinstance(ptr, dict) and ptr.get("unit") == unit and ptr.get("from") == frm:
+        if isinstance(ptr, dict):
             out.append((path, ptr))
     return out
+
+
+def about(session: str, unit: str, frm: str) -> list:
+    """[(path, pointer)] in `session`'s inbox, pending and drained, for `unit` from `frm`; unreadable
+    files are skipped. Raises ValueError for an unsafe session name (box)."""
+    return [(p, ptr) for p, ptr in about_all(session) if ptr.get("unit") == unit and ptr.get("from") == frm]
 
 
 def pending(session: str) -> list:
@@ -230,13 +253,16 @@ def _one(value) -> str:
 
 
 def render(items: list, stalled=()) -> str:
-    """`## Inbox (<n>)`, the data header, and one block per pointer (every field single-lined)."""
+    """`## Inbox (<n>)`, the data header, and one block per pointer (every field single-lined); a
+    pointer's `owner` step is its first line under the header (`OWNER STEP:`)."""
     lines = [f"## Inbox ({len(items)})", DATA_HEADER]
     for _path, p in items:
         sha = _one(p.get("head_sha") or "-")[:8]
         mark = " · STALLED (no pane output > 20 min)" if p.get("from") in stalled else ""
         lines.append(f"- unit {_one(p.get('unit', '?'))} · from {_one(p.get('from', '?'))} · "
                      f"status {_one(p.get('status', '?'))}{' · URGENT' if p.get('urgent') else ''}{mark}")
+        if p.get("owner"):
+            lines.append("  OWNER STEP: " + _one(p["owner"]))
         lines.append(f"  brief_rev {_one(p.get('brief_rev', '?'))} · head {sha} · ledger_row "
                      f"{'yes' if p.get('ledger_row') else 'no'}")
         if p.get("summary"):
@@ -340,12 +366,19 @@ def handle_prompt(payload, started, r, who) -> str:
 
 
 def _prompt_text(payload, started, r, who, me) -> str:
+    prompt = payload.get("prompt") or ""
+    main = who.member is not None and who.member.kind == "main"
+    owner = not prompt.lstrip().startswith("[orche]")
+    if main:
+        from .flow import lineage     # flow imports inbox: resolved at call time
+        lineage.begin_turn(me, owner)  # first: a failure below never leaves the last turn's lineages
     terms = orca.Terminals(orca.hook_deadline(started))
     units.touch_activity(me)
     _reconcile(r, who, terms)
     out = _standing_once(r, payload, who)
-    prompt = payload.get("prompt") or ""
+    read_at = units.now()   # before the inbox is read: a report landing after it is not this turn's
     items = _jev(prompt, pending(me), terms.deadline)
+    inject, named = [], []
     if items:
         times = [t for t in (pointer_time(p, x) for p, x in items) if t is not None]
         drain_all = (DRAIN_RE.match(prompt) or NUDGE_RE.match(prompt) or STATUS_RE.search(prompt)
@@ -354,9 +387,14 @@ def _prompt_text(payload, started, r, who, me) -> str:
         if inject:
             out.append(render(inject, _stalled(r, inject, terms)))
             drain([p for p, _x in inject])
+            if main:     # only a lineage field, or the brief of the pointer's unit, names a lineage
+                named = [n for n in (lineage.of_pointer(x, r.reg, who.member.project) for _p, x in inject) if n]
+                out.extend(lineage.lines(r.reg, who.member.project, [{"lineage": n} for n in named]))
         waiting = len(items) - len(inject)
         if waiting:
             out.append(f"[orche] inbox: {waiting} note(s) held — FYI from ORCHE, no action needed; [drain] shows them")
-        if inject and who.member is not None and who.member.kind == "main":
+        if inject and main:
             out.append(REPORT_LINE)  # ORCHE's own order, last in every block Main gets (§14.2)
+    if main:
+        lineage.write_turn(me, owner, named, at=read_at)   # after the drain; `at` is when the inbox was read
     return "\n\n".join(out)

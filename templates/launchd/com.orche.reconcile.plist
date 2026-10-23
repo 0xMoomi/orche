@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.orche.reconcile</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>{{ORCHE_BIN}}</string>
+    <string>reconcile</string>
+  </array>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>ORCHE_HOME</key>
+    <string>{{ORCHE_HOME}}</string>
+    <key>PATH</key>
+    <string>{{PATH}}</string>
+  </dict>
+  <key>StartInterval</key>
+  <integer>{{EVERY_S}}</integer>
+  <key>RunAtLoad</key>
+  <true/>
+  <key>StandardOutPath</key>
+  <string>{{ORCHE_HOME}}/logs/reconcile.log</string>
+  <key>StandardErrorPath</key>
+  <string>{{ORCHE_HOME}}/logs/reconcile.log</string>
+</dict>
+</plist>

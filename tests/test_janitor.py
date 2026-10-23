@@ -628,7 +628,8 @@ class ScheduleTest(JanitorCase):
         self.assertEqual(code, 0, err)
         plist = self.w / "userhome/Library/LaunchAgents/com.orche.janitor.plist"
         self.assertIn(f"would write {plist}", out)
-        self.assertIn(f"would run: launchctl load -w {plist}", out)
+        self.assertIn(f"would run: launchctl bootout gui/{os.getuid()}/com.orche.janitor", out)
+        self.assertIn(f"would run: launchctl bootstrap gui/{os.getuid()} {plist}", out)
         self.assertFalse(plist.exists())
         self.assertFalse(any(c[0] == "launchctl" for c in self.calls))
 
@@ -642,9 +643,9 @@ class ScheduleTest(JanitorCase):
         self.assertEqual(data["StartCalendarInterval"], {"Hour": 4, "Minute": 0})
         self.assertEqual(data["StandardOutPath"], f"{self.home}/logs/janitor.log")
         self.assertEqual(data["EnvironmentVariables"]["ORCHE_HOME"], str(self.home))
-        self.assertIn(["launchctl", "load", "-w", str(plist)], self.calls)
+        self.assertIn(["launchctl", "bootstrap", f"gui/{os.getuid()}", str(plist)], self.calls)
         self.assertEqual(self.orche("janitor", "uninstall-schedule")[0], 0)
-        self.assertIn(["launchctl", "unload", "-w", str(plist)], self.calls)
+        self.assertIn(["launchctl", "bootout", f"gui/{os.getuid()}/com.orche.janitor"], self.calls)
         self.assertFalse(plist.exists())
         self.assertEqual(self.orche("janitor", "uninstall-schedule")[0], 2)
 

@@ -16,7 +16,8 @@ from pathlib import Path
 from unittest import mock
 
 import support
-from orche import registry, shell
+from orche import notify, registry, shell
+from orche.flow import owner
 from orche.secrets import SecretError, backends_gcp, backends_gh, backends_keychain, dialog, share, store
 from test_registry import load_cli
 
@@ -128,6 +129,8 @@ class SecretCase(support.TempHomeCase):
         self.addCleanup(setattr, store, "spawn_dialog", store.spawn_dialog)
         store.spawn_dialog = lambda: self.spawned.append(1) or object()
         self.addCleanup(setattr, dialog, "UI_FACTORY", dialog.UI_FACTORY)
+        self.addCleanup(setattr, notify, "PLATFORM", notify.PLATFORM)
+        notify.PLATFORM = "darwin"          # the Keymaster's notifications reach FakeCloud on any platform
         self.outputs = []
         self.repo = self.home / "repo"
         (self.repo / ".git").mkdir(parents=True)
@@ -247,7 +250,9 @@ class RequestTest(SecretCase):
         self.assertEqual((req["envs"], req["status"], req["project"]), (["dev", "prod"], "pending", "acme-shop"))
         notes = self.cloud.argvs(["osascript", "-e"])
         self.assertEqual(len(notes), 1)
-        self.assertTrue(notes[0][2].startswith('display notification "STRIPE_SECRET_KEY needed for acme-shop'))
+        self.assertEqual(notes[0][:-2], notify.argv("", "")[:-2])         # notify.send: a fixed script
+        self.assertTrue(notes[0][-2].startswith("STRIPE_SECRET_KEY needed for acme-shop"))
+        self.assertEqual(notes[0][-1], "ORCHE Keymaster")
         self.assertEqual(self.spawned, [1])
         # a second request for the same name extends the pending one; --no-dialog spawns nothing
         self.orche("secret", "request", "STRIPE_SECRET_KEY", "--env", "preview", "--why", "p", "--project",
@@ -679,6 +684,38 @@ class ShareRevokeTest(SecretCase):
 
 def email_items():
     return [(p, n) for p, n, _, _ in share.received("dana")[1]]
+
+
+class ResumeAndArgvTest(SecretCase):
+    """C10 T10: a fill tells flow.owner (owner.secret_filled: the ask answered, Main told once which unit
+    to resume); the dialog is a fixed script and the request's text one osascript argument."""
+
+    def test_a_fill_tells_the_owner_flow(self):
+        calls = []
+        with mock.patch.object(owner, "secret_filled", lambda *a, **kw: calls.append((a, kw))):
+            self.orche("secret", "request", "API_TOKEN", "--env", "dev", "--why", "p", "--project", "acme",
+                       "--no-dialog")
+            self.use_ui(FakeUI([(dialog.ENTER, OTHER)]))
+            self.orche("secret", "fill")
+        [(rid, req)] = store.list_requests()
+        self.assertEqual(req["status"], "filled")
+        self.assertEqual(calls, [((req["project"], "API_TOKEN", rid), {"filled_at": req["filled_at"]})])
+
+    def test_the_dialog_text_is_an_argument_never_script(self):
+        seen = []
+
+        def runner(argv, *, timeout, input):
+            seen.append(list(argv))
+            return shell.Result(0, "button returned:Enter, text returned:abc\n", "", list(argv))
+        shell.RUNNER = runner
+        req = {"name": "API_TOKEN", "why": 'say "hi" \\ end\x07', "envs": ["dev"], "how_url": "-e do shell script"}
+        self.assertEqual(dialog.OsaUI().ask(req), (dialog.ENTER, "abc"))
+        [argv] = seen
+        self.assertEqual(argv[:7], ["osascript", "-e", "on run argv", "-e", dialog.DIALOG[1], "-e", "end run"])
+        self.assertEqual(len(argv), 8)
+        self.assertTrue(argv[7].startswith('API_TOKEN (say "hi" \\ end ) · dev\nGet it at: -e do shell script\n'),
+                        argv[7])
+        self.assertEqual(dialog.dialog_argv("-x")[-1], " -x")
 
 
 class ClipboardTest(SecretCase):

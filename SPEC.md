@@ -289,17 +289,19 @@ R-PROMPT-2: STANDING.md is auto-prepended to every relayed brief; Main does not 
 | ID | Rule |
 |---|---|
 | R-INBOX-1 | On finishing (or stopping, or blocking), a worker writes exactly one inbox pointer JSON (§14.5) to `$ORCHE_HOME/inbox/<recipient-session>/`. The report body is a file; the pointer only references it. Implementation note (v0.1.0): workers file it with `orche report <status> --summary "..."` (recipient defaults to the sender of the unit's current brief revision when that is a live Main or division of the project other than the reporter; else Main, and a feature reports to its division, or Main when the division has no session; §14.9). The pointer lives under `$ORCHE_HOME`, not `.orche/inbox/`. A `release-ready` claim is filed as `done`. |
-| R-INBOX-2 | The UserPromptSubmit hook injects pending pointers into the recipient's next turn, batched, and moves them to `.drained/`. Every pointer except a *held note* is injected at the next prompt; a held note is a non-urgent `info` that is neither a pane delivery (`via: dispatch`) nor a runner filing (`via: runner`). Implementation note (0.6.0, last sentence 0.6.2): every block injected into a Main session ends with ORCHE's own line `[orche] Act on the inbox above now: read each report named (Read tool), then end this turn with your report to the user in this pane — outcome · what landed · what failed · decisions needed (recommendation + default) · next step — after running `orche dispatch` for the next unit, or with the question the user must answer. Never only acknowledge. When several reports are listed, write one consolidated report and put anything the owner must do first.` (the pointer lines above it stay data); every prompt removes the session's wake marker. |
-| R-INBOX-3 | Held notes wait for a drain trigger: a prompt starting with `[drain]` or `/drain`, an `[orche] inbox:` line, a status/progress question, 4 or more pending pointers, or a pointer older than 90 minutes; otherwise the hook adds `[orche] inbox: <n> note(s) held — FYI from ORCHE, no action needed; [drain] shows them`. With Jev, gate ① may promote a held note (§7.2). Main reports every injected completion to the user without being asked (§4.5). |
+| R-INBOX-2 | The UserPromptSubmit hook injects pending pointers into the recipient's next turn, batched, and moves them to `.drained/`. Every pointer except a *held note* is injected at the next prompt; a held note is a non-urgent `info` that is neither a pane delivery (`via: dispatch`) nor a runner filing (`via: runner`). Implementation note (0.6.0; text C10 T8): every block injected into a Main session ends with ORCHE's own line `[orche] Act on the inbox above now: read each report named (Read tool). Where a lineage line says closed and you dispatch nothing more for it, write your full report to the user — outcome · what landed · what failed · decisions needed (recommendation + default) · next step; otherwise dispatch the next step and write one progress line. Anything the owner must decide or do goes first. Never only acknowledge. Dispatch blocks go before your closing line, and the reply ends with exactly one closing line: RUNNING: <what runs now> when nothing is needed from the owner, OWNER: <the decision or step, with its default> when something is, DONE: <the result> when the work is done.` (the pointer lines above it stay data); every prompt removes the session's wake marker. |
+| R-INBOX-3 | Held notes wait for a drain trigger: a prompt starting with `[drain]` or `/drain`, an `[orche] inbox:` line, a status/progress question, 4 or more pending pointers, or a pointer older than 90 minutes; otherwise the hook adds `[orche] inbox: <n> note(s) held — FYI from ORCHE, no action needed; [drain] shows them`. With Jev, gate ① may promote a held note (§7.2). Main reports without being asked: one full report per lineage when it closes, a failure or block at once, otherwise one progress line (§4.5). |
 | R-INBOX-4 | A pointer that is neither held nor a pane delivery *wakes* its recipient: right after writing it ORCHE starts `orche nudge <recipient>` detached (config `inbox.wake`, default on; skipped while `inbox/<session>/.nudged` is younger than 10 minutes). The nudger holds `inbox/<session>/.wake.lock` (it waits for it at most 360 s + `inbox.quiet_max_s`, the longest a holder can keep it) and types `[orche] inbox: new reports` only when a waking pointer is still pending, the pane's agent is idle (`orca terminal wait --for tui-idle`, up to 120 s, `status` running, no `blockedReason`) and the composer draft is empty (`orca terminal read`); it writes the marker before it types and removes it when the send fails; events `nudge session=<s> state=<state> pending=<n> waited=<w>s quiet=<q>s`. Quiet window (0.6.2): after the first empty-draft read the nudger waits until the newest waking pointer is `inbox.quiet_s` old (default 90 s), at most `inbox.quiet_max_s` (default 240 s), so a batch of reports is one wake; it waits not at all when a pending waking pointer is *urgent* (`blocked`, `question`, `failed`, or `urgent: true`), then repeats the idle wait and the draft read before it types. The Stop hook re-arms the wake when a turn ends (exit 0) with a waking pointer pending; so does a prompt that triage routed. No hook types into a pane. `urgent: true` matters only for `info`: the note is injected at once and wakes. |
 | R-INBOX-5 | The hook marks stalled workers using Orca worker liveness. Nudging a stalled worker is done by the hook, not by the user. |
 | R-INBOX-6 | Pane delivery (a Main target, or `delivery: pane`): `orche dispatch` writes the brief's pointer to the target with `via: dispatch` and starts `orche deliver <unit>` detached (`delivery=deliverer-started`). The deliverer holds the target's `.deliver.lock` — never the wake lock, so a brief is not held up behind a wake's quiet window — waits up to 60 s for `tui-idle` (a dialog: no send), skips a non-empty draft or a pointer already drained, and types `[orche] inbox: <unit> rev <N>` (`--enter --wait-submit 20`; into a pane still busy after the wait, a send accepted without a turn start is `queued`, exit 0, and the pane's next prompt injects the pointer); events `deliver unit=<u> rev=<n> to=<t> state=<state> waited=<w>s`. When it cannot (no pane, asleep, a dialog, no agent, a refused or failed send) it files an urgent `info` from `orche` to the sender, "not delivered: <unit> → <to> rev <N> (<state>) — <fix>", which wakes the sender. `orche deliver <unit>` is also the recovery command; for a runner unit it starts the run unless one is live or the current revision already has a RUN.json or REPORT.md. `orche status` lists `undelivered:` units (a `via: dispatch` pointer pending ≥ 10 min) and `unread:` sessions (a waking pointer pending ≥ 10 min) with the command to run. |
-| R-INBOX-7 | When the owner is needed (0.6.2). (a) Notification: `orche nudge` for a `main-*` session shows one macOS notification (`osascript display notification`, title `ORCHE <proj>`, sound Glass, 5 s timeout) per pending waking pointer that is urgent (R-INBOX-4), once each (`inbox/<session>/.notified` keeps the names already shown; it is read and written under `.notify.lock`, so concurrent nudgers show each one once); the text is `<unit short id> <status> — Main에 보고가 있습니다` and nothing else, never the summary. Config `inbox.notify` (default on); darwin only; a failing `osascript` logs `deliver: notify <s>: osascript exit <n>` to hooks.log and never stops the wake. Known gap: an urgent pointer filed while the wake marker is fresh spawns no nudger and gets no notification (the next prompt removes the marker). (b) `orche status` adds `  blocked: <unit> (<status>, since HH:MM, N min) — waiting on the owner; answer in main-<proj>` (JSON `blocked`) for each unit whose newest pointer in `main-<proj>`'s inbox (pending or drained) is `blocked` or `question`, under 24 h old, with no newer BRIEF.md; any later pointer for the unit (an AMEND's or STOP's feedback included) or a newer brief revision clears it. (c) `orche doctor` WARNs `main-waker` when launchd has `com.orche.main-waker` loaded (`launchctl print gui/<uid>/com.orche.main-waker`) — ORCHE wakes Main itself since 0.6.0 — with the fix `launchctl bootout gui/$(id -u)/com.orche.main-waker`. |
+| R-INBOX-7 | When the owner is needed (0.6.2). (a) Notification: removed in C10 T9 (R26) — the nudger notifies nothing; the owner hears Main's `OWNER:` / `DONE:` closing line (§8.8). (b) `orche status` adds `  blocked: <unit> (<status>, since HH:MM, N min) — waiting on the owner; answer in main-<proj>` (JSON `blocked`) for each unit whose newest pointer in `main-<proj>`'s inbox (pending or drained) is `blocked` or `question`, under 24 h old, with no newer BRIEF.md; any later pointer for the unit (an AMEND's or STOP's feedback included) or a newer brief revision clears it. (c) `orche doctor` WARNs `main-waker` when launchd has `com.orche.main-waker` loaded (`launchctl print gui/<uid>/com.orche.main-waker`) — ORCHE wakes Main itself since 0.6.0 — with the fix `launchctl bootout gui/$(id -u)/com.orche.main-waker`. |
 
 ### 4.5 Drain and report discipline (Main)
 
-The user talks only to Main and never reads a division pane. Every completion that reaches Main ends with
-Main's report to the user, in the Main pane, without being asked:
+The user talks only to Main and never reads a division pane. Main reports to the user in the Main pane
+without being asked (C10 R24): one full report per lineage when it closes (every unit in it has a final
+status — the `[orche] lineage <L>: closed …` line, `.orche/units/<L>/LINEAGE.md`), a failed, blocked or
+question report at once, and otherwise one progress line. The full report:
 
 1. Outcome in one line.
 2. What landed (unit ids, PRs, ledger rows) and what failed or is unverified.
@@ -692,7 +694,7 @@ Implementation note (v0.1.0): worktrees are named `div-<division>` (no Orca pare
 
 Events: feature agent created / retired; HR freeze / unfreeze; project public; secret request; urgent report; confirmation awaiting; Ops incident.
 
-Implementation note (0.6.2): the urgent-report notification is the only one implemented (R-INBOX-7): one per urgent pointer to a Main session, holding the unit's short id and status only.
+Implementation note (0.7.0): the owner hears Main's `OWNER:` / `DONE:` closing line (§8.8); HR, the Keymaster and the heartbeat's escalations notify through the same path. The 0.6.2 notification per urgent pointer is removed.
 
 ### 8.4 `orche` CLI
 
@@ -725,7 +727,261 @@ Implementation note (v0.1.0): `orche --help` is the authoritative list. Addition
 
 `~/.claude/orche/hr-log.md`, `~/.claude/orche/graveyard.md`, `~/.claude/orche/secrets/audit.log`.
 
+### 8.6 Reconcile heartbeat (0.7.0)
+
+`orche reconcile [--dry-run]` runs one pass under a non-blocking lock (`ORCHE_HOME/reconcile/`; a held lock
+exits 0). It finds stuck flow — a waking pointer unread ≥ `inbox.LATE` whose deliver lock is free, and the
+newest `via: dispatch` pointer per unit undelivered ≥ `inbox.LATE` with no live run — and repairs it (nudge, or
+`orche deliver --retry`). Attempts fall due once the condition has held STALL_S (600 s), 2× and 4× (10, 20,
+40 min); after CAP (3) attempts, at 80 min, one urgent info to the sender (Main for a division). STALL_S, CAP
+and BUDGET_S are constants in `lib/orche/reconcile.py`, not config. A pass starts no new action after
+BUDGET_S (60 s), saves `state.json` after each action and writes `heartbeat.json` last.
+`reconcile.enabled false` turns repairs off (the heartbeat still says so); `reconcile.every_s` (300) is the
+interval. Rows: R-RECONCILE-1…6 below.
+
+Schedulers:
+- macOS: `orche install` writes `~/Library/LaunchAgents/com.orche.reconcile.plist` — `ProgramArguments`
+  `[<plugin>/bin/orche, reconcile]`, `StartInterval` = `reconcile.every_s` (300), `RunAtLoad`, environment
+  `ORCHE_HOME` and `PATH` (plus `CLAUDE_CONFIG_DIR` when set at install time), stdout and stderr to
+  `ORCHE_HOME/logs/reconcile.log` — and loads it with `launchctl bootout gui/<uid>/com.orche.reconcile` then
+  `launchctl bootstrap gui/<uid> <plist>`, only when `--home` is the real home. `--no-reconcile` skips it;
+  `orche uninstall` boots it out and removes the file. Elsewhere: run `orche reconcile` every 5 min (cron/systemd).
+- Hook kick: the prompt hook (`report_inject`) and the Stop hook (`dispatch_relay`) call `reconcile.kick()`:
+  when the heartbeat is missing or older than 3 × `every_s` and `reconcile/.kicked` is older than `every_s`,
+  it touches `.kicked` and starts one detached pass. A kick error never changes the hook's result.
+
+Further repairs (T3/T4), each bounded:
+- drain: a dispatch pointer whose revision already ran, runs or was reported on is drained at once once its
+  `.deliver.lock` is free (uncapped; nothing else is touched).
+- busy: a revision whose RUN.json (newer than BRIEF.md) says `stop_reason: busy` and has no live run is
+  restarted with `orche run <unit>` once (cap 1, no escalation).
+- closed: a session with waiting reports ≥ `inbox.LATE` and no pane: a Main is reopened in place —
+  `hr.project_pane(switch=False)` (no focus switch) — and an active division or feature is woken (`hr.wake`),
+  then `orche nudge`; at most REOPEN_CAP (2) a day (`reopens:<session>` in `state.json`), STALL_S apart, never
+  while the pane exists and never inside `flow.quiet_hours`; past the cap, one owner notification naming the
+  decision (`orche wake main-<p>`; default: reopen tomorrow). A dormant or paused unit is never woken: one
+  urgent `info` to Main instead.
+- silent: the target's newest unit, a pane unit (never Main, takes no runner) whose dispatch was delivered but
+  not run, running or reported on at this rev, with no open child of its own, whose pane has been idle
+  SILENT_IDLE_S (20 min) or whose rev is 1.5 × TIMEBOX old, gets one `orche deliver --remind` per revision;
+  SILENT_ESCALATE_S (30 min) later, or at 2 × TIMEBOX, one urgent `info` to the brief's sender naming the
+  decision (STOP, AMEND, or let it run; default: let it run).
+- waker: launchd has the pre-0.6.0 `com.orche.main-waker` loaded → one owner notification a day.
+- lineage: a lineage close a crash missed is posted when the newest member report is ≤ 24 h old (§8.7).
+- owner: the owner step (§8.8) runs first in each pass, before the classes above.
+
+`--dry-run` prints `would …` lines and writes nothing (no state, heartbeat or unreachable marker). Each action
+logs `reconcile action=<kind> project= target= rev= attempt=a/c` to events.log.
+
+`orche status` prints one `heartbeat:` line (`reconcile.heartbeat_line()`: `last pass N min ago (every M min,
+K repairs today)`, `STALE — … run orche doctor`, `never — install the job with orche install`, or `off`) and, per project, `stalled: <class> <target> [rev R] — ORCHE retrying
+(k/cap)` or `— escalated — waiting on you` for each repair on file (`--json`: a `stalled` list);
+`orche doctor` has a `heartbeat` row (WARN when older than
+2 × `every_s` or never written) and a `reconcile job` row (WARN when the plist is missing, unreadable, has
+another interval, or is not loaded).
+
+| Rule | Requirement |
+|---|---|
+| R-RECONCILE-1 | Pass: `orche reconcile [--dry-run]` runs one bounded, idempotent pass under a non-blocking lock (held → exit 0): settle lost runs, the owner step (§8.8), observe the classes, plan due attempts, apply through existing paths only, save `state.json` after each action, write `heartbeat.json` last. No daemon. (§8.6) |
+| R-RECONCILE-2 | Classes, each with predicate → repair → cap → after the cap: unread (waking pointer pending ≥ `inbox.LATE`, pane quiet, lock free → `orche nudge`; CAP → one urgent info to the sender); closed (waiting reports, no pane → reopen Main in place / wake an active division or feature, then nudge; REOPEN_CAP a day → one owner notification; dormant or paused → one urgent info to Main); undelivered (`via: dispatch` pointer pending ≥ `inbox.LATE` → `orche deliver --retry`; CAP → one urgent info); silent (delivered, unrun pane unit idle SILENT_IDLE_S or 1.5 × TIMEBOX → `orche deliver --remind` once per rev; SILENT_ESCALATE_S later or 2 × TIMEBOX → one urgent info to the sender); busy (`stop_reason: busy`, no live run → `orche run` once; no escalation); lineage (missed close ≤ 24 h → post it); owner (§8.8); waker (`com.orche.main-waker` loaded → one owner notification a day); drain (revision already ran → drain at once, uncapped). (§8.6) |
+| R-RECONCILE-3 | Constants, not config: STALL_S 600 (attempts at 10, 20, 40 min), CAP 3 (escalation at 80 min), BUDGET_S 60 (no new action after it). Config: `reconcile.enabled` (true) and `reconcile.every_s` (300). (§8.6) |
+| R-RECONCILE-4 | Scheduling: `orche install` writes and loads the `com.orche.reconcile` LaunchAgent (`StartInterval` = `every_s`, `RunAtLoad`); `--no-reconcile` skips it; `orche uninstall` removes it. The prompt and Stop hooks kick one detached pass when the heartbeat is missing or older than 3 × `every_s` (at most once per `every_s`); a kick error never changes a hook's result. (§8.6) |
+| R-RECONCILE-5 | Heartbeat: `orche status` prints a `heartbeat:` line and per-project `stalled:` lines; `orche doctor` WARNs `heartbeat` past 2 × `every_s` or never written, and `reconcile job` when the plist is missing, unreadable, has another interval or is not loaded. (§8.6) |
+| R-RECONCILE-6 | Safety: a pass sends text only by `orche nudge` and `orche deliver --remind`; it never switches focus, never kills a pane or run, never wakes a dormant or paused unit; `--dry-run` prints `would …` and writes nothing; events lines carry ids, counts and times, never text. (§8.6) |
+
 ---
+
+### 8.7 Flow guards and pause (0.7.0)
+
+Autonomy window W(p): from the later of local midnight and the mtime of `ORCHE_HOME/flow/<slug>/owner-seen`,
+which the prompt hook stamps on every prompt typed to Main (not `[orche] inbox:` nudges, `[orche] report due:`
+reminders, or a bare `[drain]`/`/drain`). `orche dispatch` checks each local brief, AMEND and STOP before
+writing (`flow.guard.check`); a refused block exits 2 and nothing is written. STOP is never refused.
+
+| Rule | Refuses | Threshold |
+|---|---|---|
+| G1 | an AMEND to a unit revised ≥ 3 times inside W | 4th AMEND |
+| G2 | an AMEND, or a brief with the same TO and GOAL (case and spaces aside), to a unit whose last 2 reports inside W are blocked | 2 in a row |
+| G3 | a brief or AMEND when the project sent ≥ 20 since max(W, now − 1 h) | 21st |
+| G7 | not a refusal: the 3rd refusal in a row (`sessions/<slug>.relayed.json`, 30 min) appends "(refusal n in a row: stop re-sending; tell the user what you tried)" | 3 |
+| G8 | every brief and AMEND while `flow/<slug>/pause.json` exists | — |
+
+G1–G3 end "Ask the owner before …: close your reply with OWNER: <the decision>. STOP still works." G1–G7 are off
+with `flow.enabled false` (G7 drops its suffix); G8 is not. Events: `flow refused rule=<G> by=<s> unit=<u> n=<count>`,
+`flow pause project=<p> by=<s>`, `flow resume project=<p> by=<s>`.
+
+`orche flow pause <p> [--reason <text>]` writes `pause.json {by, at, reason}`; `orche flow resume <p>` removes it
+only when owner-seen is newer than `at` (else exit 3 "resume needs the owner's word after HH:MM"); an unknown
+project exits 2. While paused, reconcile only drains. `orche status` adds
+`looping: <unit> — revised N× without the owner since HH:MM: the next AMEND needs the owner` and
+`paused: by the owner since HH:MM (<reason>) — resume on their word: orche flow resume <p>` (`--json`: `looping` `[{unit, kind: revisions|repeats, n, since, status, rev}]` and `paused` `[{by: spend|owner, since, spent, cap, reason}]`, a key that does not apply is null).
+
+Lineage (T7): the brief header line after `to:` is `lineage: <id>   parent: <unit|->` (`brief.Brief.lineage`,
+`.parent`; missing line → lineage = the unit, no parent). AMEND keeps both. A new brief from a division takes the
+lineage of the division's newest brief and names that unit as parent. From Main: an owner turn (prompt not
+starting `[orche]`) starts one lineage shared by all its briefs (the first brief's unit); a wake turn whose
+injected pointers name exactly one lineage joins it, otherwise it starts one. The prompt hook records the turn in
+`ORCHE_HOME/sessions/<slug>.turn.json {owner, lineages, at, started}`. Triage briefs start a new lineage. Report
+pointers (`orche report`, runner filing, `unrun`, `lost`) carry `lineage` and, when there is one, `parent`.
+
+| Rule | Refuses | Threshold |
+|---|---|---|
+| G6 | a brief from a division whose parent (the division's newest brief) is ≥ 3 deep by parent links, or has ≥ 5 child briefs | 4th level / 6th child |
+
+Texts: "<parent> is already N briefs deep (cap 3); a brief from <s> would make it N+1. Do not dispatch it yourself:
+name the work in your report and ask Main to dispatch it." and "<parent> already has N child briefs since HH:MM without
+the owner (cap 5). Do not send another: report it to your sender (`orche report blocked --summary "<what is left>"`).",
+each ending "STOP still works." — no owner ask: the division reports and Main decides. Main's briefs, AMENDs and STOP
+are not capped; G6 is off with `flow.enabled false`.
+
+Run history (T6): `ORCHE_HOME/runs/<p>/history.jsonl`, one O_APPEND JSON line per RUN.json written (finished,
+`unrun`, `lost`): `{unit, rev, to, model, effort, status, stop_reason, cost_usd, num_turns, started, finished}`.
+A failed append is logged to hooks and never fails the run; a corrupt line is skipped on read.
+
+| Rule | Refuses | Threshold | Checked |
+|---|---|---|---|
+| G4 | every brief, AMEND and run when the project's `cost_usd` (lines finished inside W) reached `flow.max_project_cost_usd`; a unit's AMEND and run when the unit's reached `flow.max_unit_cost_usd` | $30 / $10 | `orche dispatch` (`guard.check`), `orche run` (`job.execute`) |
+| G5 | a unit's run when its history lines started inside W (not `busy`, `duplicate`, `capped`) number ≥ 4 | 5th run | `orche run` (`job.execute`) |
+
+Texts: "<p> spent $X on headless runs since HH:MM without the owner (cap $30)", "<unit> spent $X … (cap $10 a
+unit)", "<unit> ran N times since HH:MM without the owner (cap 4)". A dispatch refusal appends ". Ask the owner
+before spending more: …" and exits 2. A refused run exits 3, prints "orche: not started: <text>", starts no claude,
+writes no RUN.json or history line, and files one quiet `info` pointer "not started: <text>; ask the owner".
+`orche status` adds `paused: autonomous spend $X since HH:MM (cap $30) — until the owner answers` (`--json`: a `paused` entry with `by: spend`).
+
+Repeats (T6, `flow.shape`, in `inbox.post` before the write): a report filed under a brief by a unit session
+(not orche, a dispatch, a STOP, a runner's filing (`via: runner`), an `external-request` or a brief-less
+`adhoc-`/`xreq-` unit), urgent or not, whose previous such pointer since W (of the recipient's project) from the
+same sender about the same unit in the same inbox has the same `brief_rev` and `status` gets `quiet: true` and
+`repeat: <n>` (2 on the first repeat); text is not compared. A shaping error is logged (`inbox: shape failed for <unit>`) and the pointer is written unshaped.
+`orche status` adds `looping: <unit> — same report n× (<status>, rev <rev>): repeats did not wake Main` when the
+unit's newest report inside W has n ≥ 3.
+
+Lineage close (T8, `flow.lineage`, inside `inbox.post` under the per-project lock `ORCHE_HOME/flow/<slug>/.lock`,
+held at most 5 s): in a lineage of ≥ 2 units, a unit's `done` report, a STOP, or a runner `info` without retry
+gets `quiet: true`; `failed`, `blocked`, `question` and `external-request` wake Main as before, and a single-unit
+lineage is unchanged. When every unit's newest report is terminal (done, failed, stopped), ORCHE writes
+`<root>/.orche/units/<L>/LINEAGE.md` (`# Lineage L`, `closed: <iso>   units: n — d done, f failed, s stopped`,
+then a table `| unit | to | rev | status | report |`), records the members' signature (`unit@rev:status`) in
+`ORCHE_HOME/flow/<slug>/closed.json`, logs `lineage closed L project=<p> n=<n>` and posts one waking `done` pointer
+from `orche` to Main with `lineage_closed: true`, `report_path` = LINEAGE.md and the summary
+`lineage L closed: n units — d done, f failed, s stopped` plus ≤ 4 `unit status` lines. The same signature never
+closes twice; an AMEND that changes a revision can close again. Reconcile (`lineage.repair`) posts a close a crash
+missed when the newest member report is ≤ 24 h old (`--dry-run`: `would close lineage L (p)`).
+After the Inbox block injected into Main, one line per lineage named: `[orche] lineage L: closed — N units (d done,
+f failed)` or `[orche] lineage L: open — k of n units running; waiting on <unit> (<status>)`; then the report line
+above (R-INBOX-2).
+
+### 8.8 Owner's voice (0.7.0)
+
+Main's closing line is the only owner notification (R26). On every stop the done gate allows (also under
+`stop_hook_active`), a Main session's Stop hook (`dispatch.handle_stop` → `flow.owner.closing`) reads the final
+message's closing line: its last non-empty line outside fenced blocks (``` or ~~~, CommonMark-like; an unclosed
+fence runs to the end; a snippet fence indented inside ```` ```dispatch ```` stays inside, as in the dispatch
+grammar). Tags are upper case; tolerated around them: a quote (`> `), a bullet (`- `, `* `, `+ `), wrapping
+backticks, bold (`**OWNER:** …`, `__OWNER:__ …`), a space before the colon and a full-width colon (`OWNER：`). Every
+tag stamps `flow/<p>/tagged` with the turn's start — the `at` of the prompt hook's turn record (no record: no stamp) —
+so a report that landed during the turn is covered only by a tag from the turn that reads it (the fallback reads it). The open ask's own text again, or the last DONE again with
+no ask since, is a repeat: nothing recorded or sent (events `owner repeat project=<p> tag=<T>`), so the
+re-notification schedule runs on from the first:
+
+| Closing line | Effect |
+|---|---|
+| `OWNER: <the decision or step, with its default>` | records the project's ask (replacing an open one) and notifies |
+| `DONE: <the result>` | closes the open ask (`closed_at`) and notifies once |
+| `RUNNING: <what runs now>` | nothing |
+| anything else | nothing; events `owner untagged project=<p>` |
+
+The ask, `ORCHE_HOME/flow/<p>/ask.json`: `{text, at, kind, source[, unit][, closed_at | answered_at]}` — `text`
+masked, one line, ≤ 160 chars; `kind` `owner`, `secret` (text `secret <NAME>[, <NAME>]`), `guard` or `fallback`;
+`source` `main`, `runner` or `heartbeat`; every write under `flow/<p>/.notify.lock`, in sequence with a
+notification (never nested). An ask is open until `closed_at` (DONE) or `answered_at`. A runner's refused start
+(G4/G5: a quiet `info` that waits for Main's next prompt) records a `guard` ask (`not started: <reason>`, with
+`unit`) and notifies without the presence rule: that pointer is not on Main's screen.
+
+Answered (`flow.owner.answer`, events `owner answered project=<p> by=prompt|secret after=<m>m`): the owner prompted
+Main after the ask (`owner-seen` over a second newer than `at`; the prompt hook calls it at once, the heartbeat again),
+or every secret a `secret` ask names is in — no request for it pending and one filled since 10 min before the ask
+(a fill during Main's own turn counts; then the ask is answered as it is recorded and nothing is sent).
+
+Notifications (`flow.owner.notify`, title `ORCHE <p>`, body the closing line): (1) a first notification while the
+owner prompted Main less than 120 s ago (`flow/<p>/owner-seen`: they are at the screen) is skipped, not delayed — an
+ask's counts as its first try and is re-notified from the ask; a DONE is not sent (they watched it land); (2) at most
+one per project per 300 s; no sound inside `flow.quiet_hours`; (3) a failed show (osascript non-zero or its 5 s
+timeout) is a try: the next waits for the next slot. `flow/<p>/notified.json` `{at, kind, n, ask_at, ask_last, shown,
+tried}`, written under `flow/<p>/.notify.lock`: the last notification shown (`at`, `kind`: the gap), the tries for the
+ask made at `ask_at` (`n` — shown, skipped or failed; the last at `ask_last`), per notice kind the id of the last
+notice shown or skipped (`shown`), and a notice's failed tries (`tried` `{<kind>: {id, n, last}}`). A notice — a DONE, a `stuck` escalation (the heartbeat's Main-unreachable
+escalations), a fallback notice — is recorded in `flow/<p>/<kind>.json` `{text, at, first, id}` (one writer each)
+before it is tried (`flow.owner.announce`), so one held back is sent once by the heartbeat. Events: `owner ask
+project=<p> kind=<k> source=<s>[ unit=<u>]`, `owner notify project=<p> kind=<k> n=<n> quiet=<0|1>`, `owner held
+project=<p> kind=<k> reason=gap|off|lock|failed`, `owner skipped project=<p> kind=<k> reason=present`, `owner closed project=<p>`, `owner dropped project=<p>
+kind=<k>` — never the text.
+
+The heartbeat's owner step (`flow.owner.heartbeat`, first in each `orche reconcile` pass; `--dry-run` writes and
+sends nothing and prints `would …`), per project: mark an answered ask; post a missed secret resume (below); then,
+unless the project is paused (G8) or notifications are off, at most one of:
+- **Fallback** (R26): the oldest report to Main, 10 min to a day old, that waits on the owner — the newest of its
+  unit is `blocked`, `question` or `failed` or carries an owner step and no BRIEF.md revision answered it, or a
+  lineage's close pointer — with no tagged Main turn begun after it (`flow/<p>/tagged`), owner prompt, ask or
+  fallback notice since it: `<unit>: <owner step | status | lineage closed>`. Blocked, question and owner steps become the ask
+  (`kind fallback`, or `secret` for a secret step; `source heartbeat`), re-notified until answered; failed reports
+  and close pointers are one fallback notice. Once per cause: what it records is newer than the report. A fallback
+  whose notification was held back prints and logs as `held` (`reconcile action=held …`), not `notify`.
+- **A held notice**: the oldest one not yet shown whose try is due, once the gap has passed (a DONE while the owner
+  is at the screen is skipped); after a failed try the next waits for the next slot 30, 60, 120 or 240 min after the
+  notice (5 tries); dropped unsent once the owner prompted Main after it (they saw Main) or after a day.
+- **The ask's next notification**: the first (held back by the gap or the lock; skipped while the owner is at
+  the screen) at the next pass; then re-notifications 30, 60, 120 and 240 min after the ask (`OWNER (asked HH:MM):
+  <text>`), each the first slot after the last try (shown, skipped or failed), so slots passed unsent fold into one; then none — the `owner:` line stays. Quiet
+  hours (`flow.quiet_hours`, default `23:00-08:00`, `""` none): a first notification inside them is silent,
+  re-notifications wait, and the first pass after them sends one.
+
+Secret resume: `secrets/dialog.py`, after `store.mark_filled` (the only fill path), calls
+`flow.owner.secret_filled(project, name, rid)`: the ask is answered when every secret it names is in; then, not while
+paused, it looks up the units to resume — each unit with a report to Main (pending or drained) since the request's
+`at` less 60 s whose owner step names the secret, none of those reports told yet, and every secret its newest such
+step names filled (none pending) — and posts one urgent `info` from `orche` to Main per unit: `owner step done: secret
+<NAME>[, <NAME>] filled at HH:MM — resume <unit> (AMEND or orche run <unit>)` (events `owner secret-filled
+project=<p> name=<NAME> unit=<u>`), once per asking report (`flow/<p>/secret-filled/<report>`, created exclusively
+after the lookup; with nobody asking yet nothing is written). A fill that resumes a unit counts as the owner's word:
+`owner-seen` moves to the fill (never back), so the autonomy window restarts and G1 lets the resume AMEND through (the
+presence rule then skips a first notification for 120 s). The heartbeat repeats the lookup for requests filled in
+the last day (a dialog that died, a report filed after the fill, the last of several secrets). The Keymaster dialog is a fixed
+`on run argv` script (`display dialog (item 1 of argv) …`); the request text is its one argument.
+
+`orche status`, first under the project line (`--json`: `owner`, `{text, at, since, minutes, kind, source, unit,
+notified, next, quiet}`):
+```
+  owner: asked 16:49 (22 min, notified 2×, next 17:49) — <ask, ≤ 100 chars>
+  owner: asked 23:10 (50 min, notified 1×, waiting for quiet hours to end) — <ask>
+  owner: asked 12:00 (300 min, notified 5×) — <ask>
+```
+
+Unit side: a worker only the owner can unblock ends with `STATUS: blocked` (or `question`) and one line
+`OWNER: <the exact step or decision>` (a secret: `orche secret request <NAME> …` first, then
+`OWNER: secret <NAME>[, <NAME>]`). The runner takes the last `OWNER:` line outside fences of the final message
+(`job.owner_of`); a pane unit runs `orche report blocked --summary … --owner "<text>"`. Either sets the pointer
+field `owner` (masked, one line, ≤ 200 chars), which `inbox.render` prints first under the pointer's header:
+`  OWNER STEP: <text>`.
+
+One notify path, `lib/orche/notify.py` `send(title, body, sound=False)`: `osascript -e 'on run argv' -e 'display
+notification (item 1 of argv) with title (item 2 of argv)[ sound name "Glass"]' -e 'end run' <body> <title>` —
+body and title are arguments, never AppleScript built from text (one starting with `-` gets a leading space, never
+an osascript option); masked; control characters dropped; config
+`notify` (default on); macOS only; 5 s timeout; events `notify kind=<k> ok=<0|1>`. HR, the Keymaster and the
+heartbeat's escalations use it.
+
+| Rule | Requirement |
+|---|---|
+| R-FLOW-1 | Autonomy window W(p): from the later of local midnight and the owner's last prompt to Main (`flow/<slug>/owner-seen`); orche's own nudges, reminders and drains do not count. Every flow guard counts inside W. (§8.7) |
+| R-FLOW-2 | Guards refuse before anything is written (dispatch exit 2, run exit 3): G1 4th AMEND of a unit in W; G2 an AMEND or same TO+GOAL brief after 2 blocked reports in a row; G3 the project's 21st brief/AMEND in max(W, 1 h); G4 project spend $30 / unit spend $10 in W; G5 a unit's 5th run in W; G6 a division brief 4 levels deep or a parent's 6th child; G7 the 3rd refusal in a row adds "stop re-sending"; G8 every brief and AMEND while paused. STOP is never refused; G1–G7 are off with `flow.enabled false`, G8 is not. (§8.7) |
+| R-FLOW-3 | Post-time shaping: a unit's report repeating the previous one since W (same sender, unit, inbox, `brief_rev` and `status`) is posted `quiet: true` with `repeat: n`; `orche status` shows `looping:` at n ≥ 3. (§8.7) |
+| R-FLOW-4 | Lineage: every brief carries `lineage: <id>   parent: <unit\|->`; an owner turn starts one lineage, a wake turn naming one lineage joins it, a division's brief inherits its newest brief's lineage with that unit as parent; AMEND keeps both; report pointers carry them. (§8.7) |
+| R-FLOW-5 | Lineage close and final report (R24): in a lineage of ≥ 2 units, `done`, STOP and runner `info` reports are quiet; when every member's newest report is terminal ORCHE writes LINEAGE.md and posts one waking `done` pointer to Main (`lineage_closed: true`), once per signature. Main then gives one full report (outcome · landed · failed · decisions + default · next) — not one per wake. (§8.7) |
+| R-FLOW-6 | Closing line: Main ends every reply with one tagged line — `RUNNING: <what runs>`, `OWNER: <decision or step, default>` or `DONE: <result>`; the Stop hook reads the last non-empty line outside fences. OWNER records the ask and notifies, DONE closes it and notifies once, RUNNING and untagged lines notify nothing. Units only the owner can unblock end `STATUS: blocked` and one `OWNER: <exact step>` line (`--owner` on `orche report`). (§8.8) |
+| R-FLOW-7 | Owner notification (R26, the only path): a first notification while the owner prompted Main < 120 s ago is skipped, not delayed; a failed show is a try; ≤ 1 per project per 300 s; re-notify an open ask 30, 60, 120 and 240 min after it, then none (the `owner:` status line stays); quiet hours `flow.quiet_hours` (23:00–08:00): silent first notification, re-notifications wait, one at their end; the heartbeat's 10-minute fallback turns an owner-waiting report with no tagged Main turn into an ask or notice; a `secret` ask is answered when its secrets are filled, and Main gets one resume `info` per asking unit once every secret its step names is filled (such a fill is the owner's word). Text is masked; events never carry it. (§8.8) |
+| R-FLOW-8 | Pause and resume: `orche flow pause <p>` writes `pause.json` (G8: every brief and AMEND refused; reconcile only drains; no owner-step notices); `orche flow resume <p>` succeeds only after an owner prompt newer than the pause (else exit 3). (§8.7) |
 
 ## 9. Cross-project collaboration
 
@@ -784,7 +1040,7 @@ Rule of thumb: "What changes when this is done?" — talk to that project's Main
 | R-KEY-4 | Local processes get secrets via `orche secret run -- <cmd>`, injected only into that process environment. |
 | R-KEY-5 | Agents never handle wallet/treasury private keys (use KMS, hardware wallets, or limited hot wallets). Human-only vaults hold recovery codes and master passwords. |
 | R-KEY-6 | Environment separation by cloud project: `<app>-dev`, `<app>-prod`. |
-| R-KEY-7 | An OS notification carries no report text (0.6.2): only the project, the unit's short id and its status (R-INBOX-7). |
+| R-KEY-7 | An OS notification carries no report text: Main's closing line (masked, ≤ 160 chars) or ORCHE's own words, always as an osascript argument, never as script (§8.8). |
 
 ### 10.2 Backends
 
@@ -1122,7 +1378,7 @@ unit_id    := <project> "-" <slug> "-" yyyymmdd "-" n
 
 - Multiple blocks per run are allowed; each is one unit.
 - Implementation note (Unreleased): a brief must open with a KEY line; one that opens with prose is refused (`line 1 "<text>" is not a KEY line; a brief starts with TO.`). After the first key, a plain line that is not a KEY line continues the field above (before, `unknown keys …` refused it); a refusal for a missing field or a bad TIER names the line that was read into the field above. Every parse refusal quotes the offending line (60 chars) and states the fix in one clause.
-- Implementation note (Unreleased): blocks are delivered one by one. Every valid block is delivered even when another block in the same run is refused; `orche dispatch` prints one line per block in order (`block N: delivered <unit> → <target>` / `block N: refused — <reason>` / `block N: skipped …`) and exits 2 when any block was refused. It remembers delivered blocks per sender (body hashes in `sessions/<sender>.dispatched.json`) for 10 minutes; within that an identical block is skipped with an events line (`dispatch skipped by=<session> unit=<unit> reason=already delivered`), after it the block is delivered again, so Main re-runs the whole input after fixing a refusal without duplicates. A block is refused when it holds a code fence, the verb line of another STOP/AMEND block (two blocks run together), or, in a STOP, a KEY line other than TO. A refused STOP does not hold back a valid brief in the same run. Every refusal writes `dispatch refused by=<session> blocks=<n> reason=<first 100 chars>` to events.log. Exit codes: 0 all delivered or skipped, 2 any refused, 1 usage error.
+- Implementation note (Unreleased): blocks are delivered one by one. Every valid block is delivered even when another block in the same run is refused; `orche dispatch` prints one line per block in order (`block N: delivered <unit> → <target>` / `block N: refused — <reason>` / `block N: skipped …`) and exits 2 when any block was refused. It remembers delivered blocks per sender (body hashes in `sessions/<sender>.dispatched.json`) for 10 minutes; within that an identical block is skipped with an events line (`dispatch skipped by=<session> unit=<unit> reason=already delivered`), after it the block is delivered again, so Main re-runs the whole input after fixing a refusal without duplicates. A block is refused when it holds a code fence, the verb line of another STOP/AMEND block (two blocks run together), or, in a STOP, a KEY line other than TO. A refused STOP does not hold back a valid brief in the same run. Every refusal writes `dispatch refused by=<session> blocks=<n> refused=<k> rules=<G-rules, comma-joined, or ->` to events.log (ids and counts only, never the refusal text). Exit codes: 0 all delivered or skipped, 2 any refused, 1 usage error.
 - Implementation note (Unreleased): the Stop hook no longer reads the reply, so a fenced `dispatch` block in a reply is neither relayed nor refused (0.3.3–0.6.2 relayed it and refused an unrelayable one with exit 2).
 - `orche dispatch` assigns `unit_id` if absent and prints it in the block's line.
 - Implementation note (Unreleased): `lib/orche/brief.py` implements this grammar for `orche dispatch`, `orche run` and `orche report`. A key written twice is refused (`duplicate keys …`; before, the last value won). A `#` line indented by two spaces inside a field value is kept as content; an unindented `#` line is a comment and dropped, even mid-value (before, every `#` line was dropped). An AMEND or STOP whose unit id is malformed is refused with `bad unit id …`.

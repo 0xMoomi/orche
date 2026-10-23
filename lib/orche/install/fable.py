@@ -36,6 +36,8 @@ def block(plugin_root) -> str:
         "- Corrections: `AMEND <unit> rev <N>`, `SUPERSEDES rev <N-1>: <what>`, then only the keys that change;",
         "  halts: `STOP <unit> [reason]` (no keys but an optional TO).",
         "- Hooks deliver briefs and reports; done means a ledger row, not a claim.",
+        "- Main ends every reply with one closing line: `RUNNING: <what runs>`, `OWNER: <decision or step,",
+        "  default>` or `DONE: <result>`; only OWNER and DONE notify the owner.",
         END,
         "",
     ])

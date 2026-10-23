@@ -25,6 +25,7 @@ _REV = re.compile(r"^rev:\s*(\d+)\s*$", re.MULTILINE)
 _MARK = re.compile(r"^## Brief\b.*$", re.MULTILINE)
 _ORDER = re.compile(r"-(\d{8})-(\d+)$")
 _FROM = re.compile(r"^to: \S+\s+from: (\S+)\s*$", re.M)
+_LINEAGE = re.compile(r"^lineage: (\S+)\s+parent: (\S+)\s*$", re.M)
 _MAIN_CHECKOUT = " (main checkout)"
 
 
@@ -237,6 +238,18 @@ class Brief:
         return m.group(1) if m else ""
 
     @property
+    def lineage(self) -> str:
+        """The header's `lineage:` id; a brief without one (pre-C10) is its own lineage."""
+        m = _LINEAGE.search(self.text)
+        return m.group(1) if m else self.unit
+
+    @property
+    def parent(self) -> str:
+        """The header's `parent:` unit, or "" for `-` or a brief without the line (pre-C10)."""
+        m = _LINEAGE.search(self.text)
+        return m.group(2) if m and m.group(2) != "-" else ""
+
+    @property
     def tier(self) -> str:
         tier = str(self.fields.get("TIER", "")).strip().lower()
         return tier if tier in TIERS else "standard"
@@ -342,7 +355,7 @@ def _where(target, timeout):
     return root + (_MAIN_CHECKOUT if owner else ""), branch, root
 
 
-def _render(unit, rev, supersedes, note, to, frm, at, standing, fields) -> str:
+def _render(unit, rev, supersedes, note, to, frm, at, standing, fields, lineage, parent) -> str:
     worktree, branch, root = at
     lines = [f"rev: {rev}"]
     if supersedes:
@@ -351,6 +364,7 @@ def _render(unit, rev, supersedes, note, to, frm, at, standing, fields) -> str:
             lines.append(f"supersedes-note: {note}")
     lines += [f"unit: {unit}",
               f"to: {to}   from: {frm}",
+              f"lineage: {lineage}   parent: {parent or '-'}",
               f"worktree: {worktree}   branch: {branch}",
               f"project root: {root}   (brief + REPORT.md live under project root/{UNITS}/{unit}/)",
               "Work only inside `worktree`. SCOPE paths are relative to it."]
@@ -364,12 +378,13 @@ def _render(unit, rev, supersedes, note, to, frm, at, standing, fields) -> str:
 
 
 def write(block: Block, target: "roster.Member", sender: str, standing: str, *, prior: Brief | None = None,
-          timeout: float = 0.5) -> Brief:
+          timeout: float = 0.5, lineage: str | None = None, parent: str | None = None) -> Brief:
     """Write the next revision of a brief for `target` (a roster.Member) from `sender` (a session):
     BRIEF.rev<N>.md, then BRIEF.md. A "brief" block allocates a new unit folder (rev 1); an "amend"
     block needs `prior` (find()) and merges its fields over prior.fields. TO is always target.session.
     Raises ValueError for a STOP block, an AMEND without prior, a brief with prior, or a target without
-    a project root."""
+    a project root. `lineage`/`parent` head a new brief (default: the new unit starts its own lineage,
+    no parent); an AMEND keeps the prior's."""
     if block.kind == "stop":
         raise ValueError("a STOP block writes no brief")
     if block.kind == "amend" and prior is None:
@@ -384,13 +399,15 @@ def write(block: Block, target: "roster.Member", sender: str, standing: str, *, 
         if block.rev != rev:
             log.log("hooks", f"dispatch: AMEND {unit} said rev {block.rev}; using {rev}")
         fields = {**prior.fields, **block.fields, "TO": target.session}
+        lineage, parent = prior.lineage, prior.parent
     else:
         project, root = target.project, Path(target.home)
         unit = _allocate(root, project, block.fields["GOAL"])
         rev, supersedes = 1, 0
         fields = {**block.fields, "TO": target.session}
+        lineage = lineage or unit
     text = _render(unit, rev, supersedes, block.note if block.kind == "amend" else "", target.session, sender,
-                   _where(target, timeout), standing, fields)
+                   _where(target, timeout), standing, fields, lineage, parent)
     folder = root / UNITS / unit
     util.atomic_write(folder / f"BRIEF.rev{rev}.md", text)
     util.atomic_write(folder / "BRIEF.md", text)

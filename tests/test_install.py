@@ -4,6 +4,7 @@ import io
 import json
 import os
 import subprocess
+import sys
 import types
 import unittest
 from contextlib import redirect_stderr, redirect_stdout
@@ -14,7 +15,7 @@ import support
 from orche import __version__ as VERSION
 from orche import headless, oauth, registry, shell
 from orche.paths import PLUGIN_ROOT
-from orche.install import MIGRATION_LINE, doctor
+from orche.install import MIGRATION_LINE, doctor, launchd
 from test_hr import HrCase
 from test_registry import load_cli
 
@@ -795,7 +796,12 @@ class DoctorTest(InstallCase):
         self.install("--mode", "settings", "--yes")
         code, out, _ = self.doctor(missing=())
         self.assertEqual([l for l in out.splitlines() if not l.startswith("OK\t")],
-                         ["WARN\tjev\tnot configured (Haiku fallback)", f"WARN\toauth token\t{oauth.UNSET_LINE}"])
+                         ["WARN\tjev\tnot configured (Haiku fallback)", f"WARN\toauth token\t{oauth.UNSET_LINE}",
+                          "WARN\theartbeat\tno pass on file — install the job with orche install, "
+                          "or run orche reconcile"]
+                         + ([f"WARN\treconcile job\tnot loaded: launchctl bootstrap {launchd.domain()} "
+                             f"{launchd.plist_path(launchd.RECONCILE, self.h)}"]
+                            if sys.platform == "darwin" else []))
 
     def test_warn_for_a_project_rendered_by_another_version_only(self):
         reg = registry.empty()

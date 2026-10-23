@@ -1,4 +1,6 @@
-"""`orche status [proj]` (one line per project, then its `undelivered:`, `unread:`, `blocked:` and `upgrade:` lines) and
+"""`orche status [proj]` (one line per project, then its `owner:`, `undelivered:`, `unread:`, `blocked:`,
+`looping:`, `paused:` and `upgrade:` lines;
+then the global `triage:` and `heartbeat:` lines) and
 `orche statusline [--cwd PATH]`."""
 import datetime as _dt
 import json
@@ -6,6 +8,7 @@ import os
 import sys
 
 from . import __version__, brief, inbox, registry, roster, runs, statusline, units
+from .flow import guard, owner, shape
 
 EXIT_OK, EXIT_NOT_FOUND = 0, 2
 WAITING = ("blocked", "question")
@@ -35,7 +38,32 @@ def status_row(reg, key, now=None) -> dict:
             "divisions": divisions, "active_features": c["active_features"], "new": c["new"],
             "keys": c["keys"], "unverified": c["unverified"], "running": c["running"], "line": line,
             "undelivered": undelivered, "unread": unread, "blocked": blocked(reg, key, now),
-            "upgrade": registry.upgrade(proj, __version__)}
+            "upgrade": registry.upgrade(proj, __version__),
+            "looping": looping(reg, key, now), "paused": paused(key, now), "owner": owner.status(key, now)}
+
+
+def owner_lines(o) -> list:
+    """The open ask (flow.owner.status): `owner: asked HH:MM (<m> min, notified n×[, next HH:MM | waiting
+    for quiet hours to end]) — <ask>`; none without one."""
+    if not o:
+        return []
+    tail = ", waiting for quiet hours to end" if o["quiet"] else f", next {o['next']}" if o["next"] else ""
+    return [f"  owner: asked {o['since']} ({o['minutes']} min, notified {o['notified']}×{tail}) — {o['text']}"]
+
+
+def looping(reg, key, now):
+    """G1 holds and quiet repeats in one shape: `[{unit, kind: revisions|repeats, n, since, status, rev}]`."""
+    blank = {"since": None, "status": None, "rev": None}
+    return ([dict(blank, kind="revisions", **u) for u in guard.looping(reg, key, now)]
+            + [dict(blank, kind="repeats", **u) for u in shape.repeats(f"main-{key}", guard.window(key, now))])
+
+
+def paused(key, now):
+    """Spend cap (G4) and owner pause in one shape: `[{by: spend|owner, since, spent, cap, reason}]`."""
+    blank = {"spent": None, "cap": None, "reason": None}
+    s, p = guard.spend_status(key, now), guard.pause_status(key)
+    return (([dict(blank, by="spend", **s)] if s else [])
+            + ([dict(blank, by="owner", since=p.get("since"), reason=p.get("reason"))] if p else []))
 
 
 def _mtime(path):
@@ -83,14 +111,32 @@ def blocked(reg, key, now=None) -> list:
 
 
 def overdue_lines(row) -> list:
-    """The project's late deliveries and unread reports (≥ inbox.LATE), each naming its command, then the
-    units waiting on the owner."""
-    return ([f"  undelivered: {u['unit']} → {u['to']} (rev {u['rev']}, {u['minutes']} min) — "
-             f"run `orche deliver {u['unit']}`" for u in row["undelivered"]]
+    """The project's late deliveries and unread reports (≥ inbox.LATE), each with ORCHE's live repair
+    while the heartbeat is fresh, else its command (a closed pane: `orche wake`), then the units
+    waiting on the owner."""
+    from . import reconcile
+    reps = reconcile.repairs() if row["undelivered"] or row["unread"] else {}
+    hb = reconcile.heartbeat_json() if reps else {}
+    fresh = bool(hb.get("enabled")) and not hb.get("stale", True)
+    return (owner_lines(row.get("owner"))
+            + [f"  undelivered: {u['unit']} → {u['to']} (rev {u['rev']}, {u['minutes']} min) — "
+             + reconcile.overdue_hint("undelivered", u["unit"], reps, fresh) for u in row["undelivered"]]
             + [f"  unread: {u['session']} has {u['count']} report(s) waiting (oldest {u['minutes']} min) — "
-               f"run `orche nudge {u['session']}`" for u in row["unread"]]
+               + reconcile.overdue_hint("unread", u["session"], reps, fresh) for u in row["unread"]]
             + [f"  blocked: {u['unit']} ({u['status']}, since {u['since']}, {u['minutes']} min) — waiting on the "
-               f"owner; answer in main-{row['project']}" for u in row["blocked"]])
+               f"owner; answer in main-{row['project']}" for u in row["blocked"]]
+            + [f"  looping: {u['unit']} — revised {u['n']}× without the owner since {u['since']}: the next AMEND "
+               f"needs the owner" if u["kind"] == "revisions" else
+               f"  looping: {u['unit']} — same report {u['n']}× ({u['status']}, rev {u['rev']}): repeats did not "
+               f"wake Main" for u in row.get("looping") or []]
+            + _paused_lines(row))
+
+
+def _paused_lines(row):
+    return [f"  paused: autonomous spend ${p['spent']:.2f} since {p['since']} (cap ${p['cap']:g}) — until the "
+            f"owner answers" if p["by"] == "spend" else
+            f"  paused: by the owner since {p['since']}" + (f" ({p['reason']})" if p["reason"] else "")
+            + f" — resume on their word: orche flow resume {row['project']}" for p in row.get("paused") or []]
 
 
 def cmd_status(args):
@@ -105,13 +151,20 @@ def cmd_status(args):
         keys = sorted(reg["projects"])
     runs.reconcile_cli(reg, args, keys)      # a lost run is filed (and noted on stderr) before counting
     rows = [status_row(reg, key) for key in keys]
+    for row in rows:
+        row["stalled"] = stalled(reg, row["project"])
+    beat = heartbeat()
     if args.json:
+        for row in rows:
+            row["heartbeat"] = beat[1]
         print(json.dumps(rows, indent=2, ensure_ascii=False))
     else:
         for row in rows:
             print(row["line"])
             for line in overdue_lines(row):
                 print(line)
+            for s in row["stalled"]:      # repairs ORCHE is retrying, or escalated (lib/orche/reconcile.py)
+                print(stalled_line(s))
             if row["upgrade"]:   # the stamp of the last `orche init` is missing or older
                 print(f"  upgrade: {registry.upgrade_text(row['project'], row['upgrade'])}")
         if not rows:
@@ -119,7 +172,39 @@ def cmd_status(args):
         line = triage_line()
         if line:
             print(line)
+        if beat[0]:
+            print(beat[0])
     return EXIT_OK
+
+
+def stalled(reg, project) -> list:
+    """The repairs ORCHE is retrying or escalated (reconcile.stalled), then the lineages a blocked or
+    question member holds open (flow.lineage.stalled), in one shape."""
+    from . import reconcile
+    from .flow import lineage
+    try:
+        out = reconcile.stalled(project)
+    except Exception:  # noqa: BLE001 - a status line never fails the command
+        out = []
+    blank = {"rev": None, "to": None, "tries": 0, "cap": None, "escalated": False, "escalated_at": None,
+             "next": None, "last": None}
+    return out + [dict(blank, cls="lineage", target=s["lineage"],
+                       detail=f"{s['unit']} ({s['status']} {s['minutes']} min)")
+                  for s in lineage.stalled(reg, project)]
+
+
+def stalled_line(s) -> str:
+    from . import reconcile
+    return reconcile.stalled_line(s)
+
+
+def heartbeat():
+    """(the `heartbeat:` line, its JSON) for the reconcile pass (lib/orche/reconcile.py)."""
+    from . import reconcile
+    try:
+        return reconcile.heartbeat_line(), reconcile.heartbeat_json()
+    except Exception:  # noqa: BLE001 - a status line never fails the command
+        return None, None
 
 
 def triage_line():

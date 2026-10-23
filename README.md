@@ -206,7 +206,7 @@ export PATH="$HOME/orche/bin:$PATH"
 orche version
 ```
 
-Success: `orche 0.6.3` (or the version you cloned).
+Success: `orche 0.7.0` (or the version you cloned).
 
 To make it permanent, add the same line to your login profile. ORCHE's panes and `orche doctor` use a
 login shell (`$SHELL -lc`), and a zsh login shell does not read `~/.zshrc`, so use:
@@ -594,7 +594,9 @@ orche depts my-app
 
 ### Step 4. Read the result
 
-Main reports each finished unit in its pane without being asked (ORCHE wakes it); `[drain]` also shows ORCHE's notes.
+Main reports in its pane without being asked (ORCHE wakes it): one full report when a lineage (the units one
+request set going) closes, a failure or block at once, otherwise one progress line; `[drain]` also shows ORCHE's
+notes.
 
 Success: the result of your unit appears in Main's reply. See [How units run](#how-units-run) for
 when a unit counts as done.
@@ -603,12 +605,17 @@ when a unit counts as done.
 
 Reports that land close together reach Main as one wake: ORCHE waits until the newest has been quiet for 90 s
 (at most 240 s; `inbox.quiet_s`, `inbox.quiet_max_s`), and Main writes one consolidated report. A unit that is
-`blocked`, asks a `question` or `failed` wakes Main at once, and on macOS also shows a notification
-(`ORCHE <project>`, the unit's short id and status only; `inbox.notify` turns it off). Until you answer,
-`orche status` lists it:
+`blocked`, asks a `question` or `failed` wakes Main at once. A unit only you can unblock ends `STATUS: blocked`
+with one `OWNER: <exact step>` line, which Main shows first. Every Main reply ends with one closing line:
+`RUNNING: <what runs>`, `OWNER: <decision or step, default>` or `DONE: <result>`. Only `OWNER:` and `DONE:`
+notify you (macOS, `ORCHE <project>` and that line; config `notify` turns it off), and only when you have not
+typed in Main for 2 minutes. An unanswered `OWNER:` is notified again 30, 60, 120 and 240 minutes later, never
+inside `flow.quiet_hours` (23:00-08:00); if Main forgot its closing line, ORCHE notifies you itself after
+10 minutes. Until you answer, `orche status` lists it:
 
 ```text
-  blocked: my-app-fix-login-20261022-3 (question, since 14:05, 12 min) — waiting on the owner; answer in main-my-app
+  owner: asked 14:05 (12 min, notified 1×, next 14:35) — approve the schema change (default: keep it)
+  blocked: my-app-fix-login-20261022-3 (blocked, since 14:05, 12 min) — waiting on the owner; answer in main-my-app
 ```
 
 ORCHE needs no extra waker: `orche doctor` warns when an old `com.orche.main-waker` launchd job is still loaded
@@ -937,6 +944,16 @@ leaves its leftovers running (`orche doctor` warns about pending sweeps); (d) a 
 is reused in the up-to-2-seconds between reading the process table and the SIGKILL could be
 signalled (theoretical); (e) the macOS environment-value match, the nested-run rule and the
 title-renaming programs above.
+
+### Stuck reports repair themselves
+
+A report nobody read, or a brief that never reached its unit, is picked up by `orche reconcile`. On macOS
+`orche install` sets it to run every 5 minutes (a LaunchAgent, `com.orche.reconcile`); the prompt and Stop
+hooks also start a pass when the last one is more than 15 minutes old. A pass nudges the idle pane or delivers
+the brief again, waits longer each time (10, 20, 40 minutes), and after three tries sends one urgent note
+instead. `orche status` shows when the last pass ran, and `orche doctor` warns when the job is not loaded.
+To see what a pass would do without doing it: `orche reconcile --dry-run`. To turn it off:
+`"reconcile": {"enabled": false}` in the config, or `orche install --no-reconcile` for the LaunchAgent only.
 
 ### When a unit counts as done
 

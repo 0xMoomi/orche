@@ -21,20 +21,17 @@ it runs or already ran.
 """
 import contextlib
 import fcntl
-import json
+import re
 import sys
 import time
 
-from . import brief, config, inbox, log, orca, paths, procs, roster, runs, shell, util
+from . import brief, config, inbox, log, orca, paths, procs, roster, runs, shell, units, util
 
 WAKE_LOCK = ".wake.lock"        # one nudger per session
 DELIVER_LOCK = ".deliver.lock"  # one deliverer per target pane
-NOTIFY_LOCK = ".notify.lock"    # one `.notified` read-notify-write per session
 LOCK_WAIT_S = 600.0             # a deliverer waits this long for earlier deliverers to the same pane
-NOTIFY_WAIT_S = 30.0            # … and notify_owner for another notifier (osascript: 5 s per pointer)
 POLL_S = 0.5
-NOTIFIED = ".notified"      # pointer file names the owner was notified about (one name per line)
-PLATFORM = sys.platform    # the notification is macOS only (a seam for tests)
+LAST_NUDGE = ".last-nudge"  # {state, at} of the session's newest `orche nudge` (reconcile's escalation names it)
 QUIET_POLL_S = 2.0         # the quiet window's poll (config inbox.quiet_s / quiet_max_s)
 SUBMIT_WAIT_S = 20         # `send --wait-submit`: UserPromptSubmit hooks (ORCHE's 3 s budget plus others) run first
 SEND = ("--enter", "--wait-submit", str(SUBMIT_WAIT_S))
@@ -164,9 +161,28 @@ def _type(session, text, *, strict, wait_s, still_needed, before_send=None, on_f
     return done(state)
 
 
+REMIND_RE = re.compile(r"^\s*\[orche\] report due:")
+
+
 def _stale(draft: str) -> bool:
-    """The composer holds an ORCHE line (a wake or a brief nudge whose Enter never submitted)."""
-    return draft == inbox.WAKE_TEXT or bool(inbox.NUDGE_RE.match(draft))
+    """The composer holds an ORCHE line (a wake, a brief nudge or a reminder whose Enter never submitted)."""
+    return draft == inbox.WAKE_TEXT or bool(inbox.NUDGE_RE.match(draft)) or bool(REMIND_RE.match(draft))
+
+
+def lock_free(session, name=DELIVER_LOCK) -> bool:
+    """Probe `inbox/<session>/<name>`: no process holds it. A missing file is free."""
+    path = inbox.box(session) / name
+    try:
+        fh = open(path, "r")
+    except OSError:
+        return True
+    with fh:
+        try:
+            fcntl.flock(fh, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            return False
+        fcntl.flock(fh, fcntl.LOCK_UN)
+        return True
 
 
 def _receipt(send: dict) -> str:
@@ -242,51 +258,10 @@ def _quiet(session, cfg) -> int:
     return int(time.monotonic() - started)
 
 
-def notify_owner(session) -> None:
-    """A macOS notification per urgent waking pointer pending for a `main-*` session, once each
-    (`inbox/<session>/.notified`, read and written under `.notify.lock`, so two nudgers never notify
-    twice); config `inbox.notify`. The text holds only the unit's short id and its status. Never
-    raises (failures go to hooks.log)."""
-    try:
-        if not session.startswith("main-") or PLATFORM != "darwin" or not config.load()["inbox"].get("notify", True):
-            return
-        with _lock(session, NOTIFY_LOCK, NOTIFY_WAIT_S) as ok:
-            if not ok:
-                log.log("hooks", f"deliver: notify {session}: another notifier kept the lock")
-                return
-            _notify(session)
-    except Exception as exc:  # noqa: BLE001 - a notification is best-effort
-        log.log("hooks", f"deliver: notify {session}: {type(exc).__name__}: {exc}")
-
-
-def _notify(session) -> None:
-    """notify_owner's body, under the notify lock."""
-    marker = inbox.box(session) / NOTIFIED
-    seen = set(marker.read_text().split()) if marker.is_file() else set()
-    items = [(x, p) for x, p in inbox.pending(session) if inbox.wakes(p) and inbox.is_urgent(p)]
-    project = session[len("main-"):]
-    for path, ptr in items:
-        if path.name in seen:
-            continue
-        unit = str(ptr.get("unit") or "")
-        short = unit[len(project) + 1:] if unit.startswith(project + "-") else unit
-        text = json.dumps(f"{short} {ptr.get('status')} — Main에 보고가 있습니다", ensure_ascii=False)
-        title = json.dumps(f"ORCHE {project}", ensure_ascii=False)
-        res = shell.run(["osascript", "-e", f'display notification {text} with title {title} sound name "Glass"'],
-                        timeout=5)
-        if not res.ok:
-            log.log("hooks", f"deliver: notify {session}: osascript exit {res.code}")
-        seen.add(path.name)
-    live = {x.name for x, _p in items}
-    if items or marker.is_file():
-        marker.write_text("".join(f"{name}\n" for name in sorted(seen & live)))
-
-
 def nudge(session) -> tuple:
     """`orche nudge <session>` (design §4.4): (exit code, state). Raises ValueError for an unsafe
     session name (before anything is touched); every other failure is a state."""
     inbox.box(session)
-    notify_owner(session)
     started, state, waited, quiet = time.monotonic(), "nudge-failed", 0, [0]
 
     def settle():
@@ -296,15 +271,21 @@ def nudge(session) -> tuple:
         with _lock(session, WAKE_LOCK, wake_wait_s(config.load()["inbox"])) as ok:
             if not ok:
                 state, waited = "locked", int(time.monotonic() - started)
-            elif inbox.nudged(session):
-                state = "already-nudged"
-            elif not _waking(session):
-                state = "nothing-pending"
             else:
-                state, waited = _type(session, inbox.WAKE_TEXT, strict=True,
-                                      wait_s=IDLE_WAIT_S, still_needed=lambda: _waking(session) > 0,
-                                      before_send=lambda: _mark(session), on_fail=lambda: _unmark(session),
-                                      settle=settle)
+                try:
+                    if inbox.nudged(session):
+                        state = "already-nudged"
+                    elif not _waking(session):
+                        state = "nothing-pending"
+                    else:
+                        state, waited = _type(session, inbox.WAKE_TEXT, strict=True,
+                                              wait_s=IDLE_WAIT_S, still_needed=lambda: _waking(session) > 0,
+                                              before_send=lambda: _mark(session), on_fail=lambda: _unmark(session),
+                                              settle=settle)
+                except Exception as exc:  # noqa: BLE001 - recorded below, under the lock
+                    log.log("hooks", f"deliver: nudge {session}: {type(exc).__name__}: {exc}")
+                    state, waited = "nudge-failed", int(time.monotonic() - started)
+                _record_nudge(session, state)      # under the lock; a `locked` nudger records nothing
     except Exception as exc:  # noqa: BLE001 - the events line is always written
         log.log("hooks", f"deliver: nudge {session}: {type(exc).__name__}: {exc}")
         state, waited = "nudge-failed", int(time.monotonic() - started)
@@ -315,6 +296,13 @@ def nudge(session) -> tuple:
             pending = 0
         _event(session, state, pending, waited, quiet[0])
     return (0 if state in OK_STATES else 1), state
+
+
+def _record_nudge(session, state) -> None:
+    try:
+        util.write_json(inbox.box(session) / LAST_NUDGE, {"state": state, "at": util.now_iso()})
+    except (OSError, ValueError) as exc:
+        log.log("hooks", f"deliver: cannot record {session}'s last nudge: {exc}")
 
 
 # ---- `orche deliver <unit>` (J1, design §4.5) ---------------------------------------
@@ -341,25 +329,83 @@ def runner_wanted(r, to, cfg) -> bool:
     return m is not None and m.owns_worktree
 
 
-def spawn(unit) -> None:
-    """Start `orche deliver <unit>` detached (logs/deliver.log); never waits. Raises what Popen raises."""
-    procs.spawn_detached([sys.executable, str(paths.PLUGIN_ROOT / "bin" / "orche.py"), "deliver", "--", unit],
+def spawn(unit, retry=False) -> None:
+    """Start `orche deliver [--retry] <unit>` detached (logs/deliver.log); never waits. Raises what
+    Popen raises. `retry` (reconcile's attempts): a failure posts no pointer of its own."""
+    argv = [sys.executable, str(paths.PLUGIN_ROOT / "bin" / "orche.py"), "deliver"]
+    procs.spawn_detached(argv + (["--retry"] if retry else []) + ["--", unit],
                          paths.orche_home() / "logs" / "deliver.log")
 
 
-def _ran(b) -> bool:
-    """RUN.json or REPORT.md is at least as new as BRIEF.md: this revision already ran."""
+def drain_dispatch(to, unit, rev) -> int:
+    """Drain the pending `via: dispatch` pointers for `unit` at brief_rev <= `rev` in `to`'s inbox
+    (the unit is settled or running: nothing is left to deliver). Returns how many moved."""
+    stale = [path for path, p in inbox.pending(to) if p.get("via") == "dispatch" and p.get("unit") == unit
+             and _rev(p) <= rev]
+    inbox.drain(stale)
+    return len(stale)
+
+
+def _rev(ptr) -> int:
     try:
-        since = b.path.stat().st_mtime
-    except OSError:
+        return int(ptr.get("brief_rev") or 1)
+    except (TypeError, ValueError):
+        return 1
+
+
+REPORTS = ("done", "failed", "blocked", "question", "stop")
+
+
+def _reported(b, to) -> bool:
+    """`to` already filed a report (done, failed, blocked, question, stop) on this revision of `b` to
+    its sender (pending or drained); a dispatch pointer is never one."""
+    if not b.sender:
         return False
-    for name in ("RUN.json", "REPORT.md"):
-        try:
-            if (b.folder / name).stat().st_mtime >= since:
-                return True
-        except OSError:
-            pass
-    return False
+    try:
+        return any(_rev(p) == b.rev and p.get("via") != "dispatch" and p.get("status") in REPORTS
+                   for _x, p in inbox.about(b.sender, b.unit, frm=to))
+    except ValueError:
+        return False
+
+
+def _num(value) -> int:
+    try:
+        return int(value or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
+def _live_at(b, rec) -> bool:
+    """`rec` (runs.running) is a live run of this very revision of `b` (the lock's `rev`)."""
+    return rec is not None and _num(rec.get("rev")) == b.rev
+
+
+def _settled(b, to) -> bool:
+    """Nothing is left to deliver for this revision: it ran (_ran), runs (a live lock of this rev) or
+    was reported on (_reported). A run or report of an older revision never settles a newer one."""
+    return _ran(b) or _live_at(b, runs.running(b.project, b.unit)) or _reported(b, to)
+
+
+def _ran(b) -> bool:
+    """RUN.json records a run that started at or after BRIEF.md's mtime: this revision already ran.
+    `started` is whole seconds, so a start in BRIEF.md's own second counts. REPORT.md is no proof:
+    it carries no revision (a run of rev N may write it after an AMEND rewrote BRIEF.md)."""
+    try:
+        since = int(b.path.stat().st_mtime)
+        rec = util.read_json(b.folder / "RUN.json", default=None)
+    except (OSError, util.JsonError):
+        return False
+    at = units.parse_iso(rec.get("started")) if isinstance(rec, dict) else None
+    return at is not None and at.timestamp() >= since
+
+
+def drain_now(to, unit, rev) -> bool:
+    """drain_dispatch under `to`'s `.deliver.lock`, taken non-blocking (design §2.6): a deliverer that
+    holds it re-checks and drains, or types, itself. True when drained."""
+    with _lock(to, DELIVER_LOCK, 0) as ok:
+        if ok:
+            drain_dispatch(to, unit, rev)
+        return ok
 
 
 def _dispatched(to, unit):
@@ -383,10 +429,13 @@ def _hint(r, to, unit, state) -> str:
 
 
 def _not_delivered(r, unit, to, rev, state, sender) -> None:
-    """The urgent `info` from orche to the brief's sender (posting it wakes the sender's pane)."""
+    """The urgent `info` from orche to the brief's sender (posting it wakes the sender's pane); not filed
+    again while the same failure is still pending in the sender's inbox."""
     hint = _hint(r, to, unit, state)
     summary = f"not delivered: {unit} → {to} rev {rev} ({state})" + (f" — {hint}" if hint else "")
     try:
+        if any(x.get("from") == "orche" and x.get("summary") == summary for _p, x in inbox.pending(sender)):
+            return
         inbox.post(inbox.make(unit, "orche", sender, "info", brief_rev=rev, urgent=True, summary=summary))
     except (ValueError, OSError) as exc:
         log.log("hooks", f"deliver: cannot file the failure for {sender!r}: {exc}")
@@ -405,21 +454,50 @@ def _runner(b) -> str:
     return "runner-started"
 
 
+def _stop_run(r, b, to, locked) -> str:
+    """A STOP while a run of the unit is live: runs.stop (the marker, SIGTERM for a verified pid; the
+    run files `info` "stopped by Main"), then the unit's dispatch pointers are drained (`stopped`)."""
+    runs.stop(b.project, b.unit, reg=r.reg)
+    if locked:
+        drain_dispatch(to, b.unit, b.rev)
+    else:
+        drain_now(to, b.unit, b.rev)
+    return "stopped"
+
+
 def _pane(r, b, to, sent):
-    """Steps 3-7: (state, waited). `sent` receives the pending pointer once found."""
+    """Steps 3-7: (state, waited). `sent` receives the pending pointer once found.
+
+    A STOP pointer stops a live run of the unit (`stopped`), is drained when the target has no pane
+    and nothing runs (`stop-idle`, never a headless run), and is otherwise typed like a brief (also
+    after a report at that rev). Any other pointer of a settled revision is drained (`already-ran`),
+    also when the unit settled while this deliverer waited for the lock (R12)."""
     found = _dispatched(to, b.unit)
     if found is None:
         return "picked-up", 0
     sent.append(found[1])
-    path = found[0]
+    path, stop = found[0], found[1].get("status") == "stop"
     started = time.monotonic()
+    if stop and runs.running(b.project, b.unit) is not None:
+        return _stop_run(r, b, to, locked=False), 0
+    if not stop and _settled(b, to):
+        drain_now(to, b.unit, b.rev)
+        return "already-ran", 0
     with _lock(to, DELIVER_LOCK, LOCK_WAIT_S) as ok:
         if not ok:
             return "locked", int(time.monotonic() - started)
         if not path.exists():
             return "picked-up", int(time.monotonic() - started)
+        if stop and runs.running(b.project, b.unit) is not None:
+            return _stop_run(r, b, to, locked=True), int(time.monotonic() - started)
+        if not stop and _settled(b, to):
+            drain_dispatch(to, b.unit, b.rev)
+            return "already-ran", int(time.monotonic() - started)
         state, waited = _type(to, f"[orche] inbox: {b.unit} rev {b.rev}", strict=False, wait_s=DELIVER_WAIT_S,
                               still_needed=path.exists)
+        if stop and state == "no-pane":
+            drain_dispatch(to, b.unit, b.rev)
+            return "stop-idle", waited
     if state == "nothing-pending":
         state = "picked-up"
     elif state == "no-pane":
@@ -427,7 +505,30 @@ def _pane(r, b, to, sent):
     return state, waited
 
 
-def deliver_unit(reg, unit, cfg=None) -> tuple:
+def _fallback(r, b, to, state) -> str:
+    """A division/feature target without a pane (no-pane, needs-wake, wake-requested): start the
+    headless run instead (`runner-fallback`; a live run of an older revision is restarted on this
+    one, as an AMEND to a runner unit), or `already-ran` when this revision ran or runs. Main keeps
+    the state."""
+    m = r.member(to)
+    if state not in ("no-pane", "needs-wake", "wake-requested") or m is None or not m.owns_worktree:
+        return state
+    live = runs.running(b.project, b.unit)
+    if _live_at(b, live) or _ran(b):
+        drain_now(to, b.unit, b.rev)
+        return "already-ran"
+    try:
+        if live is not None:
+            runs.restart(b.project, b.unit, reg=r.reg)
+        else:
+            runs.start(b.unit)
+    except Exception as exc:  # noqa: BLE001 - reported as the pane state
+        log.log("hooks", f"deliver: runner fallback for {b.unit} did not start: {exc}")
+        return state
+    return "runner-fallback"
+
+
+def deliver_unit(reg, unit, cfg=None, retry=False) -> tuple:
     """`orche deliver <unit>` (design §4.5): (exit code, state). Exit 2 (`no-brief`, `unknown-target`,
     `retired-target`) touches nothing; else one events line, and a failure (FAILED, exit 1) posts an
     urgent `info` to the pending pointer's sender. `user-typing` and `queued` (typed into a busy pane,
@@ -449,11 +550,84 @@ def deliver_unit(reg, unit, cfg=None) -> tuple:
                 state = _runner(b)
             else:
                 state, waited = _pane(r, b, to, sent)
+                state = _fallback(r, b, to, state)
         except Exception as exc:  # noqa: BLE001 - the events line is always written
             log.log("hooks", f"deliver: {unit}: {type(exc).__name__}: {exc}")
             state, waited = "nudge-failed", int(time.monotonic() - started)
-        if state in FAILED and sent:
+        if state in FAILED and sent and not retry:
             _not_delivered(r, unit, to, b.rev, state, str(sent[0].get("from") or ""))
     finally:        # last: once it is written, this deliverer touches nothing more
+        if state != "locked":
+            _record_delivery(to, unit, b.rev, state)
         log.log("events", f"deliver unit={unit} rev={b.rev} to={to} state={state} waited={waited}s")
     return (1 if state in FAILED or state == "runner-failed" else 0), state
+
+
+LAST_DELIVER = ".last-deliver-"   # + unit: {state, rev, at} of the unit's newest deliverer (reconcile's escalation)
+
+
+def _record_delivery(to, unit, rev, state) -> None:
+    try:
+        util.write_json(inbox.box(to) / f"{LAST_DELIVER}{unit}", {"state": state, "rev": rev, "at": util.now_iso()})
+    except (OSError, ValueError) as exc:
+        log.log("hooks", f"deliver: cannot record {unit}'s last delivery: {exc}")
+
+
+def last_delivery(to, unit):
+    """The unit's newest recorded deliverer state in `to`'s inbox ({state, rev, at}), or None."""
+    try:
+        last = util.read_json(inbox.box(to) / f"{LAST_DELIVER}{unit}", default=None)
+    except (OSError, ValueError, util.JsonError):
+        return None
+    return last if isinstance(last, dict) else None
+
+
+# ---- `orche deliver --remind <unit>` (reconcile's silent pane unit, design §2.3) --------------
+
+REMIND_OK = ("nudged", "queued", "user-typing", "already-reported")
+REMIND_REASON = re.compile(r"idle \d{1,4} min|TIMEBOX \d{1,2}h\d{1,2}m passed")   # the only reasons (fullmatch)
+
+
+def remind_text(unit, rev, reason) -> str:
+    return (f"[orche] report due: {unit} rev {rev} — {reason}; file your report now with what you have "
+            f"(orche report …), then stop at a safe boundary. Already reported? Ignore this line.")
+
+
+def remind(reg, unit, reason) -> tuple:
+    """Type the report-due line into the unit's target pane once: (exit code, state). Exit 2 as
+    deliver_unit, and `bad-reason` for a reason that is not REMIND_REASON; `already-reported` (exit 0)
+    when the report arrived before the send."""
+    if not REMIND_REASON.fullmatch(str(reason or "")):
+        return 2, "bad-reason"
+    r = roster.Roster(reg)
+    b = brief.find(reg, unit)
+    if b is None or b.rev == 0:
+        return 2, "no-brief"
+    t = r.resolve_to(b.to, b.project)
+    if t is None:
+        return 2, "unknown-target"
+    if t.status == "retired":
+        return 2, "retired-target"
+    to, state, waited = t.session, "nudge-failed", 0
+
+    def needed():
+        return not _reported(b, to)
+    started = time.monotonic()
+    try:
+        if not needed():
+            state = "already-reported"
+        else:
+            with _lock(to, DELIVER_LOCK, LOCK_WAIT_S) as ok:
+                if not ok:
+                    state, waited = "locked", int(time.monotonic() - started)
+                else:
+                    state, waited = _type(to, remind_text(unit, b.rev, reason), strict=False,
+                                          wait_s=DELIVER_WAIT_S, still_needed=needed)
+            if state == "nothing-pending":
+                state = "already-reported"
+    except Exception as exc:  # noqa: BLE001 - the events line is always written
+        log.log("hooks", f"deliver: remind {unit}: {type(exc).__name__}: {exc}")
+        state, waited = "nudge-failed", int(time.monotonic() - started)
+    finally:
+        log.log("events", f"remind unit={unit} rev={b.rev} to={to} state={state} waited={waited}s")
+    return (0 if state in REMIND_OK else 1), state

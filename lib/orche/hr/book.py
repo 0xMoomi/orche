@@ -1,10 +1,9 @@
 """The HR record: refusals, the record of one transition, the HR log, notifications, standing orders."""
-import json
 import re
 import sys
 from pathlib import Path
 
-from .. import cli, config, mask, paths, registry, roster, shell, statusline, templates, util
+from .. import cli, mask, notify as notice, paths, registry, roster, statusline, templates, util
 
 _ORDER = re.compile(r"^(\d+)\.\s")
 
@@ -34,12 +33,9 @@ def log(text: str) -> None:
 
 
 def notify(text: str) -> None:
-    """macOS notification (masked); no-op when config `notify` is off or not on macOS."""
-    if not config.load().get("notify") or sys.platform != "darwin":
-        return
-    safe, _ = mask.redact(text)
-    script = f"display notification {json.dumps(safe)} with title \"ORCHE\""
-    shell.run(["osascript", "-e", script], timeout=5)
+    """A macOS notification titled ORCHE (notify.send: masked, an argument to a fixed script; no-op
+    when config `notify` is off or not on macOS)."""
+    notice.send("ORCHE", text, kind="hr")
 
 
 def record(reg, line, *, event=None, project=None, note=None, save=True) -> None:

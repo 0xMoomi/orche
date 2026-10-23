@@ -11,6 +11,7 @@ from pathlib import Path
 
 from . import (brief, config, deliver, donegate, inbox, log, mask, orca, registry, roster, runs, transcript,
                units, util)
+from .flow import guard, lineage, owner
 
 # ---- targets -------------------------------------------------------------
 
@@ -81,6 +82,13 @@ def plan_blocks(r, bodies, frm) -> list:
     STOP). AMEND/STOP need the unit's BRIEF.md.
     """
     plans = []
+    cfg = config.load()
+    accepted = 0        # briefs and AMENDs planned so far (G3 counts them before they are written)
+
+    def guarded(block, to, runner=False):
+        return guard.safe(guard.check, frm.session, block.unit, r.reg, block, frm, to=to, runner=runner,
+                          accepted=accepted)
+
     for body in bodies:
         try:
             block = body if isinstance(body, brief.Block) else brief.parse(body)
@@ -93,10 +101,13 @@ def plan_blocks(r, bodies, frm) -> list:
                 if t.project != frm.project:
                     if t.kind != "main":
                         raise brief.Refusal(_cross_project_error(r, t.session, t.project, frm.project))
-                    plans.append(Plan(block, t.session, t.project, external=True))
+                    hit = guarded(block, t.session)
+                    plans.append(hit if hit is not None else Plan(block, t.session, t.project, external=True))
                     continue
                 _check_reachable(r, t)
-                plans.append(Plan(block, t.session, t.project))
+                hit = guarded(block, t.session)
+                plans.append(hit if hit is not None else Plan(block, t.session, t.project))
+                accepted += hit is None
                 continue
             prior = brief.find(r.reg, block.unit)
             if prior is None or prior.rev == 0:
@@ -114,7 +125,9 @@ def plan_blocks(r, bodies, frm) -> list:
                 raise brief.Refusal(_cross_project_error(r, t.session, t.project, frm.project))
             if block.kind != "stop":
                 _check_reachable(r, t)
-            plans.append(Plan(block, t.session, prior.project, prior, block.unit))
+            hit = guarded(block, t.session, block.kind == "amend" and deliver.runner_wanted(r, t.session, cfg))
+            plans.append(hit if hit is not None else Plan(block, t.session, prior.project, prior, block.unit))
+            accepted += hit is None and block.kind != "stop"
         except brief.Refusal as exc:
             plans.append(str(exc))
     return plans
@@ -288,7 +301,10 @@ def relay_outcome(r, bodies, frm, deadline=None, by=None, skip=None) -> Outcome:
     planned = dict(zip(fresh, plan_blocks(r, [bodies[i] for i in fresh], frm)))
     terms = orca.Terminals(deadline if deadline is not None else orca.hook_deadline())   # remaining() only
     cfg = config.load()
-    done, lines, refused, delivered = [], [], [], {}
+    flow_on = (cfg.get("flow") or {}).get("enabled", True)
+    done, lines, refused, delivered, rules = [], [], [], {}, []
+    line_of = None      # the lineage this call's first new brief started (Main and triage)
+    counts = iter(guard.streak(sender, sender_proj, [not isinstance(planned[i], str) for i in fresh]))
     for i in range(len(bodies)):
         plan = planned.get(i)
         if plan is None:
@@ -297,9 +313,17 @@ def relay_outcome(r, bodies, frm, deadline=None, by=None, skip=None) -> Outcome:
                          f"{DELIVERED_TTL // 60} min; not sent again")
             continue
         if isinstance(plan, str):
+            n = next(counts)
+            if isinstance(plan, guard.Refused):
+                guard.logged(plan.rule, sender, plan.unit, plan.n)
+                rules.append(plan.rule)
+            if flow_on and n >= guard.STREAK:
+                guard.logged("G7", sender, getattr(plan, "unit", "-"), n)
+                plan = f"{plan} ({guard.STREAK_TEXT.format(n=n)})"
             refused.append(plan)
             lines.append(f"block {i + 1}: refused — {plan.removeprefix(brief.REFUSE)}")
             continue
+        next(counts)
         block = plan.block
         if plan.external:
             rev = 0
@@ -310,8 +334,14 @@ def relay_outcome(r, bodies, frm, deadline=None, by=None, skip=None) -> Outcome:
             state = _deliver(r, plan, plan.prior, "stop", block.note or "STOP requested", sender, terms, cfg, by)
             _feedback(sender, plan.unit, plan.to, rev, state, kind="stop", by=by)
         else:
+            lin, parent = lineage.assign(r.reg, frm, by) if block.kind == "brief" else (None, None)
+            lin = lin or line_of
             b = brief.write(block, r.member(plan.to), sender, standing_text(r.reg, plan.proj),
-                            prior=plan.prior, timeout=min(0.5, terms.remaining()))
+                            prior=plan.prior, timeout=min(0.5, terms.remaining()), lineage=lin, parent=parent)
+            if block.kind == "brief" and frm.kind != "div" and line_of is None:
+                line_of = b.lineage
+                if by != "triage":
+                    lineage.started(frm, b.lineage)
             plan.unit, rev = b.unit, b.rev
             goal = mask.redact(b.fields.get("GOAL", "").split("\n")[0])[0]
             state = _deliver(r, plan, b, "info", goal, sender, terms, cfg, by)
@@ -321,7 +351,7 @@ def relay_outcome(r, bodies, frm, deadline=None, by=None, skip=None) -> Outcome:
         if hashes[i] is not None:
             delivered[hashes[i]] = f"{plan.unit} → {plan.to}"
     if refused:
-        log_refusal(sender, len(bodies), "\n".join(refused))
+        log_refusal(sender, len(bodies), len(refused), rules)
     return Outcome(done, lines, refused, delivered)
 
 
@@ -337,9 +367,10 @@ def relay_detail(r, bodies, frm, deadline=None, by=None) -> list:
 DELIVERED_TTL = 600     # seconds `orche dispatch` remembers a delivered block (no identical re-send)
 
 
-def log_refusal(me, blocks, message):
-    reason = " ".join(message.removeprefix(brief.REFUSE).split())[:100]
-    log.log("events", f"dispatch refused by={me or 'unknown'} blocks={blocks} reason={reason}")
+def log_refusal(me, blocks, refused, rules=()):
+    """The events line for a dispatch with refused blocks: ids and counts only, never the text."""
+    rules = ",".join(dict.fromkeys(rules)) or "-"
+    log.log("events", f"dispatch refused by={me or 'unknown'} blocks={blocks} refused={refused} rules={rules}")
 
 
 # ---- Stop hook entry -----------------------------------------------------
@@ -369,7 +400,8 @@ def final_text(payload: dict):
 
 def handle_stop(payload: dict, started=None):
     """(exit_code, stderr_message) for the Stop hook. It relays nothing: briefs go out through
-    `orche dispatch`, and a fenced block left in the reply is plain text."""
+    `orche dispatch`, and a fenced block left in the reply is plain text. A Main session's turn that
+    may stop (also under stop_hook_active) hands its closing line to flow.owner (the owner's voice)."""
     deadline = orca.hook_deadline(started)
     cwd = payload.get("cwd") or os.getcwd()
     tpath = payload.get("transcript_path")
@@ -381,6 +413,18 @@ def handle_stop(payload: dict, started=None):
         units.touch_activity(me)
     code, msg = donegate.may_stop(text, r, who, cwd, tpath, deadline,
                                   stop_hook_active=bool(payload.get("stop_hook_active")))
+    if code == 0 and who.member is not None and who.member.kind == "main":
+        _closing(who.member.project, text, me)
     if code == 0 and me:
         inbox.rearm(me)   # reports that landed mid-turn: the turn is over, wake the pane now
     return code, msg
+
+
+def _closing(project, text, session) -> None:
+    """flow.owner.closing for Main's final message, with the turn's start (the prompt hook's turn record,
+    lineage.read_turn): a tag covers the reports that turn read; never fails the hook (the type only: no text)."""
+    try:
+        turn = lineage.read_turn(session) if session else None
+        owner.closing(project, text, turn_at=units.parse_iso((turn or {}).get("at")))
+    except Exception as exc:  # noqa: BLE001 - fail-open
+        log.log("hooks", f"dispatch: closing line for {project}: {type(exc).__name__}")

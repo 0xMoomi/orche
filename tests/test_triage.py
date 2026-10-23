@@ -1093,7 +1093,7 @@ class CommandTest(TriageCase):
 
     def test_jev_without_an_eval_is_visible_in_status_enable_and_orche_status(self):
         """M9: triage on Jev with no Jev eval on file warns (SPEC §7.3 condition 5)."""
-        self.assertEqual(self.orche_ok("status").splitlines()[-1], "triage: enabled, backend claude-haiku, "
+        self.assertEqual(self.orche_ok("status").splitlines()[-2], "triage: enabled, backend claude-haiku, "
                                                                    "no eval on file")
         cfg = self.enable(backend="auto")
         cfg["jev"] = {"enabled": True, "base_url": "https://jev.test"}
@@ -1102,14 +1102,14 @@ class CommandTest(TriageCase):
         with mock.patch.dict(os.environ, {"JEV_API_KEY": "k"}):
             self.assertIn(warning, self.orche_ok("triage", "status"))
             self.assertIn(warning, self.orche_ok("triage", "enable"))
-            line = self.orche_ok("status").splitlines()[-1]
+            line = self.orche_ok("status").splitlines()[-2]
             self.assertTrue(line.startswith("triage: enabled, backend jev, no eval on file · " + warning), line)
             from orche import cmd_triage
             cmd_triage.save_eval(self.labelled(), "jev", cmd_triage.report(
                 [{"label": True, "direct": True, "model_ms": 5, "called": True}], "jev"))
             self.assertNotIn(warning, self.orche_ok("triage", "status"))
             self.assertNotIn(warning, self.orche_ok("triage", "enable"))
-            self.assertRegex(self.orche_ok("status").splitlines()[-1],
+            self.assertRegex(self.orche_ok("status").splitlines()[-2],
                              r"^triage: enabled, backend jev, last eval \S+ \(jev\)$")
         self.orche_ok("triage", "disable")
         self.assertFalse(any(l.startswith("triage:") for l in self.orche_ok("status").splitlines()))
