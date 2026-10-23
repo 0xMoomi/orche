@@ -3,6 +3,47 @@
 All notable changes to ORCHE are listed here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow semantic versioning.
 
+## 0.7.2 — 2026-10-23
+
+### Added
+- Pass watchdog (`orche reconcile`): a pass still running 2 × BUDGET_S (120 s) after it took the lock is aborted — SIGALRM in
+  the main thread, and 15 s later a last-resort thread when the signal cannot interrupt a call blocked in the
+  kernel (a macOS privacy check; it prints the abort line to reconcile.log before exiting). `ORCHE_HOME/reconcile/
+  last-abort.json` records `{at, phase, path, hint}`: `path` is the innermost path the stuck pass held under a
+  project's root, a protected folder or `/Volumes` (never ORCHE's own files), `hint` is `privacy` for a path under
+  Desktop, Documents, Downloads, iCloud Drive, `~/Library/CloudStorage` or `/Volumes`, else `slow`; one events
+  line `reconcile abort phase=<phase> hint=<hint>`, the lock is released, exit 3. `heartbeat.json` gains
+  `job_at` (the last pass the LaunchAgent itself ran with reconcile on; its plist sets `ORCHE_RECONCILE_JOB=1`),
+  `interpreter` (that pass's Python) and `unreadable` (protected projects it could not list: a denial answers
+  EPERM while a glob there returns nothing); hook-kicked passes carry them over.
+- `orche doctor`: the `heartbeat` row names a blocked job — `heartbeat job cannot read <keys or path> (macOS
+  privacy) — run: orche install --grant`, or `heartbeat job loaded, no pass yet — …` — and a new `privacy` row
+  checks the projects under protected folders against the job's own passes. `orche status` says `heartbeat:
+  blocked by macOS privacy — run orche install --grant`.
+- `orche install` waits up to 45 s for a pass of the job itself (`하트비트 첫 점검 확인 중… (최대 45초)`; a plain
+  `launchctl kickstart` only when none came yet): `reconcile job: first pass OK (<took_s> s)`. When the job
+  cannot read a project it opens Finder at the item to add (the job's Python.app, or a uv/pyenv/conda
+  `python3.x`) and System Settings at Full Disk Access and prints what to do, Korean then English, after every
+  other line; the install still succeeds. `orche init` of a new project under a protected folder does the same
+  check. `orche install --grant` installs nothing: it walks through the grant in three steps and checks for up
+  to 5 minutes (`권한 확인 완료 — 하트비트 정상 / granted — heartbeat OK` / `아직 읽지 못합니다 — … / still blocked —
+  …`; `nothing to grant — …` with no protected project). Ctrl-C during a wait: one line, exit 130. Re-run
+  `orche install` (same --mode as before) to get the check; after a Python upgrade the grant may not carry
+  over (the doctor says so; run `--grant` again).
+- `orche setup [--project PATH ...] [--no-auth]`: one command for a new machine — the install (`--no-jev`, in
+  the mode the last install used: plugin when the ORCHE plugin is enabled, else settings), the OAuth token
+  status and the two commands to store one, `orche init PATH --no-intake` per project (an unknown repo is
+  registered), the heartbeat job's first pass, `orche doctor`. Safe to repeat; exit 1 when a step failed or the
+  doctor has a FAIL; when macOS privacy is all that is left the last line is `setup: 한 단계 남음 — …`.
+
+### Fixed
+- `orche wake` right after a pane was closed: Orca can still list the closed pane, so wake printed
+  `main-<p> pane switched to` or `<div> is already active` and opened nothing. Wake now verifies the pane by
+  its handle (`orca terminal read`, then a fresh list) and opens it again when it is gone; a read that timed
+  out (Orca's `bad_output` "timeout after 10s") keeps the pane, never a second one.
+- A reconcile repair is recorded before it runs, so a pass aborted mid-repair still spends the try (the daily
+  cap holds).
+
 ## 0.7.1 — 2026-10-23
 
 ### Fixed

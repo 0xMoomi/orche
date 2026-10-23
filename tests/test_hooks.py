@@ -1655,6 +1655,8 @@ class SessionStartEndTest(HookCase):
     ENV_LINE = f"export PATH={shlex.quote(BIN)}:\"$PATH\"\n"
 
     def env_hook(self, payload, env_file, path="/usr/bin:/bin", **env):
+        # support's stubs (launchctl, open, osascript, security, claude, orca) stay first on the PATH
+        path = f"{support.no_claude_dir()}{os.pathsep}{path}"
         return self.run_hook("session_start.py", payload, CLAUDE_ENV_FILE=str(env_file), PATH=path, **env)
 
     def test_env_file_gets_the_plugin_path_line_appended(self):

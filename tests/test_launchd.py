@@ -26,8 +26,9 @@ class PlistTest(support.TempHomeCase):
         self.assertEqual(data["ProgramArguments"][1:], ["reconcile"])
         self.assertEqual(data["StartInterval"], 300)
         self.assertIs(data["RunAtLoad"], True)
-        self.assertEqual(set(data["EnvironmentVariables"]), {"ORCHE_HOME", "PATH"})
+        self.assertEqual(set(data["EnvironmentVariables"]), {"ORCHE_HOME", "PATH", "ORCHE_RECONCILE_JOB"})
         self.assertEqual(data["EnvironmentVariables"]["ORCHE_HOME"], str(self.home))
+        self.assertEqual(data["EnvironmentVariables"]["ORCHE_RECONCILE_JOB"], "1")   # reconcile.is_job()
         self.assertEqual(data["StandardOutPath"], f"{self.home}/logs/reconcile.log")
         self.assertEqual(data["StandardErrorPath"], f"{self.home}/logs/reconcile.log")
 

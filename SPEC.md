@@ -780,6 +780,60 @@ K repairs today)`, `STALE — … run orche doctor`, `never — install the job 
 2 × `every_s` or never written) and a `reconcile job` row (WARN when the plist is missing, unreadable, has
 another interval, or is not loaded).
 
+Watchdog and privacy (0.7.2):
+- A pass still running WATCHDOG_S (2 × BUDGET_S, 120 s) after it took the lock is aborted: SIGALRM raises in
+  the main thread; when the signal cannot interrupt the call (a read blocked inside the kernel, such as a macOS
+  privacy check), a thread ends the process WATCHDOG_GRACE_S (15 s) later. Either way
+  `ORCHE_HOME/reconcile/last-abort.json` records `{at, phase, path, hint}` (and `interpreter` for the job's
+  own aborts) — `phase` where the pass was (start, privacy, runs, lineage, owner, observe, apply, heartbeat),
+  `path` the innermost path a stack frame held (walking out from where it stopped, never past `run_pass`)
+  that is under a registered project's root, a protected folder or a volume under `/Volumes` (else empty),
+  `hint` `privacy` when that path is under `~/Desktop`, `~/Documents`, `~/Downloads`, `~/Library/Mobile
+  Documents`, `~/Library/CloudStorage` or `/Volumes/*` (string checks against the home directory and its real
+  path), else `slow` — one events line `reconcile abort phase=<phase> hint=<hint>` is logged (the thread also
+  prints the abort line to reconcile.log, flushed), the lock is released and the pass exits 3. A pass the
+  LaunchAgent ran (its plist sets `ORCHE_RECONCILE_JOB=1`; launchd also sets `XPC_SERVICE_NAME` to the label)
+  with reconcile on stamps `job_at` in `heartbeat.json`, records `interpreter` (the real path of its
+  `sys.executable`) and lists each protected project's `.orche`: any error but "not found" (a denial is EPERM,
+  while a glob there returns nothing) puts the key in `unreadable`; other passes carry all three over. A
+  repair's attempt is recorded before it runs, so an abort mid-apply still spends it.
+- macOS keeps those folders from a LaunchAgent-started Python until its `Python.app` (for a framework build,
+  `…/Python.framework/Versions/X.Y/Resources/Python.app`, found from the job's `interpreter`, else
+  `sys.executable`'s real path; else the interpreter itself, e.g. uv's bare `python3.x`, whose file name the
+  texts then show) is in System Settings › Privacy & Security › Full Disk Access; only the user or MDM can
+  grant it. After loading the job, `orche install` prints `하트비트 첫 점검 확인 중… (최대 45초)` and waits up to
+  45 s for a job pass (`job_at` at or after the install start, no `unreadable`), checking before it runs a plain
+  `launchctl kickstart gui/<uid>/com.orche.reconcile` (a running pass is never killed): `reconcile job: first
+  pass OK (<took_s> s)`; else, when a registered project is under a protected folder or a privacy abort at
+  most 24 h old and newer than `job_at` says so, `open -R <app>` and `open
+  "x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles"` and the guidance (Korean, then
+  English, then the app's path), printed after every other line; else the reconcile.log hint. The install
+  still exits 0. `orche init` of a new project under a protected folder runs the same check when the job is
+  loaded (not under `--json`). `orche install --grant` installs nothing: `nothing to grant — no project is
+  under a protected folder` (exit 0) when none is; the job not loaded: `하트비트 작업이 설치되어 있지 않습니다 — …
+  orche install --mode <mode>` naming the installed mode (exit 1); a job pass within 15 s is `권한 확인 완료 —
+  하트비트 정상 / granted — heartbeat OK`; else the three steps, both windows, and up to 5 min (progress lines
+  `권한 확인 중… (최대 15초)` / `(최대 5분)`) with a kickstart every 30 s, `-k` only for the first (`granted …`,
+  exit 0, or `아직 읽지 못합니다 — … / still blocked — switch <app> on in Full Disk Access, then: orche install
+  --grant`, exit 1). Ctrl-C during any of these waits prints one line and exits 130.
+- `orche doctor`: `heartbeat` WARNs `heartbeat job cannot read <keys> (macOS privacy) — run: orche install
+  --grant` while the job's last pass (at most 24 h old) left keys `unreadable`, `heartbeat job cannot read
+  <path> (macOS privacy) — run: orche install --grant` for a privacy abort at most 24 h old with no job pass
+  after it, and `heartbeat job loaded, no pass yet — run: orche install --grant` (a project under a protected
+  folder; else `— run orche reconcile and read <ORCHE_HOME>/logs/reconcile.log`) when the loaded job has not
+  passed within 2 × `every_s` of its load (the plist's mtime). `privacy` is OK when no project is under a
+  protected folder, or the job is not loaded (the `reconcile job` row says so), or the job passed since it
+  loaded and since its last privacy abort and read every protected project; WARN otherwise, naming `orche
+  install --grant`. `orche status`: `heartbeat: blocked by macOS privacy — run orche install --grant` for the
+  first two.
+- `orche setup [--project PATH ...] [--no-auth] [--home PATH]` (a new machine; `--home` for tests): `orche
+  install --no-jev` in the mode install-state.json records (else plugin when the ORCHE plugin is enabled, else
+  settings), `orche auth status` (and, with no token stored, `claude setup-token` then `orche auth set`), `orche
+  init PATH --no-intake` per project, the first-pass check above once the projects exist, `orche doctor`;
+  idempotent, exit 0 when every step succeeded and the doctor has no FAIL. A heartbeat with no pass is a failed
+  step; when macOS privacy is all that is left the last line is `setup: 한 단계 남음 — 위에서 열린 창에서 전체 디스크
+  접근 권한을 켠 뒤 실행하세요: orche install --grant`.
+
 | Rule | Requirement |
 |---|---|
 | R-RECONCILE-1 | Pass: `orche reconcile [--dry-run]` runs one bounded, idempotent pass under a non-blocking lock (held → exit 0): settle lost runs, the owner step (§8.8), observe the classes, plan due attempts, apply through existing paths only, save `state.json` after each action, write `heartbeat.json` last. No daemon. (§8.6) |
@@ -788,6 +842,7 @@ another interval, or is not loaded).
 | R-RECONCILE-4 | Scheduling: `orche install` writes and loads the `com.orche.reconcile` LaunchAgent (`StartInterval` = `every_s`, `RunAtLoad`); `--no-reconcile` skips it; `orche uninstall` removes it. The prompt and Stop hooks kick one detached pass when the heartbeat is missing or older than 3 × `every_s` (at most once per `every_s`); a kick error never changes a hook's result. (§8.6) |
 | R-RECONCILE-5 | Heartbeat: `orche status` prints a `heartbeat:` line and per-project `stalled:` lines; `orche doctor` WARNs `heartbeat` past 2 × `every_s` or never written, and `reconcile job` when the plist is missing, unreadable, has another interval or is not loaded. (§8.6) |
 | R-RECONCILE-6 | Safety: a pass sends text only by `orche nudge` and `orche deliver --remind`; it never switches focus, never kills a pane or run, never wakes a dormant or paused unit; `--dry-run` prints `would …` and writes nothing; events lines carry ids, counts and times, never text. (§8.6) |
+| R-RECONCILE-7 | Watchdog and privacy (0.7.2): a pass running 120 s after it took the lock is aborted (SIGALRM, then a thread 15 s later), `last-abort.json` {at, phase, path, hint: privacy|slow}, one events line, lock released, exit 3; `job_at` marks the LaunchAgent's passes; `orche install` waits 45 s for the job's first pass and, blocked by macOS privacy, opens Finder and Full Disk Access with the guidance (exit 0); `orche install --grant` verifies the grant (5 min); `orche doctor` WARNs `heartbeat` and `privacy` while the job cannot read a project. (§8.6) |
 
 ---
 

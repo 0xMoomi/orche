@@ -90,6 +90,22 @@ printf '%s\\n' "$*" >> "$d/security-argv.txt"
 case "$1" in -i) cat >> "$d/security-stdin.txt" ;; esac
 exit 44
 """
+# launchd: every call logged, and every answer 113 (what `launchctl print` says for a job that is not
+# loaded), so `orche install` writes the reconcile plist under the temp HOME, its bootstrap fails (a
+# warn line) and no first-pass check kicks anything. 0.7.2 review #13: without this stub PATH's
+# /bin/launchctl booted out the developer's real com.orche.reconcile and loaded the temp clone's.
+FAKE_LAUNCHCTL = """#!/bin/sh
+printf '%s\\n' "$*" >> "$(dirname "$0")/launchctl-argv.txt"
+exit 113
+"""
+# Finder, System Settings and the clipboard: logged, nothing opened or read.
+FAKE_RECORDER = """#!/bin/sh
+printf '%s\\n' "$*" >> "$(dirname "$0")/$(basename "$0")-argv.txt"
+exit 0
+"""
+# Everything ORCHE or install.sh may run that acts on this machine: each must be a fake in fakebin
+# (or nowhere on PATH) before any child starts.
+MACHINE_TOOLS = ("claude", "orca", "osascript", "security", "launchctl", "open", "pbcopy", "pbpaste")
 OLD_PYTHON = """#!/bin/sh
 case "$1" in --version) echo "Python 3.9.6"; exit 0 ;; esac
 exit 1
@@ -156,6 +172,9 @@ class InstallShTest(unittest.TestCase):
         _write(self.fake / "orca", FAKE_ORCA)
         _write(self.fake / "osascript", FAKE_OSASCRIPT)
         _write(self.fake / "security", FAKE_SECURITY)
+        _write(self.fake / "launchctl", FAKE_LAUNCHCTL)
+        for name in ("open", "pbcopy", "pbpaste"):
+            _write(self.fake / name, FAKE_RECORDER)
         (self.fake / "python3").symlink_to(sys.executable)
         self.env = {k: v for k, v in os.environ.items()
                     if not k.startswith(("ORCHE_", "ORCA_", "CLAUDE", "ZDOTDIR", "SSH_"))}
@@ -168,10 +187,20 @@ class InstallShTest(unittest.TestCase):
     def tearDown(self):
         self._tmp.cleanup()
 
+    def fenced(self, env):
+        """`env`, after checking that none of MACHINE_TOOLS on its PATH is outside fakebin: a test
+        whose PATH lets the real launchctl, open, osascript, security, claude or orca through fails
+        here, before anything runs."""
+        for name in MACHINE_TOOLS:
+            found = shutil.which(name, path=env["PATH"])
+            if found is not None and Path(found).parent != self.fake:
+                self.fail(f"{name} would run {found}: put a fake in fakebin first")
+        return env
+
     def install(self, *args, env=None, dir_arg=True):
         argv = ["/bin/bash", str(self.script), "--source", str(self.bare)]
         argv += ["--dir", str(self.dir)] if dir_arg else []
-        res = subprocess.run(argv + list(args), env=env or self.env, stdin=subprocess.DEVNULL,
+        res = subprocess.run(argv + list(args), env=self.fenced(env or self.env), stdin=subprocess.DEVNULL,
                              capture_output=True, text=True, timeout=180, start_new_session=True)
         res.all = res.stdout + res.stderr
         return res
@@ -210,7 +239,7 @@ class InstallShTest(unittest.TestCase):
         reader = threading.Thread(target=drain, daemon=True)
         reader.start()
         argv = ["/bin/bash", "-s", "--", "--source", str(self.bare), "--dir", str(self.dir), *args]
-        proc = subprocess.Popen(argv, env=env, stdin=subprocess.PIPE, stdout=out_slave, stderr=out_slave,
+        proc = subprocess.Popen(argv, env=self.fenced(env), stdin=subprocess.PIPE, stdout=out_slave, stderr=out_slave,
                                 start_new_session=True, cwd=self.tmp)
         os.close(out_slave)
         proc.stdin.write(self.script.read_bytes())
@@ -271,6 +300,12 @@ class InstallShTest(unittest.TestCase):
         self.assertIn(f"Open a new terminal (or run: source {self.home / '.profile'})", res.stdout)
         self.assertIn("Next: orche init <project>", res.stdout)
         self.assertIn("doctor:", res.stdout)
+        if sys.platform == "darwin":   # the heartbeat job went to the fake launchctl, nothing was kicked
+            plist = self.home / "Library" / "LaunchAgents" / "com.orche.reconcile.plist"
+            launchctl = (self.fake / "launchctl-argv.txt").read_text().splitlines()
+            self.assertIn(f"bootstrap gui/{os.getuid()} {plist}", launchctl)
+            self.assertFalse([c for c in launchctl if c.startswith("kickstart")], launchctl)
+            self.assertFalse((self.fake / "open-argv.txt").exists())
 
         again = self.install()
         self.assertOk(again)
@@ -282,6 +317,16 @@ class InstallShTest(unittest.TestCase):
         self.assertIn("plugin marketplace update orche", calls)
         self.assertIn("plugin update orche@orche", calls)
         self.assertIn(f"update {self.dir} (main)", again.stdout)
+
+    def test_the_fake_world_cannot_reach_this_machine(self):
+        # Every tool that acts on the machine resolves to its fake (0.7.2 review #13: /bin/launchctl
+        # on this PATH replaced the developer's heartbeat job with the temp clone's).
+        for name in MACHINE_TOOLS:
+            self.assertEqual(shutil.which(name, path=self.env["PATH"]), str(self.fake / name), name)
+        real = _write(self.tmp / "elsewhere" / "launchctl", "#!/bin/sh\nexit 0\n")
+        with self.assertRaises(AssertionError) as caught:   # the fence refuses before any spawn
+            self.fenced({**self.env, "PATH": f"{real.parent}:{self.env['PATH']}"})
+        self.assertIn(f"launchctl would run {real}", str(caught.exception))
 
     # --- the Jev question through /dev/tty --------------------------------------------------
 
@@ -514,7 +559,7 @@ class InstallShTest(unittest.TestCase):
         # `curl ... | bash -s -- ...`: the script arrives on stdin, so stdin is no terminal (no Jev
         # question) and no child may read the rest of the script; the cwd is not taken as a clone.
         res = subprocess.run(["/bin/bash", "-s", "--", "--source", str(self.bare), "--dir", str(self.dir)],
-                             input=self.script.read_text(), env=self.env, capture_output=True, text=True,
+                             input=self.script.read_text(), env=self.fenced(self.env), capture_output=True, text=True,
                              timeout=180, cwd=ROOT, start_new_session=True)
         self.assertEqual(res.returncode, 0, res.stdout + res.stderr)
         self.assertNotIn("error:", res.stderr)
@@ -526,7 +571,7 @@ class InstallShTest(unittest.TestCase):
     def test_run_from_a_clone_uses_that_clone(self):
         _git("clone", "-q", str(self.bare), str(self.dir))
         shutil.copy2(self.script, self.dir / "install.sh")
-        res = subprocess.run(["/bin/bash", str(self.dir / "install.sh")], env=self.env,
+        res = subprocess.run(["/bin/bash", str(self.dir / "install.sh")], env=self.fenced(self.env),
                              stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=180,
                              cwd=self.tmp, start_new_session=True)
         self.assertEqual(res.returncode, 0, res.stdout + res.stderr)

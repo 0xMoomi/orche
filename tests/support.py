@@ -13,11 +13,13 @@ if str(ROOT / "lib") not in sys.path:
 
 # Process-wide default for every test module (TempHomeCase re-applies it per test): the Jev key
 # store never touches the real keychain and no real dialog opens.
-from orche import headless, jev_setup as _jev_setup, jevkey as _jevkey  # noqa: E402
+from orche import headless, jev_setup as _jev_setup, jevkey as _jevkey, reconcile as _reconcile  # noqa: E402
 
 _jevkey.PLATFORM = "linux"
 _jevkey.SECURITY = "/nonexistent/orche-test/security"
 _jev_setup.OSASCRIPT = "/nonexistent/orche-test/osascript"
+# No in-process pass arms the watchdog (SIGALRM, its exit thread) unless the test asks: run_pass(watchdog_s=…).
+_reconcile.WATCHDOG_S = 0
 
 
 _NO_CLAUDE_DIR = None
@@ -39,11 +41,13 @@ RECORDING = ("#!/bin/sh\n"
              "exit {code}\n")
 OSASCRIPT_CALLS = "osascript-calls.log"
 LAUNCHCTL_CALLS = "launchctl-calls.log"
+OPEN_CALLS = "open-calls.log"
 
 
 def no_claude_dir() -> str:
     """A directory whose `claude`, `orca`, `security` and `launchctl` always fail and whose `osascript`
-    only records its call (no test shows a notification). It goes first on PATH for the
+    and `open` only record their call (no test shows a notification, a Finder window or System
+    Settings). It goes first on PATH for the
     whole test process (below), so code that falls back to the default `claude_bin` (e.g. the intake
     at the end of `orche init`) or `orca_bin` (a nudger) can never start the developer's real Claude
     Code or reach the live Orca, and no child process reads the real keychain (it sees an empty one),
@@ -57,6 +61,7 @@ def no_claude_dir() -> str:
         atexit.register(shutil.rmtree, _NO_CLAUDE_DIR, True)
         for name, text in (("claude", NO_CLAUDE), ("orca", NO_ORCA), ("security", NO_SECURITY),
                            ("osascript", RECORDING.format(name="osascript", code=0)),
+                           ("open", RECORDING.format(name="open", code=0)),
                            ("launchctl", RECORDING.format(name="launchctl", code=113))):
             stub = Path(_NO_CLAUDE_DIR) / name
             stub.write_text(text)

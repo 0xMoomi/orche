@@ -517,7 +517,8 @@ class SleepWakeTest(CoreCase):
         self.terminals = [{"handle": "t-9", "title": "✳ div-acme-shop-build"}]
         code, out, _ = self.orche("wake", "div-acme-shop-build")
         self.assertEqual((code, out), (0, "div-acme-shop-build is already active\n"))
-        self.assertEqual([c[1:3] for c in self.calls], [["terminal", "list"]])
+        # 0.7.2: the pane found is verified by handle (`terminal read`; not conclusive here: a fresh list)
+        self.assertEqual([c[1:3] for c in self.calls], [["terminal", "list"], ["terminal", "read"], ["terminal", "list"]])
         self.assertEqual(registry.load(), self.reg)
         self.assertFalse(hr.log_path().exists())
 
@@ -604,7 +605,7 @@ class ProjectPaneTest(CoreCase):
                               "--name main-acme-shop --json\n")
         self.terminals = [{"handle": "t-main", "title": "main-acme-shop"}]
         self.assertEqual(self.orche("--dry-run", "wake", "main-acme-shop"), (0, "would switch to main-acme-shop\n", ""))
-        self.assertEqual({c[2] for c in self.calls}, {"list"})
+        self.assertEqual({c[2] for c in self.calls}, {"list", "read"})   # read-only: the pane verified (0.7.2)
 
     def test_wake_main_dry_run_json_carries_the_create_argv(self):
         code, out, _ = self.orche("--json", "--dry-run", "wake", "main-acme-shop")

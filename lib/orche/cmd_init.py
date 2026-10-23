@@ -519,4 +519,21 @@ def cmd_init(args):
     if restart:
         lines.append(f"personas updated for {', '.join(restart)}: restart the pane or /clear to load them")
     out(args, data, lines)
+    if existing is None and not dry_run and not args.json and getattr(args, "first_pass", True):
+        return _first_pass_if_protected(root)
+    return EXIT_OK
+
+
+def _first_pass_if_protected(root) -> int:
+    """A project registered under a protected folder (macOS privacy) while the heartbeat job is
+    loaded: the install's first-pass check, so the owner gets the same guidance now rather than a
+    silent job later. Human output only (apply-all's --json inits never wait)."""
+    from . import cmd_install, privacy, units
+    if not privacy.protected(root) or not cmd_install.job_loaded():
+        return EXIT_OK
+    try:
+        first = cmd_install.first_pass_check(units.now())
+    except KeyboardInterrupt:
+        return cmd_install.interrupted()
+    print("\n".join(first["lines"]), flush=True)
     return EXIT_OK

@@ -93,6 +93,12 @@ def loaded(label) -> bool:
     return shell.run(["launchctl", "print", f"{domain()}/{label}"], timeout=3).ok
 
 
+def kickstart(label, kill=False):
+    """`launchctl kickstart gui/<uid>/<label>`: run the job now; a running instance is left alone (a
+    healthy pass finishes), or with `kill` (-k) killed first."""
+    return shell.run(["launchctl", "kickstart", *(["-k"] if kill else []), f"{domain()}/{label}"], timeout=10)
+
+
 RECONCILE = "com.orche.reconcile"
 
 

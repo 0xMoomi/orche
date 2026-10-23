@@ -206,7 +206,7 @@ export PATH="$HOME/orche/bin:$PATH"
 orche version
 ```
 
-Success: `orche 0.7.1` (or the version you cloned).
+Success: `orche 0.7.2` (or the version you cloned).
 
 To make it permanent, add the same line to your login profile. ORCHE's panes and `orche doctor` use a
 login shell (`$SHELL -lc`), and a zsh login shell does not read `~/.zshrc`, so use:
@@ -326,6 +326,54 @@ These need a fix:
 - `orche on PATH`: the PATH line is not in your login profile (step 2, or re-run the one-command installer).
 - `orca	orca status failed …`: Orca is not running, or `orca` is not on `PATH`.
 - `hooks	plugin not enabled …`: step 5 is not done yet (or re-run the one-command installer).
+
+### A new machine: `orche setup`
+
+1. run the one-command installer above;
+2. open a new Terminal window;
+3. `orche setup --project ~/code/my-app` (if Finder and System Settings open, follow the printed lines).
+
+Step by step, `orche setup`:
+
+1. installs ORCHE (`orche install --no-jev` in the mode the last install used — plugin when the ORCHE plugin is
+   enabled, else settings: hooks, status line, agents, the heartbeat job);
+2. shows whether a Claude token is stored for headless runs, and if not prints the two commands to run
+   yourself: `claude setup-token`, then `orche auth set` (setup never reads or prints a token);
+3. runs `orche init <path> --no-intake` for each `--project` (a repo ORCHE does not know yet is registered);
+4. checks that the heartbeat job can read your projects (see the next section); when that is all that is
+   left, the last line is `setup: 한 단계 남음 — … orche install --grant` (exit 1);
+5. ends with `orche doctor`.
+
+Run it again whenever you like: every step is safe to repeat. `--no-auth` skips step 2.
+
+### macOS privacy: projects in Downloads, Documents, Desktop, iCloud Drive, cloud storage or /Volumes
+
+The heartbeat job (`com.orche.reconcile`) runs in the background, without a terminal, so macOS does not let
+it read those places (`~/Library/CloudStorage` and every volume under `/Volumes` included) until you allow
+it — and only you can, in System Settings. When `orche install`, `orche setup` or `orche init` (a new project
+in such a place) finds that the job cannot read a project, it opens two windows and prints, last:
+
+```text
+ORCHE 백그라운드 작업(하트비트)이 macOS 개인정보 보호 설정 때문에 프로젝트 폴더를 읽지 못합니다. 방금 열린 Finder 창에서 선택된 항목(Python.app)을 시스템 설정의 '전체 디스크 접근 권한' 목록으로 끌어다 놓고 스위치를 켠 다음, 터미널에서 실행하세요: orche install --grant
+Drag the item selected in Finder (Python.app) into System Settings › Privacy & Security › Full Disk Access, switch it on, then run: orche install --grant
+```
+
+What to do (`orche install --grant` prints the same steps):
+
+1. In the Finder window the item to add is already selected: `Python.app`, or for a uv, pyenv or conda
+   Python the `python3.x` binary itself (the last printed line is its path; if dragging does not work, click
+   + under the list, press Cmd+Shift+G and paste it). Drag it into the Full Disk Access list.
+2. Switch the new entry on (password or Touch ID). If macOS asks whether Python may access a folder, click
+   Allow.
+3. Run `orche install --grant` and keep that terminal open: it prints `권한 확인 완료 — 하트비트 정상 / granted — heartbeat OK` once the job has
+   read your projects; it keeps checking for up to 5 minutes.
+
+`아직 읽지 못합니다 — … / still blocked — …` means the switch is off or another Python was added: run
+`orche install --grant` again (it reopens both windows). With no project in such a place it prints
+`nothing to grant — no project is under a protected folder` and opens nothing. `orche status` shows `heartbeat: blocked by macOS
+privacy — run orche install --grant`; `orche doctor` shows the state in its `heartbeat` and `privacy` rows.
+After a Python upgrade the permission may not carry over; the doctor says so, and `orche install --grant`
+fixes it. Projects anywhere else (for example `~/code`) need none of this.
 
 ### Troubleshooting
 

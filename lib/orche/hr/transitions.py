@@ -112,14 +112,18 @@ def wake(reg, unit, *, dry_run=False) -> tuple:
 
 
 def _reopen(unit, *, dry_run=False) -> tuple:
-    """An `active` unit: keep "already active" while a pane carries its title, else reopen one.
+    """An `active` unit: keep "already active" while a live pane carries its title, else reopen one.
 
     A closed pane would otherwise leave the unit stuck (sleep wants a fresh HANDOFF.md, wake said
-    "already active"). The pane resumes the session; the status stays `active`, so the awake
-    limit and stage gate do not apply. The pane lookup is read-only and also runs under --dry-run.
+    "already active"). The pane found by title is verified by handle (`panes.live_pane`): one Orca
+    still lists right after it was closed does not count. The pane resumes the session; the status
+    stays `active`, so the awake limit and stage gate do not apply. The lookup is read-only and also
+    runs under --dry-run.
     """
     try:
         term = orca.find_terminal_by_title(unit.session)
+        if term is not None:
+            term = panes.live_pane(term, unit.session)
     except orca.OrcaError as exc:
         raise book.Refused(cli.EXIT_USER, f"could not list panes for {unit.session}: {exc}") from None
     if term is not None:

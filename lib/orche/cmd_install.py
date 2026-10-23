@@ -12,13 +12,22 @@ and writes nothing. `--home PATH` targets another home (tests); ORCHE_HOME then 
 The first install on a terminal also asks once for an optional Jev key (`jev_setup`); `--no-jev`
 skips it, `--jev-key-stdin [--jev-kind gateway|direct]` configures it without prompts. A missing
 or failing Jev never fails the install.
+
+Once the reconcile job is loaded (macOS, real home) the install waits up to 45 s (a progress line
+first) for a pass of the job itself, kickstarting it (plain) when none came yet: `reconcile job:
+first pass OK (<took_s> s)`, else — printed last — the privacy guidance (Finder and Full Disk Access
+opened) when a project is under a protected folder, else where to look; the install still exits 0.
+`--grant` does only the grant: nothing to grant when no project is under a protected folder; already
+granted? else the steps, Finder at the job's Python.app (or its bare interpreter) and System Settings
+at Full Disk Access, then up to 5 min for a job pass (privacy.GRANTED / privacy.BLOCKED, exit 1).
+Ctrl-C during a wait: one line, exit 130.
 """
 import os
 import sys
 from pathlib import Path
 
-from . import jev_setup, paths, reconcile, util
-from .cli import EXIT_OK, EXIT_USER, out
+from . import jev_setup, paths, privacy, reconcile, registry, units, util
+from .cli import EXIT_OK, EXIT_USER, fail, out
 from .install import (MIGRATION_LINE, Ctx, backup, agents, apply_all, codex, doctor, fable, launchd, settings, skills,
                       statusline)
 
@@ -42,6 +51,10 @@ def register(subparsers):
                    help="plugin mode: do not print the two /plugin lines (install.sh runs those steps itself)")
     p.add_argument("--no-reconcile", action="store_true",
                    help="do not install the reconcile LaunchAgent (run `orche reconcile` every 5 min yourself)")
+    p.add_argument("--grant", action="store_true",
+                   help="macOS: let the heartbeat job read projects under Downloads, Documents, Desktop, "
+                        "iCloud Drive, cloud storage or /Volumes (opens Finder and Full Disk Access, then "
+                        "checks); installs nothing")
     p.set_defaults(func=cmd_install)
     p = subparsers.add_parser("uninstall", help="remove ORCHE blocks, hook entries and agent symlinks")
     p.add_argument("--home", help="home directory (default: $HOME)")
@@ -93,6 +106,27 @@ def _load_state() -> dict:
             raise StateUnreadable(path, "not a JSON object")
         return state
     return {}
+
+
+def plugin_enabled(home) -> bool:
+    """The ORCHE plugin is enabled in `home`'s ~/.claude/settings.json (unreadable: no)."""
+    try:
+        data = util.read_json(settings.settings_path(Ctx(home)), default={})
+    except (OSError, util.JsonError):
+        return False
+    return settings.plugin_enabled(data)
+
+
+def installed_mode(home) -> str:
+    """The mode the last install used (install-state.json `mode`), else `plugin` when the ORCHE plugin
+    is enabled, else `settings`: what `orche setup` installs with and what the --grant refusal names."""
+    try:
+        mode = _load_state().get("mode")
+    except StateUnreadable:
+        mode = None
+    if mode in ("plugin", "settings"):
+        return mode
+    return "plugin" if plugin_enabled(home) else "settings"
 
 
 def _state_or_error(ctx, phase, consequence):
@@ -170,8 +204,85 @@ def _reconcile_job(ctx, args, new_state) -> None:
     else:
         how = "not loaded: --home is not the real home"
     ctx.note(RECONCILE_STEP, "write", res["plist"], f"every {every}s, {how}")
+    ctx.job_loaded = bool(res["loaded"])
     if res["error"]:
         ctx.note(RECONCILE_STEP, "warn", None, f"launchctl bootstrap failed: {res['error']}; see orche doctor")
+
+
+def job_loaded(home=None) -> bool:
+    """macOS, `home` the real home, and the reconcile job loaded (`launchctl print`)."""
+    return sys.platform == "darwin" and launchd._live(home) and launchd.loaded(launchd.RECONCILE)
+
+
+def interrupted() -> int:
+    """Ctrl-C during a wait: one line, exit 130, no traceback."""
+    print(privacy.INTERRUPTED, file=sys.stderr, flush=True)
+    return privacy.EXIT_INTERRUPTED
+
+
+def first_pass_check(started, live=True, progress=None) -> dict:
+    """After the job was (re)loaded: wait privacy.FIRST_PASS_S for a pass of its own (heartbeat.json
+    `job_at` at or after `started`, every protected project readable), checked before any kick, then
+    a plain kickstart (a running pass is left alone); the progress line goes to `progress` (default
+    stdout) first. {"ok", "took_s", "hint", "lines"}; on a timeout the lines are privacy.no_pass's: the
+    guidance (Finder and Full Disk Access opened when `live`) when a project is under a protected
+    folder or a recent privacy abort says so, else where to look. Ctrl-C raises KeyboardInterrupt."""
+    print(privacy.FIRST_PASS_WAIT, file=progress or sys.stdout, flush=True)
+    hb = privacy.wait_job_pass(started, privacy.FIRST_PASS_S, kick=lambda: launchd.kickstart(launchd.RECONCILE))
+    if hb is not None:
+        return {"ok": True, "took_s": hb.get("took_s"), "hint": None,
+                "lines": [f"reconcile job: first pass OK ({hb.get('took_s')} s)"]}
+    try:
+        reg = registry.load()
+    except registry.RegistryError:
+        reg = {}
+    hint, lines = privacy.no_pass(reg, live=live)
+    return {"ok": False, "took_s": None, "hint": hint, "lines": lines}
+
+
+def cmd_grant(args) -> int:
+    """`orche install --grant`: a job pass within GRANT_QUICK_S means granted already; else the steps,
+    Finder at the Python.app and System Settings at Full Disk Access, then up to GRANT_S for a job
+    pass, the job kickstarted every KICK_EVERY_S. 0 granted (or not macOS); 1 still blocked or no job."""
+    ctx = _ctx(args)
+    if sys.platform != "darwin":
+        out(args, {"granted": None}, ["not macOS: nothing to grant"])
+        return EXIT_OK
+    try:
+        reg = registry.load()
+    except registry.RegistryError:
+        reg = None   # cannot tell: go on
+    if reg is not None and not privacy.protected_projects(reg):
+        out(args, {"granted": None, "protected": []}, [privacy.NOTHING_TO_GRANT])
+        return EXIT_OK
+    app = privacy.python_app()
+    if args.dry_run:
+        out(args, {"dry_run": True, "app": str(app)},
+            privacy.steps(app) + [f"would run: open -R {app}", f"would run: open {privacy.SETTINGS_URL}"])
+        return EXIT_OK
+    if not launchd._live(ctx.home) or not launchd.loaded(launchd.RECONCILE):
+        return fail(EXIT_USER, privacy.NOT_LOADED.format(mode=installed_mode(ctx.home)))
+    started = units.now()
+    kicks = []
+
+    def kick():   # -k once, first (a pass stuck since before the grant); then plain: a running pass stays
+        launchd.kickstart(launchd.RECONCILE, kill=not kicks)
+        kicks.append(1)
+    progress = sys.stderr if args.json else sys.stdout
+    try:
+        print(privacy.grant_wait(privacy.GRANT_QUICK_S), file=progress, flush=True)
+        hb = privacy.wait_job_pass(started, privacy.GRANT_QUICK_S, kick, privacy.KICK_EVERY_S)
+        if hb is None:
+            if not args.json:
+                print("\n".join(privacy.steps(app)), flush=True)
+            privacy.reveal(app)
+            print(privacy.grant_wait(privacy.GRANT_S), file=progress, flush=True)
+            hb = privacy.wait_job_pass(started, privacy.GRANT_S, kick, privacy.KICK_EVERY_S)
+    except KeyboardInterrupt:
+        return interrupted()
+    out(args, {"granted": hb is not None, "app": str(app), "took_s": (hb or {}).get("took_s")},
+        [privacy.GRANTED if hb is not None else privacy.blocked(app)])
+    return EXIT_OK if hb is not None else EXIT_USER
 
 
 def _reconcile_job_remove(ctx, state) -> None:
@@ -219,6 +330,9 @@ def _jev_step(args, state, new_state):
 
 
 def cmd_install(args):
+    if getattr(args, "grant", False):
+        return cmd_grant(args)
+    started = units.now()
     ctx = _ctx(args, yes=args.yes)
     state = _state_or_error(ctx, "install", "install refused, settings.json not touched")
     jev_result = None
@@ -249,7 +363,18 @@ def cmd_install(args):
             "instructions": instructions, "errors": ctx.errors, "migration": MIGRATION_LINE}
     if jev_result is not None:
         data["jev"] = {k: v for k, v in jev_result.items() if k != "lines"}
-    out(args, data, lines)
+    if not args.json:
+        out(args, data, lines)
+    if getattr(ctx, "job_loaded", False) and not ctx.dry_run and getattr(args, "first_pass", True):
+        try:   # last: the guidance is what the owner acts on next
+            first = first_pass_check(started, progress=sys.stderr if args.json else None)
+        except KeyboardInterrupt:
+            return interrupted()
+        data["reconcile_first_pass"] = {k: v for k, v in first.items() if k != "lines"}
+        if not args.json:
+            print("\n".join(first["lines"]), flush=True)
+    if args.json:
+        out(args, data, lines)
     return EXIT_USER if ctx.errors else EXIT_OK
 
 
