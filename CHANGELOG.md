@@ -3,6 +3,13 @@
 All notable changes to ORCHE are listed here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow semantic versioning.
 
+## 0.7.1 — 2026-10-23
+
+### Fixed
+- Owner notifications judge `flow.quiet_hours` on the reconcile pass's own clock, not re-projected onto the
+  host's time zone: a pass's escalation no longer goes silent (or loud) because the machine's zone differs
+  (CI red on UTC runners at 00:24 UTC).
+
 ## 0.7.0 — 2026-10-23
 
 ### Added

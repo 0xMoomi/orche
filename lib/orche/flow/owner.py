@@ -292,8 +292,10 @@ def _held(project, kind, reason) -> bool:
 
 
 def _quiet(now) -> bool:
+    """Quiet hours on the caller's clock: `now` as given (units.now() is local), never re-read or
+    re-projected onto the host's zone."""
     from .. import reconcile      # reconcile imports flow: resolved at call time
-    return reconcile.in_quiet_hours(config.load(), now.astimezone())
+    return reconcile.in_quiet_hours(config.load(), now)
 
 
 def _sent(project) -> dict:

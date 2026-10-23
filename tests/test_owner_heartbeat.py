@@ -389,9 +389,8 @@ class HeldTest(BeatCase):
         self.assertIn("owner dropped project=acme-shop kind=done\n", self.events())
 
     def test_an_escalation_follows_the_same_path_and_rules(self):
-        with mock.patch.object(units, "now", lambda: T0):
-            reconcile._tell_owner(P, "main-acme-shop is closed: orche wake main-acme-shop")
-            reconcile._tell_owner(P, "Main has 3 report(s) unread")
+        reconcile._tell_owner(P, "main-acme-shop is closed: orche wake main-acme-shop", T0)
+        reconcile._tell_owner(P, "Main has 3 report(s) unread", T0)
         self.assertEqual(len(self.notes()), 1)
         self.assertEqual(self.shown_at([4, 5, 10]), [5])
         self.assertEqual(self.bodies()[-1], "Main has 3 report(s) unread")
