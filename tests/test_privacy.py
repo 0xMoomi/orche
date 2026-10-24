@@ -131,7 +131,7 @@ class PrivacyRowTest(PrivacyCase):
         os.utime(plist, (1_790_000_000.7, 1_790_000_000.7))
         calls = []
 
-        def runner(argv, *, timeout, input):
+        def runner(argv, *, timeout, input, env=None):
             calls.append(argv)
             return shell.Result(0, "", "", argv)
         with mock.patch.object(shell, "RUNNER", runner), mock.patch("sys.platform", "darwin"):
@@ -154,7 +154,7 @@ class FirstPassTest(test_install.InstallCase):
         self.granted, self.grant_on_open, self.job_loaded = False, False, True
         inner = shell.RUNNER
 
-        def runner(argv, *, timeout, input):
+        def runner(argv, *, timeout, input, env=None):
             if argv[0] not in ("launchctl", "open"):
                 return inner(argv, timeout=timeout, input=input)
             self.ran.append(argv)
@@ -201,7 +201,7 @@ class FirstPassTest(test_install.InstallCase):
         self.assertLessEqual(self.t, privacy.POLL_S)
 
     def test_a_pass_already_done_needs_no_kick(self):
-        def bootstrapped(argv, *, timeout, input):    # RunAtLoad: the job's pass ran before the check
+        def bootstrapped(argv, *, timeout, input, env=None):    # RunAtLoad: the job's pass ran before the check
             if argv[:2] == ["launchctl", "bootstrap"]:
                 with mock.patch.dict(os.environ, {"ORCHE_RECONCILE_JOB": "1"}):
                     reconcile.write_heartbeat(self.now, {"every_s": 300}, 0.2, 0)

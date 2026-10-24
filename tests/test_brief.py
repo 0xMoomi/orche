@@ -279,7 +279,7 @@ if __name__ == "__main__":
 STANDING = "1. Opus for hard work, Sonnet for reads.\n2. Never force-push.\n"
 SAMPLE = support.FIXTURES / "transcripts" / "dispatch_sample.jsonl"
 CLOSURE = {"orche", "orche.bip39", "orche.brief", "orche.log", "orche.mask", "orche.paths", "orche.shell",
-           "orche.units", "orche.util"}
+           "orche.units", "orche.util", "orche.vendors"}
 
 
 def today():

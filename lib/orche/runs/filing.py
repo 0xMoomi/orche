@@ -15,11 +15,13 @@ from . import history
 
 VIA = "runner"       # pointer field `via` on every pointer the runner files
 TAIL_CHARS = 2000
-IDENTITY = ("unit", "project", "to", "worktree", "branch", "tier", "model", "effort")      # what ran
+IDENTITY = ("unit", "project", "to", "worktree", "branch", "tier", "model", "vendor", "effort")   # what ran
 RESULT = ("started", "finished", "timeout_s", "exit_code", "is_error", "stop_reason", "cost_usd",
           "num_turns", "usage", "result_tail", "error", "head_before", "head_sha", "status",
           "pointer_filed")
-LOCKED = ("to", "rev", "tier", "model", "effort", "worktree", "branch")   # what runs: job.lock_info's keys
+LOCKED = ("to", "rev", "tier", "model", "vendor", "effort", "worktree", "branch",
+          "timeout_s")   # what runs: job.lock_info's keys
+LOST_TIMEOUT_S = 31 * 60   # a lock without timeout_s: job.DEFAULT_TIMEBOX_S + job.GRACE_S
 
 
 class FilingError(Exception):
@@ -30,7 +32,7 @@ class FilingError(Exception):
 def run_record(who, *, started, finished, status, stop_reason, is_error, error, pointer_filed,
                timeout_s=None, exit_code=None, cost_usd=None, num_turns=None, usage=None,
                result_tail="", head_before=None, head_sha=None) -> dict:
-    """The RUN.json record: `who`'s IDENTITY keys, then the RESULT keys, always in this order (23).
+    """The RUN.json record: `who`'s IDENTITY keys, then the RESULT keys, always in this order (24).
     Values are written as given; callers mask claude's strings (D5)."""
     result = {"started": started, "finished": finished, "timeout_s": timeout_s, "exit_code": exit_code,
               "is_error": is_error, "stop_reason": stop_reason, "cost_usd": cost_usd,
@@ -135,8 +137,8 @@ def file_pointer(reg, who, rev, folder, status, summary, head=None, link_report=
 
 
 def events(who, cost, turns, status, stop=None) -> None:
-    log.log("events", f"run unit={who['unit']} to={who['to']} model={who['model']} cost={cost} "
-                      f"turns={turns} status={status} stop={stop or '-'}")
+    log.log("events", f"run unit={who['unit']} to={who['to']} model={who['model']} vendor={who['vendor']} "
+                      f"cost={cost} turns={turns} status={status} stop={stop or '-'}")
 
 
 def unrun(reg, who, rev, folder, status, summary, error, stop_reason, record=True) -> dict:
@@ -171,17 +173,42 @@ def unrun(reg, who, rev, folder, status, summary, error, stop_reason, record=Tru
     return rec
 
 
+def _lost_finished(started, timeout_s) -> str:
+    """Now, or `started` + `timeout_s` when that is earlier: the run was killed by then."""
+    import datetime as _dt
+    now, start = util.now_iso(), units.parse_iso(started)
+    if start is None:
+        return now
+    end = start + _dt.timedelta(seconds=timeout_s)
+    return end.astimezone().isoformat(timespec="seconds") if end < units.parse_iso(now) else now
+
+
+def _drop_codex_out(data):
+    """Remove a lost Codex run's `-o` file; a lock without `started_ns` names none. Never raises."""
+    from .. import codex, procs, vendors
+    if vendors.vendor_of(data.get("model")) != vendors.CODEX or not data.get("unit") \
+            or data.get("started_ns") is None:
+        return
+    try:
+        codex.out_path(procs.run_id(data["unit"], data["started_ns"])).unlink(missing_ok=True)
+    except OSError as exc:
+        log.log("hooks", f"runner: {data['unit']}: cannot remove the codex -o file: {exc}")
+
+
 def lost(reg, proj, data) -> str:
     """A lost run (runs.reconcile: its `orche run` died without filing) from its lock record `data`.
     "unknown-unit": `proj` has no folder for the unit, nothing to file; "stale-lock": a pointer of
     this run (the runner's or the worker's own) is already filed; "unroutable": the target routes to
     no recipient: the minimal RUN.json (`pointer_filed: false`) and no pointer (logged);
-    "reconciled": a minimal RUN.json (`stop_reason: lost`; kept when the run had written its own) and
-    `failed` "runner died: …" from the target to Main (feature: Build), events `runner-reconciled`,
-    activity.
+    "reconciled": a minimal RUN.json (`stop_reason: lost`, `finished` now or, earlier, the lock's
+    `started` + `timeout_s` (LOST_TIMEOUT_S without it: the worker was killed by then), `cost_usd` the
+    reservation of `started` to `finished`, history.reserve, at most flow.max_unit_cost_usd; kept
+    when the run had written its own) and `failed` "runner died: …" from the target to Main (feature: Build), events
+    `runner-reconciled`, activity.
     The identity and the revision are the lock's (LOCKED): what ran. A lock written before them
     gives `null` identity and the brief's current revision (and target, without `to`). No donegate
-    call: a lost run has no claim. Raises OSError when a write fails (the caller keeps the lock and
+    call: a lost run has no claim. A Codex run's `-o` file (codex.out_path of the lock's run id) is
+    removed: the dead runner could not. Raises OSError when a write fails (the caller keeps the lock and
     retries later)."""
     unit, started, pid = data.get("unit"), data.get("started"), data.get("pid")
     b = brief.find(reg, unit, project=proj)
@@ -197,9 +224,16 @@ def lost(reg, proj, data) -> str:
     if filed_since(rcpt, unit, to, started):
         return "stale-lock"
     error = f"runner process {pid} died without filing"
+    _drop_codex_out(data)
     if not record_since(folder, started):
-        rec = run_record(who, started=started, finished=util.now_iso(), status="failed", stop_reason="lost",
-                         is_error=True, error=error, pointer_filed=bool(rcpt))
+        from ..flow import guard     # lazy, as lineage below: reconcile loads this module inside the prompt hook
+        timeout_s = data.get("timeout_s")
+        timeout_s = timeout_s if isinstance(timeout_s, (int, float)) and not isinstance(timeout_s, bool) \
+            and timeout_s > 0 else LOST_TIMEOUT_S
+        finished = _lost_finished(started, timeout_s)
+        rec = run_record(who, started=started, finished=finished, status="failed", stop_reason="lost",
+                         is_error=True, error=error, pointer_filed=bool(rcpt), timeout_s=timeout_s,
+                         cost_usd=history.reserve(started, finished, guard.unit_cap()))
         util.write_json(folder / "RUN.json", rec)
         history.append(proj, rec, rev)
     if not file_pointer(reg, who, rev, folder, "failed",

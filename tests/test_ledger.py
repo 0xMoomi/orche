@@ -52,7 +52,7 @@ class LedgerCase(support.TempHomeCase):
         if self._old_session is not None:
             os.environ["ORCHE_SESSION"] = self._old_session
 
-    def fake_runner(self, argv, *, timeout, input):
+    def fake_runner(self, argv, *, timeout, input, env=None):
         self.calls.append(argv)
         for key, out in self.git.items():
             if key in " ".join(argv):

@@ -15,7 +15,7 @@ class FakeRunner:
         self.calls = []
         self.results = list(results)
 
-    def __call__(self, argv, *, timeout, input):
+    def __call__(self, argv, *, timeout, input, env=None):
         self.calls.append({"argv": argv, "timeout": timeout, "input": input})
         if self.results:
             code, out, err = self.results.pop(0)

@@ -25,6 +25,7 @@ _reconcile.WATCHDOG_S = 0
 _NO_CLAUDE_DIR = None
 NO_CLAUDE = "#!/bin/sh\necho 'tests never run the real claude (support.NO_CLAUDE)' >&2\nexit 1\n"
 NO_ORCA = "#!/bin/sh\necho 'tests never run the real orca (support.NO_ORCA)' >&2\nexit 1\n"
+NO_CODEX = "#!/bin/sh\necho 'tests never run the real codex (support.NO_CODEX)' >&2\nexit 1\n"
 NO_WAKE = {"inbox": {"wake": False, "quiet_s": 0}}   # every test home's config: no test types into a pane
 # and no nudger waits out a quiet window (tests that exercise it set inbox.quiet_s and a fake clock)
 # An empty keychain for child processes (`bin/orche.py run|intake|card` read the stored OAuth token
@@ -45,7 +46,7 @@ OPEN_CALLS = "open-calls.log"
 
 
 def no_claude_dir() -> str:
-    """A directory whose `claude`, `orca`, `security` and `launchctl` always fail and whose `osascript`
+    """A directory whose `claude`, `codex`, `orca`, `security` and `launchctl` always fail and whose `osascript`
     and `open` only record their call (no test shows a notification, a Finder window or System
     Settings). It goes first on PATH for the
     whole test process (below), so code that falls back to the default `claude_bin` (e.g. the intake
@@ -59,7 +60,7 @@ def no_claude_dir() -> str:
         import shutil
         _NO_CLAUDE_DIR = tempfile.mkdtemp(prefix="orche-no-claude-")
         atexit.register(shutil.rmtree, _NO_CLAUDE_DIR, True)
-        for name, text in (("claude", NO_CLAUDE), ("orca", NO_ORCA), ("security", NO_SECURITY),
+        for name, text in (("claude", NO_CLAUDE), ("codex", NO_CODEX), ("orca", NO_ORCA), ("security", NO_SECURITY),
                            ("osascript", RECORDING.format(name="osascript", code=0)),
                            ("open", RECORDING.format(name="open", code=0)),
                            ("launchctl", RECORDING.format(name="launchctl", code=113))):
@@ -182,4 +183,73 @@ def write_fake_claude(folder: Path, help_text=HELP_FULL) -> Path:
     script.write_text(FAKE_CLAUDE)
     script.chmod(0o755)
     (folder / "help.txt").write_text(help_text)
+    return script
+
+
+# A fake `codex` for tests/test_codex.py. Assumptions about the real codex it encodes (unverified
+# against a working codex): `--version` prints one line; `exec ... -C <dir> ... -o <file> -` reads the
+# prompt on stdin, prints JSONL events on stdout and writes the final message to the -o file.
+FAKE_CODEX = r"""#!{python}
+import json, os, signal, subprocess, sys, time
+SPEC = json.loads({spec!r})
+HERE = {here!r}
+args = sys.argv[1:]
+if args[:1] == ["--version"]:
+    with open(os.path.join(HERE, "version_env.json"), "w") as fh:
+        json.dump(sorted(os.environ), fh)
+    if SPEC.get("version_fail"):
+        print("codex: broken", file=sys.stderr); sys.exit(2)
+    print("codex-cli 0.153.0"); sys.exit(0)
+if args[:1] != ["exec"]:
+    print("usage: codex exec", file=sys.stderr); sys.exit(2)
+cwd = args[args.index("-C") + 1]
+out = args[args.index("-o") + 1]
+stdin = sys.stdin.read()
+os.makedirs(os.path.join(HERE, "calls"), exist_ok=True)
+with open(os.path.join(HERE, "calls", f"{{os.getpid()}}.json"), "w") as fh:
+    json.dump({{"argv": sys.argv, "cwd": os.getcwd(), "stdin_len": len(stdin), "stdin": stdin,
+               "env": {{k: k in os.environ for k in ("CLAUDE_CODE_OAUTH_TOKEN", "ORCHE_SESSION",
+                                                    "ORCHE_RUNNER", "ORCHE_RUN_ID", "CODEX_HOME")}},
+               "claude_names": sorted(k for k in os.environ if "CLAUDE" in k),
+               "anthropic_names": sorted(k for k in os.environ if "ANTHROPIC" in k),
+               "run_id": os.environ.get("ORCHE_RUN_ID")}}, fh)
+for name, text in SPEC.get("files", {{}}).items():
+    with open(os.path.join(cwd, name), "w") as fh:
+        fh.write(text)
+if SPEC.get("commit"):
+    subprocess.run(["git", "-C", cwd, "add", "-A"], check=True, capture_output=True)
+    subprocess.run(["git", "-C", cwd, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm",
+                    SPEC["commit"]], check=True, capture_output=True)
+if SPEC.get("action"):     # a shell script run in the worktree (a ledger row for the new HEAD, …)
+    subprocess.run(["/bin/sh", "-c", SPEC["action"]], cwd=cwd, check=True, capture_output=True)
+QUIET = {{"stdin": subprocess.DEVNULL, "stdout": subprocess.DEVNULL, "stderr": subprocess.DEVNULL}}
+pids = {{"self": os.getpid()}}
+if SPEC.get("child"):
+    pids["child"] = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(30)"], **QUIET).pid
+if SPEC.get("escaped"):
+    pids["escaped"] = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(30)"],
+                                       start_new_session=True, **QUIET).pid
+with open(os.path.join(HERE, "pids.json"), "w") as fh:
+    json.dump(pids, fh)
+if SPEC.get("ignore_term"):
+    signal.signal(signal.SIGTERM, signal.SIG_IGN)
+for event in SPEC.get("events", []):
+    print(event if isinstance(event, str) else json.dumps(event), flush=True)
+if SPEC.get("final") is not None:
+    with open(out, "w") as fh:
+        fh.write(SPEC["final"])
+time.sleep(SPEC.get("sleep", 0))
+sys.exit(SPEC.get("code", 0))
+"""
+
+
+def fake_codex(folder: Path, spec: dict) -> Path:
+    """An executable fake `codex` in `folder` acting out `spec` (see FAKE_CODEX). Each exec call
+    leaves folder/calls/<pid>.json (argv, cwd, stdin and its length, which env names were set, every
+    name containing CLAUDE) and folder/pids.json (its pid and its child/escaped pids). `files`,
+    `commit` and `action` (a shell script run in the worktree) act before the events are printed."""
+    folder.mkdir(parents=True, exist_ok=True)
+    script = folder / "codex"
+    script.write_text(FAKE_CODEX.format(python=sys.executable, spec=json.dumps(spec), here=str(folder)))
+    script.chmod(0o755)
     return script

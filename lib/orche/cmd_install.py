@@ -338,6 +338,8 @@ def cmd_install(args):
     jev_result = None
     if state is not None:
         new_state = {**state, "plugin_root": str(ctx.plugin_root), "mode": args.mode}
+        if (ctx.plugin_root / ".git").exists():   # the clone `orche update` pulls (not a plugin cache copy)
+            new_state["clone"] = str(ctx.plugin_root)
         try:
             _run_steps(ctx, "install", [("ORCHE_HOME", lambda: _orche_home(ctx)),
                                         ("settings.json", lambda: settings.install(ctx, args.mode, new_state))])
@@ -351,6 +353,9 @@ def cmd_install(args):
                                         ("AGENTS.md", lambda: codex.install(ctx))])
             jev_result = _jev_step(args, state, new_state)
         finally:
+            if not ctx.errors:   # a failed install keeps the old version: `orche update` resumes
+                from . import __version__
+                new_state["version"] = __version__
             _save_state(ctx, new_state)
     instructions = []
     if args.mode == "plugin" and not args.no_plugin_hint:

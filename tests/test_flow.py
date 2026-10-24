@@ -605,9 +605,12 @@ class ChainTest(FlowCase):
 
     def test_fan_out_counts_children_in_the_window_the_owner_resets_it_main_is_not_capped(self):
         [p] = self.chain(1)
+        self.owner_spoke(later=-20)                                      # W opens well before the children
         for i in range(4):
             f = self.first(TO_FEAT.replace("Add coupon field", f"Add child {i}"))
             header(f, "L", p.name)
+            sent = time.time() - 10                                      # inside W, before "now", pinned
+            os.utime(f / "BRIEF.rev1.md", (sent, sent))
         os.utime(p / "BRIEF.md", (time.time() + 5, time.time() + 5))   # still the division's current unit
 
         def child(name):

@@ -661,5 +661,23 @@ class StopTest(TempHomeCase):
         self.assertIs(signal.getsignal(signal.SIGTERM), before)
 
 
+
+class SpawnTest(TempHomeCase):
+    def test_exit_code_output_and_stdin(self):
+        code, out, err, error, killed = headless.spawn(
+            ["/bin/sh", "-c", "cat; echo E >&2; exit 4"], dict(os.environ), self.home, "IN", timeout=5)
+        self.assertEqual((code, out, err, error, killed), (4, "IN", "E\n", None, False))
+
+    def test_cannot_start(self):
+        code, out, err, error, killed = headless.spawn([str(self.home / "none")], {}, self.home, "", timeout=5)
+        self.assertEqual((code, out, err, killed), (127, "", "", False))
+        self.assertTrue(error.startswith(f"cannot start {self.home / 'none'}: "))
+
+    def test_timeout(self):
+        code, _, _, error, killed = headless.spawn(["/bin/sh", "-c", "sleep 30"], dict(os.environ), self.home,
+                                                   "", timeout=0.3)
+        self.assertEqual((error, killed), ("timeout after 0.3s", False))
+
+
 if __name__ == "__main__":
     unittest.main()

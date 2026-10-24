@@ -6,7 +6,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from . import log, mask, shell, units, util
+from . import log, mask, shell, units, util, vendors
 
 if TYPE_CHECKING:
     from . import roster
@@ -355,7 +355,7 @@ def _where(target, timeout):
     return root + (_MAIN_CHECKOUT if owner else ""), branch, root
 
 
-def _render(unit, rev, supersedes, note, to, frm, at, standing, fields, lineage, parent) -> str:
+def _render(unit, rev, supersedes, note, to, frm, at, standing, fields, lineage, parent, model=None) -> str:
     worktree, branch, root = at
     lines = [f"rev: {rev}"]
     if supersedes:
@@ -365,8 +365,11 @@ def _render(unit, rev, supersedes, note, to, frm, at, standing, fields, lineage,
     lines += [f"unit: {unit}",
               f"to: {to}   from: {frm}",
               f"lineage: {lineage}   parent: {parent or '-'}",
-              f"worktree: {worktree}   branch: {branch}",
-              f"project root: {root}   (brief + REPORT.md live under project root/{UNITS}/{unit}/)",
+              f"worktree: {worktree}   branch: {branch}"]
+    if model:   # a division/feature target: the model it runs on and the TIER's headless effort
+        tier = str(fields.get("TIER", "")).strip()
+        lines.append(f"model: {model}   effort: {vendors.EFFORT.get(tier, 'medium')} (TIER {tier or '-'})")
+    lines += [f"project root: {root}   (brief + REPORT.md live under project root/{UNITS}/{unit}/)",
               "Work only inside `worktree`. SCOPE paths are relative to it."]
     lines += ["", standing.rstrip(), "", f"persona: .claude/agents/{to}.md", "", f"## Brief {unit}"]
     for key in KEYS:
@@ -378,13 +381,14 @@ def _render(unit, rev, supersedes, note, to, frm, at, standing, fields, lineage,
 
 
 def write(block: Block, target: "roster.Member", sender: str, standing: str, *, prior: Brief | None = None,
-          timeout: float = 0.5, lineage: str | None = None, parent: str | None = None) -> Brief:
+          timeout: float = 0.5, lineage: str | None = None, parent: str | None = None,
+          model: str | None = None) -> Brief:
     """Write the next revision of a brief for `target` (a roster.Member) from `sender` (a session):
     BRIEF.rev<N>.md, then BRIEF.md. A "brief" block allocates a new unit folder (rev 1); an "amend"
     block needs `prior` (find()) and merges its fields over prior.fields. TO is always target.session.
     Raises ValueError for a STOP block, an AMEND without prior, a brief with prior, or a target without
     a project root. `lineage`/`parent` head a new brief (default: the new unit starts its own lineage,
-    no parent); an AMEND keeps the prior's."""
+    no parent); an AMEND keeps the prior's. `model` (a division/feature target's) adds the `model:` line."""
     if block.kind == "stop":
         raise ValueError("a STOP block writes no brief")
     if block.kind == "amend" and prior is None:
@@ -407,7 +411,7 @@ def write(block: Block, target: "roster.Member", sender: str, standing: str, *, 
         fields = {**block.fields, "TO": target.session}
         lineage = lineage or unit
     text = _render(unit, rev, supersedes, block.note if block.kind == "amend" else "", target.session, sender,
-                   _where(target, timeout), standing, fields, lineage, parent)
+                   _where(target, timeout), standing, fields, lineage, parent, model)
     folder = root / UNITS / unit
     util.atomic_write(folder / f"BRIEF.rev{rev}.md", text)
     util.atomic_write(folder / "BRIEF.md", text)

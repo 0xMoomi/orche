@@ -56,7 +56,7 @@ class BookTest(test_hr.HrCase):
     def test_notify_on_off_and_platform(self):  # B4: through notify.send, the text an argument
         posted = []
 
-        def runner(argv, *, timeout, input):
+        def runner(argv, *, timeout, input, env=None):
             if argv[0] == "osascript":
                 posted.append(argv)
                 return shell.Result(0, "", "", argv)
@@ -217,7 +217,7 @@ class WakeTest(TransitionsCase):
 
     def _read_says(self, answer):
         """`orca terminal read` answers `answer` (an envelope); every other call goes to the fake Orca."""
-        def runner(argv, *, timeout, input):
+        def runner(argv, *, timeout, input, env=None):
             if argv[:3] == ["orca", "terminal", "read"]:
                 self.calls.append(argv)
                 return shell.Result(0, json.dumps(answer), "", argv)
@@ -241,7 +241,7 @@ class WakeTest(TransitionsCase):
         self.terminals = [{"handle": "t-old", "title": "div-acme-shop-build"}]
         lists = []
 
-        def runner(argv, *, timeout, input):
+        def runner(argv, *, timeout, input, env=None):
             res = self.fake_runner(argv, timeout=timeout, input=input)
             if argv[:3] == ["orca", "terminal", "list"]:
                 lists.append(argv)
@@ -314,7 +314,7 @@ class WakeTest(TransitionsCase):
         self.assertEqual(self.log_lines(), [])
 
     def test_wake_failed_pane_leaves_unit_unchanged(self):  # W10
-        def runner(argv, *, timeout, input):
+        def runner(argv, *, timeout, input, env=None):
             if argv[:3] == ["orca", "terminal", "create"]:
                 self.calls.append(argv)
                 return shell.Result(0, json.dumps({"ok": False, "error": {"code": "no_worktree",
@@ -405,7 +405,7 @@ class CreateFeatureTest(TransitionsCase):
         order = []
         save = registry.save
 
-        def runner(argv, *, timeout, input):
+        def runner(argv, *, timeout, input, env=None):
             if argv[:3] == ["orca", "worktree", "set"]:
                 order.append("unread")
             return self.fake_runner(argv, timeout=timeout, input=input)
@@ -476,7 +476,7 @@ class CreateFeatureTest(TransitionsCase):
                 self.assertEqual((exc.code, exc.msg), (code, f"feat new pay stopped: {error}"))
 
     def test_unread_failure_warns(self):  # T3 nit: the unread dot is best effort
-        def runner(argv, *, timeout, input):
+        def runner(argv, *, timeout, input, env=None):
             if argv[:3] == ["orca", "worktree", "set"]:
                 return shell.Result(0, json.dumps({"ok": False, "error": {"code": "x", "message": "m"}}), "", argv)
             return self.fake_runner(argv, timeout=timeout, input=input)
@@ -541,8 +541,8 @@ class DivisionsTest(test_hr.HrCase):
         self.assertEqual([(e["type"], e["project"], e["unit"], e["by"]) for e in reg["events"]],
                          [("create", "acme-shop", "build", "user"), ("create", "acme-shop", "gtm", "user")])
         self.assertEqual(self.log_lines(),
-                         ["init acme-shop (repo repo-acme) by user", "create div-acme-shop-build (active) by user",
-                          "create div-acme-shop-gtm (dormant) by user"])
+                         ["init acme-shop (repo repo-acme) by user", "create div-acme-shop-build (active) by user on claude-opus-5-5",
+                          "create div-acme-shop-gtm (dormant) by user on claude-sonnet-5-5"])
         self.assertEqual(self.refresh.call_count, 3)
         self.assertEqual(self.notes, [])
 
@@ -733,8 +733,8 @@ class RetireImportTest(test_hr.HrCase):
 
 class StructureTest(test_hr.HrCase):
     """Design §9 ST1-ST4: HR owns registry writes and the HR log; orche.hr and orche.janitor stay leaves."""
-    ALLOWED = set("""orche orche.bip39 orche.brief orche.cli orche.config orche.headless orche.hr orche.hr.audit
-        orche.hr.book orche.hr.create orche.hr.limits orche.hr.onboarding orche.hr.panes orche.hr.refresh
+    ALLOWED = set("""orche orche.vendors orche.bip39 orche.brief orche.cli orche.config orche.headless orche.hr orche.hr.audit
+        orche.hr.book orche.hr.create orche.hr.limits orche.hr.models orche.hr.onboarding orche.hr.panes orche.hr.refresh
         orche.hr.retire orche.hr.transitions orche.janitor orche.janitor.archive orche.janitor.discover orche.janitor.graveyard
         orche.log orche.mask orche.metrics orche.notify orche.orca orche.paths orche.procs orche.registry orche.roster
         orche.runs orche.setup_flow orche.shell orche.statusline orche.templates orche.units orche.util""".split())
@@ -778,7 +778,7 @@ class LivePaneTest(support.TempHomeCase):
         from orche.hr import panes
         calls = []
 
-        def runner(argv, *, timeout, input):
+        def runner(argv, *, timeout, input, env=None):
             calls.append(argv[1:3])
             if argv[1:3] == ["terminal", "read"]:
                 return shell.Result(124, "", f"timeout after {timeout}s", list(argv))   # _subprocess_runner's

@@ -11,7 +11,7 @@ copied to `ORCHE_HOME/backups/<key>/<ts>/`; a dry run writes nothing (no backups
 import os
 from typing import NamedTuple
 
-from .. import paths, registry, units
+from .. import config, paths, registry, units, vendors
 from . import onboarding
 
 SKIP = ("retired", "onboarding")
@@ -24,21 +24,23 @@ class Refresh(NamedTuple):
 
 
 def _units(proj):
-    """(kind, name, entry, model, effort, custom spec) of every unit `refresh_project` re-renders."""
-    specs = proj.get("custom_divisions") or {}
+    """(kind, name, entry, model, effort, custom spec) of every unit `refresh_project` re-renders.
+    A division's model is its record's; its pane effort the custom spec's, else the recommendation's.
+    A feature runs on its division's model at FEATURE_EFFORT."""
+    specs, cfg = proj.get("custom_divisions") or {}, config.load()
     for name in registry.divisions_of(proj):
         entry = (proj.get("divisions") or {}).get(name)
         if not entry or entry.get("status") in SKIP or not entry.get("worktree"):
             continue
-        spec = specs.get(name)
-        model, effort = (spec["model"], spec["effort"]) if spec else onboarding.DIVISION_MODELS[name]
-        yield "div", name, entry, entry.get("model") or model, effort, spec
+        spec, rec = specs.get(name), vendors.recommend(cfg, name)
+        model = entry.get("model") or (spec["model"] if spec else rec.model)
+        yield "div", name, entry, model, spec["effort"] if spec else rec.effort, spec
         if name != "build":
             continue
         for feat in entry.get("features") or []:
             if feat.get("status") in SKIP or not feat.get("worktree"):
                 continue
-            yield "feat", feat["name"], feat, onboarding.FEATURE_MODEL[0], onboarding.FEATURE_MODEL[1], None
+            yield "feat", feat["name"], feat, model, vendors.FEATURE_EFFORT, None
 
 
 def stamp_version(reg, key, version) -> bool:
@@ -59,27 +61,42 @@ def refresh_project(reg, key, *, root, ts, dry_run=False) -> Refresh:
     if proj is None:   # a dry run of a new project: nothing registered yet
         return Refresh([], [], [])
     backup_dir = paths.orche_home() / "backups" / key / ts
-    changed, kept, restart = [], [], []
-    for kind, name, entry, model, effort, spec in _units(proj):
-        role = "division" if kind == "div" else "feature"
-        session = entry.get("session") or onboarding.session_name(kind, key, name)
-        wt = units.worktree_path(entry["worktree"])
-        dirs = [root]
-        if os.path.isdir(wt):
-            dirs.append(wt)
-            path, wrote = onboarding.write_settings(wt, session, main_root=root, dry_run=dry_run)
-            if wrote:
-                changed.append(path)
-        else:
-            kept.append((wt, "missing"))
-        if onboarding.persona_template(role, name, custom=bool(spec)) is None:
-            kept += [(os.path.join(d, ".claude", "agents", f"{session}.md"), "no persona template") for d in dirs]
-            continue
-        custom = {"label": spec["label"], "charter": spec["charter"]} if spec else None
-        written = onboarding.write_persona(dirs, session, role, project=key, name=name, session=session,
-                                           model=model, effort=effort, main_root=root, dry_run=dry_run,
-                                           custom=custom, backup_dir=None if dry_run else backup_dir)
-        changed += written
-        if written and entry.get("status") == "active":
-            restart.append(session)
-    return Refresh(changed, kept, restart)
+    out = Refresh([], [], [])
+    for unit in _units(proj):
+        refresh_unit(key, unit, root=root, backup_dir=backup_dir, out=out, dry_run=dry_run)
+    return out
+
+
+def units_of(proj, division):
+    """The `_units` rows of `division` (a build division: with its features)."""
+    for unit in _units(proj):
+        if (unit[0] == "div" and unit[1] == division) or (unit[0] == "feat" and division == "build"):
+            yield unit
+
+
+def refresh_unit(key, unit, *, root, backup_dir, out, dry_run=False) -> None:
+    """Re-render one `_units` row's worktree settings and personas (main checkout and worktree),
+    appending to `out` (a Refresh)."""
+    kind, name, entry, model, effort, spec = unit
+    changed, kept, restart = out
+    role = "division" if kind == "div" else "feature"
+    session = entry.get("session") or onboarding.session_name(kind, key, name)
+    wt = units.worktree_path(entry["worktree"])
+    dirs = [root]
+    if os.path.isdir(wt):
+        dirs.append(wt)
+        path, wrote = onboarding.write_settings(wt, session, main_root=root, dry_run=dry_run)
+        if wrote:
+            changed.append(path)
+    else:
+        kept.append((wt, "missing"))
+    if onboarding.persona_template(role, name, custom=bool(spec)) is None:
+        kept += [(os.path.join(d, ".claude", "agents", f"{session}.md"), "no persona template") for d in dirs]
+        return
+    custom = {"label": spec["label"], "charter": spec["charter"]} if spec else None
+    written = onboarding.write_persona(dirs, session, role, project=key, name=name, session=session,
+                                       model=model, effort=effort, main_root=root, dry_run=dry_run,
+                                       custom=custom, backup_dir=None if dry_run else backup_dir)
+    changed += written
+    if written and entry.get("status") == "active":
+        restart.append(session)

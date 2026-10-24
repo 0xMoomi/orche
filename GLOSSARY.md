@@ -114,6 +114,41 @@ _Avoid_: stamp (that is intake's).
 Claude Code's `--effort` level. A unit worker's effort comes from its TIER (mechanical low, standard medium, hard high); its model comes from the target's registry record. A pane's effort is its persona file's `effort:` line; a division record carries none (an old `effort` key is ignored).
 _Avoid_: tier (TIER is the brief's field).
 
+**Vendor**:
+Who runs a model string: `codex` for `codex` and `codex:<model id>`, else `claude` (`vendors.vendor_of`). A division's vendor decides how ORCHE starts it; a Codex division runs headless only.
+_Avoid_: provider, backend.
+
+**Recommended model**:
+The model and pane effort config `kinds` gives a new division by its name (a name not listed takes the `custom` row), with the reason printed beside it. It is a default at onboarding; the division's recorded model wins afterwards.
+_Avoid_: default model (Codex's own default is spelled `codex`).
+
+**Model choice**:
+The model a division records (`orche hr add --model`, `orche hr model`); `orche hr choices` builds the owner's questions (which division to add, which model) from the kinds and `models.catalog`. A change applies at the next run or pane start; ORCHE never restarts an awake pane for it.
+_Avoid_: model switch (nothing switches mid-run).
+
+**Division kind**:
+A row of config `kinds` (rnd, research, build, gtm, ops, design, content, custom): recommended model and effort, label, description and reason in Korean and English, and a charter where the kind has one. Adding a division by a kind's name takes its row.
+_Avoid_: division type, template.
+
+**Choices JSON**:
+What `orche hr choices` prints: the owner's setup questions (`ask.add`, `ask.change`, `ask.model`, `ask.setup`, `ask.pick`), each an AskUserQuestion `tool` plus `values` mapping each label to what Main passes to `orche hr`.
+_Avoid_: menu, picker config.
+**Model string**:
+What a division records as its model: a Claude id (`claude-opus-5-5`, aliases such as `sonnet`), `codex` or `codex:<model id>`; any other `prefix:` is refused (R-MODEL-1). No effort is stored with it.
+_Avoid_: model name (the catalog label is the name shown to the owner).
+
+**Choice dialog**:
+The AskUserQuestion questions Main builds from `orche hr choices` when the owner asks in plain words ("부서 추가해줘", "모델 바꿔줘"): only what the request leaves open, the recommendation first, an unavailable model never an option (R-MODEL-9, R-MODEL-10).
+_Avoid_: wizard, form.
+
+**Two-model reconcile**:
+A hard design call sent as one brief to two divisions on different models; a third unit compares their REPORT.md files labelled A and B, never by model name (R-MODEL-8). No code of its own.
+_Avoid_: council (the dropped command).
+
+**Update**:
+`orche update`: the ORCHE checkout fast-forwarded to `origin/main`, reinstalled by the new code and every project refreshed (`orche init <project> --refresh`); the owner asks Main in plain words ("업데이트해줘"). A development checkout is refused, never reset (R-PLAIN-2).
+_Avoid_: upgrade, reinstall (the reinstall is one of its steps).
+
 **Dispatch block**:
 One block of text a Main or division sends with `orche dispatch` (stdin or `--file`; a `---` line separates blocks). ORCHE reads it as a new brief, an AMEND (a correction) or a STOP (a halt); `brief.parse` holds the grammar.
 _Avoid_: brief (that is the stored file), order, ticket.
@@ -155,7 +190,7 @@ One of a project's `runner.max_parallel` places for a live Run, held through its
 _Avoid_: queue, worker pool.
 
 **Run lock**:
-`ORCHE_HOME/runs/<project>/<unit>.lock`: the live Run's pid, run tag, claude pid and process group, and what it runs — target, revision, TIER, model, effort, worktree, branch. A Lost run is filed from it.
+`ORCHE_HOME/runs/<project>/<unit>.lock`: the live Run's pid, run tag, worker pid and process group, and what it runs — target, revision, TIER, model, vendor, effort, worktree, branch. A Lost run is filed from it.
 _Avoid_: lock file (the project's `.mutex` is one too), pid file.
 
 **STOP marker**:
@@ -167,8 +202,12 @@ A Run whose `orche run` died without filing (SIGKILL, OOM, power loss) or whose 
 _Avoid_: crashed run, zombie; a stale lock is a Lost run whose pointer was already filed.
 
 **Run record**:
-`RUN.json` in the unit folder: 23 keys in a fixed order — what ran (unit, project, target, worktree, branch, TIER, model, effort), then the result. Built by one constructor; it holds the unit's last Run.
+`RUN.json` in the unit folder: 24 keys in a fixed order — what ran (unit, project, target, worktree, branch, TIER, model, vendor, effort), then the result. Built by one constructor; it holds the unit's last Run.
 _Avoid_: run log (that is `logs/runs/<unit>.log`).
+
+**Reservation**:
+The cost a Run records when its worker started but left no cost figure — stopped, timed out, crashed, a Codex run without a completed turn, or a Lost run: its wall time in whole minutes rounded up (at least one) × $0.25, at most `flow.max_unit_cost_usd` (`history.reserve`), with `usage: null`. G4 counts it like any figure; a Run that never started its worker records no cost.
+_Avoid_: estimate (Codex's token-priced figure), placeholder cost.
 
 **Pending sweep**:
 `ORCHE_HOME/runs/<project>/<run tag>.sweep`: a filed Lost run whose leftover processes are not killed yet. It holds no Run slot; every reconcile retries it.

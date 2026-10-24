@@ -231,8 +231,8 @@ class SkillsTest(unittest.TestCase):
     def test_main_card_says_what_to_skip_when_dispatching(self):
         text = (SKILLS / "orche-main" / "SKILL.md").read_text()
         block = INJECT.findall(text)[0]
-        for line in ("Write briefs from the request, PROJECT_CARD.md and unit STATUS files. Do not inspect the "
-                     "repo (no git/grep/tail/cat) and do not run VERIFY yourself; the worker does.",
+        for line in ("Write briefs from the request, PROJECT_CARD.md and unit STATUS files; never inspect the "
+                     "repo or run VERIFY yourself.",
                      "TIER mechanical: brief ≤ 12 lines, one ACCEPT line, one VERIFY command, TIMEBOX ≤ 30m.",
                      "`orche` is on PATH; state in ~/.claude/orche. Other project: `orche card <p>`, then `orche ask <p> \"…\"`."):
             self.assertIn(line, block)
@@ -245,6 +245,45 @@ class SkillsTest(unittest.TestCase):
                      "Never only acknowledge"):
             self.assertIn(part, block)
         self.assertLessEqual(len(block), 1500)
+
+    def test_main_card_routes_setup_and_the_two_model_pattern(self):
+        text = (SKILLS / "orche-main" / "SKILL.md").read_text()
+        block = INJECT.findall(text)[0]
+        self.assertIn("a hard design call → one brief to two divisions on different models", block)
+        self.assertIn("division/model setup: skill orche-apply", block)
+        self.assertNotIn("OWNER/DONE notify the owner.", block)
+        self.assertLessEqual(len(block), 1500)
+        for part in ("## Divisions and models", "orche hr add", "notifies the owner only from your closing"):
+            self.assertIn(part, text)
+
+    def test_hr_agent_names_model_commands(self):
+        text = (support.ROOT / "agents" / "hr.md").read_text()
+        for cmd in ("orche hr add", "orche hr model", "orche hr choices"):
+            self.assertIn(cmd, text)
+
+    def test_apply_skill_asks_in_plain_words(self):
+        text = " ".join((SKILLS / "orche-apply" / "SKILL.md").read_text().split())
+        self.assertIn("## In plain words (choices)", text)
+        self.assertIn("never create a division or a project without an answer", text)
+
+    def test_main_rulebook_answers_the_owner_in_plain_words(self):
+        """R-PLAIN-1/4: the owner never needs a command; the card says so and the rulebook maps the phrases."""
+        text = " ".join((SKILLS / "orche-main" / "SKILL.md").read_text().split())
+        self.assertIn("## Owner's plain words", text)
+        for phrase in ("orche update", "orche status", "orche doctor", "never ask the owner to type an orche command",
+                       "a step only the owner can do (install Codex, grant disk access) is shown as that one step"):
+            self.assertIn(phrase, text)
+        self.assertNotIn("never show the owner a command", text)
+        block = INJECT.findall((SKILLS / "orche-main" / "SKILL.md").read_text())[0]
+        self.assertIn("plain words", block)
+        self.assertIn("you run `orche`, never the owner.", block)
+        self.assertLessEqual(len(block), 1500)
+
+    def test_spec_numbers_the_model_rules(self):
+        spec = (support.ROOT / "SPEC.md").read_text()
+        self.assertGreaterEqual(spec.count("R-MODEL-"), 11)
+        for n in range(1, 12):
+            self.assertIn(f"R-MODEL-{n} ", spec)
 
     def test_rulebooks_cover_their_topics(self):
         main = (SKILLS / "orche-main" / "SKILL.md").read_text()

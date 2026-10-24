@@ -68,7 +68,7 @@ def ok_runner(results):
     """A shell.RUNNER stub answering orca calls from `results` ({"status": ..., "repo list": ...})."""
     calls = []
 
-    def run(argv, *, timeout, input):
+    def run(argv, *, timeout, input, env=None):
         if argv[0] != "orca":
             return REAL_RUNNER(argv, timeout=timeout, input=input)
         calls.append(argv)
@@ -699,7 +699,7 @@ class DoctorTest(InstallCase):
         which = (lambda tool: None if tool in missing else real("python3") if tool == "python3" else real("sh"))
         inner = shell.RUNNER
 
-        def runner(argv, *, timeout, input):
+        def runner(argv, *, timeout, input, env=None):
             if argv[0] == LOGIN_SH and argv[1] == "-lc":
                 self.login_calls.append(argv)
                 out = self.login.get(argv[2])
@@ -924,7 +924,7 @@ class ApplyAllDryRunTest(InstallCase):
 
 
 class ApplyAllRunTest(HrCase):
-    def fake_runner(self, argv, *, timeout, input):
+    def fake_runner(self, argv, *, timeout, input, env=None):
         if argv[0] == "orca" and argv[1] == "status":
             return shell.Result(0, json.dumps({"ok": True, "result": {}}), "", argv)
         if argv[0] == "orca" and argv[1:3] == ["repo", "list"]:

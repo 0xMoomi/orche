@@ -8,7 +8,7 @@ import shlex
 import shutil
 import sys
 
-from .. import __version__, config, headless, jev_setup, oauth, orca, paths, procs, registry, runs, shell
+from .. import __version__, config, headless, jev_setup, oauth, orca, paths, procs, registry, runs, shell, vendors
 from . import settings, statusline
 
 TOOLS = ("gcloud", "gh", "vercel", "age", "zstd")
@@ -274,6 +274,12 @@ def checks(ctx) -> list:
     except orca.OrcaError as exc:
         add("WARN", "orca", f"orca status failed: {exc}")
     for row in claude_checks():
+        add(*row)
+    try:
+        vreg = registry.load()
+    except registry.RegistryError:
+        vreg = None   # the registry row below reports it
+    for row in vendors.doctor_rows(config.load(), vreg):
         add(*row)
     for tool in TOOLS:
         found = shutil.which(tool)

@@ -19,7 +19,7 @@ from pathlib import Path
 from unittest import mock
 
 import support
-from orche import brief, dispatch, headless, inbox, procs, registry, roster, runs
+from orche import brief, deliver, dispatch, headless, inbox, procs, registry, roster, runs
 from orche.runs import job as runner
 from support import write_fake_claude
 from test_hooks import GIT_ENV, HookCase
@@ -391,7 +391,8 @@ class RunTest(RunnerCase):
                           "pointer_filed": True})
         self.assertEqual(rec["usage"], {"input_tokens": 10, "output_tokens": 20})
         keys = list(rec)
-        self.assertEqual((rec["effort"], keys[keys.index("model") + 1]), ("medium", "effort"))
+        self.assertEqual((rec["effort"], rec["vendor"], keys[keys.index("model") + 1:keys.index("model") + 3]),
+                         ("medium", "claude", ["vendor", "effort"]))
         self.assertTrue(rec["started"] and rec["finished"])
         self.assertNotIn(SECRET, rec["result_tail"])
         report = (self.units_dir() / unit / "REPORT.md").read_text()
@@ -414,8 +415,8 @@ class RunTest(RunnerCase):
         self.assertTrue((self.fake / "path.txt").read_text().startswith(str(support.ROOT / "bin") + ":"))
         self.assertIn("ORCHE_RUNNER=1\n", (self.fake / "env.txt").read_text())
         self.assertEqual(list((self.home / "runner" / "mcp").iterdir()), [])   # the run's own config: gone
-        self.assertIn(f"run unit={unit} to=div-acme-build model=claude-opus-5-5 cost=0.31 turns=4 status=done "
-                      "stop=end_turn\n", self.events())
+        self.assertIn(f"run unit={unit} to=div-acme-build model=claude-opus-5-5 vendor=claude cost=0.31 turns=4 "
+                      "status=done stop=end_turn\n", self.events())
         self.assertTrue((self.home / "activity" / "div-acme-build").exists())
         self.assertEqual(ptr["via"], "runner")
         self.assertEqual(list((self.home / "runs" / "acme").glob("*.lock")), [])
@@ -608,8 +609,8 @@ class RunTest(RunnerCase):
                          ("failed", "run failed: turn cap reached (61 turns, $1.23) — re-run with a larger TIMEBOX "
                                     "or split the unit"))
         self.assertEqual(self.run_record(unit)["stop_reason"], "error_max_turns")    # not the API's end_turn
-        self.assertIn(f"run unit={unit} to=div-acme-build model=claude-opus-5-5 cost=1.234 turns=61 status=failed "
-                      "stop=error_max_turns\n", self.events())
+        self.assertIn(f"run unit={unit} to=div-acme-build model=claude-opus-5-5 vendor=claude cost=1.234 turns=61 "
+                      "status=failed stop=error_max_turns\n", self.events())
         other = self.brief()
         self.reply("", is_error=True, subtype="error_during_execution", code=1, cost=None)
         self.orche("run", other)
@@ -627,6 +628,9 @@ class RunTest(RunnerCase):
         self.assertEqual(code, 1)
         rec = self.run_record(unit)
         self.assertEqual((rec["status"], rec["error"], rec["timeout_s"]), ("failed", "timeout after 1s", 1))
+        self.assertEqual((rec["vendor"], rec["cost_usd"], rec["usage"]), ("claude", 0.25, None))  # a reservation, not $0
+        [row] = [json.loads(line) for line in (self.home / "runs" / "acme" / "history.jsonl").read_text().splitlines()]
+        self.assertEqual((row["vendor"], row["model"], row["cost_usd"]), ("claude", "claude-opus-5-5", 0.25))
         [ptr] = self.pointers("main-acme")
         self.assertEqual((ptr["status"], ptr["summary"]), ("failed", "run failed: timeout after 1s"))
         self.assertFalse(alive((self.fake / "pid").read_text().strip()))
@@ -1033,6 +1037,75 @@ class RelayRunnerTest(RunnerCase):
         self.assertEqual(self.deliverers, [])
         self.assertLess(self.elapsed, 1.0)
 
+    def test_a_dispatch_from_a_codex_sandbox_leaves_the_start_to_the_heartbeat(self):
+        popen = mock.Mock(side_effect=AssertionError("nothing may start from inside the sandbox"))
+        with mock.patch.dict(os.environ, {dispatch.SANDBOX: "seatbelt"}), \
+                mock.patch.object(procs.subprocess, "Popen", popen):
+            r = roster.Roster(registry.load())
+            o = dispatch.relay_outcome(r, [BODY.format(to="div-acme-build", tier="standard")], r.member("main-acme"),
+                                       deadline=time.monotonic() + 3)
+        [done] = o.done
+        unit = done["unit"]
+        popen.assert_not_called()
+        self.assertEqual(done["state"], "runner-deferred")
+        self.assertEqual(o.lines, [f"block 1: delivered {unit} → div-acme-build (rev 1, runner-deferred)"
+                                   " — the run starts at the next heartbeat pass"])
+        self.assertIn(f"dispatch deferred=codex-sandbox unit={unit} rev=1\n", self.events())
+        [ptr] = self.pointers("div-acme-build")
+        self.assertEqual((ptr["unit"], ptr["via"], ptr["brief_rev"], ptr["deferred"]),
+                         (unit, "dispatch", 1, "codex-sandbox"))
+        self.assertNotIn("seatbelt", self.events())
+
+    def sandboxed(self):
+        return mock.patch.dict(os.environ, {dispatch.SANDBOX: "seatbelt"})
+
+    def test_a_stop_after_a_deferred_dispatch_keeps_the_run_from_starting(self):
+        with self.sandboxed():
+            unit = self.relay()
+        self.assertEqual(self.spawned, [])
+        self.relay(body=f"STOP {unit} enough")
+        with mock.patch.object(runs, "start", side_effect=AssertionError("a stopped run never starts")):
+            self.assertEqual(deliver.deliver_unit(registry.load(), unit, retry=True), (0, "stopped"))
+        self.assertEqual([p for p in self.pointers("div-acme-build") if p.get("via") == "dispatch"], [])
+
+    def test_a_deferred_amend_stops_the_live_old_revision_and_the_heartbeat_starts_the_new_one(self):
+        unit = self.relay()                                   # rev 1 started
+        path = self.home / "runs" / "acme" / f"{unit}.lock"
+        self.lock_file(unit)                                  # a live `orche run <unit>` holds the lock
+        path.write_text(json.dumps({**json.loads(path.read_text()), "rev": 1, "to": "div-acme-build"}))
+        with self.sandboxed():
+            self.relay(body=f"AMEND {unit} rev 2\nSUPERSEDES rev 1: smaller\nGOAL      Smaller")
+        self.assertEqual(len(self.spawned), 1)
+        self.assertIsNotNone(runs.stop_requested("acme", unit))          # the old run got the marker
+        self.assertEqual([(p["brief_rev"], p["deferred"]) for p in self.pointers("div-acme-build")],
+                         [(2, "codex-sandbox")])
+        def popen(argv, **kw):                                # `ps` still runs
+            if argv[:3] != SPAWN:
+                return REAL_POPEN(argv, **kw)
+            self.spawned.append((argv, kw))
+            return mock.Mock(pid=4242)
+        with mock.patch.object(procs.subprocess, "Popen", popen):
+            self.assertEqual(deliver.deliver_unit(registry.load(), unit, retry=True), (0, "runner-started"))
+        self.assertEqual(self.spawned[-1][0], SPAWN + [unit])
+
+    def test_a_retry_inside_the_sandbox_stays_deferred(self):
+        with self.sandboxed():
+            unit = self.relay()
+            with mock.patch.object(procs.subprocess, "Popen", side_effect=AssertionError("no spawn")):
+                self.assertEqual(deliver.deliver_unit(registry.load(), unit, retry=True), (0, "runner-deferred"))
+        [ptr] = self.pointers("div-acme-build")
+        self.assertEqual((ptr["unit"], ptr["deferred"]), (unit, "codex-sandbox"))
+
+    def test_orche_run_inside_the_sandbox_defers_to_the_heartbeat(self):
+        unit = self.brief()
+        with self.sandboxed(), mock.patch.object(runs, "execute", side_effect=AssertionError("never runs")):
+            code, out, _err = self.orche("run", unit)
+        self.assertEqual((code, out), (0, f"deferred {unit}: {runs.DEFERRED_TEXT}\n"))
+        [ptr] = self.pointers("div-acme-build")
+        self.assertEqual((ptr["unit"], ptr["via"], ptr["brief_rev"], ptr["deferred"]),
+                         (unit, "dispatch", 1, "codex-sandbox"))
+        self.assertIn(f"run deferred=codex-sandbox unit={unit} rev=1\n", self.events())
+
     def test_spawn_failure_files_an_urgent_pointer(self):
         unit = self.relay(popen=mock.Mock(side_effect=OSError("no exec")))
         self.assertEqual((self.sends(), self.deliverers, self.pointers("div-acme-build")), ([], [], []))
@@ -1054,6 +1127,16 @@ class RelayRunnerTest(RunnerCase):
         self.assertEqual((ptr["unit"], ptr["status"], ptr["via"]), (unit, "info", "dispatch"))
         self.assertEqual((self.feedback(), self.urgent()),
                          ([f"relayed {unit} → div-acme-build rev 1 (deliverer-started)"], [False]))
+
+    def test_a_codex_target_takes_the_runner_under_pane_delivery(self):
+        self.config({"claude_bin": str(self.claude), "delivery": "pane"})
+        path = self.home / "registry.json"
+        reg = json.loads(path.read_text())
+        reg["projects"]["acme"]["divisions"]["build"]["model"] = "codex"
+        path.write_text(json.dumps(reg))
+        unit = self.relay()
+        self.assertEqual(([a for a, _ in self.spawned], self.deliverers, self.sends()), ([SPAWN + [unit]], [], []))
+        self.assertIn(f"unit={unit} rev=1 to=div-acme-build by=main-acme delivery=runner-started", self.events())
 
     def test_deliverer_spawn_failure_files_an_urgent_pointer(self):
         self.config({"claude_bin": str(self.claude), "delivery": "pane"})
@@ -1230,7 +1313,7 @@ class RelayRunnerTest(RunnerCase):
         calls = []
         real = runs.shell.RUNNER
 
-        def failing_ps(argv, *, timeout, input):
+        def failing_ps(argv, *, timeout, input, env=None):
             if argv[0] == "ps":
                 calls.append(timeout)
                 return runs.shell.Result(124, "", f"timeout after {timeout}s", list(argv))
@@ -1612,7 +1695,7 @@ class RoundFourTest(RunnerCase):
     def failing_ps(self, calls):
         real = runs.shell.RUNNER
 
-        def runner(argv, *, timeout, input):
+        def runner(argv, *, timeout, input, env=None):
             if argv[0] == "ps":
                 calls.append(list(argv))
                 return runs.shell.Result(124, "", f"timeout after {timeout}s", list(argv))
@@ -1635,6 +1718,7 @@ class RoundFourTest(RunnerCase):
         rec = self.run_record(unit)
         self.assertEqual((rec["status"], rec["stop_reason"], rec["is_error"], rec["error"]),
                          ("info", "stopped", False, "stopped by STOP marker"))   # not "terminated by SIGTERM"
+        self.assertEqual((rec["cost_usd"], rec["usage"]), (0.25, None))     # killed: a reservation (§7.3), not $0
         got = [(p["status"], p["summary"], p.get("via")) for p in self.pointers("main-acme")
                if p["from"] == "div-acme-build"]
         self.assertEqual(got, [("info", "stopped by Main", "runner")])
@@ -1701,7 +1785,7 @@ class RoundFourTest(RunnerCase):
         seen = []
         real = runs.shell.RUNNER
 
-        def spy(argv, *, timeout, input):
+        def spy(argv, *, timeout, input, env=None):
             seen.append(list(argv))
             return real(argv, timeout=timeout, input=input)
         with mock.patch.object(runs.shell, "RUNNER", spy):
@@ -1732,6 +1816,227 @@ class RoundFourTest(RunnerCase):
         self.assertNotIn("runner-reconciled", self.events())     # R-A: a settled lock is never filed twice
         self.assertEqual(self.pointers("main-acme"), [])
         self.assertIsNone(other.poll())
+
+
+CODEX_MODEL = "codex:gpt-6.1-sol"
+TURN = {"type": "turn.completed", "usage": {"input_tokens": 100000, "cached_input_tokens": 20000,
+                                            "output_tokens": 5000, "reasoning_output_tokens": 1000}}
+COST = 0.222      # gpt-6.1-sol at [2, 0.1, 10] $/M tokens: 80k·2 + 20k·0.1 + (5k + 1k)·10
+
+
+def said(text):
+    """A codex `agent_message` event."""
+    return {"type": "item.completed", "item": {"id": "i1", "type": "agent_message", "text": text}}
+
+
+class CodexRunTest(RunnerCase):
+    """A division on a Codex model runs `codex exec` (support.fake_codex) under the same runner:
+    the call (design C11 §5.2-5.5), the outcome table (§5.6) and its spend (§7). The claude stub
+    is never run."""
+
+    build_model = DryRunArgvTest.build_model
+
+    def setUp(self):
+        super().setUp()
+        self.build_model(CODEX_MODEL)
+        self.codex_dir = self.root / "fakecodex"
+
+    def codex(self, spec, sandbox=None, **cfg):
+        path = support.fake_codex(self.codex_dir, spec)
+        models = {"codex_bin": str(path), **({"codex_sandbox": sandbox} if sandbox else {})}
+        self.config({"claude_bin": str(self.claude), "delivery": "runner", "models": models, **cfg})
+        return path
+
+    def calls(self):
+        folder = self.codex_dir / "calls"
+        return [json.loads(p.read_text()) for p in sorted(folder.glob("*.json"))] if folder.is_dir() else []
+
+    def history(self):
+        path = self.home / "runs" / "acme" / "history.jsonl"
+        return [json.loads(line) for line in path.read_text().splitlines()] if path.exists() else []
+
+    def ran(self, spec, tier="standard", **cfg):
+        """One new unit run on the fake codex: (unit, exit code, RUN.json, the runner's pointer)."""
+        unit = self.brief(tier=tier)
+        self.codex(spec, **cfg)
+        code, _, _ = self.orche("run", unit)
+        [ptr] = [p for p in self.pointers("main-acme") if p["unit"] == unit]
+        return unit, code, self.run_record(unit), ptr
+
+    def argv(self, run_id, effort="medium", sandbox="workspace-write"):
+        """Appendix A.1 for the fixture's build division."""
+        git_dir = subprocess.run(["git", "-C", str(self.wt), "rev-parse", "--path-format=absolute",
+                                  "--git-common-dir"], capture_output=True, text=True, check=True).stdout.strip()
+        out = [str(self.codex_dir / "codex"), "exec", "--json", "--color", "never", "--skip-git-repo-check",
+               "--ignore-user-config", "-C", str(self.wt), "-s", sandbox]
+        if sandbox == "workspace-write":
+            roots = json.dumps([git_dir, str(self.home), str(self.units_dir())], separators=(",", ":"))
+            out += ["-c", f"sandbox_workspace_write.writable_roots={roots}",
+                    "-c", "sandbox_workspace_write.network_access=true"]
+        return out + ["-c", 'approval_policy="never"', "-c", 'shell_environment_policy.inherit="all"',
+                      "-m", "gpt-6.1-sol", "-c", f'model_reasoning_effort="{effort}"',
+                      "-o", str(self.home / "runner" / "codex" / f"{run_id}.md"), "-"]
+
+    def claude_unused(self):
+        self.assertFalse((self.fake / "stdin.txt").exists())      # the claude stub never ran
+
+    def test_a_codex_build_unit_runs_codex_exec_and_files_done_from_its_final_message(self):
+        self.persona().write_text("---\nname: div-acme-build\nmodel: codex:gpt-6.1-sol\n---\n"
+                                  "You are the build division.\n")
+        self.ledger()
+        final = f"Did it. token {SECRET}\nVERIFY output: ok\nSTATUS: done\ncoupon field added\ntests pass"
+        spec = {"events": [{"type": "thread.started", "thread_id": "t1"}, {"type": "turn.started"}, said(final), TURN],
+                "final": final, "action": COMMIT + ROW.format(verdict="unit-test-verified")}
+        with mock.patch.dict(os.environ, {"CLAUDE_CODE_OAUTH_TOKEN": "test-only-not-a-token"}):
+            unit, code, rec, ptr = self.ran(spec, tier="hard")
+        new = self.rev(self.wt)
+        self.assertNotEqual(new, self.head)
+        self.assertEqual(code, 0)
+        self.assertEqual({k: rec[k] for k in ("model", "vendor", "effort", "cost_usd", "num_turns", "exit_code",
+                                              "is_error", "stop_reason", "status", "head_sha", "usage")},
+                         {"model": CODEX_MODEL, "vendor": "codex", "effort": "high", "cost_usd": COST, "num_turns": 1,
+                          "exit_code": 0, "is_error": False, "stop_reason": "completed", "status": "done",
+                          "head_sha": new, "usage": TURN["usage"]})
+        report = (self.units_dir() / unit / "REPORT.md").read_text()
+        self.assertIn("STATUS: done", report)
+        self.assertNotIn(SECRET, report + json.dumps(rec) + json.dumps(ptr))
+        self.assertEqual((ptr["status"], ptr["summary"], ptr["ledger_row"], ptr["via"]),
+                         ("done", "coupon field added\ntests pass", True, "runner"))
+        [call] = self.calls()
+        self.assertTrue(call["run_id"].startswith(unit + "@"), call["run_id"])
+        self.assertEqual(call["argv"], self.argv(call["run_id"], effort="high"))
+        self.assertEqual(call["cwd"], os.path.realpath(self.wt))
+        self.assertEqual({k: call["env"][k] for k in ("CLAUDE_CODE_OAUTH_TOKEN", "ORCHE_SESSION", "ORCHE_RUNNER",
+                                                      "ORCHE_RUN_ID")},
+                         {"CLAUDE_CODE_OAUTH_TOKEN": False, "ORCHE_SESSION": True, "ORCHE_RUNNER": True,
+                          "ORCHE_RUN_ID": True})
+        self.assertEqual(call["claude_names"], [])
+        stdin = call["stdin"]
+        self.assertTrue(stdin.startswith(f"## Your role\nYou are the build division.\n\nrev: 1\nunit: {unit}"), stdin)
+        self.assertTrue(stdin.endswith(
+            "\n\n## Runner\n" + runner.FOOTER.format(worktree=self.wt) + "\n"
+            + runner.CODEX_SANDBOX.format(worktree=self.wt, units=self.units_dir(), home=self.home) + "\n"), stdin)
+        self.assertEqual(list((self.home / "runner" / "codex").iterdir()), [])     # the -o file: read, removed
+        self.assertEqual([(r["model"], r["vendor"], r["effort"], r["cost_usd"]) for r in self.history()],
+                         [(CODEX_MODEL, "codex", "high", COST)])
+        self.assertIn(f"run unit={unit} to=div-acme-build model={CODEX_MODEL} vendor=codex cost={COST} turns=1 "
+                      "status=done stop=completed\n", self.events())
+        self.claude_unused()
+
+    def test_a_codex_done_without_its_ledger_row_is_unverified(self):
+        self.ledger()
+        final = "STATUS: done\nall good"
+        _, code, rec, ptr = self.ran({"events": [said(final), TURN], "final": final, "action": COMMIT})
+        self.assertEqual((code, rec["status"], ptr["status"]), (0, "info", "info"))
+        self.assertTrue(ptr["summary"].startswith("unverified: STATUS: done ("), ptr["summary"])
+
+    def test_without_an_o_file_the_last_agent_message_gives_the_status_and_the_owner_step(self):
+        _, code, rec, ptr = self.ran({"events": [said("looking"), said(
+            "STATUS: blocked\nneeds the payment key\nOWNER: secret STRIPE_KEY"), TURN]})
+        self.assertEqual((code, rec["status"], ptr["status"], rec["cost_usd"]), (0, "blocked", "blocked", COST))
+        self.assertIn("secret STRIPE_KEY", ptr["owner"])
+        self.claude_unused()
+
+    def test_codex_errors_file_failed_with_the_masked_text(self):
+        cases = [([{"type": "turn.started"}, {"type": "turn.failed", "error": {"message": f"stream died {SECRET}"}}],
+                  "error_turn_failed", "run failed: codex reported an error (stream died "),
+                 ([{"type": "error", "message": "rate limited"}],
+                  "error_event", "run failed: codex reported an error (rate limited)"),
+                 ([{"type": "turn.started"}, TURN],
+                  "error_no_message", "run failed: codex reported an error (no final message)")]
+        for events, stop_reason, summary in cases:
+            with self.subTest(stop_reason):
+                _, code, rec, ptr = self.ran({"events": events, "code": 1})
+                self.assertEqual((code, rec["status"], rec["stop_reason"], rec["vendor"], ptr["status"]),
+                                 (1, "failed", stop_reason, "codex", "failed"))
+                self.assertTrue(ptr["summary"].startswith(summary), ptr["summary"])
+                self.assertNotIn(SECRET, json.dumps(rec) + json.dumps(ptr))
+        # no completed turn: a reservation (one minute); a completed turn: its estimate
+        self.assertEqual([(r["stop_reason"], r["cost_usd"]) for r in self.history()],
+                         [("error_turn_failed", 0.25), ("error_event", 0.25), ("error_no_message", COST)])
+        self.claude_unused()
+
+    def test_a_codex_that_does_not_start_is_blocked_on_the_owner_and_never_run_on_claude(self):
+        unit, code, rec, ptr = self.ran({"events": ["codex: error while loading shared libraries"], "code": 2})
+        self.assertEqual((code, rec["status"], rec["stop_reason"], rec["cost_usd"], ptr["status"]),
+                         (0, "blocked", "error", None, "blocked"))
+        self.assertTrue(ptr["summary"].startswith("codex did not start: codex exited 2: codex: error while loading"),
+                        ptr["summary"])
+        self.assertEqual(ptr["owner"], runner.CODEX_OWNER.format(unit=unit))
+        other = self.brief()          # not installed: nothing starts at all
+        self.config({"claude_bin": str(self.claude), "delivery": "runner",
+                     "models": {"codex_bin": str(self.root / "missing" / "codex")}})
+        code, _, _ = self.orche("run", other)
+        rec = self.run_record(other)
+        [ptr] = [p for p in self.pointers("main-acme") if p["unit"] == other]
+        self.assertEqual((code, rec["status"], rec["exit_code"], rec["cost_usd"], ptr["status"], ptr["owner"]),
+                         (0, "blocked", 127, None, "blocked", runner.CODEX_OWNER.format(unit=other)))
+        self.assertIn("cannot start", ptr["summary"])
+        self.assertEqual([r["cost_usd"] for r in self.history()], [None, None])     # never started: no cost
+        self.claude_unused()
+
+    def test_stop_of_a_sleeping_codex_files_stopped_by_main_and_a_reservation(self):
+        unit = self.brief()
+        self.codex({"events": [{"type": "thread.started", "thread_id": "t1"}], "sleep": 20})
+        proc = self.spawn(unit, env={**os.environ, "ORCHE_RUN_SINCE": str(time.time_ns())})
+        self.assertTrue(self.wait_for(lambda: (self.codex_dir / "pids.json").exists()
+                                      and "pgid" in (self.lock(unit) or {})), (self.root / f"{unit}.out").read_text())
+        self.assertEqual((self.lock(unit)["vendor"], self.lock(unit)["model"]), ("codex", CODEX_MODEL))
+        (self.home / "runs" / "acme" / f"{unit}.stop").write_text("now\n")
+        self.assertEqual(proc.wait(timeout=10), 0, (self.root / f"{unit}.out").read_text())
+        rec = self.run_record(unit)
+        self.assertEqual((rec["status"], rec["stop_reason"], rec["vendor"], rec["cost_usd"], rec["usage"]),
+                         ("info", "stopped", "codex", 0.25, None))
+        [ptr] = [p for p in self.pointers("main-acme") if p["unit"] == unit]
+        self.assertEqual((ptr["status"], ptr["summary"]), ("info", "stopped by Main"))
+        self.assertEqual([(r["vendor"], r["cost_usd"]) for r in self.history()], [("codex", 0.25)])
+        self.assertFalse(alive(json.loads((self.codex_dir / "pids.json").read_text())["self"]))
+
+    def test_a_stop_before_start_writes_no_cost_and_never_starts_codex(self):
+        unit = self.brief()
+        self.codex({"events": [said("STATUS: done"), TURN]})
+        folder = self.home / "runs" / "acme"
+        folder.mkdir(parents=True, exist_ok=True)
+        with mock.patch.dict(os.environ, {runs.SINCE_ENV: str(time.time_ns() - 10 ** 9)}):
+            (folder / f"{unit}.stop").write_text("now\n")
+            code, _, _ = self.orche("run", unit)
+        rec = self.run_record(unit)
+        self.assertEqual((code, rec["status"], rec["vendor"], rec["cost_usd"]), (0, "info", "codex", None))
+        self.assertEqual(([r["cost_usd"] for r in self.history()], self.calls()), ([None], []))
+
+    def test_g4_refuses_the_next_run_once_codex_estimates_reach_the_unit_cap(self):
+        unit = self.brief()
+        self.codex({"events": [said("STATUS: blocked\nneeds design"), TURN]}, flow={"max_unit_cost_usd": 0.2})
+        self.assertEqual(self.orche("run", unit)[0], 0)
+        code, _, err = self.orche("run", unit)
+        self.assertEqual(code, runner.EXIT_BLOCKED, err)
+        self.assertIn(f"{unit} spent $0.22 on headless runs", err)
+        self.assertEqual(len(self.calls()), 1)
+
+    def test_dry_run_prints_the_codex_argv_and_a_bad_sandbox_fails_before_a_slot(self):
+        unit = self.brief()
+        persona = self.persona()
+        self.codex({})
+        before = digest(self.home)
+        code, out, err = self.orche("--dry-run", "run", unit)
+        self.assertEqual(code, 0, err)
+        self.assertEqual(out.splitlines(), [shlex.join(self.argv(f"{unit}@<started_ns>"))])
+        self.assertIn("ORCHE_SESSION=div-acme-build", err)
+        self.assertIn(f"stdin persona {persona} + ", err)
+        self.assertEqual(digest(self.home), before)
+        self.codex({}, sandbox="danger-full-access")
+        code, out, _ = self.orche("--dry-run", "run", unit)
+        self.assertEqual(out.splitlines(), [shlex.join(self.argv(f"{unit}@<started_ns>", sandbox="danger-full-access"))])
+        job = runner.resolve(registry.load(), unit)
+        self.assertNotIn("Codex sandbox:", runner.prompt(job, {"models": {"codex_sandbox": "danger-full-access"}}))
+        self.assertIn("Codex sandbox:", runner.prompt(job, {}))
+        self.codex({}, sandbox="bogus")
+        code, _, _ = self.orche("run", unit)
+        self.assertEqual(code, 1)
+        [ptr] = [p for p in self.pointers("main-acme") if p["unit"] == unit]
+        self.assertIn("codex sandbox must be one of", ptr["summary"])
+        self.assertEqual((self.calls(), list((self.home / "runs" / "acme").glob("*.lock"))), ([], []))
+        self.claude_unused()
 
 
 class KeychainHermeticTest(RunnerCase):

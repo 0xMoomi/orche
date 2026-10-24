@@ -52,7 +52,7 @@ class HelperTest(support.TempHomeCase):
         self.h = self.home / "userhome"
         self.calls = []
 
-        def runner(argv, *, timeout, input):
+        def runner(argv, *, timeout, input, env=None):
             self.calls.append(argv)
             return shell.Result(0, "", "", argv)
         patches = [mock.patch.object(shell, "RUNNER", runner),

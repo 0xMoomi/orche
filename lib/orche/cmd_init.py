@@ -10,7 +10,10 @@ files from the current templates (`hr.refresh_project`: personas in the main che
 worktree settings, the card link; an overwritten persona is first copied to
 `ORCHE_HOME/backups/<key>/<time>/`), never the user's files, stamps `orche_version` in the registry
 (saved only when it changes) and ends by naming the panes to restart. `--print-setup` prints the setup
-JSON and exits.
+JSON and exits. `--refresh` (a registered project only; what `orche update` runs per project) does just
+that re-render — the card link, personas, worktree settings, the stamp (never a project template
+file: one the user deleted stays deleted) — and stops: no Orca, panes, automations or intake; setup flags are refused; a folder it may not
+read is `unreadable (privacy): <path>` (exit 3).
 
 Order: resolve the repo (`orca repo list`, read-only even under --dry-run) -> setup -> project templates +
 card symlink -> registry entry -> `.orche/project` marker (the project key, read by the status
@@ -31,7 +34,7 @@ import sys
 import time
 from pathlib import Path
 
-from . import __version__, config, hr, intake, mask, orca, paths, registry, setup_flow, shell, templates, util
+from . import __version__, config, hr, intake, mask, orca, paths, privacy, registry, setup_flow, shell, templates, util, vendors
 from .cli import EXIT_BLOCKED, EXIT_NOT_FOUND, EXIT_OK, EXIT_USER, dry, fail, out, warn
 from .hr import onboarding
 
@@ -60,7 +63,75 @@ def register(subparsers):
     p.add_argument("--automations", action="store_true", help="create the Orca automations (default: print them)")
     p.add_argument("--no-intake", action="store_true",
                    help="skip the closing project intake (run it later with: orche intake <project>)")
+    p.add_argument("--refresh", action="store_true",
+                   help="a registered project only: re-render its templates, card link, personas and worktree "
+                        "settings, then stop (no Orca, panes, automations or intake; what `orche update` runs)")
     p.set_defaults(func=cmd_init)
+
+
+def _registered(needle, reg):
+    """The registry key of `needle` (a key, an alias or the main checkout's path), else None."""
+    real = os.path.realpath(os.path.expanduser(needle))
+    for key, proj in reg["projects"].items():
+        if needle in (key, *proj.get("aliases", [])) or os.path.realpath(proj.get("path") or "/nonexistent") == real:
+            return key
+    return None
+
+
+def _refresh(args, reg) -> int:
+    """`--refresh`: the ORCHE-owned files of a registered project from the current templates —
+    the card link, personas and worktree settings (no project template file) — and the
+    `orche_version` stamp. Reads no codebase, touches no Orca, never the user's files."""
+    given = [f for f, v in zip(SETUP_FLAGS, (args.divisions is not None, args.custom, args.setup_file,
+                                             args.stage, args.aliases is not None, args.wake)) if v]
+    if given or args.print_setup or args.automations:
+        return fail(EXIT_USER, f"--refresh only re-renders; drop {', '.join(given) or '--print-setup/--automations'}")
+    key = _registered(args.repo, reg)
+    if key is None:
+        return fail(EXIT_NOT_FOUND, f"--refresh needs a registered project; {args.repo!r} is not one "
+                                    "(see: orche projects)")
+    proj, dry_run = reg["projects"][key], args.dry_run
+    root = os.path.realpath(proj.get("path") or "/nonexistent")
+    try:
+        os.listdir(root)
+    except FileNotFoundError:
+        return fail(EXIT_NOT_FOUND, f"project {key}: {root} is missing")
+    except PermissionError:
+        return fail(EXIT_BLOCKED, _unreadable(root))
+    except OSError:
+        pass   # not a folder: the isdir check names it
+    if not os.path.isdir(root):
+        return fail(EXIT_NOT_FOUND, f"project {key}: {root} is missing")
+    if not dry_run:
+        paths.ensure_dirs()
+    link, linked = _link_card(key, root, dry_run=dry_run)
+    ts = time.strftime("%Y%m%dT%H%M%S")
+    try:
+        ref = hr.refresh_project(reg, key, root=root, ts=ts, dry_run=dry_run)
+    except onboarding.UnsafeTarget as exc:
+        return fail(EXIT_BLOCKED, f"refresh {key} stopped: {exc}")
+    except PermissionError as exc:
+        return fail(EXIT_BLOCKED, _unreadable(exc.filename or root))
+    except (OSError, util.JsonError) as exc:
+        return fail(EXIT_USER, f"refresh {key} stopped: {exc}")
+    stamped = not dry_run and hr.stamp_version(reg, key, __version__)
+    refreshed = list(ref.changed) + ([link] if linked in ("created", "relinked") else [])
+    restart = [] if dry_run else ([proj["main_session"]] if stamped and proj.get("main_session") else []) + ref.restart
+    data = {"project": key, "path": root, "dry_run": dry_run, "refreshed": [str(p) for p in refreshed],
+            "kept": [{"path": str(p), "why": w} for p, w in ref.kept], "restart": restart}
+    lines = [f"{'would refresh' if dry_run else 'refreshed'} {key}: "
+             + (f"{len(refreshed)} file(s)" if refreshed else "already current")]
+    lines += [f"kept {_tilde(Path(p))}: {why}" for p, why in ref.kept]
+    if restart:
+        lines.append(f"personas updated for {', '.join(restart)}: restart the pane or /clear to load them")
+    out(args, data, lines)
+    return EXIT_OK
+
+
+def _unreadable(path) -> str:
+    """The refusal for a project folder this process may not read: a macOS privacy denial (a
+    protected folder, privacy.protected) or a plain permission."""
+    return f"unreadable ({'privacy' if privacy.protected(path) else 'permission'}): {path}"
 
 
 def _csv(text) -> list:
@@ -230,7 +301,8 @@ def _new_count(setup, existing) -> int:
 
 
 def _summary(setup, existing, wake) -> str:
-    return setup_flow.summary(setup, new=_new_count(setup, existing), registered=bool(existing), wake=wake)
+    return setup_flow.summary(setup, new=_new_count(setup, existing), registered=bool(existing), wake=wake,
+                              models=setup_flow.models(setup, existing))
 
 
 def _setup(args, key, existing, reg):
@@ -269,11 +341,24 @@ def _setup(args, key, existing, reg):
         setup = {**setup, "divisions": [d for d in registry.DIVISIONS
                                         if d in setup["divisions"] or d in base["divisions"]],
                  "stage": existing["stage"], "aliases": base["aliases"]}
+        for name, model in (setup.get("models") or {}).items():
+            old = ((existing.get("divisions") or {}).get(name) or {}).get("model")
+            if old and old != model:
+                return None, fail(EXIT_USER, f"{key}/{name} is on {old}; change it with "
+                                             f"orche hr model {key} {name} {model}")
+    new = {n: m for n, m in (setup.get("models") or {}).items()
+           if not ((existing or {}).get("divisions") or {}).get(n, {}).get("model")}
+    if any(vendors.vendor_of(m) == vendors.CODEX for m in new.values()):
+        avail = vendors.available(config.load())
+        if not avail.ok:
+            return None, fail(EXIT_BLOCKED, vendors.refusal(avail))
     if _interactive(args):
         locked = setup_flow.names(base) if existing else []
         checklist = setup_flow.Checklist(key, setup, locked, sys.stdin, sys.stdout, wake=_csv(args.wake),
                                          session_owner=lambda name: hr.session_owner(
-                                             reg, key, hr.session_name("div", key, name)))
+                                             reg, key, hr.session_name("div", key, name)),
+                                         recorded={n: d.get("model") for n, d in
+                                                   ((existing or {}).get("divisions") or {}).items() if d.get("model")})
         try:
             setup = checklist.run(bool(existing), lambda s: _summary(s, existing, _csv(args.wake)))
         except setup_flow.Aborted:
@@ -374,6 +459,8 @@ def cmd_init(args):
             return fail(EXIT_USER, str(exc))
         args.repo = top
     reg = registry.load()
+    if args.refresh:
+        return _refresh(args, reg)
     if args.print_setup:
         given = [f for f, v in zip(SETUP_FLAGS, (args.divisions is not None, args.custom, args.setup_file,
                                                  args.stage, args.aliases is not None, args.wake)) if v]
@@ -418,7 +505,7 @@ def cmd_init(args):
     if wake is None:
         return err
     try:
-        plan = hr.plan_divisions(reg, key, setup, wake)
+        plan = hr.plan_divisions(reg, key, setup, wake, models=setup.get("models"))
     except hr.Refused as exc:
         return fail(exc.code, exc.msg)
     custom = setup["custom"]
@@ -442,7 +529,7 @@ def cmd_init(args):
                                        f"({taken.get('path')}), not {repo['id']} ({root}); rename the Orca repo "
                                        "or remove the stale registry entry")
             try:
-                plan = hr.plan_divisions(reg, key, setup, wake)
+                plan = hr.plan_divisions(reg, key, setup, wake, models=setup.get("models"))
             except hr.Refused as exc:
                 return fail(exc.code, exc.msg)
     if dry_run:
@@ -453,7 +540,7 @@ def cmd_init(args):
     link, linked = _link_card(key, root, dry_run=dry_run)
     try:
         proj, panes = hr.onboard_project(reg, key, setup, plan, repo_id=repo["id"], root=root, card=_tilde(link),
-                                         dry_run=dry_run)
+                                         dry_run=dry_run, models=setup.get("models"))
     except hr.Refused as exc:
         return fail(exc.code, exc.msg)
     ts = time.strftime("%Y%m%dT%H%M%S")

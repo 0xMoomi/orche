@@ -36,7 +36,7 @@ class ReportTest(support.TempHomeCase):
         self._runner, shell.RUNNER = shell.RUNNER, self.fake_runner
         self.addCleanup(setattr, shell, "RUNNER", self._runner)
 
-    def fake_runner(self, argv, *, timeout, input):
+    def fake_runner(self, argv, *, timeout, input, env=None):
         self.calls.append(argv)
         if argv[:1] == ["git"] and argv[-2:] == ["rev-parse", "HEAD"]:
             return shell.Result(0, SHA + "\n", "", argv)
@@ -167,7 +167,7 @@ class ReportTest(support.TempHomeCase):
         build_sha = "b" * 40
         real = self.fake_runner
 
-        def per_path(argv, *, timeout, input):
+        def per_path(argv, *, timeout, input, env=None):
             if argv[:3] == ["git", "-C", "/srv/orca/acme-shop-build"] and argv[-2:] == ["rev-parse", "HEAD"]:
                 self.calls.append(argv)
                 return shell.Result(0, build_sha + "\n", "", argv)

@@ -268,6 +268,18 @@ class DelivererRepairTest(RepairCase):
         self.assertEqual(inbox.pending("div-acme-shop-build"), [])
         self.assertTrue(any("action=drain-stale" in e for e in self.events()))
 
+    def test_a_deferred_dispatch_starts_at_the_next_pass_then_drains(self):
+        b = self.brief()
+        self.pointer(b.to, 0, unit=b.unit, via="dispatch", brief_rev=b.rev, status="info", deferred="codex-sandbox",
+                     **{"from": b.sender})
+        _code, lines = self.run_at(0)
+        self.assertEqual(self.spawned, [("deliver", b.unit)])            # deliver.spawn(retry=True): `orche deliver`
+        self.assertEqual(lines, [f"deliver {b.unit} → div-acme-shop-build (rev 1, 0 min; try 1/3)"])
+        self.run_json(b, started=util.now_iso())                         # the deliverer's runs.start ran it
+        _code, lines = self.run_at(5)
+        self.assertEqual(self.spawned, [])
+        self.assertEqual(inbox.pending("div-acme-shop-build"), [])
+
     def test_a_stop_pointer_is_never_drained_as_settled(self):
         b = self.brief()
         inbox.write(inbox.make(b.unit, "div-acme-shop-build", "main-acme-shop", "blocked", brief_rev=1))

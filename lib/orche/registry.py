@@ -30,7 +30,6 @@ RESERVED_NAMES = ("main", "liaison", "feat", "hr", "jev")
 CUSTOM_KEYS = ("label", "charter", "model", "effort")
 EFFORTS = ("low", "medium", "high", "xhigh", "max")
 LABEL_MAX, CHARTER_MAX = 24, 400
-CUSTOM_MODEL, CUSTOM_EFFORT = "claude-opus-5-5", "high"
 # `onboarding`: the worktree exists but onboarding has not finished (re-run init / feat new to resume).
 DIVISION_STATUSES = ("active", "dormant", "paused", "retired", "onboarding")
 FEATURE_STATUSES = ("active", "paused", "retired", "onboarding")
@@ -147,8 +146,13 @@ def charter_errors(charter) -> list:
 
 
 def model_errors(model) -> list:
-    """Why `model` cannot be a custom division's model id (messages without a field prefix)."""
-    if not isinstance(model, str) or not model or any(c.isspace() for c in model) or _has_control(model):
+    """Why a stored `model` cannot be read (messages without a field prefix): only a non-empty string
+    without spaces or control characters is required, so a registry written by an earlier version
+    (`sonnet[1m]`) or against another config's `models.catalog` still loads. The grammar and the
+    catalog (vendors.errors) are checked where a model is written: `orche hr add`, `orche hr model`,
+    `orche init` / `orche setup`."""
+    if not isinstance(model, str) or not model \
+            or any(c.isspace() or unicodedata.category(c) in ("Cc", "Cf") for c in model):
         return ["must be a model id without spaces or control characters"]
     return []
 
