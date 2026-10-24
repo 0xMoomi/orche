@@ -25,7 +25,7 @@ import re
 import sys
 import time
 
-from . import brief, config, inbox, log, orca, paths, procs, roster, runs, shell, units, util
+from . import brief, config, inbox, log, orca, paths, procs, roster, runs, shell, units, util, vendors
 
 WAKE_LOCK = ".wake.lock"        # one nudger per session
 DELIVER_LOCK = ".deliver.lock"  # one deliverer per target pane
@@ -322,10 +322,12 @@ def wake_state(r, session: str) -> str:
 
 def runner_wanted(r, to, cfg) -> bool:
     """A unit for a division/feature goes through the runner unless config `delivery` is `pane`;
-    Main targets keep the pane (a human reads them)."""
+    Main targets keep the pane (a human reads them). A Codex target always takes the runner (no pane)."""
+    m = r.member(to)
+    if m is not None and vendors.vendor_of(vendors.of(r.reg, m)) == vendors.CODEX:
+        return True
     if cfg.get("delivery", "runner") != "runner":
         return False
-    m = r.member(to)
     return m is not None and m.owns_worktree
 
 
@@ -441,17 +443,43 @@ def _not_delivered(r, unit, to, rev, state, sender) -> None:
         log.log("hooks", f"deliver: cannot file the failure for {sender!r}: {exc}")
 
 
-def _runner(b) -> str:
-    if runs.running(b.project, b.unit):
+def _runner(r, b, to) -> str:
+    """A runner unit's brief (the heartbeat's retry of a deferred dispatch, or a manual deliver):
+    `running` while a run of this revision is live, `already-ran` when it ran; a STOP written after
+    this revision was requested (_requested) drains its dispatch pointers (`stopped`); a live run of
+    an older revision (an AMEND deferred from a Codex sandbox) is stopped and a fresh one started
+    (`runner-started`); `runner-deferred` inside a Codex sandbox (runs.defer)."""
+    live = runs.running(b.project, b.unit)
+    if _live_at(b, live):
         return "running"
     if _ran(b):
         return "already-ran"          # never re-runs finished work: `orche run <unit>` does that on purpose
+    if runs.stop_requested(b.project, b.unit, since=_requested(b, to)):
+        drain_now(to, b.unit, b.rev)
+        return "stopped"
     try:
-        runs.start(b.unit)
+        if live is not None:
+            runs.stop(b.project, b.unit, reg=r.reg)     # runs.restart: the marker is older than the new start
+        if not runs.start(b.unit):
+            return runs.DEFERRED
     except Exception as exc:  # noqa: BLE001 - reported as a state
         log.log("hooks", f"deliver: runner for {b.unit} did not start: {exc}")
         return "runner-failed"
     return "runner-started"
+
+
+def _requested(b, to) -> int:
+    """When this revision's run was requested (ns): BRIEF.md's mtime, or the pending dispatch
+    pointer's `since_ns` (a deferred dispatch, dated after an AMEND's own stop) when later."""
+    try:
+        since = b.path.stat().st_mtime_ns
+    except OSError:
+        since = 0
+    found = _dispatched(to, b.unit)
+    try:
+        return max(since, int(found[1].get("since_ns") or 0) if found else 0)
+    except (TypeError, ValueError):
+        return since
 
 
 def _stop_run(r, b, to, locked) -> str:
@@ -520,8 +548,10 @@ def _fallback(r, b, to, state) -> str:
     try:
         if live is not None:
             runs.restart(b.project, b.unit, reg=r.reg)
-        else:
-            runs.start(b.unit)
+        elif not runs.start(b.unit):
+            return runs.DEFERRED
+        if runs.in_sandbox():
+            return runs.DEFERRED
     except Exception as exc:  # noqa: BLE001 - reported as the pane state
         log.log("hooks", f"deliver: runner fallback for {b.unit} did not start: {exc}")
         return state
@@ -547,7 +577,7 @@ def deliver_unit(reg, unit, cfg=None, retry=False) -> tuple:
     try:
         try:
             if runner_wanted(r, to, config.load() if cfg is None else cfg):
-                state = _runner(b)
+                state = _runner(r, b, to)
             else:
                 state, waited = _pane(r, b, to, sent)
                 state = _fallback(r, b, to, state)

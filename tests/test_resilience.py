@@ -31,7 +31,7 @@ def rid(unit="acme-x-20261018-1"):
     return f"{unit}@{uuid.uuid4().int % 10 ** 18}"
 
 
-def ps_fails(argv, *, timeout, input):
+def ps_fails(argv, *, timeout, input, env=None):
     """shell.RUNNER whose `ps` always fails (exit 1); everything else runs for real."""
     if argv and argv[0] == "ps":
         return shell.Result(1, "", "ps: unavailable", list(argv))
@@ -193,7 +193,7 @@ class EnvSweepTest(SweepCase):
         args_out = "".join(f"{pid} 1 {pid} 01:02 {cmd}\n" for pid, cmd in args.items())
         env_out = "".join(f"{pid} {line}\n" for pid, line in env.items()) + f"207 {tag}\n"
 
-        def fake(argv, *, timeout, input):
+        def fake(argv, *, timeout, input, env=None):
             return shell.Result(0, args_out if list(argv) == procs.ARGS_PS else env_out, "", list(argv))
         with mock.patch.object(shell, "RUNNER", fake), mock.patch.object(procs, "_linux", return_value=False):
             table = {p.pid: p for p in procs.table()}
@@ -209,7 +209,7 @@ class EnvSweepTest(SweepCase):
         started at 100.9 and read at 101.1 shows `00:01`. Its start reads 101 (never before 100.9;
         `now - etime` gave 100.1, so a hidden claude started just after its lock's `started_ns`
         failed `started at or after`), and is at most 1 s late."""
-        def fake(argv, *, timeout, input):
+        def fake(argv, *, timeout, input, env=None):
             out = "301 1 301 00:01 claude --mcp-config m.json\n" if list(argv) == procs.ARGS_PS else "301 claude --mcp-config m.json\n"
             return shell.Result(0, out, "", list(argv))
         with mock.patch.object(shell, "RUNNER", fake), mock.patch.object(procs, "_linux", return_value=False), \
@@ -343,7 +343,7 @@ class ReconcileTest(SweepCase):
     def sip_ps(pids):
         """The real `ps`, except that `ps -axwwE` shows only the arguments of `pids` (Apple binaries
         whose environment macOS shows because SIP is off, as on GitHub's runners): what SIP hides."""
-        def run(argv, *, timeout, input):
+        def run(argv, *, timeout, input, env=None):
             res = REAL_SHELL(argv, timeout=timeout, input=input)
             if list(argv) != procs.ENV_PS or not res.ok:
                 return res
@@ -601,7 +601,7 @@ class ReconcileTest(SweepCase):
         timeout still counts."""
         slow = 1.2
 
-        def slow_ps(argv, *, timeout, input):
+        def slow_ps(argv, *, timeout, input, env=None):
             if argv and argv[0] == "ps":
                 if timeout < slow:
                     time.sleep(timeout)

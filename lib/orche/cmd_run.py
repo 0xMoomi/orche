@@ -1,9 +1,12 @@
-"""`orche run <unit>` — run one dispatched unit headless (`claude -p`) in its target's worktree.
+"""`orche run <unit>` — run one dispatched unit headless in its target's worktree: `claude -p`, or
+`codex exec` for a division (or feature) on a Codex model (Codex runs only here: no pane).
 
 The Stop hook starts it detached for every new brief (and AMEND) to a division or feature (config
-`delivery: runner`); run it by hand to re-run a unit. `--dry-run` prints the exact `claude` argv and
-writes nothing; `--json` prints the RUN record. Exit 0 when the run finished (done, unverified,
-blocked, stopped by Main — also before start), 1 when it failed (crash, timeout, `STATUS: failed`,
+`delivery: runner`; a Codex target always); run it by hand to re-run a unit. `--dry-run` prints the
+exact `claude` or `codex` argv and writes nothing; `--json` prints the RUN record (its `vendor`, and
+`cost_usd`: Claude's figure, Codex's estimate, or the reservation of a run killed, timed out or
+crashed without one). Exit 0 when the run finished (done, unverified, blocked — also a codex that
+does not start —, stopped by Main — also before start), 1 when it failed (crash, timeout, `STATUS: failed`,
 a runner error, SIGTERM), 2 for a missing brief/worktree or a retired target, 3 when the project's
 run slots (or the target's one) stay taken for `runner.queue_wait_s` ("runner busy") or a flow cap
 holds the unit (G4 spend, G5 runs per unit: "not started: …; ask the owner", one quiet `info`), 4 when the
@@ -71,6 +74,10 @@ def cmd_run(args):
     cfg = config.load()
     if args.dry_run:
         return _dry_run(args, reg, cfg)
+    if runs.in_sandbox():       # a Codex sandbox kills its children: the heartbeat pass starts it
+        runs.defer(args.unit)
+        print(f"deferred {args.unit}: {runs.DEFERRED_TEXT}")
+        return EXIT_OK
     out = runs.execute(reg, args.unit, cfg)
     for line in out.stderr:
         print(line, file=sys.stderr)
@@ -100,7 +107,8 @@ def _dry_run(args, reg, cfg):
     else:
         print(shlex.join(p.argv))
         context = f" + project context {job.context}" if job.context is not None else ""
+        role = f"persona {job.persona} + " if job.vendor == "codex" and job.persona is not None else ""
         env = " ".join(f"{k}={v}" for k, v in call.env.items())
-        print(f"[dry-run] cwd {job.worktree}; {env}; stdin {job.brief}{context} + runner "
+        print(f"[dry-run] cwd {job.worktree}; {env}; stdin {role}{job.brief}{context} + runner "
               f"footer; timeout {call.timeout}s", file=sys.stderr)
     return EXIT_OK

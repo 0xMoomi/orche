@@ -103,6 +103,9 @@ _NEGATION = re.compile(
     r"지\s*마(?:세요|십시오|시고|라|요)?(?=[\s,.!~]|$)|지\s*말(?:고|아|라|자)|말아|"
     r"\bdon'?t\b|\bdo not\b|\bnever\b|\bno need to\b", re.IGNORECASE)
 # An acknowledgement or continuation word first: the prompt answers Main, whatever Main's last line was.
+# Division and model setup is a conversation with the owner (choices, then orche hr), never a brief.
+SETUP_RE = re.compile(r"부서|division|department|모델|\b(opus|sonnet|haiku|codex)\b", re.I)
+
 _CONTINUATION = re.compile(
     r"^\s*(?:(?:응|네|예|그래|좋아|아니|그걸로|그렇게|그럼)요?(?=[\s,.!?~…]|$)"
     r"|(?:yes|yeah|ok|okay|sure|no|nope|go ahead|do it|that one)(?![\w'-]|\.\w))", re.IGNORECASE)
@@ -308,6 +311,8 @@ def bypass_reason(prompt: str, transcript_path=None):
         return "continuation"
     if is_question(prompt):
         return "question"
+    if SETUP_RE.search(prompt):
+        return "setup"
     if main_asked(transcript_path):
         return "reply-to-main"
     return None

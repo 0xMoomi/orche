@@ -61,7 +61,7 @@ class JanitorCase(support.TempHomeCase):
             os.environ["HOME"] = self._old_home_env
 
     # ---- fakes ---------------------------------------------------------------------------------
-    def fake_runner(self, argv, *, timeout, input):
+    def fake_runner(self, argv, *, timeout, input, env=None):
         self.calls.append(argv)
         if argv[1:3] == ["worktree", "list"]:
             return self.ok({"worktrees": [{"id": f"repo-acme::{p}", "path": str(p)} for p in self.orca_paths]})
@@ -478,7 +478,7 @@ class OrcaRemovedTest(JanitorCase):
         self.terminals = None
         orig = self.fake_runner
 
-        def failing(argv, *, timeout, input):
+        def failing(argv, *, timeout, input, env=None):
             if argv[1:3] in (["terminal", "list"], ["worktree", "list"]):
                 return shell.Result(1, "", "orca down", argv)
             return orig(argv, timeout=timeout, input=input)
@@ -663,7 +663,7 @@ class ZstdTest(JanitorCase):
         archive.zstd_bin = lambda: real
         orig = self.fake_runner
 
-        def runner(argv, *, timeout, input):
+        def runner(argv, *, timeout, input, env=None):
             if argv[0] == real:
                 return self._orig_runner(argv, timeout=timeout, input=input)
             return orig(argv, timeout=timeout, input=input)

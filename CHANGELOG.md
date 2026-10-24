@@ -3,6 +3,99 @@
 All notable changes to ORCHE are listed here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow semantic versioning.
 
+## 0.8.0 — 2026-10-23
+
+### Added
+- Per-division models as data (`lib/orche/vendors.py`). A division records one model string: a Claude id
+  (`claude-opus-5-5`; aliases such as `sonnet` too), `codex` (Codex's default model) or `codex:<model id>`;
+  anything else with a `:` is refused (`unknown vendor`), and a plain id that is neither `claude-…`, an
+  alias nor a catalog id is refused (`unknown model 'gpt-4' — …`). A feature agent runs on its division's model.
+- `kinds` in config: one row per division kind (rnd, research, build, gtm, ops, design, content, `custom`
+  for any other name) with its model and pane effort (rnd opus high, research sonnet medium, build opus
+  medium, gtm sonnet medium, ops sonnet medium, design opus high, content sonnet medium, custom opus high),
+  `label`, `desc` and `why` in Korean and English, and a `charter` for design and content; override one
+  entry in `config.json`. `models.catalog` names the models a chooser offers (label, cost tier, description);
+  also `models.codex_bin`, `models.codex_sandbox`, `models.prices`, and `lang` (default `en`).
+- A Codex division's persona says `model: inherit`. Waking a Codex division is refused (exit 3: "codex
+  divisions run headless only (v1); briefs reach them through orche run"); a feature under a Codex Build
+  opens no pane and is recorded `paused`.
+- `orche hr add <proj> <division> [--model M] [--label L --charter C] [--wake] [--no-intake]`: adds one
+  division to an onboarded project. It prints `recommended for <division>: <model> — <reason>`, the `choices:`
+  line (Claude ids, and Codex only when it runs) and, when Codex is missing or broken, `codex: <state> — <fix>`,
+  then `created div-<proj>-<division> (dormant) on <model>` and starts the intake in the background
+  (`intake: started in the background (orche intake status <proj>)`; `--no-intake` skips it). Exit 1 for an
+  existing division or a custom one without label/charter, 2 for an unknown project, 3 for a Codex model when
+  Codex is unavailable or with `--wake`.
+- `orche hr model <proj> <division> <model>`: records a division's model and prints
+  `<session>: <old> → <new>` plus how it switches (`(the next run uses it)`, `(headless only; the next run uses it)`
+  for Codex, or `restart its pane to switch: …` for an awake pane); `is already on <model>` when nothing changes.
+  Moving an awake division to Codex is refused (exit 3, `sleep its pane first`). One hr-log `model` line.
+- `orche hr choices [<project>] [--lang ko|en]` (global `--json`): the owner's setup questions, built from data
+  and written nowhere — keys `project`, `lang`, `stage`, `kinds`, `custom`, `models` and `ask` (`add`, `change`,
+  `model` per kind plus `*` for a new one, `setup` and `pick` for a project not under ORCHE yet). Each question
+  is an AskUserQuestion `tool` (question, header, 2–4 options) plus `values` (label → value); the recommended
+  option comes first with `(권장)`/`(recommended)`, Codex is offered only when it runs (otherwise its state is
+  in the question). An unknown project exits 2. A `--setup-file` may carry each division's model under `models`.
+- Division and model setup prompts (부서, division, department, 모델, opus, sonnet, haiku, codex) bypass
+  triage with reason `setup`: Main asks the owner instead of sending a brief.
+- The model shows in `orche depts` (MODEL column), `orche status`, a brief's `model:` line and `orche doctor`
+  (a `vendors` row: OK, or WARN naming the Codex divisions and the fix when Codex does not run).
+- Codex divisions run headless through `orche run`: `codex exec --json` in the worktree under the
+  `workspace-write` sandbox (git's common dir, `ORCHE_HOME` and the units folder writable, network on;
+  `models.codex_sandbox: danger-full-access` drops it; the sandbox limits accidents, not a hostile worker: `ORCHE_HOME` and git's common dir are writable, so it is no containment boundary, as for Claude workers), effort by TIER, the persona body and a sandbox sentence on
+  stdin. The final message is filed as a Claude worker's (STATUS line, `OWNER:`, done gate, masked REPORT.md); a
+  `turn.failed` or `error` event or no final message files `failed` with codex's masked text; a codex that prints
+  no event (missing, broken) files `blocked` with `OWNER: fix codex: orche doctor (row vendors) names the step;
+  then orche run <unit>` — never a silent re-run on Claude. `cost_usd` is the estimate at `models.prices`;
+  `orche --dry-run run` prints the codex argv.
+
+- `orche update [--dry-run]`: fast-forwards the ORCHE checkout to `origin/main`, reinstalls with the new code,
+  refreshes every project (`orche init <project> --refresh`, new: ORCHE-owned files only, no Orca call) and reports
+  `ORCHE <old> → <new>` and whether sessions need a restart; a development checkout is refused, nothing changed.
+
+### Changed
+- Every run's spend reaches G4: a run whose worker started but left no cost figure (stopped, timed out, crashed,
+  Codex without a completed turn, lost) records a reservation — whole minutes rounded up (at least one) × $0.25,
+  at most `flow.max_unit_cost_usd`, `usage: null` — instead of nothing. A lost run's wall time ends at its
+  timeout (the lock records `timeout_s`), not at the reconcile that finds it, and a timed-out run's
+  `stop_reason` is `error` whatever its worker printed. Runs that never start their worker (busy,
+  duplicate, stopped before start, not installed) stay uncounted.
+- `vendor` (`claude` or `codex`) follows `model` in RUN.json (now 24 keys), the run lock, `runs/<p>/history.jsonl`
+  and the events line (`model=… vendor=…`).
+- A dispatch from inside a Codex sandbox (`CODEX_SANDBOX` set) is started by the heartbeat, not by the sandboxed
+  shell: the pointer is marked `deferred`, the delivered line ends `— the run starts at the next heartbeat pass`,
+  and reconcile's next pass delivers it (`deliver … try 1/3`) instead of waiting 10 minutes.
+- `orche update` updates the clone install recorded (else its own checkout; no `.git` → `not a git checkout:
+  <root>; reinstall with the README prompt`, exit 2), fetches with `GIT_TERMINAL_PROMPT=0` and a 120 s bound
+  (the error text masked), resumes an install whose recorded version differs, and `--json` answers every outcome.
+  Its refresh re-renders each pane's effort from the `kinds` table, so a 0.7.x build, gtm or ops pane moves from
+  high to medium; recorded models are kept.
+- A STOP or AMEND reaches a deferred run: a stopped pointer is drained (`stopped`) instead of started, and an
+  AMEND stops the live older revision before the heartbeat starts the new one. `orche run` and a delivery retry
+  inside a sandbox defer to the heartbeat too (`deferred <unit>: …`, exit 0).
+- `orche init` on an onboarded project refreshes only ORCHE's own files: a project template the owner deleted
+  (`.env.example`, `docs/RUBRIC.md`, `.orche/STANDING.md`) is not recreated. A folder macOS privacy blocks is
+  named `unreadable (privacy): <path>` (exit 3; any other denial `unreadable (permission): <path>`). A `kinds`
+  default model that is not valid refuses init before anything is written (`config kinds.<kind>.model: …`, exit 1).
+
+### Docs
+- Main's card routes division/model setup to the `orche-apply` skill and names the two-model pattern (a hard
+  design call → one brief to two divisions on different models, a third reconciles A and B); the rulebook gains
+  `## Divisions and models`. The `orche-apply` skill asks in plain words with a choice dialog and never creates
+  a division or a project without an answer; the HR agent lists `orche hr add|model|choices`.
+- SPEC numbers the model rules R-MODEL-1 to R-MODEL-11 (model string, recommendation and availability,
+  `hr add`, `hr model`, headless-only Codex, the `codex exec` call, vendor and spend, the two-model reconcile,
+  `hr choices`, setup in plain words, the `models` setup key), plus the triage `setup` bypass and the G4 note.
+- README: divisions and models in plain words, enabling Codex and what a headless Codex worker gives up.
+  GLOSSARY: Model string, Kind, Choice dialog, Two-model reconcile.
+- Plain words everywhere (R-PLAIN-1 to R-PLAIN-4): Main's rulebook gains `## Owner's plain words` (status,
+  check, update, divisions, halt → the `orche` command Main runs; the owner is never asked to type an orche
+  command — a step only the owner can do, such as installing Codex or granting disk access, is shown as that one
+  step — and never sees raw output) and its card says so. The README install prompt asks the first setup with choices ("기본 4개 (권장)"
+  first) in the owner's language (`--lang ko|en`) and passes the answers as `--setup-file` (a picked design or
+  content under `"custom"`); the quick start is three plain steps; new `## Update` section.
+  GLOSSARY: Update.
+
 ## 0.7.3 — 2026-10-23
 
 ### Fixed

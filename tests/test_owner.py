@@ -89,7 +89,7 @@ class OwnerCase(support.TempHomeCase):
         self.config({})
         self.calls = []
 
-        def runner(argv, *, timeout, input):
+        def runner(argv, *, timeout, input, env=None):
             self.calls.append(list(argv))
             return shell.Result(0, "", "", list(argv))
         for obj, name, value in ((shell, "RUNNER", runner), (notify, "PLATFORM", "darwin")):

@@ -2,25 +2,19 @@
 interactive checklist) and the one-line summary.
 
 A setup is `{"divisions": [standard names], "custom": {name: {label, charter, model, effort}},
-"stage": str, "aliases": [str]}` — the same JSON `orche init --print-setup` prints and
+"stage": str, "aliases": [str], "models": {division: model string}}` — the same JSON `orche init --print-setup` prints and
 `--setup-file` reads. Defaults (an unregistered repo): every standard division except `ops`, no
-custom division, stage `building`, no aliases. A registered project's setup is what it has.
+custom division, stage `building`, no aliases, no models (the recommendation). A registered
+project's setup is what it has (its recorded models included).
 Stdlib only; the checklist is plain stdin/stdout (no curses).
 """
 import json
 import re
 
-from . import registry
+from . import config, registry, vendors
 
-STANDARD = {
-    "rnd": "R&D — prototypes and technical spikes",
-    "research": "Research — market, users, competitors",
-    "build": "Build — integrates features, owns the ledger, opens PRs",
-    "gtm": "GTM — launch, content, growth",
-    "ops": "Ops — deploy and operate (dormant until stage public)",
-}
 DEFAULT_DIVISIONS = ("rnd", "research", "build", "gtm")
-SETUP_KEYS = ("divisions", "custom", "stage", "aliases")
+SETUP_KEYS = ("divisions", "custom", "stage", "aliases", "models")
 CUSTOM_INPUT_KEYS = ("label", "charter", "model", "effort")
 _BLANK_LINE = re.compile(r"\n\s*\n")
 _ITEM_NUMBER = re.compile(r"[0-9]+")   # ASCII digits only: `²` or `１` is no item number
@@ -37,19 +31,21 @@ class Aborted(Exception):
 
 
 def defaults() -> dict:
-    return {"divisions": list(DEFAULT_DIVISIONS), "custom": {}, "stage": "building", "aliases": []}
+    return {"divisions": list(DEFAULT_DIVISIONS), "custom": {}, "stage": "building", "aliases": [], "models": {}}
 
 
 def of_project(proj: dict) -> dict:
     """The setup a registered project has now."""
     return {"divisions": [d for d in registry.DIVISIONS if d in (proj.get("divisions") or {})],
             "custom": {n: dict(s) for n, s in (proj.get("custom_divisions") or {}).items()},
-            "stage": proj["stage"], "aliases": list(proj.get("aliases", []))}
+            "stage": proj["stage"], "aliases": list(proj.get("aliases", [])),
+            "models": {n: d["model"] for n, d in (proj.get("divisions") or {}).items() if d.get("model")}}
 
 
 def custom_spec(name, raw) -> dict:
     """Validated, normalised spec for custom division `name` (whitespace collapsed, model/effort
-    defaulted). Raises SetupError."""
+    defaulted to vendors.recommend(name); label and charter defaulted from a `kinds` entry with a
+    charter, e.g. `design`). Raises SetupError."""
     errors = list(registry.custom_name_errors(name))
     if not isinstance(raw, dict):
         raise SetupError(errors + [f"custom division {name}: must be an object"])
@@ -59,17 +55,25 @@ def custom_spec(name, raw) -> dict:
                for k in CUSTOM_INPUT_KEYS if raw.get(k) is not None and not isinstance(raw[k], str)]
     if errors:
         raise SetupError(errors)
+    cfg = config.load()
+    known = vendors.kind(cfg, name, "en")
     label, charter = raw.get("label"), raw.get("charter")
+    if known["listed"] and known["charter"]:
+        label = known["label"] if label is None else label
+        charter = known["charter"] if charter is None else charter
+    rec = vendors.recommend(cfg, name)
     if charter is not None and _BLANK_LINE.search(charter.strip()):
         errors.append(f"custom division {name}: charter must be one paragraph (no blank lines)")
     # The label is kept as typed (a line break or tab in it is refused); the charter's whitespace,
     # single line breaks included, collapses to one paragraph.
     spec = {"label": label.strip(" ") if label is not None else label,
             "charter": " ".join(charter.split()) if charter is not None else charter,
-            "model": (raw.get("model") or "").strip() or registry.CUSTOM_MODEL,
-            "effort": (raw.get("effort") or "").strip() or registry.CUSTOM_EFFORT}
+            "model": (raw.get("model") or "").strip() or rec.model,
+            "effort": (raw.get("effort") or "").strip() or rec.effort}
     if not errors:
         errors += registry.custom_spec_errors(spec, f"custom division {name}")
+        errors += [f"custom division {name}.model: {e}" for e in vendors.errors(spec["model"], cfg)
+                   if not registry.model_errors(spec["model"])]
     if errors:
         raise SetupError(errors)
     return spec
@@ -142,6 +146,22 @@ def from_data(data: dict, base: dict) -> dict:
             errors.append(f"setup: stage must be one of {'|'.join(registry.STAGES)}, got {data['stage']!r}")
         else:
             setup["stage"] = data["stage"]
+    if "models" in data:
+        chosen = data["models"]
+        if not isinstance(chosen, dict) or not all(isinstance(m, str) for m in chosen.values()):
+            errors.append("setup: models must be an object of division -> model string")
+        else:
+            known = names(setup)
+            bad = [d for d in chosen if d not in known]
+            if bad:
+                errors.append(f"setup: models: unknown division(s) {','.join(bad)} (this setup has: {','.join(known)})")
+            for d, m in chosen.items():
+                errors += [f"setup: models.{d}: {e}" for e in vendors.errors(m, config.load())]
+            setup["models"] = {**(base.get("models") or {}), **chosen}
+            # A custom division keeps one model: its spec's (what the registry records) is the chosen one.
+            for d, m in chosen.items():
+                if d in setup["custom"]:
+                    setup["custom"][d] = {**setup["custom"][d], "model": m}
     if "aliases" in data:
         aliases = data["aliases"]
         if not isinstance(aliases, list) or not all(isinstance(a, str) for a in aliases):
@@ -179,12 +199,26 @@ def names(setup: dict) -> list:
     return [d for d in registry.DIVISIONS if d in setup["divisions"]] + list(setup["custom"])
 
 
-def summary(setup: dict, *, new: int, registered: bool, wake=()) -> str:
-    """`Summary: build, gtm, design(custom) · stage building · 3 worktrees · pane main`."""
+def models(setup: dict, existing=None, cfg=None) -> dict:
+    """{division: model} of a setup: its `models` entry, else a custom spec's, else the recorded
+    division's (`existing` is the registered project), else the recommendation (`cfg` None:
+    config.load())."""
+    have = (existing or {}).get("divisions", {})
+    cfg = config.load() if cfg is None else cfg
+    chosen = setup.get("models") or {}
+    return {n: chosen.get(n) or (setup["custom"][n]["model"] if n in setup["custom"] else None)
+            or (have.get(n) or {}).get("model") or vendors.recommend(cfg, n).model for n in names(setup)}
+
+
+def summary(setup: dict, *, new: int, registered: bool, wake=(), models=None) -> str:
+    """`Summary: build, gtm, design(custom) · stage building · 3 worktrees · pane main
+    · models: build claude-opus-5-5, …` (`models`: {division: model}, see models())."""
     divs = ", ".join(d + ("(custom)" if d in setup["custom"] else "") for d in names(setup)) or "no divisions"
     worktrees = f"{new} {'new ' if registered else ''}worktree{'' if new == 1 else 's'}"
     line = f"Summary: {divs} · stage {setup['stage']} · {worktrees} · pane main"
-    return line + (f" · wake {','.join(wake)}" if wake else "")
+    line += f" · wake {','.join(wake)}" if wake else ""
+    shown = [f"{n} {models[n]}" for n in names(setup) if (models or {}).get(n)]
+    return line + (f" · models: {', '.join(shown)}" if shown else "")
 
 
 # ---- interactive checklist ---------------------------------------------------------------------
@@ -199,15 +233,18 @@ class Checklist:
     of division `name` (None when it is free). A row whose session is taken is shown unticked and
     unavailable from the start, and cannot be ticked."""
 
-    def __init__(self, key, setup, locked, reader, writer, *, wake=(), session_owner=lambda name: None):
+    def __init__(self, key, setup, locked, reader, writer, *, wake=(), session_owner=lambda name: None,
+                 recorded=None):
         self.key, self.reader, self.writer = key, reader, writer
         self.locked, self.wake, self.session_owner = set(locked), list(wake), session_owner
         self.items = [(d, d in setup["divisions"]) for d in registry.DIVISIONS]
         self.custom = dict(setup["custom"])
+        self.chosen = dict(setup.get("models") or {})
         self.items += [(n, True) for n in self.custom]
         self.taken = {n: owner for n, _ in self.items if n not in self.locked and (owner := session_owner(n))}
         self.items = [(n, on and n not in self.taken) for n, on in self.items]
         self.setup = setup
+        self.recorded = dict(recorded or {})   # {division: model} of the registered project
 
     def taken_text(self, name) -> str:
         return f"session div-{self.key}-{name} is taken by project {self.taken[name]}"
@@ -230,7 +267,11 @@ class Checklist:
             spec = self.custom[name]
             text = f"{spec['label']} — {_short(spec['charter'])}"
         else:
-            text = STANDARD[name]
+            kind = vendors.kind(config.load(), name, "en")
+            text = f"{kind['label']} — {kind['desc']}"
+        model = self.chosen.get(name) or (self.custom.get(name) or {}).get("model") or self.recorded.get(name) \
+            or vendors.recommend(config.load(), name).model
+        text += f"  [{model}]"
         if name in self.taken:
             return text + f"  (unavailable: {self.taken_text(name)})"
         return text + ("  (onboarded)" if name in self.locked else "")
@@ -299,12 +340,13 @@ class Checklist:
         charter = self._field(" charter (one paragraph): ",
                               lambda v: next((f"charter {e}" for e in registry.charter_errors(" ".join(v.split()))),
                                              None))
-        model = self._field(f" model [{registry.CUSTOM_MODEL}]: ",
-                            lambda v: next((f"model {e}" for e in registry.model_errors(v)), None),
-                            default=registry.CUSTOM_MODEL)
-        effort = self._field(f" effort [{registry.CUSTOM_EFFORT}]: ",
+        rec = vendors.recommend(config.load(), name)
+        model = self._field(f" model [{rec.model}]: ",
+                            lambda v: next((f"model {e}" for e in vendors.errors(v, config.load())), None),
+                            default=rec.model)
+        effort = self._field(f" effort [{rec.effort}]: ",
                              lambda v: None if v in registry.EFFORTS else f"effort is one of {'|'.join(registry.EFFORTS)}",
-                             default=registry.CUSTOM_EFFORT)
+                             default=rec.effort)
         self.custom[name] = custom_spec(name, {"label": label, "charter": charter, "model": model, "effort": effort})
         self.items.append((name, True))
 
@@ -330,6 +372,7 @@ class Checklist:
         setup = {**self.setup,
                  "divisions": [n for n, on in self.items if on and n in registry.DIVISIONS],
                  "custom": {n: self.custom[n] for n, on in self.items if on and n in self.custom}}
+        setup["models"] = {n: m for n, m in self.chosen.items() if n in names(setup)}
         if registered:
             self.say(f"Stage: {setup['stage']} · aliases: {','.join(setup['aliases']) or '-'}  "
                      "(registered; change the stage with orche stage set)")

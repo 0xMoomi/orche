@@ -49,7 +49,7 @@ class BeatCase(support.TempHomeCase):
         self.config()
         self.calls = []
 
-        def runner(argv, *, timeout, input):
+        def runner(argv, *, timeout, input, env=None):
             self.calls.append(list(argv))
             return shell.Result(0, "", "", list(argv))
         for obj, name, value in ((shell, "RUNNER", runner), (notify, "PLATFORM", "darwin")):
@@ -136,7 +136,7 @@ class FailedShowTest(BeatCase):
     """A failed show (non-zero exit, the 5 s timeout) is a try: the next waits for the next slot."""
 
     def failing(self):
-        def runner(argv, *, timeout, input):
+        def runner(argv, *, timeout, input, env=None):
             self.calls.append(list(argv))
             return shell.Result(1, "", "err", list(argv))
         return mock.patch.object(shell, "RUNNER", runner)
@@ -494,7 +494,7 @@ class PassTest(ReconcileCase):
         (self.home / "config.json").write_text(json.dumps({**WAKE, "flow": {"quiet_hours": ""}}))
         calls = []
 
-        def run(argv, *, timeout, input):
+        def run(argv, *, timeout, input, env=None):
             calls.append(list(argv))
             return shell.Result(0 if argv[0] == "osascript" else 113, "", "", list(argv))
         with mock.patch.object(notify, "PLATFORM", "darwin"), mock.patch.object(shell, "RUNNER", run):

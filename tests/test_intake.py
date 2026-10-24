@@ -224,7 +224,7 @@ class IntakeRunTest(IntakeCase):
     def test_request_stays_within_12_kb_with_long_charters(self):
         reg = registry.load()
         reg["projects"]["acme"]["custom_divisions"].update({
-            f"c{i}": {"label": f"C{i}", "charter": "x" * 400, "model": "m", "effort": "high"} for i in range(30)})
+            f"c{i}": {"label": f"C{i}", "charter": "x" * 400, "model": "claude-opus-5-5", "effort": "high"} for i in range(30)})
         for i in range(30):
             reg["projects"]["acme"]["divisions"][f"c{i}"] = dict(reg["projects"]["acme"]["divisions"]["design"])
         registry.save(reg)

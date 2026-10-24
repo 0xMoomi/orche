@@ -6,7 +6,7 @@ Precondition of `wake` and `sleep`: `unit.owns_worktree` (the CLI routes Main to
 import sys
 import time
 
-from .. import cli, orca, roster, units, util
+from .. import cli, orca, roster, units, util, vendors
 from . import book, limits, panes
 
 STALE_HANDOFF_SECONDS = 30 * 60
@@ -28,6 +28,13 @@ def _refuse_retired_or_onboarding(unit) -> None:
         raise book.Refused(cli.EXIT_BLOCKED, f"{unit.session} is retired")
     if unit.status == "onboarding":
         raise book.Refused(cli.EXIT_BLOCKED, _onboarding_message(unit))
+
+
+def _refuse_codex(reg, unit) -> None:
+    """A Codex unit never gets a pane (wake and reopen alike): headless only (v1)."""
+    if vendors.vendor_of(vendors.of(reg, unit)) == vendors.CODEX:
+        raise book.Refused(cli.EXIT_BLOCKED, f"{unit.session} runs on codex: headless only (v1); "
+                           "its briefs run through orche run")
 
 
 def handoff_problem(unit):
@@ -87,6 +94,7 @@ def wake(reg, unit, *, dry_run=False) -> tuple:
     for a dormant unit; 1 on an Orca error) -> last_activity + activity touch -> record.
     """
     _refuse_retired_or_onboarding(unit)
+    _refuse_codex(reg, unit)
     if unit.status == "active":
         return _reopen(unit, dry_run=dry_run)
     limits.unit_gate(reg, unit)
@@ -189,6 +197,8 @@ def _wake_ops(reg, proj, *, dry_run) -> tuple:
         return False, "ops has no session yet"
     if unit.status in ("active", "retired"):
         return False, f"ops is {unit.status}"
+    if vendors.vendor_of(vendors.of(reg, unit)) == vendors.CODEX:
+        return False, "ops runs on codex (headless only); not woken"
     try:
         _, line = wake(reg, unit, dry_run=dry_run)
     except limits.AwakeLimit as exc:

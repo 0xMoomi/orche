@@ -1,15 +1,22 @@
 """Run history (C10 T6): `ORCHE_HOME/runs/<p>/history.jsonl`, one line per RUN.json written (job,
 `unrun`, `lost`), each one O_APPEND write:
-`{unit, rev, to, model, effort, status, stop_reason, cost_usd, num_turns, started, finished}`.
-Readers: the spend cap (G4) and the run cap (G5) in flow.guard. A corrupt line is skipped."""
+`{unit, rev, to, model, vendor, effort, status, stop_reason, cost_usd, num_turns, started, finished}`.
+Readers: the spend cap (G4) and the run cap (G5) in flow.guard. A corrupt line is skipped.
+
+A run whose worker started but left no cost figure (killed, timed out, crashed, Codex without a
+completed turn, lost) records a reservation instead of nothing (reserve(), design C11 §7.3), so G4
+counts it; a run that never started its worker (busy, duplicate, stopped before start, exit 127, a
+Codex that printed no event) records no cost."""
 import json
+import math
 import os
 
 from .. import log, paths, units, util
 
-KEYS = ("unit", "rev", "to", "model", "effort", "status", "stop_reason", "cost_usd", "num_turns",
+KEYS = ("unit", "rev", "to", "model", "vendor", "effort", "status", "stop_reason", "cost_usd", "num_turns",
         "started", "finished")
 UNCOUNTED = ("busy",)      # the only unrun reason filed to history: never started claude, not a run for G5
+UNKNOWN_USD_PER_MIN = 0.25  # what a minute of a run without a cost figure counts (§7.3)
 
 
 def path(proj):
@@ -19,6 +26,15 @@ def path(proj):
 def entry(rec, rev):
     """The history line of RUN.json record `rec` for brief revision `rev`."""
     return {k: (rev if k == "rev" else rec.get(k)) for k in KEYS}
+
+
+def reserve(started, finished, cap):
+    """The cost (USD) a started run without a cost figure counts: its wall time in whole minutes,
+    rounded up and at least one (the timestamps are whole seconds), × UNKNOWN_USD_PER_MIN, at most
+    `cap` (flow.max_unit_cost_usd). An unreadable time counts one minute."""
+    a, b = units.parse_iso(started), units.parse_iso(finished)
+    seconds = (b - a).total_seconds() if a is not None and b is not None else 0
+    return round(min(float(cap), max(1, math.ceil(seconds / 60)) * UNKNOWN_USD_PER_MIN), 2)
 
 
 def append(proj, rec, rev):

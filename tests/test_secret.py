@@ -41,7 +41,7 @@ class FakeCloud:
         self.age_inputs = []
         self.fail_writes = False
 
-    def __call__(self, argv, *, timeout, input):
+    def __call__(self, argv, *, timeout, input, env=None):
         self.calls.append((list(argv), input))
         ok = shell.Result(0, "", "", list(argv))
         if argv[:2] == ["gcloud", "secrets"]:
@@ -473,7 +473,7 @@ class RunTest(SecretCase):
         subprocess.run(["git", "init", "-q", str(self.repo)], check=True)
         cloud = self.cloud
 
-        def runner(argv, *, timeout, input):  # real git for the info/exclude helper
+        def runner(argv, *, timeout, input, env=None):  # real git for the info/exclude helper
             if argv[:1] == ["git"]:
                 return shell._subprocess_runner(argv, timeout=timeout, input=input)
             return cloud(argv, timeout=timeout, input=input)
@@ -704,7 +704,7 @@ class ResumeAndArgvTest(SecretCase):
     def test_the_dialog_text_is_an_argument_never_script(self):
         seen = []
 
-        def runner(argv, *, timeout, input):
+        def runner(argv, *, timeout, input, env=None):
             seen.append(list(argv))
             return shell.Result(0, "button returned:Enter, text returned:abc\n", "", list(argv))
         shell.RUNNER = runner
@@ -729,7 +729,7 @@ class ClipboardTest(SecretCase):
             def ask(self, req, error=None):
                 return answers.pop(0) if answers else (dialog.CANCEL, "")
 
-        def runner(argv, *, timeout, input):
+        def runner(argv, *, timeout, input, env=None):
             if argv == ["pbpaste"]:
                 cloud.calls.append((list(argv), input))
                 return shell.Result(0, clipboard, "", list(argv))

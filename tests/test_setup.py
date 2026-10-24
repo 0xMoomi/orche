@@ -49,7 +49,8 @@ class DefaultsTest(SetupCase):
         code, out, err = self.orche("init", "Acme Shop")
         self.assertEqual(code, 0, err)
         self.assertEqual(self.created(), ["div-rnd", "div-research", "div-build", "div-gtm"])
-        self.assertIn("Summary: rnd, research, build, gtm · stage building · 4 worktrees · pane main\n",
+        self.assertIn("Summary: rnd, research, build, gtm · stage building · 4 worktrees · pane main · models: "
+                      "rnd claude-opus-5-5, research claude-sonnet-5-5, build claude-opus-5-5, gtm claude-sonnet-5-5\n",
                       out)
         proj = self.proj()
         self.assertEqual(registry.divisions_of(proj), ["rnd", "research", "build", "gtm"])
@@ -71,7 +72,8 @@ class DefaultsTest(SetupCase):
         data = json.loads(out)
         self.assertEqual(list(data["divisions"]), ["rnd", "research", "build", "gtm"])
         self.assertEqual(data["summary"], "Summary: rnd, research, build, gtm · stage building · 4 worktrees · "
-                                          "pane main")
+                                          "pane main · models: rnd claude-opus-5-5, research claude-sonnet-5-5, "
+                                          "build claude-opus-5-5, gtm claude-sonnet-5-5")
 
 
 # ---- interactive checklist ----------------------------------------------------------------------
@@ -83,14 +85,16 @@ class InteractiveTest(SetupCase):
         self.assertEqual(code, 0, err)
         self.assertIn("Divisions for acme-shop  (type numbers to toggle, a to add a custom division, Enter to "
                       "continue)\n"
-                      " 1 [x] rnd       R&D — prototypes and technical spikes\n"
-                      " 2 [x] research  Research — market, users, competitors\n"
-                      " 3 [x] build     Build — integrates features, owns the ledger, opens PRs\n"
-                      " 4 [x] gtm       GTM — launch, content, growth\n"
-                      " 5 [ ] ops       Ops — deploy and operate (dormant until stage public)\n> ", out)
-        self.assertIn(" 6 [x] design    Design — owns the visual system, reviews UI chan…\n", out)
+                      " 1 [x] rnd       R&D — prototypes and technical spikes  [claude-opus-5-5]\n"
+                      " 2 [x] research  Research — market, users, competitors  [claude-sonnet-5-5]\n"
+                      " 3 [x] build     Build — integrates features, owns the ledger, opens PRs  [claude-opus-5-5]\n"
+                      " 4 [x] gtm       GTM — launch, content, growth  [claude-sonnet-5-5]\n"
+                      " 5 [ ] ops       Ops — deploy and operate (dormant until stage public)  [claude-sonnet-5-5]\n> ",
+                      out)
+        self.assertIn(" 6 [x] design    Design — owns the visual system, reviews UI chan…  [claude-opus-5-5]\n", out)
         self.assertIn(" 1 [ ] rnd ", out)
-        self.assertIn("Summary: build, gtm, design(custom) · stage building · 3 worktrees · pane main\n"
+        self.assertIn("Summary: build, gtm, design(custom) · stage building · 3 worktrees · pane main · models: "
+                      "build claude-opus-5-5, gtm claude-sonnet-5-5, design claude-opus-5-5\n"
                       "Apply? [Y/n] ", out)
         self.assertEqual(self.created(), ["div-build", "div-gtm", "div-design"])
         proj = self.proj()
@@ -210,7 +214,7 @@ class InteractiveTest(SetupCase):
         self.calls.clear()
         code, out, err = self.typed("3", "6", "1", "", "")
         self.assertEqual(code, 0, err)
-        self.assertIn(" 3 [x] build     Build — integrates features, owns the ledger, opens PRs  (onboarded)", out)
+        self.assertIn(" 3 [x] build     Build — integrates features, owns the ledger, opens PRs  [claude-opus-5-5]  (onboarded)", out)
         self.assertIn("  build is already onboarded; removing a division is out of scope "
                       "(sleep it: orche sleep div-acme-shop-build)", out)
         self.assertIn("  design is already onboarded;", out)
@@ -237,6 +241,19 @@ class FlagsTest(SetupCase):
         panes = [c[c.index("--title") + 1] for c in self.orca_calls("terminal create")]
         self.assertEqual(panes[0], "div-acme-shop-design")
         self.assertIn("Summary: build, design(custom), qa(custom) · stage building · 3 worktrees · pane main · wake design", out)
+
+    def test_a_bad_kinds_default_model_refuses_init_before_any_write(self):
+        cfg = json.loads((self.home / "config.json").read_text())
+        cfg["kinds"] = {"rnd": {"model": "gpt-5"}}
+        (self.home / "config.json").write_text(json.dumps(cfg))
+        root = Path(os.path.realpath(self.repo))
+        code, out, err = self.orche("init", "Acme Shop", "--divisions", "rnd,build", "--no-intake")
+        self.assertEqual(code, 1, out)
+        self.assertIn("config kinds.rnd.model: unknown model 'gpt-5'", err)
+        self.assertIn("Claude ids start with claude-", err)
+        self.assertNotIn("acme-shop", registry.load()["projects"])
+        self.assertEqual(self.created(), [])
+        self.assertFalse((root / ".env.example").exists())
 
     def test_custom_flag_errors(self):
         cases = [
@@ -298,7 +315,11 @@ class FlagsTest(SetupCase):
             ({"divisions": ["sales"]}, None, "unknown division(s): sales"),
             ({"stage": "beta"}, None, "setup: stage must be one of building|public"),
             ({"custom": {"design": {"label": "Design", "charter": "one\n\ntwo"}}}, None, "charter must be one paragraph"),
-            ({"custom": {"design": {"label": "Design"}}}, None, "design.charter: must be one paragraph of 1-400"),
+            ({"custom": {"legal": {"label": "Legal"}}}, None, "legal.charter: must be one paragraph of 1-400"),
+            # 0.8.0: a setup file carries models; each key is a division of the setup, each value a model.
+            ({"divisions": ["build"], "models": ["opus"]}, None, "setup: models must be an object"),
+            ({"divisions": ["build"], "models": {"gtm": "opus"}}, None, "models: unknown division(s) gtm"),
+            ({"divisions": ["build"], "models": {"build": "gpt-4"}}, None, "models.build: unknown model 'gpt-4'"),
             ({"custom": {"design": {"label": "D", "charter": "c", "owner": "x"}}}, None, "unknown key 'owner'"),
             (None, '{"custom": {"design": {"label": "A", "charter": "a"}, "design": {"label": "B", "charter": "b"}}}',
              "key 'design' appears twice"),
@@ -346,7 +367,7 @@ class PrintSetupTest(SetupCase):
         code, out, err = self.orche("init", "--print-setup", "Acme Shop")
         self.assertEqual(code, 0, err)
         self.assertEqual(json.loads(out), {"divisions": ["rnd", "research", "build", "gtm"], "custom": {},
-                                           "stage": "building", "aliases": []})
+                                           "stage": "building", "aliases": [], "models": {}})
         self.assertEqual(registry.load()["projects"], {})
 
     def test_registered_project_prints_its_setup_and_it_round_trips(self):
@@ -357,7 +378,9 @@ class PrintSetupTest(SetupCase):
         self.assertEqual(code, 0, err)
         setup = json.loads(out)
         self.assertEqual(setup, {"divisions": ["build", "gtm"], "custom": {"design": DESIGN},
-                                 "stage": "building", "aliases": ["shop"]})
+                                 "stage": "building", "aliases": ["shop"],
+                                 "models": {"build": "claude-opus-5-5", "gtm": "claude-sonnet-5-5",
+                                            "design": "claude-opus-5-5"}})
         self.assertEqual(self.calls, [])   # a registered project needs no Orca call
         setup["divisions"].append("research")
         path = self.home / "setup.json"
@@ -565,7 +588,7 @@ class SessionUniquenessTest(SetupCase):
         self.other = self.home / "repos" / "acme"
         self.other.mkdir(parents=True)
 
-    def fake_runner(self, argv, *, timeout, input):
+    def fake_runner(self, argv, *, timeout, input, env=None):
         result = super().fake_runner(argv, timeout=timeout, input=input)
         if argv[:3] != ["orca", "repo", "list"]:
             return result
@@ -671,7 +694,7 @@ class AddRepoTest(SetupCase):
         self.display = "new-app"
         self.added = []
 
-    def fake_runner(self, argv, *, timeout, input):
+    def fake_runner(self, argv, *, timeout, input, env=None):
         if argv[:3] == ["orca", "repo", "add"]:
             self.calls.append(argv)
             self.added.append(argv[argv.index("--path") + 1])
@@ -818,7 +841,7 @@ class BareInitTest(SetupCase):
         super().setUp()
         self.here = git_repo(self.home / "repos" / "cwd-app")
 
-    def fake_runner(self, argv, *, timeout, input):
+    def fake_runner(self, argv, *, timeout, input, env=None):
         result = super().fake_runner(argv, timeout=timeout, input=input)
         if argv[:3] == ["orca", "repo", "list"]:
             data = json.loads(result.out)
@@ -912,7 +935,7 @@ class LandOnMainTest(SetupCase):
     def test_a_failed_switch_is_one_warning_and_init_still_succeeds(self):
         real = self.fake_runner
 
-        def runner(argv, *, timeout, input):
+        def runner(argv, *, timeout, input, env=None):
             if argv[1:3] == ["terminal", "switch"]:
                 self.calls.append(argv)
                 return shell.Result(1, json.dumps({"ok": False, "error": {"code": "boom", "message": "no window"}}),
@@ -931,7 +954,7 @@ class LandOnMainTest(SetupCase):
     def test_a_failed_switch_never_claims_main_is_open(self):
         real = self.fake_runner
 
-        def runner(argv, *, timeout, input):
+        def runner(argv, *, timeout, input, env=None):
             if argv[1:3] == ["terminal", "switch"]:
                 self.calls.append(argv)
                 return shell.Result(1, json.dumps({"ok": False, "error": {"code": "boom", "message": "no window"}}),
@@ -946,7 +969,7 @@ class LandOnMainTest(SetupCase):
     def test_a_missing_main_tab_warns_and_does_not_switch(self):
         real = self.fake_runner
 
-        def runner(argv, *, timeout, input):
+        def runner(argv, *, timeout, input, env=None):
             result = real(argv, timeout=timeout, input=input)
             self.terminals[:] = [t for t in self.terminals if t["title"] != "main-acme-shop"]
             return result
@@ -980,6 +1003,47 @@ class SetupModelTest(unittest.TestCase):
         self.assertEqual(setup_flow.summary({**setup, "divisions": [], "custom": {}}, new=0, registered=True),
                          "Summary: no divisions · stage public · 0 new worktrees · pane main")
 
+    def test_models_take_the_custom_spec_then_the_record_then_the_recommendation(self):
+        setup = {"divisions": ["rnd", "build"], "custom": {"qa": {**DESIGN, "model": "codex"}},
+                 "stage": "building", "aliases": []}
+        existing = {"divisions": {"rnd": {"model": "codex:gpt-5.5"}}}
+        models = setup_flow.models(setup, existing, cfg={})
+        self.assertEqual(models, {"rnd": "codex:gpt-5.5", "build": "claude-opus-5-5", "qa": "codex"})
+        self.assertEqual(setup_flow.summary(setup, new=1, registered=True, models=models),
+                         "Summary: rnd, build, qa(custom) · stage building · 1 new worktree · pane main · "
+                         "models: rnd codex:gpt-5.5, build claude-opus-5-5, qa codex")
+
+    def test_checklist_row_shows_the_recorded_model(self):
+        setup = {"divisions": ["rnd"], "custom": {}, "stage": "building", "aliases": []}
+        c = setup_flow.Checklist("acme", setup, ["rnd"], io.StringIO(), io.StringIO(),
+                                 recorded={"rnd": "codex"})
+        self.assertEqual(c.describe("rnd"), "R&D — prototypes and technical spikes  [codex]  (onboarded)")
+        self.assertTrue(c.describe("research").endswith("[claude-sonnet-5-5]"))
+
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class SetupFileModelTest(support.TempHomeCase):
+    def test_a_chosen_model_of_a_custom_division_replaces_its_spec_model(self):
+        base = setup_flow.defaults()
+        setup = setup_flow.from_data({"custom": {"design": {}}, "models": {"design": "claude-sonnet-5-5"}}, base)
+        self.assertEqual(setup["custom"]["design"]["model"], "claude-sonnet-5-5")
+        self.assertEqual(setup_flow.models(setup)["design"], "claude-sonnet-5-5")
+
+    def test_the_readme_setup_json_with_a_picked_design_parses(self):
+        readme = (support.ROOT / "README.md").read_text()
+        self.assertIn('{"divisions": [...], "custom": {"<kind>": {}}, "models": {"<division>": "<model>"}}', readme)
+        self.assertIn("--lang en", readme)
+        data = {"divisions": ["rnd"], "custom": {"design": {}}, "models": {"rnd": "claude-sonnet-5-5"}}
+        setup = setup_flow.from_data(data, setup_flow.defaults())
+        self.assertIn("design", setup["custom"])
+        self.assertEqual(setup_flow.names(setup), ["rnd", "design"])
+        self.assertEqual(setup_flow.models(setup)["rnd"], "claude-sonnet-5-5")
+
+    def test_a_custom_spec_model_is_checked_strictly_at_write(self):
+        with self.assertRaises(setup_flow.SetupError) as ctx:
+            setup_flow.custom_spec("design", {"model": "gpt-4"})
+        self.assertTrue(any(e.startswith("custom division design.model: unknown model 'gpt-4'")
+                            for e in ctx.exception.errors), ctx.exception.errors)

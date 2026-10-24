@@ -332,7 +332,7 @@ class DeliverTest(NudgeCase):
 
     def test_running(self):
         b = self.brief()
-        with mock.patch.object(runs, "running", return_value={"pid": 1}), mock.patch.object(runs, "start") as start:
+        with mock.patch.object(runs, "running", return_value={"pid": 1, "rev": 1}), mock.patch.object(runs, "start") as start:
             self.assertEqual(self.deliver(b.unit, {"delivery": "runner"}), (0, "running"))
         start.assert_not_called()
 

@@ -14,8 +14,9 @@ from types import SimpleNamespace
 from unittest import mock
 
 import support
-from orche import brief, config, inbox, mask, paths, procs, registry, runs, util
-from orche.runs import filing
+from orche import brief, codex, config, inbox, mask, paths, procs, registry, runs, units, util
+from orche.flow import guard
+from orche.runs import filing, history
 from orche.runs import job as runner
 from test_runner import RunnerCase
 
@@ -58,10 +59,11 @@ def _masked(value):
 
 
 # Private copies of the three RUN.json literals at 3f47850 (runner.py:396-402, 484-490, 602-610), the
-# record before filing.run_record; the shapes below must serialise byte for byte the same.
+# record before filing.run_record, + `vendor` after `model` (0.8.0, design C11 §7.1); the shapes below
+# must serialise byte for byte the same.
 def old_unrun(job, now, status, error, stop_reason, routed):
     return {"unit": job.unit, "project": job.project, "to": job.to, "worktree": str(job.worktree),
-            "branch": job.branch, "tier": job.tier, "model": job.model, "effort": EFFORT[job.tier],
+            "branch": job.branch, "tier": job.tier, "model": job.model, "vendor": "claude", "effort": EFFORT[job.tier],
             "started": now, "finished": now,
             "timeout_s": None, "exit_code": None, "is_error": status == "failed", "stop_reason": stop_reason,
             "cost_usd": None, "num_turns": None, "usage": None, "result_tail": "",
@@ -72,7 +74,7 @@ def old_unrun(job, now, status, error, stop_reason, routed):
 def old_lost(job, started, finished, error, recipient):
     return {
         "unit": job.unit, "project": job.project, "to": job.to, "worktree": str(job.worktree),
-        "branch": job.branch, "tier": job.tier, "model": job.model, "effort": EFFORT[job.tier],
+        "branch": job.branch, "tier": job.tier, "model": job.model, "vendor": "claude", "effort": EFFORT[job.tier],
         "started": started, "finished": finished, "timeout_s": None, "exit_code": None,
         "is_error": True, "stop_reason": "lost", "cost_usd": None, "num_turns": None, "usage": None,
         "result_tail": "", "error": error, "head_before": None, "head_sha": None, "status": "failed",
@@ -82,7 +84,7 @@ def old_lost(job, started, finished, error, recipient):
 def old_finished(job, call, res, data, model, started, finished, code, error, stopped, result,
                  head_before, head, status, filed):
     return {"unit": job.unit, "project": job.project, "to": job.to, "worktree": str(job.worktree),
-            "branch": job.branch, "tier": job.tier, "model": model, "effort": call.effort,
+            "branch": job.branch, "tier": job.tier, "model": model, "vendor": "claude", "effort": call.effort,
             "started": started, "finished": finished, "timeout_s": call.timeout,
             "exit_code": code, "is_error": res.is_error or (error is not None and not stopped),
             "stop_reason": "stopped" if stopped else _masked(
@@ -132,8 +134,12 @@ class RecordTest(unittest.TestCase):
         j, call = self.JOB, SimpleNamespace(model="claude-sonnet-5-5", effort="high")
         base = {"unit": "u-1", "project": "acme", "to": "div-acme-build", "worktree": "/w/acme-build",
                 "branch": "build", "tier": "standard"}
-        self.assertEqual(runner.who(j), {**base, "model": "claude-opus-5-5", "effort": "medium"})
-        self.assertEqual(runner.who(j, call), {**base, "model": "claude-sonnet-5-5", "effort": "high"})
+        self.assertEqual(runner.who(j), {**base, "model": "claude-opus-5-5", "vendor": "claude", "effort": "medium"})
+        self.assertEqual(runner.who(j, call), {**base, "model": "claude-sonnet-5-5", "vendor": "claude",
+                                               "effort": "high"})
+        codex_call = SimpleNamespace(model="codex:gpt-6.1-sol", effort="low")
+        self.assertEqual(runner.who(j, codex_call), {**base, "model": "codex:gpt-6.1-sol", "vendor": "codex",
+                                                     "effort": "low"})
         self.assertEqual(list(runner.who(j)), list(filing.IDENTITY))
 
     def finished(self, res, data, error, stopped, status):
@@ -167,6 +173,16 @@ class RecordTest(unittest.TestCase):
                          "end_turn")
         self.finished(SimpleNamespace(is_error=False, cost_usd=None, turns=None, usage=None), {},
                       "timeout after 1860s", False, "failed")
+
+    def test_a_timed_out_run_stops_with_error_whatever_it_printed(self):
+        """A Codex run killed at its timeout after some events parses as error_no_message; RUN.json
+        says `error`: the runner ended it."""
+        for data in ({"subtype": "error_no_message", "stop_reason": "error_no_message"},
+                     {"subtype": "success", "stop_reason": "completed"}, {}):
+            with self.subTest(data=data):
+                self.assertEqual(runner.stop_reason_of(data, "timeout after 660s", False, timed_out=True), "error")
+        self.assertEqual(runner.stop_reason_of({"subtype": "error_no_message"}, "timeout after 660s", True,
+                                               timed_out=True), "stopped")
 
     def test_finished_stopped_by_main(self):
         res = SimpleNamespace(is_error=False, cost_usd=0.1, turns=2, usage=None)
@@ -237,7 +253,7 @@ class StartRestartTest(support.TempHomeCase):
     def test_start_spawns_orche_run_detached(self):
         before = time.time_ns()
         result, argv, kw = self.spawn(lambda: runs.start(self.UNIT))
-        self.assertIsNone(result)
+        self.assertIs(result, True)
         self.assertEqual(argv, [sys.executable, str(paths.PLUGIN_ROOT / "bin" / "orche.py"), "run", self.UNIT])
         self.assertTrue(kw["start_new_session"])
         self.assertEqual(kw["stdin"], subprocess.DEVNULL)
@@ -268,6 +284,29 @@ class StartRestartTest(support.TempHomeCase):
         old = ("spawn_detached", "subprocess", "run_" + "argv", "spawn_" + "run")   # split: no grep hit
         for name in old:     # R3: an old patch target fails loudly
             self.assertFalse(hasattr(dispatch, name), name)
+
+
+class ReservationTest(unittest.TestCase):
+    """history.reserve (design C11 §7.3) on fixed times: whole minutes rounded up, at least one,
+    UNKNOWN_USD_PER_MIN each, at most the cap."""
+
+    def test_whole_minutes_rounded_up_at_least_one_at_most_the_cap(self):
+        at = "2026-10-23T09:00:00+00:00"
+        cases = [(at, 10, 0.25), ("2026-10-23T09:00:59+00:00", 10, 0.25), ("2026-10-23T09:01:01+00:00", 10, 0.5),
+                 ("2026-10-23T18:30:00+09:00", 10, 7.5), ("2026-10-23T10:00:00+00:00", 10, 10.0),
+                 ("2026-10-23T10:00:00+00:00", 30, 15.0), (at, 0, 0.0), (None, 10, 0.25),
+                 ("2026-10-23T08:00:00+00:00", 10, 0.25)]
+        for finished, cap, want in cases:
+            with self.subTest(finished=finished, cap=cap):
+                self.assertEqual(history.reserve(at, finished, cap), want)
+        self.assertEqual(history.UNKNOWN_USD_PER_MIN, 0.25)
+
+    def test_history_lines_carry_the_vendor(self):
+        rec = {k: None for k in filing.IDENTITY + filing.RESULT}
+        rec.update(unit="u-1", model="codex", vendor="codex", cost_usd=0.5)
+        self.assertEqual({k: v for k, v in history.entry(rec, 2).items() if v is not None},
+                         {"unit": "u-1", "rev": 2, "model": "codex", "vendor": "codex", "cost_usd": 0.5})
+        self.assertEqual(list(history.KEYS[3:6]), ["model", "vendor", "effort"])
 
 
 class LockIdentityTest(RunnerCase):
@@ -303,6 +342,42 @@ class LockIdentityTest(RunnerCase):
         rec = self.run_record(unit)
         return ptr["brief_rev"], {k: rec[k] for k in ("tier", "model", "effort", "worktree", "branch")}
 
+    def test_a_lost_codex_run_is_reserved_up_to_its_timeout_not_to_the_reconcile(self):
+        """§7.3: the lock's `started` to the earlier of now and `started` + `timeout_s`: this lock is
+        months old, its timeout 600 s, so 10 minutes ($2.50) are reserved and G4 does not refuse;
+        its `-o` file is removed."""
+        unit = self.brief()
+        out = codex.out_path(procs.run_id(unit, 1))
+        out.parent.mkdir(parents=True, exist_ok=True)
+        out.write_text("partial")
+        self.put_lock(unit, rev=1, tier="standard", model="codex", vendor="codex", effort="medium",
+                      worktree=str(self.wt), branch="build", timeout_s=600)
+        self.assertIsNone(guard.run_refusal("acme", unit))
+        [act] = runs.reconcile(registry.load(), "acme", budget_s=10.0)
+        self.assertEqual(act["action"], "reconciled")
+        rec = self.run_record(unit)
+        self.assertEqual((rec["status"], rec["stop_reason"], rec["model"], rec["vendor"], rec["cost_usd"],
+                          rec["usage"], rec["timeout_s"]), ("failed", "lost", "codex", "codex", 2.5, None, 600))
+        self.assertEqual(units.parse_iso(rec["finished"]), units.parse_iso("2026-01-01T09:15:00+00:00"))
+        self.assertFalse(out.exists())
+        [ptr] = [p for p in self.pointers("main-acme") if p["from"] == "div-acme-build"]
+        self.assertTrue(ptr["summary"].startswith(f"runner died: {unit}"), ptr["summary"])
+        self.assertEqual([(r["vendor"], r["model"], r["cost_usd"]) for r in history.read("acme")],
+                         [("codex", "codex", 2.5)])
+        self.assertIsNone(guard.run_refusal("acme", unit))
+
+    def test_a_lost_run_without_timeout_s_is_reserved_up_to_the_default_timebox(self):
+        """A lock written before `timeout_s`: the default TIMEBOX + grace (31 minutes, $7.75)."""
+        self.assertEqual(filing.LOST_TIMEOUT_S, runner.DEFAULT_TIMEBOX_S + runner.GRACE_S)
+        unit = self.brief()
+        self.put_lock(unit, rev=1, tier="standard", model="claude-opus-5-5", vendor="claude", effort="medium",
+                      worktree=str(self.wt), branch="build")
+        [act] = runs.reconcile(registry.load(), "acme", budget_s=10.0)
+        self.assertEqual(act["action"], "reconciled")
+        rec = self.run_record(unit)
+        self.assertEqual((rec["cost_usd"], rec["timeout_s"]), (7.75, filing.LOST_TIMEOUT_S))
+        self.assertEqual(units.parse_iso(rec["finished"]), units.parse_iso("2026-01-01T09:36:00+00:00"))
+
     def test_lock_info_is_locked(self):
         unit = self.brief()
         j = runner.resolve(self.reg, unit)
@@ -316,8 +391,8 @@ class LockIdentityTest(RunnerCase):
         self.assertTrue(self.claude_sleeping(unit), (self.root / f"{unit}.out").read_text())
         j = runner.resolve(self.reg, unit)
         call = runner.call_for(j, config.load())       # the config the spawned run loaded
-        want = {"to": "div-acme-build", "rev": 1, "tier": "standard", "model": call.model, "effort": call.effort,
-                "worktree": str(j.worktree), "branch": j.branch}
+        want = {"to": "div-acme-build", "rev": 1, "tier": "standard", "model": call.model, "vendor": "claude",
+                "effort": call.effort, "worktree": str(j.worktree), "branch": j.branch, "timeout_s": call.timeout}
         target = json.loads((self.home / "runs" / "acme" / "div-acme-build.target.lock").read_text())
         for lock in (self.lock(unit), target):
             self.assertEqual({k: lock.get(k) for k in filing.LOCKED}, want)

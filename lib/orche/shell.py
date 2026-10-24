@@ -23,12 +23,12 @@ class ShellError(RuntimeError):
         self.result = result
 
 
-def _subprocess_runner(argv, *, timeout, input):
+def _subprocess_runner(argv, *, timeout, input, env=None):
     # errors="replace": a non-UTF-8 byte in any output (a `ps` table listing a legacy file name or
     # environment value) becomes U+FFFD instead of raising UnicodeDecodeError.
     try:
         cp = subprocess.run(argv, input=input, capture_output=True, text=True, errors="replace",
-                            timeout=timeout)
+                            timeout=timeout, env=env)
         return Result(cp.returncode, cp.stdout, cp.stderr, list(argv))
     except subprocess.TimeoutExpired:
         return Result(124, "", f"timeout after {timeout}s", list(argv))
@@ -39,11 +39,13 @@ def _subprocess_runner(argv, *, timeout, input):
 RUNNER = _subprocess_runner
 
 
-def run(argv, *, timeout=20, dry_run=False, input=None, check=False) -> Result:
+def run(argv, *, timeout=20, dry_run=False, input=None, check=False, env=None) -> Result:
+    """env: the child's whole environment (None: this process's)."""
     argv = [str(a) for a in argv]
     if dry_run:
         return Result(0, "", "", argv)
-    result = RUNNER(argv, timeout=timeout, input=input)
+    extra = {} if env is None else {"env": env}
+    result = RUNNER(argv, timeout=timeout, input=input, **extra)
     if check and result.code != 0:
         raise ShellError(result)
     return result

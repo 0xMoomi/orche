@@ -11,6 +11,8 @@ G1–G7 off; the owner's pause (G8) stays on.
   G3 rate       the project's briefs and AMENDs since max(W, now − 1 h) → every brief and AMEND  (20)
   G4 spend     runs/<p>/history.jsonl cost_usd, finished in W: a unit at its cap → its AMENDs and
                 runs; the project at its cap → every brief, AMEND and run   (flow.max_*_cost_usd 10/30)
+                Claude's figure, Codex's estimate, or the reservation of a run without one
+                (killed, timed out, lost: history.reserve, at most unit_cap())
   G5 runs       the unit's history lines started in W, not busy/duplicate → its `orche run`  (4)
   G6 chain      a division's brief: its current unit already 3 briefs deep along `parent:`, or
                 already parent of 5 briefs first sent in W (BRIEF.rev1.md) → that division's brief (3/5)
@@ -264,6 +266,12 @@ def _cap(f, key, default):
         return float(default)
 
 
+def unit_cap(f=None):
+    """G4's cap a unit (flow.max_unit_cost_usd, default 10; `f` the `flow` config, else loaded): also
+    the most one run's reservation counts (history.reserve)."""
+    return _cap(_flow() if f is None else f, "max_unit_cost_usd", 10)
+
+
 def _spend(proj, unit, w):
     """G4: (text, n) when the project, or `unit` (an AMEND or a run), spent its cap inside W, else None."""
     from ..runs import history
@@ -274,7 +282,7 @@ def _spend(proj, unit, w):
         return (f"{proj} spent ${spent:.2f} on headless runs since {_hhmm(w)} without the owner "
                 f"(cap ${cap:g})", int(spent))
     if unit:
-        cap = _cap(f, "max_unit_cost_usd", 10)
+        cap = unit_cap(f)
         spent = history.spend(proj, w, unit)
         if spent >= cap:
             return (f"{unit} spent ${spent:.2f} on headless runs since {_hhmm(w)} without the owner "

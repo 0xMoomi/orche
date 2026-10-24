@@ -11,7 +11,8 @@ reconcile/heartbeat.json last. Classes (design §2.2):
   Main's pane is reopened in place (`hr.project_pane(switch=False)`), an active division/feature
   woken (`hr.wake`), then `orche nudge`, REOPEN_CAP a day (`reopens:<session>`, STALL_S apart);
   past the cap one escalation; a dormant or paused unit is never woken: one urgent `info` to Main;
-- undelivered <unit>: a `via: dispatch` pointer pending >= inbox.LATE -> `orche deliver --retry`;
+- undelivered <unit>: a `via: dispatch` pointer pending >= inbox.LATE -> `orche deliver --retry`; a
+  `deferred` one (a runner dispatch from inside a Codex sandbox) at once, its first try in that pass;
 - drain <unit>: that pointer's revision ran, runs or was reported on (never a STOP) -> drained at
   once under the target's `.deliver.lock` taken non-blocking (uncapped, nothing else is touched);
 - busy <unit>: RUN.json of the current revision says `stop_reason: busy`, no run live ->
@@ -330,7 +331,8 @@ def _dispatches(reg, m, session, late, now) -> list:
                                  ready=deliver.lock_free(session), rev=b.rev, to=session))
             continue
         out.append(Condition("undelivered", f"undelivered:{unit}:{rev}", m.project, unit, age, rev=rev,
-                             to=session, sender=str(p.get("from") or f"main-{m.project}")))
+                             to=session, sender=str(p.get("from") or f"main-{m.project}"),
+                             info={"deferred": True} if p.get("deferred") else {}))
     return out
 
 
@@ -349,7 +351,7 @@ def observe(reg, now, keys=None, wake=True, terms=None, cfg_all=None, hush=False
         except ValueError:
             continue
         late = [(t, path, p) for t, path, p in ((inbox.pointer_time(path, p), path, p) for path, p in items)
-                if t is not None and now - t >= inbox.LATE]
+                if t is not None and (now - t >= inbox.LATE or p.get("deferred"))]
         out += _dispatches(reg, m, session, late, now)
         waking = [(t, path, p) for t, path, p in late if inbox.wakes(p)]
         if not wake or not waking or terms is None:
@@ -401,7 +403,7 @@ def _plan_repair(c, e, now, actions) -> None:
     stall, cap, escalates = timing(c.cls)
     attempts = list(e.get("attempts") or [])
     n = len(attempts)
-    if n < cap and c.ready and c.age_s >= stall * 2 ** n:
+    if n < cap and c.ready and (c.age_s >= stall * 2 ** n or (n == 0 and c.info.get("deferred"))):
         actions.append(Action(KIND[c.cls], c, n + 1, cap))
         attempts.append(_iso(now))
         n += 1

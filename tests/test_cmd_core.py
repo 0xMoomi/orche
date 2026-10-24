@@ -46,7 +46,7 @@ class CoreCase(support.TempHomeCase):
         self.addCleanup(setattr, shell, "RUNNER", self._orig_runner)
         self.terminals = []
 
-    def fake_runner(self, argv, *, timeout, input):
+    def fake_runner(self, argv, *, timeout, input, env=None):
         self.calls.append(argv)
         result = {"terminals": self.terminals} if argv[1:3] == ["terminal", "list"] else {}
         return shell.Result(0, json.dumps({"ok": True, "result": result}), "", argv)
@@ -193,11 +193,11 @@ class DeptsTest(CoreCase):
         code, out, err = self.orche("depts")
         self.assertEqual((code, err), (0, ""))
         self.assertEqual(out.splitlines(), [
-            "PROJECT    UNIT            STATUS   SESSION                  BRANCH         LAST_ACTIVITY              IDLE  RUNNING",
-            "acme-shop  rnd             dormant  div-acme-shop-rnd        div/rnd        2026-10-01T09:00:00+09:00  15d   0",
-            "acme-shop  build           active   div-acme-shop-build      div/build      2026-10-15T18:30:00+09:00  0d    0",
-            "acme-shop  build/checkout  active   feat-acme-shop-checkout  feat/checkout  2026-10-15T18:00:00+09:00  0d    0",
-            "acme-shop  build/search    paused   feat-acme-shop-search    feat/search    2026-10-03T10:00:00+09:00  12d   0",
+            "PROJECT    UNIT            STATUS   MODEL            SESSION                  BRANCH         LAST_ACTIVITY              IDLE  RUNNING",
+            "acme-shop  rnd             dormant  claude-opus-5-5  div-acme-shop-rnd        div/rnd        2026-10-01T09:00:00+09:00  15d   0",
+            "acme-shop  build           active   claude-opus-5-5  div-acme-shop-build      div/build      2026-10-15T18:30:00+09:00  0d    0",
+            "acme-shop  build/checkout  active   claude-opus-5-5  feat-acme-shop-checkout  feat/checkout  2026-10-15T18:00:00+09:00  0d    0",
+            "acme-shop  build/search    paused   claude-opus-5-5  feat-acme-shop-search    feat/search    2026-10-03T10:00:00+09:00  12d   0",
         ])
 
     def test_depts_shows_last_activity_in_the_local_zone(self):
@@ -273,7 +273,7 @@ class RunningVisibilityTest(CoreCase):
     def lock(self, unit, to, pid):
         self.write(f"runs/acme-shop/{unit}.lock", {"pid": pid, "unit": unit, "to": to})
 
-    def fake_runner(self, argv, *, timeout, input):
+    def fake_runner(self, argv, *, timeout, input, env=None):
         if argv[0] == "ps":       # reconcile's pid check sees the real process table
             return self._orig_runner(argv, timeout=timeout, input=input)
         return super().fake_runner(argv, timeout=timeout, input=input)
@@ -624,7 +624,7 @@ class ProjectPaneTest(CoreCase):
         self.assertEqual(len(self.calls_of("create")), 1)
 
     def _orca_fails_on(self, sub, message):
-        def runner(argv, *, timeout, input):
+        def runner(argv, *, timeout, input, env=None):
             if argv[1:3] == ["terminal", sub]:
                 self.calls.append(argv)
                 return shell.Result(1, json.dumps({"ok": False, "error": {"message": message}}), "", argv)

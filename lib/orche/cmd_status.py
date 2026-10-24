@@ -7,7 +7,7 @@ import json
 import os
 import sys
 
-from . import __version__, brief, inbox, registry, roster, runs, statusline, units
+from . import __version__, brief, inbox, registry, roster, runs, statusline, units, vendors
 from .flow import guard, owner, shape
 
 EXIT_OK, EXIT_NOT_FOUND = 0, 2
@@ -28,14 +28,19 @@ def status_row(reg, key, now=None) -> dict:
     proj = reg["projects"][key]
     c = statusline.counts(reg, key, now)
     limit = reg["limits"]["max_awake_sessions"]
-    cells = statusline.division_cells(proj, c["active_features"])
+    models = {name: proj.get("divisions", {}).get(name, {}).get("model")
+              for name in registry.divisions_of(proj)}
+    # A non-Claude division is marked with its vendor (`rnd○[codex]`); the status bar is unchanged.
+    cells = [cell + (f"[{vendors.vendor_of(m)}]" if m and vendors.vendor_of(m) != "claude" else "")
+             for cell, m in zip(statusline.division_cells(proj, c["active_features"]), models.values())]
     line = (f"{key} stage={proj['stage']} awake={c['awake']}/{limit} divisions: {' '.join(cells) or '-'}"
             f" · new:{c['new']} · keys:{c['keys']} · unverified:{c['unverified']} · RUNNING {c['running']}")
     divisions = {name: proj.get("divisions", {}).get(name, {}).get("status", "dormant")
                  for name in registry.divisions_of(proj)}
     undelivered, unread = inbox.overdue(roster.Roster(reg), key, now)
     return {"project": key, "stage": proj["stage"], "awake": c["awake"], "limit": limit,
-            "divisions": divisions, "active_features": c["active_features"], "new": c["new"],
+            "divisions": divisions, "models": {n: m for n, m in models.items() if m},
+            "active_features": c["active_features"], "new": c["new"],
             "keys": c["keys"], "unverified": c["unverified"], "running": c["running"], "line": line,
             "undelivered": undelivered, "unread": unread, "blocked": blocked(reg, key, now),
             "upgrade": registry.upgrade(proj, __version__),

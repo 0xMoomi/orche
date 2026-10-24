@@ -160,6 +160,16 @@ class CustomDivisionsTest(unittest.TestCase):
 
 
 class CustomRoundTripTest(support.TempHomeCase):
+    def test_a_stored_model_outside_the_strict_grammar_loads_and_saves(self):
+        # 0.7.2 records ("sonnet[1m]") and config-catalog ids must not break the registry;
+        # the strict grammar is checked when a model is written (hr add, hr model, init/setup).
+        for model in ("sonnet[1m]", "gw-model-x", "gpt-4"):
+            reg = with_custom(sample(), spec={**DESIGN, "model": model})
+            reg["projects"]["acme-shop"]["divisions"]["design"]["model"] = model
+            self.assertEqual(registry.validate(reg), [], model)
+            registry.save(reg)
+            self.assertEqual(registry.load()["projects"]["acme-shop"]["custom_divisions"]["design"]["model"], model)
+
     def test_custom_round_trip_through_save_and_load(self):
         reg = with_custom(sample())
         registry.save(reg)
@@ -237,7 +247,7 @@ class CliTest(support.TempHomeCase):
         return cp.returncode, cp.stdout, cp.stderr
 
     def test_version(self):
-        self.assertEqual(self.orche("version"), (0, "orche 0.7.3\n", ""))
+        self.assertEqual(self.orche("version"), (0, "orche 0.8.0\n", ""))
 
     def test_projects_json_empty_home(self):
         self.assertEqual(self.orche("projects", "--json"), (0, "[]\n", ""))

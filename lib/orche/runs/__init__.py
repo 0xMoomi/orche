@@ -6,8 +6,9 @@ pending_sweeps, logs_dir/prune_logs, records(roots), RunError.
 Run locks under ORCHE_HOME/runs/<proj>/, one set per live `orche run`.
 
 - `<unit>.lock` holds `{"pid", "unit", "started", "started_ns", "run_id"}`, what runs (`to`, `rev`,
-  `tier`, `model`, `effort`, `worktree`, `branch`: filing.LOCKED, job.lock_info()) and, once claude
-  is up, `child_pid` and `pgid` (its own process group); it is live while its pid (the `orche run`
+  `tier`, `model`, `vendor`, `effort`, `worktree`, `branch`: filing.LOCKED, job.lock_info()) and, once
+  the worker (claude or codex) is up, `child_pid` and `pgid` (its own process group); a lost run's
+  reservation counts from `started` (filing.lost); it is live while its pid (the `orche run`
   process) is. `run_id` (`<unit>@<started_ns>`) is the worker's ORCHE_RUN_ID (procs.py).
 - `<to>.target.lock` (same record): one live run per target session, because a target's runs
   share one worktree. A second unit for the same target waits like a run over the project cap.
@@ -17,7 +18,8 @@ and loads `filing` and `job` only inside the functions that need them (the statu
 runs on every render; the prompt hook reconciles on every prompt).
 
 start() is the Stop hook's `orche run <unit>`, detached (procs.spawn_detached), dated by SINCE_ENV;
-restart() is AMEND: stop(), then start() — the order is the contract.
+restart() is AMEND: stop(), then start() — the order is the contract. Inside a Codex sandbox
+(SANDBOX present) start() spawns nothing: defer() leaves the start to the heartbeat.
 
 execute() is `orche run <unit>` (an Outcome: exit code, RUN record, stderr lines) and preview() its
 dry run; both load job.py only when called. RunError is resolve's refusal (exit 1 or 2).
@@ -731,16 +733,59 @@ def _argv(unit) -> list:
     return [sys.executable, str(paths.PLUGIN_ROOT / "bin" / "orche.py"), "run", unit]
 
 
-def start(unit) -> None:
+SANDBOX = "CODEX_SANDBOX"   # set in a Codex sandboxed shell; only its presence is checked, never its value
+DEFERRED = "runner-deferred"
+DEFERRED_TEXT = "the run starts at the next heartbeat pass"
+
+
+def in_sandbox() -> bool:
+    return SANDBOX in os.environ
+
+
+def defer(unit) -> None:
+    """Inside a Codex sandbox a spawned run would inherit it (its worker could not write its own
+    worktree): the start is left to the heartbeat. The unit's pending dispatch pointer at its current
+    revision is marked `deferred` (written, `info` from the brief's sender, when there is none);
+    reconcile retries a deferred pointer at its first pass (deliver.spawn). `since_ns` (now, kept
+    when the pointer has one) dates the request: a STOP marker written later stops it before it
+    starts (deliver._runner), an older one never does. Never raises (logged)."""
+    try:
+        from .. import brief, deliver, inbox, roster
+        reg = registry.load()
+        b = brief.find(reg, unit)
+        t = roster.Roster(reg).resolve_to(b.to, b.project) if b is not None and b.rev else None
+        if t is None:
+            log.log("hooks", f"runner: {unit}: no brief or target to defer the run to")
+            return
+        found = [(path, p) for path, p in inbox.pending(t.session)
+                 if p.get("via") == "dispatch" and p.get("unit") == unit and deliver._rev(p) == b.rev]
+        mark = {"deferred": "codex-sandbox", "since_ns": time.time_ns()}
+        if found:
+            path, ptr = found[-1]
+            util.write_json(path, {**mark, **ptr, "deferred": mark["deferred"]})
+        else:
+            inbox.write(inbox.make(unit, b.sender, t.session, "info", report_path=str(b.path),
+                                   brief_rev=b.rev, via="dispatch", **mark))
+        log.log("events", f"run deferred=codex-sandbox unit={unit} rev={b.rev}")
+    except Exception as exc:  # noqa: BLE001 - the heartbeat retries the brief either way
+        log.log("hooks", f"runner: {unit}: cannot defer the run: {exc}")
+
+
+def start(unit) -> bool:
     """Start `orche run <unit>` detached (procs.spawn_detached: its own session, output appended to
     logs/runs/<unit>.log, the plugin bin first on PATH, ORCHE_RUN_ID dropped); never waits.
     SINCE_ENV (now, ns) dates the request: a STOP marker written after it stops the run even before
     the new process got going; an older marker never does. The dispatch pointers this run replaces
     (the unit's, at the current revision or older, in its target's inbox) are drained once the spawn
     succeeded: a failed spawn (it raises) leaves the brief pending for the pane or the heartbeat.
-    The run drains again after it acquires its slot (job.run)."""
+    The run drains again after it acquires its slot (job.run). Inside a Codex sandbox nothing is
+    spawned (defer()): False."""
+    if in_sandbox():
+        defer(unit)
+        return False
     procs.spawn_detached(_argv(unit), logs_dir() / f"{unit}.log", **{SINCE_ENV: str(time.time_ns())})
     drain_replaced(unit)
+    return True
 
 
 def drain_replaced(unit) -> None:

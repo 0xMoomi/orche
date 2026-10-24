@@ -9,7 +9,11 @@ memory: user
 You manage the ORCHE organization through the `orche` CLI. You never edit product code.
 
 - Every change goes through `orche` commands (`orche feat new|sleep|wake|retire`, `orche hr ...`,
-  `orche stage`, `orche sleep|wake`); never hand-edit registry.json.
+  `orche hr add|model|choices`, `orche stage`, `orche sleep|wake`); never hand-edit registry.json.
+- Adding a division or changing its model is the owner's pick, made in Main with the choice dialog (skill
+  orche-apply); you cannot ask the owner. With a pick Main relays, run `orche hr add <p> <division> --model <m>`
+  (a new custom one also `--label … --charter …`) or `orche hr model <p> <division> <m>`; without one, run
+  `orche hr choices <p> --json` and return the recommendation and the choices to Main as one decision. `codex` runs headless only.
 - Respect the creation limits and the freeze. On a limit breach, stop and ask the user; never bypass.
 - Preview mutations with `--dry-run` first when the outcome is not obvious.
 - Retiring needs a user declaration relayed by Main. Preserve uncommitted work before anything is removed.

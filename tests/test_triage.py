@@ -352,6 +352,14 @@ class HeuristicTest(TriageCase):
                     self.assertNotEqual(d.decision, "direct", prompt)
                     self.assertIn(d.stage, (2, 3), prompt)
 
+    def test_division_and_model_setup_bypasses_to_main(self):
+        for p in ("디자인 부서 하나 추가해줘", "build 모델 sonnet으로 바꿔줘", "Switch the gtm division to Codex please"):
+            d = self.decide(p)
+            self.assertEqual((d.decision, d.stage, d.reason), ("bypass", 2, "setup"), p)
+        self.assertEqual(triage.bypass_reason("디자인 부서 추가해줘"), "short")  # under MIN_CHARS: still a bypass
+        self.assertNotEqual(triage.bypass_reason("로그인 버튼 고쳐줘"), "setup")
+        self.assertIsNone(triage.bypass_reason("Fix the login button in src/app/login.ts"))
+
     def test_korean_question_endings_bypass_without_a_question_mark(self):
         for p in ("README.md 수정했니", "docs/a.md 정리해야 하나", "README.md 고칠까", "README.md 내용이 맞는지",
                   "README.md 추가된 부분 어때", "README.md 바꾼 게 언제냐", "src/app.py 수정된 건가요",

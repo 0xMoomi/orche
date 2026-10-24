@@ -147,13 +147,16 @@ class Result:
 
     @property
     def problem(self) -> str:
-        """Why the call failed, '' when it did not: failure, an is_error result, a nonzero exit."""
+        """Why the call failed, '' when it did not: failure, an is_error result, a nonzero exit; the
+        vendor named is the result's (`vendor`, set by codex.parse), else claude."""
+        vendor = self.data.get("vendor") or "claude"
         if self.failure:
             return self.failure
         if self.is_error:
-            return f"claude reported an error ({self.data.get('subtype') or 'is_error'})"
+            return (f"{vendor} reported an error "
+                    f"({self.data.get('error_text') or self.data.get('subtype') or 'is_error'})")
         if self.code:
-            return f"claude exited {self.code}"
+            return f"{vendor} exited {self.code}"
         return ""
 
 
@@ -217,19 +220,30 @@ def _owned(name) -> bool:
     return name.startswith(OWNED) and name not in PASS_ENV and name not in AUTH_ENV
 
 
-def env(call: Call, cfg: dict) -> dict:
-    """The exact environment, from os.environ at call time. No side effects.
+def base_env(cfg: dict, claude_auth: bool = True) -> dict:
+    """The environment every headless vendor call starts from, from os.environ at call time.
 
     Everything inherited passes, except the owned namespaces (OWNED): there only PASS_ENV and
     AUTH_ENV pass. The configured Jev key variable never passes. The plugin's bin/ goes first on
-    PATH, then call.env applies, then a tagged call gets ORCHE_RUN_ID (an untagged one has none).
-    CLAUDE_CODE_OAUTH_TOKEN: inherited, else the one `orche auth set` stored (oauth.inject), else
-    none (the run uses the login). Reading the store is the only lookup; nothing is written."""
+    PATH. claude_auth: CLAUDE_CODE_OAUTH_TOKEN inherited, else the one `orche auth set` stored,
+    else none (the run uses the login); reading the store is the only lookup, nothing is written.
+    claude_auth=False (another vendor): no CLAUDE* or ANTHROPIC* name at all and no stored token (C5)."""
     from . import oauth  # lazy: hooks import this module for argv()/env() only
     jev_key_env = str((cfg.get("jev") or {}).get("api_key_env") or "JEV_API_KEY")
     out = {k: v for k, v in os.environ.items() if not _owned(k) and k != jev_key_env}
-    oauth.inject(out)
+    if claude_auth:
+        oauth.inject(out)
+    else:
+        out = {k: v for k, v in out.items()
+               if not k.startswith(("CLAUDE", "ANTHROPIC")) and k not in AUTH_ENV}
     out["PATH"] = f"{paths.PLUGIN_ROOT / 'bin'}{os.pathsep}{out.get('PATH', '')}"
+    return out
+
+
+def env(call: Call, cfg: dict) -> dict:
+    """The exact environment of a Claude call. No side effects: base_env(cfg), then call.env
+    applies, then a tagged call gets ORCHE_RUN_ID (an untagged one has none)."""
+    out = base_env(cfg)
     out.update({str(k): str(v) for k, v in call.env.items()})
     out.pop(procs.ENV, None)
     if call.tag:
@@ -499,9 +513,8 @@ def _parse_output(stdout) -> dict:
     return fallback
 
 
-def _wait(proc, call, stdin, stop, should_stop, on_start):
+def _wait(proc, stdin, timeout, blank, tag, stop, should_stop, on_start):
     """Steps 4-6 of run(): (stdout, stderr, timeout error or None, killed by stop/should_stop)."""
-    blank = call.context == "blank"
     done, watcher, error, out, err = threading.Event(), None, None, "", ""
     try:
         if on_start is not None:
@@ -512,10 +525,10 @@ def _wait(proc, call, stdin, stop, should_stop, on_start):
             thread.start()
             watcher = thread           # only a started thread is joined (a failed start must not mask the kill)
         try:
-            out, err = proc.communicate(stdin, timeout=call.timeout)
+            out, err = proc.communicate(stdin, timeout=timeout)
         except subprocess.TimeoutExpired:
             out, err = _kill(proc, blank)
-            error = f"timeout after {call.timeout}s"
+            error = f"timeout after {timeout}s"
     finally:
         done.set()
         if watcher is not None:
@@ -526,8 +539,24 @@ def _wait(proc, call, stdin, stop, should_stop, on_start):
         if timer is not None:
             timer.cancel()
         _sweep_group(proc.pid, blank)
-        _sweep_tag(call.tag)
+        _sweep_tag(tag)
     return out or "", err or "", error, killed
+
+
+def spawn(cmd, env, cwd, stdin, *, timeout, blank=False, tag=None, stop=None, should_stop=None,
+          on_start=None):
+    """The one process lifecycle: start `cmd` in its own group, feed stdin, wait up to `timeout`,
+    kill (blank: SIGKILL at once), sweep the group and the tag. (code, stdout, stderr, error,
+    killed); code 127 with the error when it could not start, 124 when no exit status was read."""
+    try:
+        proc = subprocess.Popen(cmd, cwd=str(cwd), env=env, stdin=subprocess.PIPE,
+                                stdout=subprocess.PIPE, stderr=subprocess.PIPE, encoding="utf-8",
+                                errors="replace", start_new_session=True)
+    except OSError as exc:
+        return 127, "", "", f"cannot start {cmd[0]}: {exc}", False
+    out, err, error, killed = _wait(proc, stdin, timeout, blank, tag, stop if stop is not None else Stop(),
+                                    should_stop, on_start)
+    return (proc.returncode if proc.returncode is not None else 124), out, err, error, killed
 
 
 def run(call: Call, stdin: str, cfg: dict, *, stop=None, should_stop=None, on_start=None) -> Result:
@@ -546,15 +575,9 @@ def run(call: Call, stdin: str, cfg: dict, *, stop=None, should_stop=None, on_st
     try:
         if call.context == "blank":
             scratch = _scratch_dir()
-        try:
-            proc = subprocess.Popen(cmd, cwd=str(scratch or call.cwd), env=call_env, stdin=subprocess.PIPE,
-                                    stdout=subprocess.PIPE, stderr=subprocess.PIPE, encoding="utf-8",
-                                    errors="replace", start_new_session=True)
-        except OSError as exc:
-            error = f"cannot start {cmd[0]}: {exc}"
-            return Result(127, {}, error, mask.redact(error)[0], False)
-        out, err, error, killed = _wait(proc, call, stdin, stop if stop is not None else Stop(),
-                                        should_stop, on_start)
+        code, out, err, error, killed = spawn(cmd, call_env, scratch or call.cwd, stdin, timeout=call.timeout,
+                                              blank=call.context == "blank", tag=call.tag, stop=stop,
+                                              should_stop=should_stop, on_start=on_start)
     finally:
         try:
             if mcp is not None:
@@ -563,7 +586,6 @@ def run(call: Call, stdin: str, cfg: dict, *, stop=None, should_stop=None, on_st
                 shutil.rmtree(scratch, ignore_errors=True)
         except OSError:
             pass
-    code = proc.returncode if proc.returncode is not None else 124
     data = _parse_output(out)
     if error is None and killed:
         error = (stop.reason if stop is not None else None) or "stopped by STOP marker"

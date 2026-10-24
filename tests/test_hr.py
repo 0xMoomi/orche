@@ -69,7 +69,7 @@ class HrCase(support.TempHomeCase):
         shell.RUNNER = self.fake_runner
         self.addCleanup(setattr, shell, "RUNNER", REAL_RUNNER)
 
-    def fake_runner(self, argv, *, timeout, input):
+    def fake_runner(self, argv, *, timeout, input, env=None):
         if argv[0] != "orca":
             return REAL_RUNNER(argv, timeout=timeout, input=input)
         self.calls.append(argv)
@@ -320,7 +320,7 @@ class InitTest(HrCase):
                          generic.format("div-acme-shop-research", "research"))
         # A persona is ORCHE's: one already at the path is rendered over (T10; was: never overwritten).
         self.assertEqual(existing.read_text(), "---\nname: div-acme-shop-gtm\n---\n" + header.format("division.md")
-                         + "Generic gtm high\n")
+                         + "Generic gtm medium\n")
         self.assertNotIn("persona template missing for division", hr.log_path().read_text())
 
     def test_rerun_resumes_partial_init_without_duplicates(self):
@@ -530,7 +530,7 @@ class RefreshTest(HrCase):
         header = onboarding.PERSONA_HEADER.format(file="div-build.md")
         for path in self.copies("div-acme-shop-build"):
             self.assertEqual(path.read_text(), "---\nname: div-acme-shop-build\nmodel: claude-opus-5-5\n---\n"
-                                               f"{header}\ndiv-build.md high\n")
+                                               f"{header}\ndiv-build.md medium\n")
         self.assertIn("div-custom.md", self.copies("div-acme-shop-design")[0].read_text())
         backups = self.home / "backups" / "acme-shop" / "T1"
         self.assertEqual(sorted(p.name for p in backups.iterdir()),
@@ -873,7 +873,7 @@ class FeatRetireTest(FeatCase):
         self.tag = f"archive/feat-checkout-{NOW.strftime('%Y%m%d')}"
         self.kept = self.home / "archive" / "feat-acme-shop-checkout" / "unit-files" / self.tag
 
-    def fake_runner(self, argv, *, timeout, input):
+    def fake_runner(self, argv, *, timeout, input, env=None):
         """Pane checks (`terminal list`) are tracked apart from the destructive calls asserted below.
 
         `worktree rm` behaves like Orca: it refuses a worktree whose `git status` is not empty
@@ -1418,5 +1418,269 @@ class CorrectTest(FeatCase):
         self.assertNotIn(canary, hr.log_path().read_text())
 
 
+# ---- models (0.8.0 T1): one model string per division, a recommended model per kind -------------
+
+class ModelsTest(HrCase):
+    def setUp(self):
+        super().setUp()
+        self.personas.mkdir()
+        for name in ("division.md", "div-custom.md", "feature.md"):
+            (self.personas / name).write_text("---\nname: {{SESSION}}\nmodel: {{MODEL}}\n---\n{{EFFORT}}\n")
+        self.root = os.path.realpath(self.repo)
+
+    def persona(self, session):
+        return (Path(self.root) / ".claude" / "agents" / f"{session}.md").read_text()
+
+    def init(self, *extra):
+        return self.orche("init", "Acme Shop", "--divisions", "research,build", "--no-intake", *extra)
+
+    def test_onboarding_records_the_model_and_renders_the_persona(self):
+        code, _, err = self.init("--custom", "design=Design:owns the visual system:codex:high",
+                                 "--custom", "billing=Billing:owns invoices", "--wake", "build")
+        self.assertEqual(code, 0, err)
+        divs = registry.load()["projects"]["acme-shop"]["divisions"]
+        self.assertEqual({d: divs[d]["model"] for d in divs},
+                         {"research": "claude-sonnet-5-5", "build": "claude-opus-5-5", "design": "codex",
+                          "billing": "claude-opus-5-5"})
+        self.assertIn("model: claude-sonnet-5-5\n", self.persona("div-acme-shop-research"))
+        self.assertTrue(self.persona("div-acme-shop-research").endswith("medium\n"))
+        self.assertTrue(self.persona("div-acme-shop-build").endswith("medium\n"))
+        self.assertIn("model: inherit\n", self.persona("div-acme-shop-design"))   # Codex: nothing starts Claude
+        self.assertTrue(self.persona("div-acme-shop-design").endswith("high\n"))
+        self.assertIn("model: claude-opus-5-5\n", self.persona("div-acme-shop-billing"))
+        self.assertTrue(self.persona("div-acme-shop-billing").endswith("high\n"))
+
+    def test_waking_a_codex_division_is_refused(self):
+        code, _, err = self.init("--custom", "design=Design:owns the visual system:codex", "--wake", "design")
+        self.assertEqual(code, 3)
+        self.assertIn("codex divisions run headless only (v1); briefs reach them through orche run", err)
+        self.assertEqual(self.orca_calls("terminal create"), [])
+
+    def test_refresh_keeps_the_recorded_model_and_features_take_their_division_s(self):
+        self.assertEqual(self.init("--wake", "build")[0], 0)
+        reg = registry.load()
+        reg["projects"]["acme-shop"]["divisions"]["build"]["model"] = "sonnet"
+        registry.save(reg)
+        code, _, err = self.orche("feat", "new", "acme-shop", "checkout", "--scope", "src/c/**", "--reason", "r")
+        self.assertEqual(code, 0, err)
+        self.assertIn("model: sonnet\n", (Path(self.root) / ".claude" / "agents" / "feat-acme-shop-checkout.md").read_text())
+        self.assertTrue(self.persona("feat-acme-shop-checkout").endswith("high\n"))
+        build = Path(self.root) / ".claude" / "agents" / "div-acme-shop-build.md"
+        build.write_text("old\n")
+        hr.refresh_project(registry.load(), "acme-shop", root=self.root, ts="T1")
+        self.assertIn("model: sonnet\n", build.read_text())
+        self.assertTrue(build.read_text().endswith("medium\n"))   # effort from the table
+
+    def test_a_feature_under_a_codex_build_opens_no_pane_and_waits_paused(self):
+        self.assertEqual(self.init()[0], 0)
+        reg = registry.load()
+        reg["projects"]["acme-shop"]["divisions"]["build"]["model"] = "codex:gpt-6.1-sol"
+        registry.save(reg)
+        self.calls.clear()
+        code, out, err = self.orche("feat", "new", "acme-shop", "checkout", "--scope", "src/c/**", "--reason", "r")
+        self.assertEqual((code, out), (0, "feat-acme-shop-checkout paused (feat/checkout)\n"), err)
+        self.assertEqual(self.orca_calls("terminal create"), [])
+        feat = registry.load()["projects"]["acme-shop"]["divisions"]["build"]["features"][-1]
+        self.assertEqual(feat["status"], "paused")
+        self.assertIn("model: inherit\n", (Path(self.root) / ".claude" / "agents" / "feat-acme-shop-checkout.md").read_text())
+
+
+    def _on_codex(self, division, status=None):
+        reg = registry.load()
+        entry = reg["projects"]["acme-shop"]["divisions"][division]
+        entry["model"] = "codex"
+        if status:
+            entry["status"] = status
+        registry.save(reg)
+        self.calls.clear()
+
+    def test_wake_feat_wake_and_reopen_refuse_a_codex_unit(self):
+        self.assertEqual(self.init("--wake", "build")[0], 0)
+        self.assertEqual(self.orche("feat", "new", "acme-shop", "checkout", "--scope", "src/c/**",
+                                    "--reason", "r")[0], 0)
+        self.assertEqual(self.orche("feat", "sleep", "acme-shop", "checkout")[0], 0)
+        self._on_codex("research")
+        code, _, err = self.orche("wake", "div-acme-shop-research")
+        self.assertEqual(code, 3, err)
+        self.assertIn("div-acme-shop-research runs on codex: headless only (v1)", err)
+        reg = registry.load()
+        reg["projects"]["acme-shop"]["divisions"]["build"]["model"] = "codex"
+        registry.save(reg)
+        self.calls.clear()
+        code, _, err = self.orche("feat", "wake", "acme-shop", "checkout")
+        self.assertEqual(code, 3, err)
+        self.assertIn("feat-acme-shop-checkout runs on codex: headless only (v1)", err)
+        code, _, err = self.orche("wake", "div-acme-shop-build")   # active: the reopen path
+        self.assertEqual(code, 3, err)
+        self.assertIn("div-acme-shop-build runs on codex", err)
+        self.assertEqual(self.orca_calls("terminal create"), [])
+        divs = registry.load()["projects"]["acme-shop"]["divisions"]
+        self.assertEqual(divs["research"]["status"], "dormant")
+        self.assertEqual(divs["build"]["features"][-1]["status"], "paused")
+
+    def test_going_public_leaves_a_codex_ops_asleep_with_a_note(self):
+        code, _, err = self.orche("init", "Acme Shop", "--divisions", "build,ops", "--no-intake")
+        self.assertEqual(code, 0, err)
+        self._on_codex("ops")
+        code, out, err = self.orche("stage", "set", "acme-shop", "public", "--yes")
+        self.assertEqual(code, 0, err)
+        self.assertIn("ops runs on codex (headless only); not woken", out)
+        self.assertEqual(self.orca_calls("terminal create"), [])
+        self.assertNotEqual(registry.load()["projects"]["acme-shop"]["divisions"]["ops"]["status"], "active")
+
+
 if __name__ == "__main__":
     unittest.main()
+
+
+class HrAddModelTest(HrCase):
+    """`orche hr add`, `hr model`, `hr choices` (design 2026-10-23 §3.1, §3.2, §10)."""
+    OK = None
+
+    def setUp(self):
+        super().setUp()
+        from orche import procs, vendors
+        self.vendors = vendors
+        self.avail = vendors.Availability("ok", "codex-cli 0.50.0", "")
+        p = mock.patch.object(vendors, "available", lambda cfg=None: self.avail)
+        p.start()
+        self.addCleanup(p.stop)
+        self.spawned = []
+        p = mock.patch.object(procs, "spawn_detached", lambda argv, log, **env: self.spawned.append((argv, log)))
+        p.start()
+        self.addCleanup(p.stop)
+        code, _, err = self.orche("init", "Acme Shop", "--divisions", "research,build", "--no-intake")
+        self.assertEqual(code, 0, err)
+
+    def div(self, name):
+        return registry.load()["projects"]["acme-shop"]["divisions"].get(name)
+
+    def test_add_prints_the_recommendation_choices_and_creates_dormant(self):
+        code, out, err = self.orche("hr", "add", "acme-shop", "gtm")
+        self.assertEqual((code, err), (0, ""))
+        lines = out.splitlines()
+        self.assertEqual(lines[0], "recommended for gtm: claude-sonnet-5-5 — launch copy and content: writing "
+                                   "quality at Sonnet's price")
+        self.assertTrue(lines[1].startswith("choices: claude-opus-5-5 · claude-sonnet-5-5 · any claude-… id · codex"))
+        self.assertEqual(lines[2], "created div-acme-shop-gtm (dormant) on claude-sonnet-5-5")
+        self.assertEqual(lines[3], "intake: started in the background (orche intake status acme-shop)")
+        self.assertEqual(self.div("gtm")["model"], "claude-sonnet-5-5")
+        self.assertEqual(self.spawned[0][1].name, "acme-shop.log")
+
+    def test_add_json_and_no_intake(self):
+        code, out, _ = self.orche("--json", "hr", "add", "acme-shop", "rnd", "--model", "codex", "--no-intake")
+        self.assertEqual(code, 0)
+        data = json.loads(out)
+        self.assertEqual({k: data[k] for k in ("division", "session", "status", "model", "vendor", "recommended",
+                                               "intake")},
+                         {"division": "rnd", "session": "div-acme-shop-rnd", "status": "dormant", "model": "codex",
+                          "vendor": "codex", "recommended": "claude-opus-5-5", "intake": "off"})
+        self.assertEqual(self.spawned, [])
+
+    def test_add_refusals(self):
+        self.assertEqual(self.orche("hr", "add", "nope", "gtm")[0], 2)
+        code, _, err = self.orche("hr", "add", "acme-shop", "build")
+        self.assertEqual(code, 1)
+        self.assertIn("orche hr model acme-shop build <model>", err)
+        self.assertEqual(self.orche("hr", "add", "acme-shop", "billing")[0], 1)   # custom: --label/--charter
+        self.assertEqual(self.orche("hr", "add", "acme-shop", "rnd", "--model", "codex", "--wake")[0], 3)
+        self.avail = self.vendors.Availability("absent", "", self.vendors.INSTALL)
+        code, _, err = self.orche("hr", "add", "acme-shop", "rnd", "--model", "codex")
+        self.assertEqual(code, 3)
+        self.assertIn("codex is not installed", err)
+        self.assertIsNone(self.div("rnd"))
+
+    def test_add_without_codex_names_it_and_dry_run_writes_nothing(self):
+        self.avail = self.vendors.Availability("broken", "boom", self.vendors.UPGRADE)
+        code, out, _ = self.orche("--dry-run", "hr", "add", "acme-shop", "gtm")
+        self.assertEqual(code, 0)
+        self.assertIn("codex: installed but does not start — npm install -g @openai/codex@latest\n", out)
+        self.assertNotIn("codex (Codex's", out)
+        self.assertIn("would create div-acme-shop-gtm (dormant) on claude-sonnet-5-5 (dry-run)", out)
+        self.assertIn("would run: orche intake acme-shop", out)
+        self.assertIsNone(self.div("gtm"))
+
+    def test_model_moves_a_dormant_division_and_says_how_it_switches(self):
+        code, out, err = self.orche("hr", "model", "acme-shop", "research", "claude-opus-5-5")
+        self.assertEqual((code, err), (0, ""))
+        self.assertEqual(out, "div-acme-shop-research: claude-sonnet-5-5 → claude-opus-5-5\n(the next run uses it)\n")
+        self.assertEqual(self.div("research")["model"], "claude-opus-5-5")
+        self.assertIn("model div-acme-shop-research claude-sonnet-5-5 -> claude-opus-5-5", hr.log_path().read_text())
+        code, out, _ = self.orche("hr", "model", "acme-shop", "research", "claude-opus-5-5")
+        self.assertEqual((code, out), (0, "div-acme-shop-research is already on claude-opus-5-5\n"))
+        code, out, _ = self.orche("hr", "model", "acme-shop", "research", "codex")
+        self.assertEqual((code, out.splitlines()[1]), (0, "(headless only; the next run uses it)"))
+
+    def test_model_on_an_active_pane(self):
+        self.assertEqual(self.orche("wake", "div-acme-shop-build")[0], 0)
+        code, out, _ = self.orche("hr", "model", "acme-shop", "build", "claude-sonnet-5-5")
+        self.assertEqual(code, 0)
+        self.assertEqual(out.splitlines()[1], "restart its pane to switch: orche sleep div-acme-shop-build && "
+                                              "orche wake div-acme-shop-build")
+        code, _, err = self.orche("hr", "model", "acme-shop", "build", "codex")
+        self.assertEqual(code, 3)
+        self.assertIn("sleep its pane first: orche sleep div-acme-shop-build", err)
+        self.assertEqual(self.orche("hr", "model", "acme-shop", "gtm", "codex")[0], 2)
+        self.assertEqual(self.orche("hr", "model", "acme-shop", "build", "openai:gpt-4")[0], 1)
+
+    def test_choices_json(self):
+        code, out, _ = self.orche("--json", "hr", "choices", "acme-shop", "--lang", "en")
+        self.assertEqual(code, 0)
+        data = json.loads(out)
+        kinds = {k["key"]: k for k in data["kinds"]}
+        self.assertEqual({k: kinds["research"][k] for k in ("label", "desc", "exists", "status", "model",
+                                                             "recommended", "pane_effort")},
+                         {"label": "Research", "desc": "market, users, competitors", "exists": True,
+                          "status": "dormant", "model": "claude-sonnet-5-5", "recommended": "claude-sonnet-5-5",
+                          "pane_effort": "medium"})
+        self.assertFalse(kinds["gtm"]["exists"])
+        self.assertEqual([m["model"] for m in data["models"]], ["claude-opus-5-5", "claude-sonnet-5-5", "codex"])
+        self.assertTrue(all(m["available"] for m in data["models"]))
+        self.avail = self.vendors.Availability("absent", "", self.vendors.INSTALL)
+        data = json.loads(self.orche("--json", "hr", "choices", "acme-shop", "--lang", "ko")[1])
+        codex = data["models"][2]
+        self.assertEqual((codex["available"], codex["reason"]),
+                         (False, "Codex는 설치되지 않아 못 골라요(설치: npm install -g @openai/codex 후 codex login)"))
+
+    def test_a_custom_division_moves_to_a_config_catalog_id(self):
+        cfg = json.loads((self.home / "config.json").read_text())
+        cfg["models"] = {"catalog": {"gw-model-x": {"label": "Gateway X", "cost": 2}}}
+        (self.home / "config.json").write_text(json.dumps(cfg))
+        code, _, err = self.orche("hr", "add", "acme-shop", "design", "--no-intake")
+        self.assertEqual(code, 0, err)
+        code, _, err = self.orche("hr", "model", "acme-shop", "design", "gw-model-x")
+        self.assertEqual((code, err), (0, ""))
+        self.assertEqual(self.div("design")["model"], "gw-model-x")
+        self.assertEqual(registry.load()["projects"]["acme-shop"]["custom_divisions"]["design"]["model"], "gw-model-x")
+
+    def test_plain_gpt4_is_refused(self):
+        code, _, err = self.orche("hr", "model", "acme-shop", "build", "gpt-4")
+        self.assertEqual(code, 1)
+        self.assertIn("unknown model 'gpt-4'", err)
+
+    def test_add_design_takes_its_label_and_charter_from_kinds(self):
+        from orche import config
+        code, _, err = self.orche("hr", "add", "acme-shop", "design", "--no-intake")
+        self.assertEqual(code, 0, err)
+        spec = registry.load()["projects"]["acme-shop"]["custom_divisions"]["design"]
+        self.assertEqual((spec["label"], spec["charter"]), ("Design", config.DEFAULTS["kinds"]["design"]["charter"]))
+        code, _, err = self.orche("hr", "add", "acme-shop", "content", "--charter", "Writes the changelog.",
+                                  "--no-intake")
+        self.assertEqual(code, 0, err)
+        spec = registry.load()["projects"]["acme-shop"]["custom_divisions"]["content"]
+        self.assertEqual((spec["label"], spec["charter"]), ("Content", "Writes the changelog."))
+
+    def test_hr_help_lists_add_and_model(self):
+        code, out, _ = self.orche_help()
+        self.assertIn("add", out)
+        self.assertIn("model", out)
+        self.assertIn("choices", out)
+
+    def orche_help(self):
+        out = io.StringIO()
+        with redirect_stdout(out), redirect_stderr(io.StringIO()):
+            try:
+                code = self.cli.main(["hr", "--help"])
+            except SystemExit as exc:
+                code = exc.code
+        return code, out.getvalue(), ""

@@ -1,6 +1,6 @@
 ---
 name: orche-apply
-description: Apply ORCHE to one project on request. Use when the user names a project and asks to put it under ORCHE ("put X under ORCHE", "/orche-apply X"), or says `orche init` (or `/orche-apply`) with no project named, which means the project of the current directory; to choose or customise its divisions (including a custom division of their own), to add a division to an already-registered project, or asks what applying ORCHE to a project does. Never apply to every repo at once.
+description: Apply ORCHE to one project on request. Use when the user names a project and asks to put it under ORCHE ("put X under ORCHE", "/orche-apply X", "이 프로젝트 ORCHE로 시작하자"), or says `orche init` (or `/orche-apply`) with no project named, which means the project of the current directory; to choose or customise its divisions (including a custom division of their own), to add a division to an already-registered project, to change a division's model or to list a project's divisions — also when asked in plain words ("부서 추가해줘", "모델 바꿔줘", "어떤 부서가 있어?"); or asks what applying ORCHE to a project does. Never apply to every repo at once.
 ---
 
 # Apply ORCHE to one project
@@ -44,6 +44,46 @@ lines from its output: the `Summary:` line, the intake's one-line result (or `in
 the last line, `Main is open in the main-<proj> tab; type a request there.` If it fails with `not inside
 a git repository`, ask for the project path. A path or a project name means that project.
 
+## In plain words (choices)
+
+When the user asks in plain words to set up ORCHE ("이 프로젝트 ORCHE로 시작하자"), add a division ("부서 추가해줘",
+"디자인 부서 만들어줘"), change a model ("빌드 모델 바꿔줘") or see the divisions ("어떤 부서가 있어?"), do it in
+this session with the choice dialog (AskUserQuestion). Never hand it to the `hr` agent: a subagent cannot ask.
+
+1. Run `orche hr choices <proj> --lang ko --json` (the user's language; no `<proj>` for a project not under ORCHE
+   yet). Ask only what the request leaves open: a division or a model the user named is not asked again.
+2. Ask with the `ask` entries as given: each entry's `tool` is one element of AskUserQuestion's `questions` (up to
+   four per call); map each picked label through the entry's `values`. Text typed instead ("Other") is the user's
+   own words: a name, a model id, "취소".
+3. Run the `orche` command yourself; never ask the user to type one (only owner steps such as `codex login`).
+4. No answer (the dialog is missing or fails, an empty answer, a question that auto-continued): a model falls back
+   to the recommendation, said in one line (`orche hr model` changes it later); never create a division or a project
+   without an answer: ask the same question as numbered plain text and end with `OWNER: <question> — 기본:
+   <recommendation>`. Esc or "취소": say "취소했어요"; nothing is written.
+5. Reply with one result line (what was made or changed and its model; a `codex` division runs headless only) and
+   the closing line: `RUNNING:` while the background intake runs, else `DONE:`.
+
+- Add a division: none named → `ask.add`; for each picked kind `ask.model.<kind>` (one call), then
+  `orche hr add <proj> <kind> --model <model>` each. A new name (`*`, or typed): propose an English slug
+  (`custom.rules`), an English label and two charters, A and B, in the user's language from their words; in one
+  call ask "‘<name>’ 부서(<slug>)가 맡을 일을 이렇게 적을까요?" (header "맡을 일", options "A (권장)" and "B", the
+  charters as descriptions) together with `ask.model["*"]`; then `orche hr add <proj> <slug> --label <label>
+  --charter "<charter>" --model <model>`. A picked kind that is not standard and has `charter: null` gets the same
+  charter question (its slug and label fixed). No `--dry-run` first: the questions showed what it makes, and `hr add`
+  checks everything before it writes.
+- Change a model: none named → `ask.change`; then `ask.model.<division>`; then `orche hr model <proj> <division>
+  <model>` ("그대로 두기" changes nothing). Say in plain words when a pane must restart to use it; restart one
+  (`orche sleep`, then `orche wake`) only when the user asks and nothing runs there. A feature agent runs on its
+  division's model: offer the division.
+- Which divisions: from the same JSON, one line per existing division (`<label> (<key>) — <desc> · <model label>
+  · <status_text>`) and one line naming the kinds that can be added; no question.
+- First setup: step 1 below and `orche hr choices --lang ko --json`; ask `ask.setup`; "직접 고르기" → `ask.pick`;
+  "부서마다 고르기" → `ask.model.<kind>` per chosen division (four per call); write the setup file with
+  `divisions`, `custom` (a picked `design`/`content` as `{}`) and `models` (none for "부서에 맞춰서", the picked model
+  for every division for "모두 …") (step 3); preview (step 4), then ask "이대로 만들까요? (<the preview's
+  `Summary:` line in the user's words, one line>)", header "확인", options "만들기 (권장)" — "끝으로 프로젝트
+  파악(intake)을 해요: 보통 1분, $1 미만" and "고치기" — "바꿀 점을 적어 주세요"; on 만들기 apply (step 5). The literal `orche init` keeps the no-question path above.
+
 ## Procedure (choosing divisions)
 
 Use this only when the user names divisions, a custom division, a stage or aliases, or asks to choose or
@@ -56,7 +96,8 @@ customise. In chat there is no terminal, so the setup goes through a JSON file. 
    does not list yet also gets the defaults: `orche init` adds it to Orca (`orca repo add`) before it
    onboards, so do not ask the user to add it in Orca first. If the name is ambiguous or unknown (not a
    git path), list candidates with `orca repo list` and ask.
-2. Show the setup as a checklist, defaults filled in, and ask one question:
+2. Ask with the choice dialog (In plain words, first setup). Without it, show the setup as a checklist, defaults
+   filled in, and ask one question:
    ```
    Divisions for <proj>
     [x] rnd       R&D — prototypes and technical spikes
@@ -94,12 +135,16 @@ customise. In chat there is no terminal, so the setup goes through a JSON file. 
 
 ## Later changes
 
-- Add a division: print the setup (`orche init --print-setup <proj>`), add the standard name to
+- Add a division: `orche hr add <proj> <division> [--model <m>] [--label <L> --charter <C>]` (a standard kind,
+  `design` or `content` needs no label or charter; ask first, In plain words). Several at once also work through
+  the setup file: print the setup (`orche init --print-setup <proj>`), add the standard name to
   `divisions` or the new entry to `custom`, preview and apply with `--setup-file` as above (or
   `orche init <proj> --divisions <list> --custom name=label:charter`; `--custom` splits on `:`, so a charter
   or model id containing `:` goes in the setup file). Only the new division's worktree and
   files are created; existing ones, and the registry entries, are left as they are.
-- Removing a division, or changing a custom division's definition, is out of scope for `orche init`: sleep
+- Change a division's model: `orche hr model <proj> <division> <model>` (a Claude id, `codex` or `codex:<id>`); ask
+  first, In plain words.
+- Removing a division, or changing a custom division's definition, is out of scope for `orche init` and `orche hr`: sleep
   it (`orche sleep div-<proj>-<division>`) or remove it by hand.
 - Wake / sleep a division: `orche wake|sleep div-<proj>-<division>`; feature agents under Build:
   `orche feat new|sleep|wake|retire` (or ask the `hr` agent).

@@ -6,11 +6,12 @@ donegate.may_stop.
 """
 import hashlib
 import os
+import time
 from dataclasses import dataclass
 from pathlib import Path
 
 from . import (brief, config, deliver, donegate, inbox, log, mask, orca, registry, roster, runs, transcript,
-               units, util)
+               units, util, vendors)
 from .flow import guard, lineage, owner
 
 # ---- targets -------------------------------------------------------------
@@ -173,6 +174,22 @@ def _run_delivery(plan, terms) -> str:
     return "runner-started"
 
 
+SANDBOX, DEFERRED, DEFERRED_TEXT = runs.SANDBOX, runs.DEFERRED, runs.DEFERRED_TEXT
+
+
+def _defer(plan, b, status, summary, frm, terms) -> None:
+    """A run started from inside a Codex sandbox would inherit it (its `claude -p` could not write its
+    own worktree): write the pane path's dispatch pointer, marked `deferred` and dated `since_ns`, and
+    leave the start to the heartbeat (reconcile retries it at its first pass through deliver.spawn,
+    whose runner path honours a later STOP and restarts a live run of an older revision). An AMEND
+    first stops the live run of the older revision (runs.stop: the marker, older than `since_ns`)."""
+    if plan.block.kind == "amend":
+        runs.stop(plan.proj, plan.unit, timeout=terms.remaining())
+    inbox.write(inbox.make(plan.unit, frm, plan.to, status, report_path=str(b.path), brief_rev=b.rev,
+                           summary=summary, via="dispatch", deferred="codex-sandbox", since_ns=time.time_ns()))
+    log.log("events", f"dispatch deferred=codex-sandbox unit={plan.unit} rev={b.rev}")
+
+
 def _deliver(r, plan, b, status, summary, frm, terms, cfg=None, by=None):
     """No Orca call (ruling 2). A runner unit (deliver.runner_wanted) is started, restarted or stopped
     here and gets no target pointer (ruling 6); an exception is `runner-failed`. A pane unit gets
@@ -182,7 +199,11 @@ def _deliver(r, plan, b, status, summary, frm, terms, cfg=None, by=None):
     STOP). `by` names who relayed in the events line (default the sender; triage passes `triage`)."""
     rev = b.rev
     by = by or frm
-    if deliver.runner_wanted(r, plan.to, cfg if cfg is not None else config.load()):
+    runner = deliver.runner_wanted(r, plan.to, cfg if cfg is not None else config.load())
+    if runner and plan.block.kind != "stop" and runs.in_sandbox():
+        _defer(plan, b, status, summary, frm, terms)
+        state = DEFERRED
+    elif runner:
         try:
             state = _run_delivery(plan, terms)
         except Exception as exc:  # noqa: BLE001 - reported to the sender, urgent
@@ -337,7 +358,8 @@ def relay_outcome(r, bodies, frm, deadline=None, by=None, skip=None) -> Outcome:
             lin, parent = lineage.assign(r.reg, frm, by) if block.kind == "brief" else (None, None)
             lin = lin or line_of
             b = brief.write(block, r.member(plan.to), sender, standing_text(r.reg, plan.proj),
-                            prior=plan.prior, timeout=min(0.5, terms.remaining()), lineage=lin, parent=parent)
+                            prior=plan.prior, timeout=min(0.5, terms.remaining()), lineage=lin, parent=parent,
+                            model=vendors.of(r.reg, r.member(plan.to)))
             if block.kind == "brief" and frm.kind != "div" and line_of is None:
                 line_of = b.lineage
                 if by != "triage":
@@ -347,7 +369,8 @@ def relay_outcome(r, bodies, frm, deadline=None, by=None, skip=None) -> Outcome:
             state = _deliver(r, plan, b, "info", goal, sender, terms, cfg, by)
             _feedback(sender, plan.unit, plan.to, rev, state, by=by)
         done.append({"unit": plan.unit, "to": plan.to, "state": state, "rev": rev})
-        lines.append(f"block {i + 1}: delivered {plan.unit} → {plan.to} (rev {rev}, {state})")
+        lines.append(f"block {i + 1}: delivered {plan.unit} → {plan.to} (rev {rev}, {state})"
+                     + (f" — {DEFERRED_TEXT}" if state == DEFERRED else ""))
         if hashes[i] is not None:
             delivered[hashes[i]] = f"{plan.unit} → {plan.to}"
     if refused:
