@@ -15,7 +15,7 @@ from orche import brief, shell, triage, units
 from orche.brief import Block, Refusal
 
 R = "[orche] dispatch refused: "
-ALLOWED = "Allowed: TO GOAL SCOPE CONTEXT ACCEPT VERIFY TIMEBOX FORBID REPORT TIER ROLLBACK."
+ALLOWED = "Allowed: TO GOAL SCOPE CONTEXT ACCEPT VERIFY TIMEBOX FORBID REPORT TIER ROLLBACK MODEL."
 FILL = "Fill every field or drop the block."
 DUP = "Write each key once; continue a value on the lines below it."
 FIX = "start each field with its exact KEY."

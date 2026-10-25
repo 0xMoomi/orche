@@ -10,7 +10,8 @@ from pathlib import Path
 
 from . import headless, procs
 
-SANDBOXES = ("workspace-write", "danger-full-access")
+SANDBOXES = ("workspace-write", "danger-full-access")   # a worker's (models.codex_sandbox)
+REVIEW_SANDBOX = "read-only"    # a reviewer's only (review.call_for): no writable root, no network
 EFFORTS = ("low", "medium", "high")
 ERROR_MAX = 300
 
@@ -39,8 +40,11 @@ def _validate(call):
         raise ValueError(f"codex model must be codex or codex:<id>, not {call.model!r}")
     if call.effort not in EFFORTS:
         raise ValueError(f"codex effort must be one of {', '.join(EFFORTS)}, not {call.effort!r}")
-    if call.sandbox not in SANDBOXES:
-        raise ValueError(f"codex sandbox must be one of {', '.join(SANDBOXES)}, not {call.sandbox!r}")
+    if call.sandbox not in SANDBOXES + (REVIEW_SANDBOX,):
+        raise ValueError(f"codex sandbox must be one of {', '.join(SANDBOXES + (REVIEW_SANDBOX,))}, "
+                         f"not {call.sandbox!r}")
+    if call.sandbox == REVIEW_SANDBOX and call.writable:
+        raise ValueError("a read-only codex call takes no writable roots")
     if not call.timeout or call.timeout <= 0:
         raise ValueError("codex timeout must be > 0")
 

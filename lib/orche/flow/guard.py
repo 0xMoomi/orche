@@ -5,17 +5,17 @@ The autonomy window W(p) starts at the later of local midnight and the owner's l
 only, so one word from the owner resets them all. STOP always passes. `flow.enabled` false turns
 G1–G7 off; the owner's pause (G8) stays on.
 
-  G1 revisions  a unit's AMENDs (BRIEF.rev<N>.md, N ≥ 2) in W           → its next AMEND        (3)
+  G1 revisions  a unit's AMENDs (BRIEF.rev<N>.md, N ≥ 2) in W           → its next AMEND        (flow.revisions 3)
   G2 blocked    the unit's last two reports blocked/question, in W      → its AMEND, a same-GOAL
                                                                           brief to the same TO  (2)
-  G3 rate       the project's briefs and AMENDs since max(W, now − 1 h) → every brief and AMEND  (20)
+  G3 rate       the project's briefs and AMENDs since max(W, now − 1 h) → every brief and AMEND  (flow.briefs_per_hour 20)
   G4 spend     runs/<p>/history.jsonl cost_usd, finished in W: a unit at its cap → its AMENDs and
                 runs; the project at its cap → every brief, AMEND and run   (flow.max_*_cost_usd 10/30)
                 Claude's figure, Codex's estimate, or the reservation of a run without one
                 (killed, timed out, lost: history.reserve, at most unit_cap())
-  G5 runs       the unit's history lines started in W, not busy/duplicate → its `orche run`  (4)
+  G5 runs       the unit's history lines started in W, not busy/duplicate → its `orche run`  (flow.runs_per_unit 4)
   G6 chain      a division's brief: its current unit already 3 briefs deep along `parent:`, or
-                already parent of 5 briefs first sent in W (BRIEF.rev1.md) → that division's brief (3/5)
+                already parent of 5 briefs first sent in W (BRIEF.rev1.md) → that division's brief (flow.depth 3 / flow.fanout 5)
   G7 streak     the session's refused blocks since its last delivered one (30 min) → nothing more;
                 the refusal adds "refusal <n> in a row: stop re-sending; tell the user what you tried" (3)
   G8 pause      flow/<p>/pause.json {by, at, reason}                    → every brief and AMEND
@@ -27,7 +27,7 @@ import re
 from .. import brief, config, inbox, log, paths, units, util
 from . import lineage
 
-REVISIONS, BLOCKED, RATE, STREAK, RUNS = 3, 2, 20, 3, 4
+BLOCKED, STREAK = 2, 3
 STREAK_TTL = _dt.timedelta(minutes=30)
 WAITING = ("blocked", "question")
 ASK = "Ask the owner before {what}: close your reply with OWNER: <the decision>. STOP still works."
@@ -173,14 +173,15 @@ def _chain(reg, block, sender, w):
     if p is None:
         return None
     d = lineage.depth(reg, p)
-    if d >= lineage.DEPTH:
-        return Refused(f"{p.unit} is already {d} briefs deep (cap {lineage.DEPTH}); a brief from {sender.session} "
+    depth, fanout = cap("depth"), cap("fanout")
+    if d >= depth:
+        return Refused(f"{p.unit} is already {d} briefs deep (cap {depth}); a brief from {sender.session} "
                        f"would make it {d + 1}. Do not dispatch it yourself: name the work in your report and ask "
                        f"Main to dispatch it. STOP still works.", "G6", p.unit, d + 1)
     n = lineage.children(reg, p, _unit_dirs(reg, sender.project), since=w.timestamp())
-    if n >= lineage.FANOUT:
+    if n >= fanout:
         return Refused(f"{p.unit} already has {n} child briefs since {_hhmm(w)} without the owner (cap "
-                       f"{lineage.FANOUT}). Do not send another: report it to your sender (`orche report blocked "
+                       f"{fanout}). Do not send another: report it to your sender (`orche report blocked "
                        f"--summary \"<what is left>\"`). STOP still works.", "G6", p.unit, n + 1)
     return None
 
@@ -221,7 +222,7 @@ def check(reg, block, sender, now=None, to=None, runner=False, accepted=0):
         b = brief.find(reg, unit, project=proj)
         if b is not None:
             revs = [n for n, _ in _revs(b.folder, since) if n >= 2]
-            if len(revs) >= REVISIONS:
+            if len(revs) >= cap("revisions"):
                 return Refused(f"{unit} was revised {len(revs)} times since {_hhmm(w)} without the owner "
                                f"(rev {revs[0]}–{revs[-1]}). " + ASK.format(what="revising it again"),
                                "G1", unit, len(revs))
@@ -243,14 +244,16 @@ def check(reg, block, sender, now=None, to=None, runner=False, accepted=0):
     if block.kind == "amend" and runner:
         from ..runs import history
         n = history.runs_of(proj, unit, w)
-        if n >= RUNS:
-            return Refused(f"{unit} ran {n} times since {_hhmm(w)} without the owner (cap {RUNS}). "
+        runs = cap("runs_per_unit")
+        if n >= runs:
+            return Refused(f"{unit} ran {n} times since {_hhmm(w)} without the owner (cap {runs}). "
                            + ASK.format(what="running it again"), "G5", unit, n)
     start = max(w, now - _dt.timedelta(hours=1))
     n = accepted + sum(len(_revs(d, start.timestamp())) for d in _unit_dirs(reg, proj))
-    if n >= RATE:
+    rate = cap("briefs_per_hour")
+    if n >= rate:
         return Refused(f"{proj} sent {n} briefs and AMENDs since {_hhmm(start)} without the owner "
-                       f"(cap {RATE} an hour). " + ASK.format(what="sending more"), "G3", unit or "-", n)
+                       f"(cap {rate} an hour). " + ASK.format(what="sending more"), "G3", unit or "-", n)
     return None
 
 
@@ -259,11 +262,20 @@ def _flow():
 
 
 def _cap(f, key, default):
-    """A flow cap from config; a missing or malformed value falls back to the default."""
+    """A flow cap from config; a missing or malformed value falls back to the default (one `config` line)."""
+    v = f.get(key, default)
     try:
-        return float(f.get(key, default))
+        if isinstance(v, bool) or float(v) < 0:
+            raise ValueError(v)
+        return float(v)
     except (TypeError, ValueError):
+        log.log("config", f"flow.{key}={v!r} is not a number >= 0; using {default}")
         return float(default)
+
+
+def cap(key):
+    """A count cap (revisions, briefs_per_hour, runs_per_unit, depth, fanout) from config.flow, as an int."""
+    return int(_cap(_flow(), key, config.DEFAULTS["flow"][key]))
 
 
 def unit_cap(f=None):
@@ -300,8 +312,9 @@ def run_refusal(proj, unit, now=None):
         return Refused(hit[0], "G4", unit, hit[1])
     from ..runs import history
     n = history.runs_of(proj, unit, w)
-    if n >= RUNS:
-        return Refused(f"{unit} ran {n} times since {_hhmm(w)} without the owner (cap {RUNS})", "G5", unit, n)
+    runs = cap("runs_per_unit")
+    if n >= runs:
+        return Refused(f"{unit} ran {n} times since {_hhmm(w)} without the owner (cap {runs})", "G5", unit, n)
     return None
 
 
@@ -356,14 +369,14 @@ def logged(rule, by, unit, n):
 
 
 def looping(reg, project, now=None):
-    """Units G1 holds: revised REVISIONS or more times inside W. [{unit, n, since}] for `orche status`."""
+    """Units G1 holds: revised flow.revisions or more times inside W. [{unit, n, since}] for `orche status`."""
     if not (config.load().get("flow") or {}).get("enabled", True):
         return []
     w = window(project, now)
     out = []
     for d in _unit_dirs(reg, project):
         n = len([r for r, _ in _revs(d, w.timestamp()) if r >= 2])
-        if n >= REVISIONS:
+        if n >= cap("revisions"):
             out.append({"unit": d.name, "n": n, "since": _hhmm(w)})
     return out
 

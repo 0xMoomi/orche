@@ -59,7 +59,7 @@ def _masked(value):
 
 
 # Private copies of the three RUN.json literals at 3f47850 (runner.py:396-402, 484-490, 602-610), the
-# record before filing.run_record, + `vendor` after `model` (0.8.0, design C11 §7.1); the shapes below
+# record before filing.run_record, + `vendor` after `model` (0.8.0, design C11 §7.1), + `pr` last (0.9.0, §5.11); the shapes below
 # must serialise byte for byte the same.
 def old_unrun(job, now, status, error, stop_reason, routed):
     return {"unit": job.unit, "project": job.project, "to": job.to, "worktree": str(job.worktree),
@@ -68,7 +68,7 @@ def old_unrun(job, now, status, error, stop_reason, routed):
             "timeout_s": None, "exit_code": None, "is_error": status == "failed", "stop_reason": stop_reason,
             "cost_usd": None, "num_turns": None, "usage": None, "result_tail": "",
             "error": _masked(error), "head_before": None, "head_sha": None, "status": status,
-            "pointer_filed": routed}
+            "pointer_filed": routed, "pr": None}
 
 
 def old_lost(job, started, finished, error, recipient):
@@ -78,7 +78,7 @@ def old_lost(job, started, finished, error, recipient):
         "started": started, "finished": finished, "timeout_s": None, "exit_code": None,
         "is_error": True, "stop_reason": "lost", "cost_usd": None, "num_turns": None, "usage": None,
         "result_tail": "", "error": error, "head_before": None, "head_sha": None, "status": "failed",
-        "pointer_filed": bool(recipient)}
+        "pointer_filed": bool(recipient), "pr": None}
 
 
 def old_finished(job, call, res, data, model, started, finished, code, error, stopped, result,
@@ -92,12 +92,13 @@ def old_finished(job, call, res, data, model, started, finished, code, error, st
                 else data.get("stop_reason") or data.get("subtype") or ("error" if error else None)),
             "cost_usd": res.cost_usd, "num_turns": res.turns, "usage": res.usage,
             "result_tail": mask.redact(result[-2000:])[0], "error": error,
-            "head_before": head_before, "head_sha": head, "status": status, "pointer_filed": filed}
+            "head_before": head_before, "head_sha": head, "status": status, "pointer_filed": filed,
+            "pr": None}
 
 
 class RecordTest(unittest.TestCase):
     JOB = SimpleNamespace(unit="u-1", project="acme", to="div-acme-build", worktree=Path("/w/acme-build"),
-                          branch="build", tier="standard", model="claude-opus-5-5")
+                          branch="build", tier="standard", model="claude-opus-5-5", effort="medium")
     NOW, LATER = "2026-10-20T09:00:00+00:00", "2026-10-20T09:05:00+00:00"
 
     def same(self, old, new):
@@ -607,6 +608,74 @@ class OnePointerTest(RunnerCase):
     def hooks_log(self):
         path = self.home / "logs" / "hooks.log"
         return path.read_text() if path.exists() else ""
+
+
+class GlobalCapTest(support.TempHomeCase):
+    """0.9.0 T4 (design §8.3, R21): runner.max_parallel_total across projects and the memory guard."""
+
+    def setUp(self):
+        super().setUp()
+        patcher = mock.patch.object(runs, "reconcile", return_value=[])   # the locks below are this process
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def live(self, proj, unit):
+        folder = runs.run_dir(proj)
+        folder.mkdir(parents=True, exist_ok=True)
+        util.write_json(folder / f"{unit}.lock", {"pid": os.getpid(), "unit": unit, "started": util.now_iso(),
+                                                  "started_ns": 1})
+
+    def events(self):
+        path = self.home / "logs" / "events.log"
+        return path.read_text() if path.exists() else ""
+
+    def test_the_global_cap_counts_every_project(self):
+        self.live("alpha", "a1")
+        self.live("beta", "b1")
+        with self.assertRaises(runs.Busy) as ctx:
+            runs.acquire("alpha", "a2", {}, 4, wait_s=0, reg={}, total=2)
+        self.assertEqual(str(ctx.exception), "runner busy: 2 live runs in all projects (cap 2)")
+        self.assertIn("run unit=a2 waiting=global n=2 cap=2\n", self.events())
+        self.assertTrue(runs.at_cap("alpha", {"runner": {"max_parallel": 4, "max_parallel_total": 2}}))
+        self.assertFalse(runs.at_cap("alpha", {"runner": {"max_parallel": 4, "max_parallel_total": 3}}))
+        self.assertEqual(runs.total(), 2)
+        lock = runs.acquire("alpha", "a2", {}, 4, wait_s=0, reg={}, total=3)
+        self.assertEqual(lock.name, "a2.lock")
+
+    def test_the_project_cap_still_applies_first(self):
+        self.live("alpha", "a1")
+        with self.assertRaises(runs.Busy) as ctx:
+            runs.acquire("alpha", "a2", {}, 1, wait_s=0, reg={}, total=8)
+        self.assertEqual(str(ctx.exception), "runner busy: 1 live runs")
+        self.assertNotIn("waiting=global", self.events())
+
+    def test_low_memory_waits_and_an_unreadable_reading_is_no_guard(self):
+        with mock.patch.object(procs, "free_mb", return_value=1000):
+            with self.assertRaises(runs.Busy) as ctx:
+                runs.acquire("alpha", "a1", {}, 4, wait_s=0, reg={}, total=8, min_free_mb=2048)
+        self.assertEqual(str(ctx.exception), "runner busy: free memory 1000 MB < 2048 MB")
+        self.assertIn("run unit=a1 waiting=memory free_mb=1000 min_mb=2048\n", self.events())
+        self.assertFalse((runs.run_dir("alpha") / "a1.lock").exists())   # no slot taken while waiting
+        with mock.patch.object(procs, "free_mb", return_value=None):
+            runs.acquire("alpha", "a1", {}, 4, wait_s=0, reg={}, total=8, min_free_mb=2048)
+            runs.acquire("alpha", "a3", {}, 4, wait_s=0, reg={}, total=8, min_free_mb=2048)
+        hooks = (self.home / "logs" / "hooks.log").read_text()
+        self.assertEqual(hooks.count("free memory is unreadable"), 1)       # once a day
+
+    def test_a_waiting_run_rereads_the_memory_guard_after_each_poll(self):
+        def lowered(_s):
+            (self.home / "config.json").write_text(json.dumps({"runner": {"min_free_mb": 0}}))
+        (self.home / "config.json").write_text(json.dumps({"runner": {"min_free_mb": 2048}}))
+        with mock.patch.object(procs, "free_mb", return_value=1000), \
+                mock.patch.object(runs.time, "sleep", side_effect=lowered) as sleep:
+            lock = runs.acquire("alpha", "a1", {}, 4, wait_s=60, poll_s=0, reg={}, total=8, min_free_mb=2048)
+        self.assertTrue(lock.exists())
+        self.assertEqual(sleep.call_count, 1)
+
+    def test_test_homes_have_no_memory_guard(self):
+        self.assertEqual(json.loads((self.home / "config.json").read_text())["runner"]["min_free_mb"], 0)
+        self.assertEqual(support.no_wake({})["runner"]["min_free_mb"], 0)
+        self.assertEqual(support.no_wake({"runner": {"min_free_mb": 5}})["runner"]["min_free_mb"], 5)
 
 
 if __name__ == "__main__":

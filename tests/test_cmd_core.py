@@ -74,6 +74,74 @@ class CoreCase(support.TempHomeCase):
 NEVER = "heartbeat: never — install the job with orche install"
 
 
+class ScaleStatusTest(CoreCase):
+    """0.9.0 T4 (design §9.1): one line per project whatever the number of features, the queue and runs
+    cells, a usage hold's `paused:` line, sub-lines capped per kind, `--project` and the JSON shapes."""
+
+    def thirty(self):
+        build = self.reg["projects"]["acme-shop"]["divisions"]["build"]
+        base, build["features"] = build["features"][0], []
+        for i in range(30):
+            f = copy.deepcopy(base)
+            for k in ("name", "session", "slug"):
+                if isinstance(f.get(k), str):
+                    f[k] = f"{f[k]}{i}"
+            f["status"] = "active"
+            build["features"].append(f)
+        registry.save(self.reg)
+        for i in range(30):          # thirty units waiting on the owner
+            self.write(f"inbox/main-acme-shop/b{i}.json", {"unit": f"acme-shop-f{i}-20261016-{i + 1}",
+                                                           "status": "blocked", "at": at(5)})
+
+    def test_thirty_features_print_one_line_and_three_sub_lines_per_kind(self):
+        self.thirty()
+        code, out, _ = self.orche("status", "shop")
+        lines = out.splitlines()
+        self.assertEqual(code, 0)
+        self.assertEqual([ln for ln in lines if not ln.startswith(("  ", "heartbeat:"))], [lines[0]])
+        self.assertIn(" build●30 · new:", lines[0])
+        blocked = [ln for ln in lines if ln.startswith("  blocked:")]
+        self.assertEqual(len(blocked), 4)
+        self.assertEqual(blocked[-1], "  blocked: … 27 more: orche status --project acme-shop")
+        detail = self.orche("status", "--project", "acme-shop")[1].splitlines()
+        self.assertEqual(sum(1 for ln in detail if ln.startswith("  blocked:")), 30)
+
+    def test_queue_and_runs_cells_and_a_usage_hold(self):
+        from orche import util
+        from orche.flow import usage
+        from orche.queue import store
+        q = store.empty("acme-shop")
+        q["entries"] = [{"id": f"pr{n}-{s[0] * 7}", "pr": n, "head": s[0] * 40, "unit": f"u{n}", "state": s,
+                         "owner_ok": True} for n, s in ((4, "testing"), (5, "waiting"), (6, "waiting"))]
+        q["paused"] = {"by": "div-acme-shop-build", "at": at(10)}
+        store.queue_path("acme-shop").parent.mkdir(parents=True, exist_ok=True)
+        util.write_json(store.queue_path("acme-shop"), q)
+        usage.hit("claude", "API Error: 429", {}, project="acme-shop", unit="u9", stage="work", now=NOW)
+        out = self.orche("status", "shop")[1].splitlines()
+        self.assertIn(" build●1 · queue 2/1/0 · new:", out[0])
+        self.assertTrue(out[0].endswith(" · runs 0/4"), out[0])
+        self.assertIn(f"  paused: claude usage limit until {usage.hhmm(NOW + dt.timedelta(minutes=5), NOW)} "
+                      "(1 units held)", out)
+        self.assertIn(f"  queue: paused by div-acme-shop-build since {hhmm(10)} — orche queue resume acme-shop", out)
+        row = json.loads(self.orche("--json", "status", "shop")[1])[0]
+        self.assertEqual((row["queue"]["waiting"], row["queue"]["testing"], row["queue"]["state"]), (2, 1, "paused"))
+        self.assertEqual(row["runs"], {"live": 0, "cap": 4})
+        self.assertEqual([(h["vendor"], h["units"]) for h in row["holds"]], [("claude", 1)])
+        docs = json.loads(self.orche("--json", "status", "docs-site")[1])[0]
+        self.assertEqual((docs["holds"], docs["queue"]["waiting"]), ([], 0))     # another project's hold
+
+    def test_the_lineage_line_and_the_detail_json(self):
+        from orche import cmd_status
+        r = {"lineage": "acme-shop-web-round5-20261024-1", "units": 12, "prs": [41, 43, 44, 45], "spend": 14.2,
+             "states": {"returned": 1, "running": 2, "merged": 7, "queued": 2}, "since": "10:12"}
+        self.assertEqual(cmd_status.lineage_line(r), "L acme-shop-web-round5-20261024-1  12 units: 7 merged · "
+                                                     "2 queued · 2 running · 1 returned  PRs #41 #43 #44 …  $14.20  "
+                                                     "since 10:12")
+        [row] = json.loads(self.orche("--json", "status", "--project", "acme-shop")[1])
+        self.assertEqual((row["project"], row["lineages"]), ("acme-shop", []))
+        self.assertEqual(self.orche("status", "--project", "nope")[0], 2)
+
+
 class StatusTest(CoreCase):
     def test_status_golden(self):
         self.counters()
@@ -81,16 +149,16 @@ class StatusTest(CoreCase):
         self.assertEqual((code, err), (0, ""))
         self.assertEqual(out, (
             "acme-shop stage=building awake=2/12 divisions: rnd○ build●1"
-            " · new:1 · keys:1 · unverified:1 · RUNNING 0\n"
+            " · new:1 · keys:1 · unverified:1 · runs 0/4\n"
             "docs-site stage=public awake=0/12 divisions: -"
-            " · new:0 · keys:1 · unverified:0 · RUNNING 0\n"
+            " · new:0 · keys:1 · unverified:0 · runs 0/4\n"
             f"{NEVER}\n"))
 
     def test_status_without_counter_dirs(self):
         code, out, _ = self.orche("status", "shop")
         self.assertEqual(code, 0)
         self.assertEqual(out, "acme-shop stage=building awake=2/12 divisions: rnd○ build●1"
-                              " · new:1 · keys:0 · unverified:0 · RUNNING 0\n"
+                              " · new:1 · keys:0 · unverified:0 · runs 0/4\n"
                               f"{NEVER}\n")
 
     def test_status_json_and_unknown(self):
@@ -303,8 +371,8 @@ class RunningVisibilityTest(CoreCase):
 
     def test_status_shows_running_per_project(self):
         out = self.orche("status")[1].splitlines()
-        self.assertTrue(out[0].endswith(" · RUNNING 2"), out[0])
-        self.assertTrue(out[1].endswith(" · RUNNING 0"), out[1])
+        self.assertTrue(out[0].endswith(" · runs 2/4"), out[0])
+        self.assertTrue(out[1].endswith(" · runs 0/4"), out[1])
         self.assertEqual(json.loads(self.orche("--json", "status", "acme")[1])[0]["running"], 2)
 
     def test_depts_counts_runs_per_session(self):

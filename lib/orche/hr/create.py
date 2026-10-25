@@ -1,7 +1,8 @@
 """Creating units: divisions at `orche init`, feature agents at `orche feat new` (SPEC §2.5, §14.12)."""
+import shutil
 from typing import NamedTuple
 
-from .. import cli, config, orca, registry, roster, setup_flow, util, vendors
+from .. import cli, config, orca, registry, roster, scale, setup_flow, units, util, vendors
 from . import book, limits, onboarding, panes
 
 
@@ -209,10 +210,12 @@ def create_feature(reg, key, name, *, scope, reason, by=None, batch=None, strict
     """`orche feat new` end to end (SPEC §2.5). `scope`: the globs, split and non-empty (the CLI checks).
     Order: build division (2) -> name is a slug (1) -> session free registry-wide (1) -> no live feature
     of that name (1) -> creation limits (3; the global cap also freezes creation, unless dry_run) ->
-    scope overlaps (warning; 3 with `strict`) -> awake limit (3) -> parent-division warning -> child
+    scope overlaps (warning; 3 with `strict`) -> free disk >= `feature_min_free_disk_mb` (3) -> awake limit
+    (3; not for a headless feature: Codex, or `feature_panes` false) -> parent-division warning -> child
     worktree of the build worktree, a provisional `onboarding` entry saved at once (a re-run resumes it),
     unit files, settings, persona, pane -> the `create` record and notification -> Orca unread dot
-    (a failure is a warning). Returns (data, line)."""
+    (a failure is a warning). A headless Claude feature is `active` with `pane: false` (no pane, no
+    awake slot; `orche feat wake` opens one); a Codex feature is `paused`. Returns (data, line)."""
     proj = reg["projects"][key]
     by = by or roster.actor()
     session = onboarding.session_name("feat", key, name)
@@ -236,9 +239,12 @@ def create_feature(reg, key, name, *, scope, reason, by=None, batch=None, strict
         if strict:
             raise book.Refused(cli.EXIT_BLOCKED, f"scope {mine} overlaps feature {other} ({theirs})")
         cli.warn(f"scope {mine} overlaps feature {other} ({theirs})")
-    model, effort = build.get("model") or vendors.recommend(config.load(), "build").model, vendors.FEATURE_EFFORT
+    cfg = config.load()
+    _disk_guard(cfg, reg, proj["path"])
+    model, effort = build.get("model") or vendors.recommend(cfg, "build").model, vendors.FEATURE_EFFORT
     codex = vendors.vendor_of(model) == vendors.CODEX   # headless only: no pane, no awake slot, `paused`
-    if not codex:
+    headless = codex or cfg.get("feature_panes", True) is False
+    if not headless:
         limits.need_awake(reg)
     if build.get("status") != "active":
         cli.warn(f"parent division build is {build.get('status')}")
@@ -253,7 +259,7 @@ def create_feature(reg, key, name, *, scope, reason, by=None, batch=None, strict
         registry.save(reg)
     try:
         entry = onboarding.onboard(project=key, repo_root=proj["path"], repo_id=proj["repo_id"], kind="feat",
-                                   name=name, model=model, effort=effort, wake=not codex, parent=build["worktree"],
+                                   name=name, model=model, effort=effort, wake=not headless, parent=build["worktree"],
                                    existing=resume, on_created=provisional, dry_run=dry_run)
         if dry_run:
             orca.worktree("set", "--worktree", f"id:{entry['worktree']}", "--unread", dry_run=True)
@@ -263,8 +269,12 @@ def create_feature(reg, key, name, *, scope, reason, by=None, batch=None, strict
         raise book.Refused(cli.EXIT_BLOCKED, f"feat new {name} stopped: {exc}") from None
     except (orca.OrcaError, OSError, util.JsonError) as exc:
         raise book.Refused(cli.EXIT_USER, f"feat new {name} stopped: {exc}") from None
+    from .. import publish   # here, not at the top: hr stays free of the git/gh publish layer at import
+    publish.guard_base(units.worktree_path(entry["worktree"]), publish.base(proj["path"]))   # R29
     status = "paused" if codex else "active"
     feature.update(worktree=entry["worktree"], branch=entry["branch"], status=status)
+    if headless and not codex:
+        feature["pane"] = False
     features[:] = [f for f in features if not (f["name"] == name and f["status"] == "onboarding")]
     features.append(feature)
     event = {"type": "create", "project": key, "unit": f"build/{name}", "by": by}
@@ -277,3 +287,18 @@ def create_feature(reg, key, name, *, scope, reason, by=None, batch=None, strict
     except orca.OrcaError as exc:
         cli.warn(f"could not mark the worktree unread: {exc}")
     return {"project": key, "feature": feature}, f"{session} {status} ({entry['branch']})"
+
+
+def _disk_guard(cfg, reg, path):
+    """Refuse (3) a feature worktree when the project's disk has less than `feature_min_free_disk_mb`."""
+    need = cfg.get("feature_min_free_disk_mb", config.DEFAULTS["feature_min_free_disk_mb"])
+    if isinstance(need, bool) or not isinstance(need, (int, float)) or need <= 0:
+        return
+    try:
+        free = shutil.disk_usage(path).free
+    except OSError:
+        return
+    if free < need * 1024 * 1024:
+        raise book.Refused(cli.EXIT_BLOCKED,
+                           f"disk: {free / 1024 ** 3:.1f} GiB free < {need / 1024:g} GiB "
+                           f"(scale {scale.current(cfg, reg)}); free space or pick a smaller scale")

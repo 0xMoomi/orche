@@ -18,7 +18,7 @@ TAIL_CHARS = 2000
 IDENTITY = ("unit", "project", "to", "worktree", "branch", "tier", "model", "vendor", "effort")   # what ran
 RESULT = ("started", "finished", "timeout_s", "exit_code", "is_error", "stop_reason", "cost_usd",
           "num_turns", "usage", "result_tail", "error", "head_before", "head_sha", "status",
-          "pointer_filed")
+          "pointer_filed", "pr")
 LOCKED = ("to", "rev", "tier", "model", "vendor", "effort", "worktree", "branch",
           "timeout_s")   # what runs: job.lock_info's keys
 LOST_TIMEOUT_S = 31 * 60   # a lock without timeout_s: job.DEFAULT_TIMEBOX_S + job.GRACE_S
@@ -31,14 +31,15 @@ class FilingError(Exception):
 
 def run_record(who, *, started, finished, status, stop_reason, is_error, error, pointer_filed,
                timeout_s=None, exit_code=None, cost_usd=None, num_turns=None, usage=None,
-               result_tail="", head_before=None, head_sha=None) -> dict:
-    """The RUN.json record: `who`'s IDENTITY keys, then the RESULT keys, always in this order (24).
+               result_tail="", head_before=None, head_sha=None, pr=None) -> dict:
+    """The RUN.json record: `who`'s IDENTITY keys, then the RESULT keys, always in this order (25);
+    `pr`: what a gated done published ({number, url, head}, publish.Published.record), else None.
     Values are written as given; callers mask claude's strings (D5)."""
     result = {"started": started, "finished": finished, "timeout_s": timeout_s, "exit_code": exit_code,
               "is_error": is_error, "stop_reason": stop_reason, "cost_usd": cost_usd,
               "num_turns": num_turns, "usage": usage, "result_tail": result_tail, "error": error,
               "head_before": head_before, "head_sha": head_sha, "status": status,
-              "pointer_filed": pointer_filed}
+              "pointer_filed": pointer_filed, "pr": pr}
     return {**{k: who[k] for k in IDENTITY}, **{k: result[k] for k in RESULT}}
 
 
@@ -136,9 +137,23 @@ def file_pointer(reg, who, rev, folder, status, summary, head=None, link_report=
     return True
 
 
-def events(who, cost, turns, status, stop=None) -> None:
+def events(who, cost, turns, status, stop=None, rung=None, attempts=1) -> None:
+    """The run's events line; `rung` (tier:model:effort of the last attempt) and the attempt count
+    are added for a worker run (ladder.py)."""
+    ladder = f" rung={rung} attempts={attempts} escalated={int(attempts > 1)}" if rung else ""
     log.log("events", f"run unit={who['unit']} to={who['to']} model={who['model']} vendor={who['vendor']} "
-                      f"cost={cost} turns={turns} status={status} stop={stop or '-'}")
+                      f"cost={cost} turns={turns} status={status} stop={stop or '-'}{ladder}")
+
+
+def holds_of(folder) -> int:
+    """RUN.json `holds`: the unit's runs a usage limit stopped since its last done pointer (§8.5's repeat
+    guard, flow/usage.repeats); 0 without one."""
+    try:
+        rec = util.read_json(Path(folder) / "RUN.json", default=None)
+    except (OSError, util.JsonError):
+        return 0
+    n = rec.get("holds") if isinstance(rec, dict) else None
+    return n if isinstance(n, int) and not isinstance(n, bool) and n > 0 else 0
 
 
 def unrun(reg, who, rev, folder, status, summary, error, stop_reason, record=True) -> dict:
@@ -157,8 +172,11 @@ def unrun(reg, who, rev, folder, status, summary, error, stop_reason, record=Tru
         routed = False
     rec = run_record(who, started=now, finished=now, status=status, stop_reason=stop_reason,
                      is_error=status == "failed", error=masked(error), pointer_filed=routed)
+    held = holds_of(folder)      # a run that never started neither adds a hold nor ends the count
+    if held:
+        rec["holds"] = held
     extra = ({"retry": True, "quiet": True} if stop_reason in ("busy", "duplicate")
-             else {"quiet": True} if stop_reason == "capped" else None)
+             else {"quiet": True} if stop_reason in ("capped", "held") else None)
     steps = [lambda: file_pointer(reg, who, rev, folder, status, summary, None, link_report=False, extra=extra),
              lambda: units.touch_activity(who["to"]),
              lambda: events(who, None, None, status, stop_reason)]

@@ -926,3 +926,90 @@ class DiskTest(RunnerCase):
         self.assertTrue(ptr["summary"].startswith(f"runner died: {unit} (pid {proc.pid}, "), ptr["summary"])
         self.assertEqual(self.run_record(unit)["status"], "blocked")             # the run's own record
         self.assertIsNone(self.lock(unit))
+
+
+class ScaleDoctorTest(support.TempHomeCase):
+    """0.9.0 T4 (Appendix C.5): the gh, queue gate, deploy on merge, queue, usage, memory, scale and ladder
+    rows, beside the disk and process-table rows above. gh is a fake on PATH (never the real one)."""
+
+    def fake_gh(self, perm):
+        folder = self.home / "fake-gh"
+        folder.mkdir(exist_ok=True)
+        (folder / "repo.json").write_text(json.dumps({"nameWithOwner": "DESPELL/PIKIT", "viewerPermission": perm,
+                                                      "defaultBranchRef": {"name": "main"}}))
+        script = folder / "gh"
+        script.write_text('#!/bin/sh\ncase "$1 $2" in\n  "api user") echo despell-bot ;;\n'
+                          '  "repo view") cat "$(dirname "$0")/repo.json" ;;\n  *) exit 1 ;;\nesac\n')
+        script.chmod(0o755)
+        os.environ["PATH"] = f"{folder}{os.pathsep}{os.environ['PATH']}"
+
+    def git_repo(self, name, origin=None):
+        root = self.home / name
+        subprocess.run(["git", "init", "-q", str(root)], check=True, capture_output=True)
+        if origin:
+            subprocess.run(["git", "-C", str(root), "remote", "add", "origin", origin], check=True, capture_output=True)
+        return root
+
+    def test_gh_rows_write_read_and_missing(self):
+        from orche.install import doctor
+        root = self.git_repo("pikit", "https://github.com/DESPELL/PIKIT.git")
+        reg = {"projects": {"pikit": {"path": str(root)}, "loose": {"path": str(self.git_repo("loose"))}}}
+        self.fake_gh("WRITE")
+        self.assertEqual(doctor.gh_rows(reg), [
+            ("WARN", "gh", "loose: no origin remote — the merge queue lands PRs on GitHub"),
+            ("OK", "gh", "pikit: gh as despell-bot · WRITE on DESPELL/PIKIT · base main")])
+        self.fake_gh("READ")
+        level, name, detail = doctor.gh_rows(reg)[1]
+        self.assertEqual((level, name), ("WARN", "gh"))
+        self.assertIn("pikit: gh account despell-bot has READ on DESPELL/PIKIT — the queue cannot merge: gh auth "
+                      "switch -u <an account with write>, or gh auth login", detail)
+        with mock.patch.object(doctor.shutil, "which", return_value=None):
+            [(level, _name, detail)] = doctor.gh_rows(reg)
+        self.assertEqual(level, "WARN")
+        self.assertIn("gh is not installed", detail)
+
+    def test_queue_gate_and_deploy_on_merge(self):
+        from orche import config
+        from orche.install import doctor
+        root = self.git_repo("site")
+        (root / "vercel.json").write_text("{}")
+        reg = {"projects": {"site": {"path": str(root)}}}
+        [no_base, _deploy] = doctor.gate_rows(reg, config.load())          # no origin/HEAD, no publish.base: R12
+        self.assertIn("site: no base branch: publish.base is unset and origin/HEAD is not set", no_base[2])
+        self.assertIn("OWNER: git -C", no_base[2])
+        rows = doctor.gate_rows(reg, {**config.load(), "publish": {"base": "main"}})
+        self.assertEqual([r[:2] for r in rows], [("WARN", "queue gate"), ("WARN", "deploy on merge")])
+        self.assertIn("site: no scripts/verify/ci.sh on origin/main — queue add refuses", rows[0][2])
+        self.assertIn("site: vercel.json — every queue merge deploys main (queue.land auto)", rows[1][2])
+
+    def test_queue_usage_memory_scale_and_ladder_rows(self):
+        from orche import config, ladder, util
+        from orche.flow import usage
+        from orche.install import doctor
+        from orche.queue import store
+        q = store.empty("pikit")
+        q["entries"] = [{"id": "pr3-bbbbbbb", "pr": 3, "head": "b" * 40, "state": "testing", "owner_ok": True}]
+        store.queue_path("pikit").parent.mkdir(parents=True, exist_ok=True)
+        util.write_json(store.queue_path("pikit"), q)
+        reg = {"projects": {"pikit": {"path": str(self.home)}, "other": {"path": str(self.home)}}, "limits": {}}
+        [(level, _n, detail)] = doctor.queue_rows(reg)                    # `other` has no queue: no row
+        self.assertEqual(level, "WARN")
+        self.assertIn("pikit: open · 0 waiting · 1 testing · integrator idle — an entry is testing with no "
+                      "integrator (lost)", detail)
+        self.assertEqual(doctor.usage_rows(), [("OK", "usage", "no usage hold")])
+        usage.hit("claude", "API Error: 429", {}, project="pikit", unit="u1", stage="work")
+        [(level, _n, detail)] = doctor.usage_rows()
+        self.assertEqual(level, "WARN")
+        self.assertTrue(detail.startswith("claude held until ") and detail.endswith("(1 units) — they re-run then"))
+        cfg = config.load()
+        cfg["runner"]["min_free_mb"] = 2048                     # test homes turn the guard off (support.NO_WAKE)
+        self.assertEqual(doctor.memory_rows(cfg, free=14499, total=24576),
+                         [("OK", "memory", "14.2 GiB free (58 %) ≥ 2048 MB")])
+        self.assertEqual(doctor.memory_rows(cfg, free=1500, total=24576),
+                         [("WARN", "memory", "1.5 GiB free (6 %) < 2048 MB: new runs wait for memory (runner.min_free_mb)")])
+        with mock.patch.object(procs, "free_mb", return_value=None):
+            self.assertEqual(doctor.memory_rows(cfg)[0][0], "WARN")
+        self.assertEqual(doctor.scale_rows(cfg, reg), [
+            ("OK", "scale", "preset default: runs 4/project, 8 total · features keep a pane · spend cap $30 · "
+                            "min free 2048 MB"),
+            ("OK", "ladder", ladder.doctor_row(cfg))])

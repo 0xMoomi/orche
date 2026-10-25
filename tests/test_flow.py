@@ -74,6 +74,38 @@ class RevisionsTest(FlowCase):
         self.assertIn("delivered", res.stdout)
 
 
+
+class ConfigCapsTest(FlowCase):
+    """0.9.0 scale: every flow cap is config; a malformed value falls back to the default."""
+
+    def flow(self, **kw):
+        cfg = self.home / "config.json"
+        cfg.write_text(json.dumps({**json.loads(cfg.read_text()), "flow": kw}))
+
+    def test_revisions_cap_from_config(self):
+        self.flow(revisions=1)
+        unit = self.first().name
+        self.assertEqual(self.orche("dispatch", stdin=amend(unit, 2)).returncode, 0)
+        res = self.orche("dispatch", stdin=amend(unit, 3))
+        self.assertEqual(res.returncode, 2, res.stdout)
+        self.assertIn(f"{unit} was revised 1 times since", res.stdout)
+
+    def test_rate_cap_from_config(self):
+        self.flow(briefs_per_hour=5)
+        folder = self.first()
+        self.revs(folder, *range(2, 5))                                  # rev1 + 3 = 4
+        self.assertEqual(self.orche("dispatch", stdin=GIFT).returncode, 0)
+        res = self.orche("dispatch", stdin=THIRD)
+        self.assertEqual(res.returncode, 2, res.stdout)
+        self.assertIn("(cap 5 an hour)", res.stdout)
+
+    def test_malformed_cap_uses_the_default(self):
+        for bad in ("lots", -1, True, None):
+            self.flow(revisions=bad, depth=[1])
+            self.assertEqual((guard.cap("revisions"), guard.cap("depth")), (3, 3), bad)
+        self.flow(revisions=7, fanout=20.0, runs_per_unit=0)
+        self.assertEqual((guard.cap("revisions"), guard.cap("fanout"), guard.cap("runs_per_unit")), (7, 20, 0))
+
 class BlockedTwiceTest(FlowCase):
     def test_amend_and_same_goal_brief_refused_other_blocks_still_relay(self):
         unit = self.first().name

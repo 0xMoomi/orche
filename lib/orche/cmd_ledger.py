@@ -37,7 +37,7 @@ def register(subparsers):
     c.add_argument("--proj")
     c.set_defaults(func=_wrap(cmd_check))
 
-    s = sub.add_parser("summary", help="verdict counts, unverified feat/* heads, last 10 rows")
+    s = sub.add_parser("summary", help="verdict counts, unverified feature heads, last 10 rows")
     s.add_argument("--proj")
     s.set_defaults(func=_wrap(cmd_summary))
 
@@ -126,15 +126,21 @@ def cmd_check(args):
 
 
 def _feat_heads(reg, proj):
+    """[(branch, sha)] for the registry's feature branches (any naming), or None when git fails."""
     build = reg["projects"][proj].get("divisions", {}).get("build") or {}
     where = units.worktree_path(build.get("worktree", "")) or None
     if where and not Path(where).is_dir():
         where = None
-    res = shell.run(["git", *(["-C", where] if where else []), "for-each-ref",
-                     "--format=%(refname:short)\t%(objectname)", "refs/heads/feat/"])
-    if not res.ok:
-        return None
-    return [tuple(line.split("\t", 1)) for line in res.out.splitlines() if "\t" in line]
+    heads = []
+    for feat in build.get("features", []):
+        branch = feat.get("branch")
+        if not branch:
+            continue
+        res = shell.run(["git", *(["-C", where] if where else []), "rev-parse", "--verify", "-q", branch])
+        if not res.ok:
+            return None
+        heads.append((branch, res.out.strip()))
+    return heads
 
 
 def cmd_summary(args):
@@ -149,9 +155,9 @@ def cmd_summary(args):
     lines = [f"ledger {proj}: {len(rows)} rows ({ledger.path(proj)})"]
     lines += [f"  {v:<20} {n}" for v, n in counts.items()]
     if unverified is None:
-        lines.append("unverified feat/* heads: (git for-each-ref failed)")
+        lines.append("unverified feature heads: (git rev-parse failed)")
     else:
-        lines.append(f"unverified feat/* heads: {len(unverified)}")
+        lines.append(f"unverified feature heads: {len(unverified)}")
         lines += [f"  {u['branch']} {u['sha'][:12]}" for u in unverified]
     lines.append("last rows:")
     lines += [f"  {ledger.format_row(r)}" for r in last] or ["  (none)"]

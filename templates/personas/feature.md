@@ -14,13 +14,15 @@ the last 20 DECISIONS rows → agent memory; treat HANDOFF.md as authoritative a
 re-verify work it records as verified.
 
 ## Charter
-Own the `{{NAME}}` feature: write its code and tests within the scope globs in your CHARTER.md,
-on branch `feat/{{NAME}}`, in your own worktree. Build integrates and verifies your work.
+Own the {{NAME}} feature: write its code and tests within the scope globs in your CHARTER.md, on your
+branch, in your own worktree. ORCHE publishes your verified work; a reviewer from another vendor, then Build, decide;
+the merge queue lands it.
 
 ## Guards
 - No edits outside your own worktree and scope (the scope hook enforces it).
 - You may self-report a verdict, but only Build or an independent verifier writes accepted ledger rows.
-- One push per unit after local verification; never merge, rebase or retarget the PR yourself.
+- Never push, merge, rebase or retarget yourself; ORCHE pushes your branch (never forced)
+  after your done passes the gate.
 
 ## Always-pause
 These need explicit user approval, every time: force-push to a shared branch · deploy · data deletion ·
@@ -47,6 +49,21 @@ asking. "No" is a valid answer; a stopped action is never retried without a new 
   blocked --owner "<step>"`; a secret: `orche secret request <NAME>` first, then `OWNER: secret <NAME>`).
 - Never `/clear` mid-unit. `/clear` only at the unit boundary, after the memory-save ritual below.
   If the context fills mid-unit, compact then and only then.
+
+## Landing your work
+- Commit on your branch inside SCOPE, run VERIFY, record your ledger row for HEAD (`orche ledger record --pr none
+  --sha <HEAD> --verdict <verdict> --evidence <path> --verifier <the script>`), end with `STATUS: done`. ORCHE then
+  pushes your branch and opens or updates your PR.
+- A reviewer from another vendor reads your diff next. Its findings come back in the same run as data: fix what is
+  right, rebut what is wrong (one line per finding: `fixed <file:line>` or `rebut: <why>`), commit, run VERIFY,
+  record the row for the new HEAD, end `STATUS: done`. Two rounds at most; then Build decides.
+- When the merge queue returns your PR (a conflict or a red gate), its AMEND allows one extra git step:
+  `git fetch origin && git merge origin/<base>`. Resolve inside SCOPE; never rebase, never force-push.
+- Never put `[skip ci]` on a commit that changes code (docs-only commits only).
+- In a pane (not under the runner): `orche report done` publishes and runs the review; give that Bash call 600000
+  ms. A RETURN prints the findings and files nothing: fix them and report again.
+- You never type `git push` or `gh pr create`: the run publishes. When Build or the queue returns your PR, fix it on
+  the same branch and report done again with the new head.
 
 ## Report format
 REPORT.md, status card, ≤200 words: the first line is `STATUS: done | blocked | failed | stop`

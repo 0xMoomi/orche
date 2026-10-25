@@ -3,6 +3,64 @@
 All notable changes to ORCHE are listed here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow semantic versioning.
 
+## 0.9.0 — 2026-10-25
+
+### Added
+- Scale: every flow cap is config (`flow.revisions`, `flow.briefs_per_hour`, `flow.runs_per_unit`, `flow.depth`,
+  `flow.fanout`); `runner.max_parallel_total` (8) caps live runs across projects and `runner.min_free_mb` (2048)
+  makes a run wait while free memory is lower. Presets default/20/30 (`scale.presets`) set them at once:
+  `orche hr scale [<preset>]` (HR event `scale`; `orche hr choices` offers them). `feature_panes: false` makes
+  features pane-less (`orche feat wake` opens one); `feature_min_free_disk_mb` guards `orche feat new`.
+- Publish: after a gated unit's verified done, ORCHE (not the model) pushes the unit's own branch (`feat/*`,
+  `div/build`; never forced) and opens or reuses one ready PR to the base: config `publish.base` (null), else
+  origin/HEAD, else an OWNER step (`git remote set-head origin -a`), never a guess. A failed push or PR, or a
+  feature done with nothing to publish, leaves the done unverified, with an OWNER step when only a person can fix
+  it; a Build done that changes nothing publishes nothing (`pr: none`). RUN.json, REPORT.md and the pointer carry
+  the PR. A feature run starts by merging the base into its branch (a conflict is aborted and noted in the prompt).
+- The merge queue: an approved PR becomes an entry pinned to its head (`orche queue add <unit> [--first]` or
+  `--pr N`; `drop`, `pause`, `resume`, `approve`; `orche queue <p>` lists them); `queue.land: owner` keeps entries
+  untested until `orche queue approve`. The integrator, model-free, one per project, in its own clone, merges the
+  first entry's head onto the fetched base, runs the gate (`scripts/verify/ci.sh`, then the unit's committed
+  VERIFY scripts; no secrets in its environment), lands a green entry with `gh pr merge --match-head-commit` and
+  proves the merge commit (parents and tree). A red, conflicting or timed-out entry goes back to its writer as an
+  AMEND, the third in a window to Build. A red main closes the queue to all but `--first` entries until main is
+  green again; a failed proof closes it until `orche queue resume`. GitHub refusals, a base that keeps moving and
+  `queue.max_stops` (3) passes in a row stopped by git or gh pause it with a notice. The heartbeat starts the
+  integrator and puts a lost entry back at the front.
+- Reviews: a reviewer of another vendor (`review.order`; with none, the other Claude model, noted) pre-reviews a
+  published done read-only inside the unit's run (`VERDICT: PASS|RETURN`); the writer reworks a RETURN in the same
+  run, and after `review.rounds` (2) RETURNs the done goes to Build with the open findings. Then a headless,
+  read-only Build review (Build's persona and model) answers the eight-line checklist: a PASS queues the PR;
+  RETURN, high risk, size or an error wake the Build pane (`review.build: false` turns it off). The heartbeat
+  starts pending Build reviews and tells Build after `review.max_starts` (3) starts. `orche review --pr N` runs
+  both for Build's own PRs; a pane member's `orche report done` runs one pre-review round itself.
+- The tier ladder: TIER picks the model and effort (`ladder.<vendor>.<TIER>`; mechanical starts on Haiku, the
+  division's model is the ceiling, the `MODEL` brief key pins one). A failed or unverified mechanical attempt
+  escalates once to the standard rung in the same run; every call is an attempt in RUN.json `attempts`.
+- Usage holds and spend caps: an attempt that hits a usage or rate limit holds that vendor across projects until
+  the reset it names, else a 5/15/60-minute backoff (`lib/orche/flow/usage.py`). The unit files one quiet `info`,
+  never `failed`; the owner is told once and the heartbeat re-runs held units after the reset at the held stage
+  (a review or rework on the same HEAD resumes there); a unit held 3 times since its last done is not held again.
+  G4 is checked before every paid call (escalation, review, rework, Build review), skipping it over a cap.
+- `orche status`: `queue w/t/m` and `runs n/cap` (was `RUNNING n`) on the project line, `paused: claude usage limit
+  until 15:00 (7 units held)` and `queue:` lines, at most 3 sub-lines per kind (`--project <p>` prints all, and a
+  line per lineage). `orche doctor` rows `gh`, `queue gate`, `deploy on merge`, `queue`, `review`, `scale`,
+  `ladder`, `usage` and `memory`.
+- The resume card: `orche resume [<project>]` prints each open lineage (goal, units, PRs, newest report, what it
+  waits on), what waits on the owner and the queue; SessionStart shows it to Main after a `/clear` or a restart.
+
+### Changed
+- G5 (`flow.runs_per_unit`) counts only a run's `work` line; escalation, rework and review are calls inside it.
+- The heartbeat's `busy` restart waits without spending its attempt while the slot cap is full (R34).
+- Rulebooks: Build is traffic control and never merges by hand; the merge queue lands every PR (`orche-build`,
+  `orche-main`, the div-build and feature personas); `templates/verify/ci.sh` is the gate's starting script.
+- Docs: SPEC §4.13 Model ladder, §8.9 Scale, §12.4 Merge queue, §14.15 Pre-review; GLOSSARY's queue, review,
+  ladder and scale terms; a short README (what it is, install, set up, use, update); FAQ on landing and scale.
+
+### Removed
+- `vendors.EFFORT` (the TIER→`--effort` table); the ladder replaces it.
+- SPEC's watch-pr and the "integration worktree"/"Main approves integration" rules: the merge queue lands PRs.
+
 ## 0.8.0 — 2026-10-23
 
 ### Added

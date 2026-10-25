@@ -10,14 +10,47 @@
     "turns_ceiling": 400,
     "max_parallel": 4,
     "queue_wait_s": 1800,
-    "log_keep_days": 14
+    "log_keep_days": 14,
+    "max_parallel_total": 8,
+    "min_free_mb": 2048,
+    "usage_limit": {
+      "patterns": [
+        "usage limit",
+        "rate[ _-]?limit",
+        "\\b429\\b[^\\n]*\\brate",
+        "\\brate[^\\n]*\\b429\\b",
+        "\\bapi error:?\\s*429\\b",
+        "too many requests",
+        "(?:\\d+-hour|daily|weekly) limit reached",
+        "hit your (usage )?limit",
+        "usage quota",
+        "quota exceeded for",
+        "exceeded your (?:current )?quota",
+        "overloaded"
+      ],
+      "reset_patterns": [
+        "\\|(?P<epoch>\\d{10})\\b",
+        "resets?\\s+(?:at\\s+)?(?P<iso>\\d{4}-\\d{2}-\\d{2}[T ]\\d{2}:\\d{2}(?::\\d{2})?(?:Z|[+-]\\d{2}:?\\d{2})?)",
+        "resets?\\s+(?:at\\s+)?(?P<hour>\\d{1,2})(?::(?P<minute>\\d{2}))?\\s*(?P<ampm>am|pm)?",
+        "(?:try again|resets?) in\\s+(?:(?P<days>\\d+)\\s*days?)?\\s*(?:(?P<hours>\\d+)\\s*hours?)?\\s*(?:(?P<minutes>\\d+)\\s*min)?",
+        "retry[- ]after[:= ]\\s*(?P<seconds>\\d+)"
+      ],
+      "backoff_min": [
+        5,
+        15,
+        60
+      ]
+    }
   },
+  "feature_panes": true,
+  "feature_min_free_disk_mb": 2048,
   "jev": {
     "enabled": false,
     "base_url": "",
     "model": "jev-1.13.0",
     "timeout_s": 1.0,
-    "api_key_env": "JEV_API_KEY"
+    "api_key_env": "JEV_API_KEY",
+    "min_confidence": 0.8
   },
   "triage": {
     "enabled": false,
@@ -54,7 +87,157 @@
     "enabled": true,
     "quiet_hours": "23:00-08:00",
     "max_unit_cost_usd": 10,
-    "max_project_cost_usd": 30
+    "max_project_cost_usd": 30,
+    "revisions": 3,
+    "briefs_per_hour": 20,
+    "runs_per_unit": 4,
+    "depth": 3,
+    "fanout": 5
+  },
+  "publish": {
+    "base": null
+  },
+  "queue": {
+    "method": "merge",
+    "land": "auto",
+    "timeout_s": 1200,
+    "max_returns": 3,
+    "max_restarts": 2,
+    "lost_after_s": 3600,
+    "max_stops": 3,
+    "docs_paths": [
+      "**/*.md",
+      "docs/**",
+      ".orche/**"
+    ],
+    "per_project": {}
+  },
+  "review": {
+    "cross_vendor": "required",
+    "order": [
+      "codex",
+      "claude-opus-5-5",
+      "claude-sonnet-5-5"
+    ],
+    "rounds": 2,
+    "effort": "medium",
+    "timeout_s": 480,
+    "max_diff_lines": 3000,
+    "build": true,
+    "build_timeout_s": 240,
+    "pane_lines": 400,
+    "tier_audit": "log",
+    "max_starts": 3
+  },
+  "ladder": {
+    "escalate": true,
+    "claude": {
+      "mechanical": {
+        "model": "claude-haiku-5-5",
+        "effort": "low"
+      },
+      "standard": {
+        "model": "division",
+        "effort": "medium"
+      },
+      "hard": {
+        "model": "division",
+        "effort": "high"
+      }
+    },
+    "codex": {
+      "mechanical": {
+        "model": "division",
+        "effort": "low"
+      },
+      "standard": {
+        "model": "division",
+        "effort": "medium"
+      },
+      "hard": {
+        "model": "division",
+        "effort": "high"
+      }
+    }
+  },
+  "scale": {
+    "presets": {
+      "default": {
+        "estimate_usd_per_hour": null,
+        "config": {
+          "runner.max_parallel": 4,
+          "runner.max_parallel_total": 8,
+          "runner.min_free_mb": 2048,
+          "runner.queue_wait_s": 1800,
+          "feature_panes": true,
+          "feature_min_free_disk_mb": 2048,
+          "flow.fanout": 5,
+          "flow.depth": 3,
+          "flow.briefs_per_hour": 20,
+          "flow.revisions": 3,
+          "flow.runs_per_unit": 4,
+          "flow.max_unit_cost_usd": 10,
+          "flow.max_project_cost_usd": 30
+        },
+        "limits": {
+          "per_project_per_day": 3,
+          "per_project_per_week": 10,
+          "per_request_auto": 2,
+          "global_per_day_freeze": 20,
+          "max_awake_sessions": 12
+        }
+      },
+      "20": {
+        "estimate_usd_per_hour": 40,
+        "config": {
+          "runner.max_parallel": 12,
+          "runner.max_parallel_total": 16,
+          "runner.min_free_mb": 2048,
+          "runner.queue_wait_s": 7200,
+          "feature_panes": false,
+          "feature_min_free_disk_mb": 8192,
+          "flow.fanout": 20,
+          "flow.depth": 3,
+          "flow.briefs_per_hour": 60,
+          "flow.revisions": 3,
+          "flow.runs_per_unit": 4,
+          "flow.max_unit_cost_usd": 10,
+          "flow.max_project_cost_usd": 150
+        },
+        "limits": {
+          "per_project_per_day": 20,
+          "per_project_per_week": 60,
+          "per_request_auto": 20,
+          "global_per_day_freeze": 40,
+          "max_awake_sessions": 12
+        }
+      },
+      "30": {
+        "estimate_usd_per_hour": 60,
+        "config": {
+          "runner.max_parallel": 20,
+          "runner.max_parallel_total": 24,
+          "runner.min_free_mb": 3072,
+          "runner.queue_wait_s": 7200,
+          "feature_panes": false,
+          "feature_min_free_disk_mb": 10240,
+          "flow.fanout": 30,
+          "flow.depth": 3,
+          "flow.briefs_per_hour": 90,
+          "flow.revisions": 3,
+          "flow.runs_per_unit": 4,
+          "flow.max_unit_cost_usd": 10,
+          "flow.max_project_cost_usd": 250
+        },
+        "limits": {
+          "per_project_per_day": 30,
+          "per_project_per_week": 90,
+          "per_request_auto": 30,
+          "global_per_day_freeze": 60,
+          "max_awake_sessions": 12
+        }
+      }
+    }
   },
   "kinds": {
     "rnd": {

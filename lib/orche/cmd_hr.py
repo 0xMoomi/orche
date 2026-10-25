@@ -1,9 +1,10 @@
-"""`orche hr log|freeze|unfreeze|audit|correct|add|model|choices`.
+"""`orche hr log|freeze|unfreeze|audit|correct|add|model|choices|scale`.
 
 add:     add one division to a registered project on a model (hr/create.add_division), then start
          the project intake in the background when its stamp misses the division.
 model:   move a division to another model (hr/models.set_model).
 choices: the division kinds, models and the owner's questions (design 2026-10-23 §10.3; lib/orche/hr/choices.py).
+scale:   print the scale presets and the current one, or set one (lib/orche/scale.py; `--dry-run` writes nothing).
 
 audit:   weekly HR report (hr/audit.py); `--apply` sleeps the proposed units, `--quiet` prints
          nothing when there is nothing to propose.
@@ -12,7 +13,7 @@ correct: append the next numbered standing order to `<repo>/.orche/STANDING.md` 
 import json
 
 from . import cmd_intake, config, hr, intake, paths, procs, registry
-from .cli import EXIT_NOT_FOUND, EXIT_OK, fail
+from .cli import EXIT_NOT_FOUND, EXIT_OK, EXIT_USER, fail
 
 
 def register(subparsers):
@@ -50,6 +51,9 @@ def register(subparsers):
     p.add_argument("project", nargs="?", help="omit for a project not under ORCHE yet")
     p.add_argument("--lang", choices=("ko", "en"), help="question language (default: config lang, else en)")
     p.set_defaults(func=cmd_choices)
+    p = sub.add_parser("scale", help="print the scale presets, or set one (default, 20, 30)")
+    p.add_argument("preset", nargs="?", help="omit to print the presets and the current one")
+    p.set_defaults(func=cmd_scale)
 
 
 def cmd_log(args):
@@ -196,4 +200,28 @@ def cmd_choices(args):
         print(line.rstrip())
     parts = [m["model"] + ("" if m["available"] else f" (unavailable: {m['reason']})") for m in data["models"]]
     print("models: " + ", ".join(parts))
+    return EXIT_OK
+
+
+def cmd_scale(args):
+    from . import roster, scale, util
+    cfg = config.load()
+    reg = registry.load()
+    names = scale.presets(cfg)
+    if not args.preset:
+        cur = scale.current(cfg, reg)
+        if args.json:
+            print(json.dumps({"current": cur, "presets": names}, indent=2, ensure_ascii=False))
+            return EXIT_OK
+        print(f"scale {cur}")
+        for name in names:
+            print(f"{'*' if name == cur else ' '} {name}: {scale.summary(cfg, name)}")
+        return EXIT_OK
+    try:
+        data, lines = scale.apply(args.preset, roster.actor(), dry_run=args.dry_run)
+    except KeyError:
+        return fail(EXIT_NOT_FOUND, f"unknown scale {args.preset}; pick one of {', '.join(names)}")
+    except util.JsonError as exc:
+        return fail(EXIT_USER, f"config.json is not valid JSON ({exc}); fix it, then set the scale again")
+    print(json.dumps(data, indent=2, ensure_ascii=False) if args.json else "\n".join(lines))
     return EXIT_OK

@@ -93,3 +93,26 @@ Briefs and reports under `.orche/units/` are excluded automatically the same way
 adds the line), so they never keep the main checkout dirty.
 Unit memory in each worktree (`.orche/div/<name>/`, `.orche/feat/<name>/`) is the unit's choice;
 it is archived when the unit retires. Existing files are never overwritten.
+
+## Why did my PR merge without me?
+
+Every PR passes three checks before it lands. First a pre-review by a different vendor, then the Build review, then the
+merge queue gate: `scripts/verify/ci.sh` plus the brief's VERIFY, run on top of the current main. When all are green the
+queue merges it. Set `queue.land: owner` and each PR waits for your approval instead (`orche queue approve <p> --all`).
+A merge deploys only if your host deploys main. ORCHE never merges with `--admin` and never force-pushes.
+
+## How many agents can run at once?
+
+Pick a preset with `orche hr scale`, or tell Main "에이전트 20개까지" or "30개까지".
+
+| Preset | max_parallel | total | min_free_mb | feature_min_free_disk_mb | feature panes | about |
+|---|---|---|---|---|---|---|
+| default | 4 | 8 | 2048 | 2048 | on | — |
+| 20 | 12 | 16 | 2048 | 8192 | off | $40/h |
+| 30 | 20 | 24 | 3072 | 10240 | off | $60/h |
+
+A run waits while free memory is below `min_free_mb` (RAM), and `orche feat new` refuses while free disk is below
+`feature_min_free_disk_mb`. At 20 and 30, features run headless without panes; `orche feat wake` opens one.
+
+With a Claude subscription (Max), many agents share one usage window and soon reach it. ORCHE then holds that vendor
+until the window resets and re-runs the held work. An API key or Codex keeps going meanwhile.

@@ -16,10 +16,32 @@ DEFAULTS = {
     # queue_wait_s: how long a run waits for a project slot or its target's lock, then "runner busy".
     # log_keep_days: logs/runs/*.log older than this go at `orche run` start and `orche janitor run`.
     # turns_*: a run's --max-turns = clamp(ceil(TIMEBOX minutes × turns_per_minute), turns_floor, turns_ceiling).
+    # max_parallel: runs at once per project; max_parallel_total: across projects; min_free_mb: a run
+    # waits while the machine has less free memory. usage_limit: a run's output that names a vendor's
+    # usage window (patterns), when it resets (reset_patterns) and the backoff minutes otherwise.
     "runner": {"turns_per_minute": 3, "turns_floor": 30, "turns_ceiling": 400, "max_parallel": 4,
-               "queue_wait_s": 1800, "log_keep_days": 14},
+               "queue_wait_s": 1800, "log_keep_days": 14, "max_parallel_total": 8, "min_free_mb": 2048,
+               "usage_limit": {
+                   "patterns": ["usage limit", "rate[ _-]?limit", "\\b429\\b[^\\n]*\\brate",
+                                "\\brate[^\\n]*\\b429\\b", "\\bapi error:?\\s*429\\b", "too many requests",
+                                "(?:\\d+-hour|daily|weekly) limit reached", "hit your (usage )?limit",
+                                "usage quota", "quota exceeded for", "exceeded your (?:current )?quota",
+                                "overloaded"],
+                   "reset_patterns": [
+                       "\\|(?P<epoch>\\d{10})\\b",
+                       "resets?\\s+(?:at\\s+)?(?P<iso>\\d{4}-\\d{2}-\\d{2}[T ]\\d{2}:\\d{2}(?::\\d{2})?"
+                       "(?:Z|[+-]\\d{2}:?\\d{2})?)",
+                       "resets?\\s+(?:at\\s+)?(?P<hour>\\d{1,2})(?::(?P<minute>\\d{2}))?\\s*(?P<ampm>am|pm)?",
+                       "(?:try again|resets?) in\\s+(?:(?P<days>\\d+)\\s*days?)?\\s*(?:(?P<hours>\\d+)\\s*hours?)?"
+                       "\\s*(?:(?P<minutes>\\d+)\\s*min)?",
+                       "retry[- ]after[:= ]\\s*(?P<seconds>\\d+)"],
+                   "backoff_min": [5, 15, 60]}},
+    # A feature agent: false = headless (no Orca pane, runs only through `orche run`); `orche feat wake`
+    # opens a pane. feature_min_free_disk_mb: `hr feature` refuses below this much free disk.
+    "feature_panes": True,
+    "feature_min_free_disk_mb": 2048,
     "jev": {"enabled": False, "base_url": "", "model": "jev-1.13.0", "timeout_s": 1.0,
-            "api_key_env": "JEV_API_KEY"},
+            "api_key_env": "JEV_API_KEY", "min_confidence": 0.8},
     # Triage of a Main pane's prompts (lib/orche/triage.py): backend auto = Jev when enabled and
     # configured, else claude-haiku (`claude -p`); max_latency_s bounds the Haiku call (Jev keeps
     # jev.timeout_s); keep_prompts stores the masked prompt in triage/samples.jsonl.
@@ -46,7 +68,54 @@ DEFAULTS = {
     # reconcile.py), then one escalation. false: the pass only writes the heartbeat.
     "reconcile": {"enabled": True, "every_s": 300},
     # Flow guarantees (C10): the autonomy window's quiet hours and the headless spend caps.
-    "flow": {"enabled": True, "quiet_hours": "23:00-08:00", "max_unit_cost_usd": 10, "max_project_cost_usd": 30},
+    # The guards' caps: revisions (G1) and briefs_per_hour (G3) inside W, runs_per_unit (G5), a lineage's
+    # depth and fanout (G6).
+    "flow": {"enabled": True, "quiet_hours": "23:00-08:00", "max_unit_cost_usd": 10, "max_project_cost_usd": 30,
+             "revisions": 3, "briefs_per_hour": 20, "runs_per_unit": 4, "depth": 3, "fanout": 5},
+    # publish.base: the branch PRs target and the queue lands on; null = origin/HEAD (neither: an OWNER step).
+    "publish": {"base": None},
+    # The merge queue (lib/orche/queue): per_project overrides method/land by project name. lost_after_s:
+    # a testing entry whose integrator's pid still lives while the lock is free counts as lost after this
+    # (a dead pid at once); max_stops: passes in a row stopped by git/gh before the queue pauses.
+    "queue": {"method": "merge", "land": "auto", "timeout_s": 1200, "max_returns": 3, "max_restarts": 2,
+              "lost_after_s": 3600, "max_stops": 3, "docs_paths": ["**/*.md", "docs/**", ".orche/**"],
+              "per_project": {}},
+    # The review table: a cross-vendor reviewer from `order`, at most `rounds`. max_starts: the heartbeat's
+    # starts of one PR head's Build review before Build is told.
+    "review": {"cross_vendor": "required", "order": ["codex", "claude-opus-5-5", "claude-sonnet-5-5"],
+               "rounds": 2, "effort": "medium", "timeout_s": 480, "max_diff_lines": 3000, "build": True,
+               "build_timeout_s": 240, "pane_lines": 400, "tier_audit": "log", "max_starts": 3},
+    # The tier ladder: a run's model and effort by TIER and vendor ("division": the unit's own model).
+    "ladder": {"escalate": True,
+               "claude": {"mechanical": {"model": "claude-haiku-5-5", "effort": "low"},
+                          "standard": {"model": "division", "effort": "medium"},
+                          "hard": {"model": "division", "effort": "high"}},
+               "codex": {"mechanical": {"model": "division", "effort": "low"},
+                         "standard": {"model": "division", "effort": "medium"},
+                         "hard": {"model": "division", "effort": "high"}}},
+    # Scale presets (lib/orche/scale.py, `orche hr scale`): dotted config keys and registry limits.
+    "scale": {"presets": {
+        "default": {"estimate_usd_per_hour": None,
+                    "config": {"runner.max_parallel": 4, "runner.max_parallel_total": 8, "runner.min_free_mb": 2048,
+                               "runner.queue_wait_s": 1800, "feature_panes": True, "feature_min_free_disk_mb": 2048,
+                               "flow.fanout": 5, "flow.depth": 3, "flow.briefs_per_hour": 20, "flow.revisions": 3,
+                               "flow.runs_per_unit": 4, "flow.max_unit_cost_usd": 10, "flow.max_project_cost_usd": 30},
+                    "limits": {"per_project_per_day": 3, "per_project_per_week": 10, "per_request_auto": 2,
+                               "global_per_day_freeze": 20, "max_awake_sessions": 12}},
+        "20": {"estimate_usd_per_hour": 40,
+               "config": {"runner.max_parallel": 12, "runner.max_parallel_total": 16, "runner.min_free_mb": 2048,
+                          "runner.queue_wait_s": 7200, "feature_panes": False, "feature_min_free_disk_mb": 8192,
+                          "flow.fanout": 20, "flow.depth": 3, "flow.briefs_per_hour": 60, "flow.revisions": 3,
+                          "flow.runs_per_unit": 4, "flow.max_unit_cost_usd": 10, "flow.max_project_cost_usd": 150},
+               "limits": {"per_project_per_day": 20, "per_project_per_week": 60, "per_request_auto": 20,
+                          "global_per_day_freeze": 40, "max_awake_sessions": 12}},
+        "30": {"estimate_usd_per_hour": 60,
+               "config": {"runner.max_parallel": 20, "runner.max_parallel_total": 24, "runner.min_free_mb": 3072,
+                          "runner.queue_wait_s": 7200, "feature_panes": False, "feature_min_free_disk_mb": 10240,
+                          "flow.fanout": 30, "flow.depth": 3, "flow.briefs_per_hour": 90, "flow.revisions": 3,
+                          "flow.runs_per_unit": 4, "flow.max_unit_cost_usd": 10, "flow.max_project_cost_usd": 250},
+               "limits": {"per_project_per_day": 30, "per_project_per_week": 90, "per_request_auto": 30,
+                          "global_per_day_freeze": 60, "max_awake_sessions": 12}}}},
     # Division kinds (lib/orche/vendors.py, lib/orche/hr/choices.py): by kind (fallback `custom`),
     # the model `orche init` / `orche hr add` give a division, its pane effort (a headless run's
     # effort is its TIER's), the owner-facing label and description and the reason for the model

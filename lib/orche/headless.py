@@ -159,6 +159,18 @@ class Result:
             return f"{vendor} exited {self.code}"
         return ""
 
+    @property
+    def limit_text(self) -> str:
+        """The text a usage or rate limit shows in (flow/usage.py, design §8.5): the failure line and,
+        for an is_error result, Claude's result text or Codex's `error_text` (never Codex's final
+        message: that is the model's). '' for a call that did not fail, was killed or hit its turn cap."""
+        if self.killed or not (self.failure or self.is_error or self.code) \
+                or self.data.get("subtype") == "error_max_turns":
+            return ""
+        own = (self.data.get("error_text") if self.data.get("vendor") == "codex"
+               else self.text if self.is_error else "")
+        return "\n".join(x for x in (self.failure, own) if isinstance(x, str) and x)
+
 
 def gates() -> str:
     """The `--settings` value of a project call: compact `{"hooks": {"PreToolUse": [...]}}`, the

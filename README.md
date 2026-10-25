@@ -77,7 +77,10 @@ Division kinds and their recommended models:
 
 - Talk in the `main-<project>` tab: the work you want done, or "상태 알려줘" / "점검해줘".
 - Main ends every reply with one line: `RUNNING`, `OWNER` or `DONE`. Only `OWNER` (a decision for you) and `DONE` notify you.
+- Main이 끊겨도 일은 파일에 있습니다: /clear 뒤에도 'orche resume'로 이어 갑니다.
 - In a terminal: `orche status` (one line per project) and `orche doctor` (every line OK or WARN, never FAIL).
+- Finished work is reviewed by a second model (another vendor's when Codex is installed), then the merge queue tests it on top of `main` with `scripts/verify/ci.sh` and merges it when green; a merge deploys if your host deploys `main`.
+- Say '에이전트 30개까지' to Main to run more agents at once; on a Claude subscription many agents reach the usage window and ORCHE waits for its reset.
 
 ## Update
 

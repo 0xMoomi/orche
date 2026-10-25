@@ -108,7 +108,7 @@ Liaison (headless) ── orche ask <proj> · orche card refresh <proj> (read-on
 | Liaison | Sonnet 5.5 / low | none: headless calls in the main checkout (§14.14) | Refresh PROJECT_CARD.md (`orche card refresh`); answer other projects' questions (`orche ask`) | Read-only tools; card first; no model call when nothing landed since the base commit; cannot assign work |
 | R&D | Opus 5.5 / high (+ deep-reasoner at max) | `div/rnd` | Product and architecture planning, design, prototypes | MUST NOT edit product code (prototype folder only). gstack only for important decisions (§13) |
 | Research | Sonnet 5.5 / medium | `div/research` | Market, technical, competitive research reports | Read-only. Conclusion ≤1 page. Escalate synthesis to Opus if heavy |
-| Build | Opus 5.5 / high | `div/build` = integration worktree | Assign features, integrate, test, own the ledger, review, open PRs | Feature code is written by feature agents; Build integrates and verifies |
+| Build | Opus 5.5 / high | `div/build` | Traffic control: assigns features, decides PASS or RETURN, owns the ledger; the merge queue lands PRs | Feature code is written by feature agents; Build never merges by hand |
 | Feature agent | Opus 5.5 / high (exec per TIER) | `feat/<name>`, Orca parent = Build | Feature code within its scope | No edits outside own worktree (scope hook). `/clear` at unit end. 14 idle days ⇒ sleep |
 | GTM | Opus 5.5 / high | `div/gtm` | Copy, landing pages, launch, marketing, customer-facing text | External publication (post, send) requires user approval |
 | Ops | Opus 5.5 / high (mostly scripts) | `div/ops` | Monitoring, incident first response, release ladder, backup verification, patching, cost, report triage, runbooks | Dormant unless stage=`public`. Automatic rollback only via pre-approved runbook; everything else Always-pause |
@@ -179,7 +179,7 @@ Creation trigger: Build decides a persistent owner is needed when ≥2 of: (a) e
 | `max_awake_sessions` | 12 | Per machine; a wake past it is refused (exit 3) until a unit sleeps |
 
 Creation outputs (all MUST exist after creation):
-1. Orca child worktree: parent = Build worktree, git base = `main`, branch `feat/<name>`.
+1. Orca child worktree, branch `feat/<name>`; its branch starts on origin/<base> (reset when Orca forked elsewhere); no pane when `feature_panes` is false.
 2. `.orche/feat/<name>/{CHARTER.md,STATUS.md,HANDOFF.md,DECISIONS.tsv}`.
 3. `.claude/agents/feat-<project>-<name>.md` persona with `memory: project`.
 4. Worktree `.claude/settings.local.json` with `agent` set to that persona.
@@ -419,6 +419,17 @@ Four race conditions and defenses:
 | R-PROJ-7 | The panel where the user typed fixes the output project; only the source is ambiguous. |
 | R-PROJ-8 | An alias that maps to 2+ projects always triggers clarification. |
 
+### 4.13 Model ladder (0.9.0)
+
+| ID | Rule |
+|---|---|
+| R-LADDER-1 | A headless attempt's model and effort come from `ladder.<vendor of the division's model>.<TIER>`; `"division"` is the division's model (a feature's: its division's). Defaults: claude haiku/low, division/medium, division/high; codex division/low, /medium, /high. |
+| R-LADDER-2 | The division's model is the ceiling: a rung of another vendor or priced above it resolves to it (logged). Main's runs and panes are unchanged. |
+| R-LADDER-3 | `MODEL` (optional brief key): a model string (vendors grammar), refused at dispatch when unavailable, of another vendor than the target division, or above its ceiling; it replaces the rung's model, not its effort; no escalation for a pinned brief. |
+| R-LADDER-4 | Escalation (`ladder.escalate`): a mechanical attempt ending failed or unverified is re-run once in the same run at the standard rung; a mechanical unit's rework and a revision written after its previous revision's done also run at standard. Never twice; not for blocked, STOP, a hold or a worker that did not start. |
+| R-LADDER-5 | RUN.json `attempts` `[{kind, model, vendor, effort, started, finished, cost_usd, num_turns, outcome}]` and `pr`; history one line per attempt with `kind`; G5 counts `work`; `orche metrics` groups attempts by model and effort. |
+| R-LADDER-6 | TIER audit: with Jev enabled and `review.tier_audit` `log`, `orche run` logs `tier-audit` when Jev disagrees with the TIER at ≥ `jev.min_confidence`; nothing else changes. |
+
 ---
 
 ## 5. Quality assurance
@@ -448,7 +459,7 @@ Verdict enum, strongest first: `live-ui-verified` > `unit-test-verified` > `type
 | R-LEDGER-2 | No row for (pr, current sha) ⇒ unverified. `orche ledger check --pr <pr> --sha <sha>` exits 2. |
 | R-LEDGER-3 | The Stop hook blocks any "release-ready" or completion claim for a unit with a PR but no valid row. Implementation note (v0.1.0): keyed by HEAD sha: `STATUS: done` needs a row of at least `type-check-only`; `STATUS: release-ready` needs at least `unit-test-verified` from a verifier other than the claimant. The claimant is the session's identity (§14.9) and HEAD is read in its worktree. The runner applies the same minimums to a run's final claim (R-DISPATCH-9). See §14.11. |
 | R-LEDGER-4 | CI green alone is never a verdict. |
-| R-LEDGER-5 | Build owns the ledger; feature agents may self-report, but only Build or an independent verifier writes accepted verdicts. |
+| R-LEDGER-5 | Build owns the ledger; feature agents may self-report, but only Build or an independent verifier writes accepted verdicts; the merge queue writes rows with verifier `queue`. |
 | R-LEDGER-6 | Rows are append-only. |
 | R-LEDGER-7 | Release ladder steps (§2.4) each require a row for the deployed SHA. |
 
@@ -525,6 +536,14 @@ Part of HR weekly audit. A mistake seen twice is promoted to enforcement, prefer
 Failing minimal test → fix → pass. If impractical, use the nearest executable verification.
 
 ---
+
+### 5.12 Build review (0.9.0)
+
+| ID | Rule |
+|---|---|
+| R-REVIEW-7 | After a pre-review PASS (or skip) and with `review.build` on, a headless Build review (Build's persona and model at the standard rung, fresh, the eight-line checklist) decides: PASS → the runner queues the entry (its parent the brief's `parent:` unit) and posts quietly; RETURN or error → a waking pointer to the Build pane with both verdicts. The reviewer is read-only exactly as R-REVIEW-3 (`review.call_for`: Claude sealed with Read, Glob, Grep; Codex `-s read-only`, no writable root, no network) in the writer's worktree, `git status --porcelain` compared before and after (a change is `error`); every package value is masked and the facts, brief fields, pre-review and diff are fenced as data; the evidence file and every pointer are masked. The answer's first non-blank line is a lone `VERDICT: PASS` or `VERDICT: RETURN`, else `error`; a `- N: why` line after PASS makes it RETURN. |
+| R-REVIEW-8 | The Build review runs once per (PR, head) (`reviews/<proj>/pr<N>-<h7>.lock`, a `build` row in the review ledger, evidence `pr<N>-<h7>-build.md`). Facts decide alone, without a model call: `[skip ci]` on code (line 4), files outside SCOPE (3), an open PR touching the same files (6, "wait for PR #N"), a high-risk path (7) or a diff over `review.pane_lines` or TIER hard (8); lines 7 and 8 go to the pane. A queue refusal wakes the pane too. Before the call: G4 (the unit's and the project's spend in W; over a cap → a `skipped` row and the pane decides) and the usage hold of the reviewer's vendor (held → no call, no row, one quiet `held: <vendor> usage limit until HH:MM; this unit runs then (stage build-review)`; a limit hit during the call holds the vendor and defers the same way). Every call is a history line `kind: build-review` (vendor, model, cost; §7.3's reserve without a cost figure). |
+| R-REVIEW-9 | Triggers: the run's publish success path calls `review.build.after_publish(project, pr, unit)` once (detached `orche review --pr N --wait --unit U`; inside a sandbox it is left to the heartbeat; never raises); when it returns true (a Build review decides) the run files its done quiet and RUN.json and the pointer carry `review.build: {"verdict": "pending"}`. The heartbeat's `review` step reads `review.build.pending(project)` — those runs (RUN.json as new as BRIEF.md, status done) with no build row at their head, never a pane unit's (R-REVIEW-9 of §12.4: the pane reviews) — and starts at most one per project a pass, with its unit, after `claim()`: the PR open at that head (`gh pr view --json state,headRefOid`; closed or moved → dropped quietly), the reviewer's vendor not held (not counted), fewer than `review.max_starts` (3) starts (then one waking pointer to Build and no more starts; `reviews/<proj>/starts.json`). `orche review --pr N [--project P] [--unit U] [--background]` (Build's own PRs, R33): one pre-review round at the PR's head (the writer's worktree at that head, else a temporary detached worktree; a `pre` row, so `orche queue add --pr N` finds it; a pass, skipped or return row there is not reviewed again), then on PASS or skipped the Build review; a pre-review RETURN or error exits 3 with the findings; `--background` runs it detached and tells the caller the pre-review verdict (waking, `via: review`). |
 
 ## 6. Token economy
 
@@ -1069,13 +1088,24 @@ heartbeat's escalations use it.
 | Rule | Requirement |
 |---|---|
 | R-FLOW-1 | Autonomy window W(p): from the later of local midnight and the owner's last prompt to Main (`flow/<slug>/owner-seen`); orche's own nudges, reminders and drains do not count. Every flow guard counts inside W. (§8.7) |
-| R-FLOW-2 | Guards refuse before anything is written (dispatch exit 2, run exit 3): G1 4th AMEND of a unit in W; G2 an AMEND or same TO+GOAL brief after 2 blocked reports in a row; G3 the project's 21st brief/AMEND in max(W, 1 h); G4 project spend $30 / unit spend $10 in W; G5 a unit's 5th run in W; G6 a division brief 4 levels deep or a parent's 6th child; G7 the 3rd refusal in a row adds "stop re-sending"; G8 every brief and AMEND while paused. STOP is never refused; G1–G7 are off with `flow.enabled false`, G8 is not. (§8.7) |
+| R-FLOW-2 | Guards refuse before anything is written (dispatch exit 2, run exit 3): G1 4th AMEND of a unit in W (`flow.revisions`); G2 an AMEND or same TO+GOAL brief after 2 blocked reports in a row; G3 the project's 21st brief/AMEND in max(W, 1 h) (`flow.briefs_per_hour`); G4 project spend $30 / unit spend $10 in W; G5 a unit's 5th run in W (`flow.runs_per_unit`); G6 a division brief 4 levels deep or a parent's 6th child (`flow.depth`, `flow.fanout`); G7 the 3rd refusal in a row adds "stop re-sending"; G8 every brief and AMEND while paused. STOP is never refused; G1–G7 are off with `flow.enabled false`, G8 is not. (§8.7) |
 | R-FLOW-3 | Post-time shaping: a unit's report repeating the previous one since W (same sender, unit, inbox, `brief_rev` and `status`) is posted `quiet: true` with `repeat: n`; `orche status` shows `looping:` at n ≥ 3. (§8.7) |
 | R-FLOW-4 | Lineage: every brief carries `lineage: <id>   parent: <unit\|->`; an owner turn starts one lineage, a wake turn naming one lineage joins it, a division's brief inherits its newest brief's lineage with that unit as parent; AMEND keeps both; report pointers carry them. (§8.7) |
 | R-FLOW-5 | Lineage close and final report (R24): in a lineage of ≥ 2 units, `done`, STOP and runner `info` reports are quiet; when every member's newest report is terminal ORCHE writes LINEAGE.md and posts one waking `done` pointer to Main (`lineage_closed: true`), once per signature. Main then gives one full report (outcome · landed · failed · decisions + default · next) — not one per wake. (§8.7) |
 | R-FLOW-6 | Closing line: Main ends every reply with one tagged line — `RUNNING: <what runs>`, `OWNER: <decision or step, default>` or `DONE: <result>`; the Stop hook reads the last non-empty line outside fences. OWNER records the ask and notifies, DONE closes it and notifies once, RUNNING and untagged lines notify nothing. Units only the owner can unblock end `STATUS: blocked` and one `OWNER: <exact step>` line (`--owner` on `orche report`). (§8.8) |
 | R-FLOW-7 | Owner notification (R26, the only path): a first notification while the owner prompted Main < 120 s ago is skipped, not delayed; a failed show is a try; ≤ 1 per project per 300 s; re-notify an open ask 30, 60, 120 and 240 min after it, then none (the `owner:` status line stays); quiet hours `flow.quiet_hours` (23:00–08:00): silent first notification, re-notifications wait, one at their end; the heartbeat's 10-minute fallback turns an owner-waiting report with no tagged Main turn into an ask or notice; a `secret` ask is answered when its secrets are filled, and Main gets one resume `info` per asking unit once every secret its step names is filled (such a fill is the owner's word). Text is masked; events never carry it. (§8.8) |
 | R-FLOW-8 | Pause and resume: `orche flow pause <p>` writes `pause.json` (G8: every brief and AMEND refused; reconcile only drains; no owner-step notices); `orche flow resume <p>` succeeds only after an owner prompt newer than the pause (else exit 3). (§8.7) |
+
+### 8.9 Scale (0.9.0)
+
+| Rule | Requirement |
+|---|---|
+| R-SCALE-1 | Every cap is config or registry data (§8.1); no cap is a code constant. |
+| R-SCALE-2 | `scale.presets` set the group; `orche hr scale [<preset>]` prints or applies one through HR's record; `orche hr choices` offers them with the cost line; doctor `scale` shows the values. |
+| R-SCALE-3 | Global cap `runner.max_parallel_total` across projects and memory guard `runner.min_free_mb` (kernel free percentage × RAM on macOS, `MemAvailable` on Linux): a run or a gate waits while either is exceeded; events say why. Implementation: `runs.acquire` counts every project's live unit locks under `ORCHE_HOME/runs/.mutex` (then the project's `.mutex`), reads `procs.free_mb()` before each try and `runner.min_free_mb` from config.json again after each poll (10 s polls while low; an unreadable reading is no guard, logged once a day) and logs one `run unit=<u> waiting=global n=<n> cap=<c>` or `… waiting=memory free_mb=<n> min_mb=<m>` line per wait; past `runner.queue_wait_s` the run is `busy`. The heartbeat's `busy` restart is not ready while the project or all projects are at the cap (its attempt is not spent), and a restart that came back busy again is a fresh try (R34). |
+| R-SCALE-4 | `feature_panes` false: new features have no pane and no awake slot (`pane: false`), run through the runner, and are never woken by the heartbeat; `orche feat wake` opens a pane. `orche feat new` refuses below `feature_min_free_disk_mb`. |
+| R-SCALE-5 | A usage or rate limit (patterns `runner.usage_limit`) holds that vendor across projects until the reset it names or the backoff `5/15/60 min`: no attempt or review of it starts; held and interrupted units file one quiet `info` and are re-run by the heartbeat class `held` after the hold, resuming at their stage; one owner notice per hold; status and doctor show it. Implementation: `flow/usage.py` (`detect`, `hit`, `join`, `active`); the text read is `headless.Result.limit_text` (the failure line; Claude's `is_error` result text; Codex's `error_text`, never its final message; nothing for a call that succeeded, was killed or hit its turn cap). The hold file `ORCHE_HOME/flow/usage-<vendor>.json` is `{vendor, at, until, source: reset|backoff, step, text (masked, ≤ 160), project, units: [{project, unit, stage, at}], notified, resumed}`, written under `flow/.usage-<vendor>.lock`; an active hold is joined, never escalated. The default patterns are vendor wording (`usage limit`, `rate limit`, a `429` beside `rate` or after `API Error`, `too many requests`, `<n>-hour|daily|weekly limit reached`, `hit your limit`, a non-disk `quota` exceeded, `overloaded`), never a bare `429`, `quota` or `limit reached`; a reset is a clock time (`3pm`, `9:30`, `17:00`), `in <n> minutes|hours|days`, an epoch, an ISO time or `retry-after`, never a bare number (`reset 5` backs off). A unit a limit stopped 3 times (history `usage_limit`, `work` lines) since its last `done` is not held again: `usage hold refused unit=<u> reason=repeat` and the run files its own status (`failed`). RUN.json `stop_reason: held` (a start while held, worker never started, exit 0) or `usage_limit` with `stage` (the attempt hit the limit; no escalation); both are quiet `info` pointers and `history.UNCOUNTED` (not a run for G5). The heartbeat re-runs a fresh `held`/`usage_limit` record whose vendor is not held, no run live and no STOP marker since, once per record, oldest first, at most `runner.max_parallel_total` a pass; the owner notice is `owner.usage_notice` (kind `usage`, Appendix A.15). |
+| R-SCALE-6 | `orche status` is one line per project (`queue w/t/m`, `runs n/cap`, a feature count) with sub-lines capped at 3 per kind; `orche status --project <p>` is one line per lineage (units by state, PRs, spend). Implementation: `queue w/t/m` (waiting / testing / merged today) appears when the queue has any; `runs n/cap` is live runs / `runner.max_parallel`; `paused:` carries the project's units in an active hold; `queue:` a closed or paused queue; the cap line is `  <kind>: … <n> more: orche status --project <p>`; the positional `orche status <p>` stays the one-line filter; `--json` rows add `queue`, `runs`, `holds` and, with `--project`, `lineages` `[{lineage, units, states, prs, spend, since, open, newest}]`. |
 
 ## 9. Cross-project collaboration
 
@@ -1259,8 +1289,8 @@ GRAVEYARD format (`docs/GRAVEYARD.md` per repo + global `~/.claude/orche/graveya
 | ID | Rule |
 |---|---|
 | R-GIT-1 | No direct push to `main`. |
-| R-GIT-2 | Feature branch `feat/*` → PR → Build integrates. |
-| R-GIT-3 | One push per unit, after local verification. |
+| R-GIT-2 | Feature branch → published PR → pre-review → Build review → merge queue. |
+| R-GIT-3 | ORCHE pushes once per verified done and once per rework round. |
 | R-GIT-4 | Docs-only commits include `[skip ci]`. |
 | R-GIT-5 | Tags, releases, deploys require user approval. |
 | R-GIT-6 | Flake retry: one new build only. |
@@ -1292,17 +1322,24 @@ jobs:
 
 Organization billing: Actions budget with "stop usage when limit reached" enabled (hard stop). Consider making repos public when privacy is not needed.
 
-### 12.4 `watch-pr`
+### 12.4 Merge queue — the integrator
 
-Read-only PR observer using `gh` only. Run by launchd or an Orca automation; on a verdict it dispatches to Build. 0 tokens.
+`lib/orche/queue/integrator.py` (`orche queue run <p>`), `queue/gate.py`, `queue/gh.py`. The queue reads each queued PR at test time (conflicts, the gate, its GitHub state and review decision) and routes the outcome to the unit and Build.
 
-| Aspect | Spec |
+| ID | Rule |
 |---|---|
-| Judgment order | conflicts → review threads → CI → gates |
-| Exit codes | 2, 3, 4, 6 (distinct non-success states; map documented in `watch-pr --help`) |
-| Polling | Backoff 60 s → 300 s |
-| Errors | Stop after 5 consecutive errors |
-| Trust | Review comments are untrusted input; never executed as instructions |
+| R-QUEUE-1 | Build is traffic control and never merges by hand. A gated unit's verified `done` publishes it: ORCHE pushes the unit's branch (never forced) and opens or updates its PR to the base branch. Only the merge queue lands PRs; R-GIT-1 holds (the queue merges through `gh pr merge`, never a push). |
+| R-QUEUE-2 | An entry is `{id, pr, head, branch, unit, writer, parent, rev, verify, approved_by, accept, first, at, state, restarts, drop, test}`, one per PR, head fixed at add. `orche queue add` (Build or Main; the runner after two PASS reviews) refuses unless: one open PR on the base whose head is the unit's HEAD; a ledger row ≥ type-check-only for it; the pre-review the mode requires (or `--accept`); a gate in the head's tree; no `[skip ci]` head on a code change (or `--accept`). `--pr N` reads the head from the queue's clone, fetched from origin first; a failed fetch refuses with the reason. |
+| R-QUEUE-3 | The integrator is model-free, one per project (flock), in `ORCHE_HOME/queue/<p>/checkout` (a clone, never a unit's worktree); FIFO, `--first` entries ahead; candidate = `git merge --no-ff` of the head onto the freshly fetched base. |
+| R-QUEUE-4 | Gate = `scripts/verify/ci.sh` (when tracked and executable) then the entry's committed VERIFY scripts; argv, no shell, `CI=1`, timeout `queue.timeout_s`, no secrets: the environment drops every name holding TOKEN, SECRET, KEY, PASSWORD, PASSWD or CREDENTIAL, an AUTH word (SSH_AUTH_SOCK), `*_PWD`, `JEV_*`, `CLAUDE*`/`ANTHROPIC*`, `ORCHE_HOME`, `CODEX_HOME` and the session/run names, and carries `ORCHE_QUEUE_RUN=<tag>`; nothing sandboxes the gate beyond this (it is the project's code, run as the user with the network); its verdict comes from ci.sh's last `verdict:` line, else type-check-only. The queue never reads CI status; `[skip ci]` changes nothing. No automatic re-run. |
+| R-QUEUE-5 | Green: re-fetch the base (moved → re-test, ≤ `queue.max_restarts`), `gh pr merge --<queue.method> --match-head-commit <head>`, then prove the commit the merge made (origin/<base>'s first-parent child of the tested base; merge: parents base and head, tree equal; squash: parent base, tree equal); a fetch that fails twice proves nothing: the entry stays `testing` (`test.landed`) and the next pass proves it; rows (PR, head) and (none, merge) with verifier `queue`. Never merge red, never `--admin`, never force-push. |
+| R-QUEUE-6 | Red, conflict or timeout: the entry leaves the queue; a unit entry gets an AMEND relayed as Build (`by=queue`) allowing only `git fetch origin && git merge origin/<base>`; a PR entry gets an urgent pointer to Build. The `queue.max_returns`th return of a unit inside W sends no AMEND: Build gets `blocked`. A refused AMEND reaches Build as `failed`. |
+| R-QUEUE-7 | Drops: head moved after PASS, PR closed or merged outside, retargeted, draft, `orche queue drop`. Each is logged; Build gets one pointer (held for head-moved). |
+| R-QUEUE-8 | A base that moved outside the queue is gated alone first; red closes the queue (only `--first` entries test; a green one or `orche queue resume` reopens it); a failed proof closes it too, and then nothing tests, not even `--first`, until `orche queue resume`. |
+| R-QUEUE-9 | `orche queue pause`, `orche flow pause` (G8), a GitHub refusal, exhausted restarts and `queue.max_stops` (3) passes in a row stopped by git, gh or the clone (an urgent pointer to Build and Main naming the failure, masked; a pass that gets through or `orche queue resume` resets the count) stop new tests until `orche queue resume`; a gate in flight finishes. A usage hold does not pause the queue. |
+| R-QUEUE-10 | Driver: `orche queue add|resume` and the heartbeat class `queue` start `orche queue run <p>` detached when entries wait and the lock is free (never from inside a Codex sandbox); with the lock free, a testing entry returns to the front when its pid is dead (at once) or after `queue.lost_after_s` (3600) with a live pid; only processes carrying its gate's `ORCHE_QUEUE_RUN` tag, or its recorded step verified by pid, group, start time and command, are stopped with the groups they lead, never a bare recorded pgid. |
+| R-QUEUE-11 | Landed: Build gets a held note per merge and one urgent note when every child unit of its unit (the entry's `parent`, else the unit brief's `parent:`) landed or ended; Build then reports its unit. No queue pointer goes to a feature. |
+| R-QUEUE-12 | Method `queue.method` (merge; per project `queue.per_project.<p>.method`), land mode `queue.land` (auto; `owner` keeps new entries untested until Main runs `orche queue approve` on the owner's word, asked once per batch; approval is for the PR; §4.4); back on `auto`, waiting entries are released (`approved` by `land-auto`, never the owner's word). |
 
 ---
 
@@ -1341,7 +1378,6 @@ Read-only PR observer using `gh` only. Run by launchd or an Orca automation; on 
 │   ├── orche
 │   ├── orche-secret
 │   ├── orche-janitor
-│   ├── watch-pr
 │   └── mask.py
 ├── secrets/
 │   ├── queue/
@@ -1470,7 +1506,7 @@ continuation := SP SP+ text NL               ; extends the field above, whatever
             | text NL                        ; a plain line that is not a KEY line also extends the field above
 comment    := "#" text NL                    ; an unindented "#" line: always dropped, even mid-value (indent PR refs: "  #25")
 KEY        := "TO" | "GOAL" | "SCOPE" | "CONTEXT" | "ACCEPT" | "VERIFY" | "TIMEBOX"
-            | "FORBID" | "REPORT" | "TIER" | "ROLLBACK"   ; each at most once per block
+            | "FORBID" | "REPORT" | "TIER" | "ROLLBACK" | "MODEL"   ; each at most once per block; ROLLBACK and MODEL optional
 TIER value := "mechanical" | "standard" | "hard"
 unit_id    := <project> "-" <slug> "-" yyyymmdd "-" n
 ```
@@ -1503,7 +1539,7 @@ File: `$ORCHE_HOME/inbox/<recipient-session>/<ISO-ts>-<unit>.json` (never overwr
 }
 ```
 
-Optional fields: `memory_saved` (bool), `depends_on` (list of unit ids), `via` (`runner`: filed by `orche run`; `dispatch`: a pane delivery's pointer to its target), `from_project` (an external request).
+Optional fields: `memory_saved` (bool), `depends_on` (list of unit ids), `via` (`runner`: filed by `orche run`; `dispatch`: a pane delivery's pointer to its target), `from_project` (an external request), `pr` (int), `review` (`{"pre": {verdict, reviewer, model, fallback, round, open, path}, "build": {verdict, model, path}}`), `queue` (`"auto"` or the position); `via` also takes `queue` and `review` (a `via: queue|review` `info` is held unless urgent, as any other note).
 
 Implementation note (v0.1.0): the fields and statuses above replace the earlier draft (`landed | needs-verify | failed | blocked | stopped | external-request`, `report`, `branch`, `pr`, `ts`). `info` (relayed brief or AMEND) and `stop` (STOP) go to a pane target only, with `via: dispatch`; a runner target gets none; an external request carries the request text in `summary`.
 
@@ -1732,9 +1768,9 @@ Implementation note (Unreleased): `lib/orche/runs/` is the one module for a run'
   - `ORCHE_HOME/runs/<proj>/<unit>.stop` (the STOP marker), `<run_id>.sweep` (a pending sweep),
     `.mutex`.
   - `ORCHE_HOME/runner/mcp/<run_id>.json` (§14.10) and `ORCHE_HOME/logs/runs/<unit>.log`.
-  - In the unit folder: `RUN.json` — 24 keys in this order: `unit, project, to, worktree, branch,
+  - In the unit folder: `RUN.json` — 26 keys in this order: `unit, project, to, worktree, branch,
     tier, model, vendor, effort, started, finished, timeout_s, exit_code, is_error, stop_reason, cost_usd,
-    num_turns, usage, result_tail, error, head_before, head_sha, status, pointer_filed` — and
+    num_turns, usage, result_tail, error, head_before, head_sha, status, pointer_filed, pr, attempts` — and
     `REPORT.md`, `REPORT.prev.md`. `vendor` is the model's (`claude`, `codex`); the events line carries it too.
 - **Vendor.** Implementation note (Unreleased): R-MODEL-7 below.
 - **Codex runs (0.8.0).** A target on a Codex model (`vendors.of`) runs `codex exec` (`codex.Call`, §14.10's
@@ -1787,6 +1823,32 @@ Implementation note (Unreleased): `lib/orche/liaison.py` is the Liaison. It is n
 - **Writers of PROJECT_CARD.md.** `orche init` (the template), `orche intake` (the placeholder sections and its block, R-DISPATCH-11), `orche card refresh` (its four sections and `## Last refreshed`), and people.
 - **Before 0.5.0** the Liaison was a pane and session `liaison-<proj>` (`claude --agent liaison`). Its registry key `liaison_session` is ignored, and a leftover `ORCHE_SESSION=liaison-<proj>` is an unregistered session (§14.9).
 
+### 14.15 Pre-review (Unreleased)
+
+`lib/orche/review/__init__.py` (the read-only call, the verdict grammar, fences, the tree check) and
+`lib/orche/review/pre.py` (reviewer choice, the package, rounds, records, the pane round). Package text:
+`templates/review/pre.md`; rework prompt: `templates/review/rework.md`.
+
+| ID | Rule |
+|---|---|
+| R-REVIEW-1 | Every gated `done` with a diff against the base gets a pre-review after publish and before Build: `review.cross_vendor` required (default) / optional / off. The base is config `publish.base`, else origin/HEAD, never a guess (neither: unverified, OWNER `git remote set-head origin -a`); only the unit's own branch is published (a feature's `feat/*`, Build's `div/build` or its recorded branch; any other: unverified with the reason); a done with nothing against origin/<base> (a coordination unit) publishes nothing and is filed with `pr: none`, unreviewed. |
+| R-REVIEW-2 | Reviewer: the first model of `review.order` whose vendor differs from the writing model's, is not under a usage hold (§8.5) and is available; none → required: the first model that differs from the writer's, noted "same-vendor fallback" (with the reason: `codex not installed`, `codex does not start`, `codex held: usage limit until HH:MM`); optional: skipped, noted. Every candidate held → the review stage is held (no row; RUN.json `stop_reason: usage_limit`, `stage: review`, `held_vendor`). |
+| R-REVIEW-3 | Reviews are read-only (Claude sealed with Read, Glob and Grep and no Bash at all, since `git diff --output=<path>` or `--no-index` would write or read any file; Codex `-s read-only`, no writable root, no network) in the writer's worktree; the package carries the diff up to `review.max_diff_lines` (3000), then says so, the stat listing every changed path in full; it is fenced and masked as data; a changed tree after the call is an `error`. |
+| R-REVIEW-4 | `VERDICT: PASS\|RETURN` and `[act]/[consider]/[noted]` lines; any `[act]` is RETURN; unparsable, timeout or error → the next reviewer once, then `error`. |
+| R-REVIEW-5 | A RETURN is reworked inside the same run (no AMEND; standard rung for a mechanical unit) and reviewed again; at most `review.rounds` RETURNs per revision; then the done reaches the Build pane with the open findings. |
+| R-REVIEW-6 | Rows in `ORCHE_HOME/ledger/<p>.review.tsv` (`pr sha kind verdict reviewer model writer round note evidence ts`), append-only; reviewers are `review:<kind>:<model>`, never the writer; REVIEW.<kind>.r<k>.md beside the brief. |
+| R-REVIEW-8 | Every review counts in its unit's run: `attempts`, `cost_usd`, one history line each (G4). |
+| R-REVIEW-9 | A pane unit's `orche report done` publishes and runs one pre-review round (≤ `review.timeout_s`); RETURN exits 3 with the findings and files nothing; the Build pane reviews (no headless Build review). |
+
+- **Implementation notes (Unreleased).** The fallback note is `fallback: same vendor (codex not installed)`
+  (or `codex does not start`); a hand-over to a model of the writer's vendor notes `fallback: same vendor
+  (<model> gave no verdict)`. A head with no diff against `origin/<base>` is not reviewed (no row). The
+  revision's RETURNs are counted from the `rev` in each REVIEW file's header, so a re-run of a capped
+  revision and the third `orche report done` file the done with the open findings without a new call. A
+  pane round is bounded by 540 s for both calls (`review.timeout_s` each, a hand-over with under 30 s left
+  is not started). The exception summary is Appendix A.11's with `Build review not run`. G5 counts only
+  `work` history lines.
+
 ## 15. Rollout plan
 
 Apply phases in order (C is independent). For each phase, list changed files and verify rollback before applying.
@@ -1800,7 +1862,7 @@ Apply phases in order (C is independent). For each phase, list changed files and
 | 3 | Cards and Liaison: card template + symlinks, weekly `orche card refresh` automation, `orche ask` (headless since 0.5.0) | Global + pilot |
 | 4 | Divisions, features, HR, quality: `hr` agent, `registry.json`, 5 division persona templates (incl. Ops runbook and health templates), rubric + max 3 iterations, `ROLLBACK` field, feature-agent generator, weekly audit + `/correct`, ledger CLI + `LEDGER.tsv`, `DECISIONS.tsv` + `orche decide`, `verify-<app>` skill + weekly check, HANDOFF/resume rules, independent-context judge, pilot wake-up | Global + pilot + IAM |
 | 5 | Jev hooks ①–④ (only if J passed): 1 s fail-open, masked | Global |
-| 6 | GitHub and large jobs: budget hard stop, CI template PRs, STANDING git rules, `watch-pr`, optional self-hosted runner, Workflow script templates for large one-off jobs | Per repo |
+| 6 | GitHub and large jobs: budget hard stop, CI template PRs, STANDING git rules, the merge queue, optional self-hosted runner, Workflow script templates for large one-off jobs | Per repo |
 | 7 | Jev ⑤⑥ (optional): HR scope matching, card refresh gate | Global |
 | C | Janitor: `orche janitor` (state-based, archive, trash, ledger, undo/restore), launchd 04:00, `orche discard`, GRAVEYARD template, untrack generated artifacts PR; first week dry-run | Global + repo |
 

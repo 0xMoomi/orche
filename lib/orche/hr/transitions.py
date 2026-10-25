@@ -6,7 +6,7 @@ Precondition of `wake` and `sleep`: `unit.owns_worktree` (the CLI routes Main to
 import sys
 import time
 
-from .. import cli, orca, roster, units, util, vendors
+from .. import cli, orca, registry, roster, units, util, vendors
 from . import book, limits, panes
 
 STALE_HANDOFF_SECONDS = 30 * 60
@@ -95,6 +95,8 @@ def wake(reg, unit, *, dry_run=False) -> tuple:
     """
     _refuse_retired_or_onboarding(unit)
     _refuse_codex(reg, unit)
+    if unit.status == "active" and unit.entry.get("pane") is False:
+        return _pane_for_headless(reg, unit, dry_run=dry_run)
     if unit.status == "active":
         return _reopen(unit, dry_run=dry_run)
     limits.unit_gate(reg, unit)
@@ -117,6 +119,25 @@ def wake(reg, unit, *, dry_run=False) -> tuple:
     units.touch_activity(unit.session)
     _record(reg, unit, "active", "wake")
     return {"unit": unit.session, "status": "active"}, f"{unit.session} active"
+
+
+def _pane_for_headless(reg, unit, *, dry_run=False) -> tuple:
+    """An `active` feature created headless (`pane: false`): open its pane (awake limit applies, 3),
+    then it counts as awake like any other (`pane` dropped). No record: the status stays `active`."""
+    limits.need_awake(reg)
+    argv = panes.unit_argv(unit, resume=True)
+    if dry_run:
+        result = orca.terminal("create", *argv, dry_run=True)
+        return ({"unit": unit.session, "dry_run": True, "argv": result["argv"]},
+                f"would open a pane for {unit.session} (dry-run)")
+    try:
+        orca.terminal("create", *argv)
+    except orca.OrcaError as exc:
+        raise book.Refused(cli.EXIT_USER, f"could not open a pane for {unit.session}: {exc}") from None
+    unit.entry.pop("pane", None)
+    unit.entry["last_activity"] = util.now_iso()
+    registry.save(reg)
+    return {"unit": unit.session, "status": "active", "pane": True}, f"{unit.session} active (pane opened)"
 
 
 def _reopen(unit, *, dry_run=False) -> tuple:

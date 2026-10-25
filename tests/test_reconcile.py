@@ -7,6 +7,7 @@ import fcntl
 import io
 import json
 import os
+import subprocess
 import time
 import unittest
 from contextlib import redirect_stderr, redirect_stdout
@@ -810,6 +811,232 @@ class LineageCloseRepairTest(RepairCase):
         self.assertIn(f"reconcile action=lineage-close project=acme-shop lineage={a.unit}", "\n".join(self.events()))
         self.assertTrue(any("reconcile pass took=" in e and e.endswith("actions=1") for e in self.events()))
         self.assertEqual(json.loads(reconcile.heartbeat_path().read_text())["actions"], 1)
+
+
+class ScaleHeartbeatTest(RepairCase):
+    """0.9.0 T4: the heartbeat's queue, usage, held and review steps, and the busy fix (R34)."""
+
+    def setUp(self):
+        super().setUp()
+        from orche import queue
+        from orche.flow import guard, owner, usage
+        self.queue, self.guard, self.owner, self.usage = queue, guard, owner, usage
+
+    def held_unit(self, minutes_ago, reason="usage_limit", vendor="claude"):
+        b = self.brief()
+        self.run_json(b, stop_reason=reason, vendor=vendor, finished=(T0 - dt.timedelta(minutes=minutes_ago)).isoformat())
+        return b
+
+    def hold(self, unit, minutes_ago=1, vendor="claude"):
+        return self.usage.hit(vendor, "API Error: 429", {}, project="acme-shop", unit=unit, stage="work",
+                              now=T0 - dt.timedelta(minutes=minutes_ago))   # backoff 5 min: until T0 + 4
+
+    def all_events(self):
+        path = self.home / "logs" / "events.log"
+        return path.read_text() if path.exists() else ""
+
+    def test_held_units_rerun_after_the_hold_oldest_first_and_once(self):
+        bs = [self.held_unit(m) for m in (3, 9, 6)]
+        self.hold(bs[0].unit)
+        started = []
+        with mock.patch.object(runs, "start", started.append), mock.patch.object(runs, "running", lambda *a: None), \
+                mock.patch.object(self.owner, "usage_notice", return_value=True) as told:
+            _c, lines = self.run_at(0)
+            self.assertEqual(started, [])                                  # held until T0 + 4
+            self.assertIn(f"told the owner: claude usage limit until {self.usage.hhmm(T0 + dt.timedelta(minutes=4), T0)}"
+                          " (1 units held)", lines)
+            _c, lines = self.run_at(5)
+            self.assertEqual(started, [bs[1].unit, bs[2].unit, bs[0].unit])  # oldest first
+            self.assertIn(f"re-run {bs[1].unit} (rev 1, its claude usage hold is over; try 1/1)", lines)
+            self.run_at(6)
+            self.run_at(40)
+        self.assertEqual(len(started), 3)                                  # once per held record
+        told.assert_called_once()
+        self.assertEqual(self.all_events().count("usage resume vendor=claude\n"), 1)
+        self.assertEqual(reconcile.stalled("acme-shop"), [])               # a re-run in flight is no stall
+
+    def test_at_most_max_parallel_total_reruns_a_pass_and_the_other_vendor_runs_now(self):
+        (self.home / "config.json").write_text(json.dumps({**WAKE, "runner": {"max_parallel_total": 2}}))
+        bs = [self.held_unit(m) for m in (3, 2, 1)]
+        codex = self.held_unit(4, vendor="codex")
+        self.hold(bs[0].unit)
+        started = []
+        with mock.patch.object(runs, "start", started.append), mock.patch.object(runs, "running", lambda *a: None), \
+                mock.patch.object(self.owner, "usage_notice", return_value=True):
+            self.run_at(0)
+            self.assertEqual(started, [codex.unit])                        # codex is not held
+            self.run_at(5)
+            self.assertEqual(started, [codex.unit, bs[0].unit, bs[1].unit])
+            self.run_at(6)
+            self.assertEqual(started, [codex.unit, bs[0].unit, bs[1].unit, bs[2].unit])
+
+    def test_a_held_unit_stopped_since_is_not_rerun(self):
+        b = self.held_unit(3)
+        marker = runs._marker("acme-shop", b.unit)
+        marker.parent.mkdir(parents=True, exist_ok=True)
+        marker.write_text("")
+        later = (b.folder / "RUN.json").stat().st_mtime_ns + 10**9
+        os.utime(marker, ns=(later, later))
+        with mock.patch.object(runs, "start", side_effect=AssertionError("re-run")), \
+                mock.patch.object(runs, "running", lambda *a: None):
+            self.assertEqual(self.run_at(5)[1], [])
+
+    def test_a_busy_unit_at_the_slot_cap_waits_then_is_restarted_again(self):
+        b = self.brief()
+        self.run_json(b, stop_reason="busy", finished=(T0 - dt.timedelta(minutes=11)).isoformat())
+        started, full = [], [True]
+        with mock.patch.object(runs, "start", started.append), mock.patch.object(runs, "running", lambda *a: None), \
+                mock.patch.object(runs, "at_cap", lambda *a: full[0]):
+            self.run_at(0)
+            self.assertEqual(started, [])                                  # at the cap: nothing spent
+            full[0] = False
+            self.run_at(1)
+            self.assertEqual(started, [b.unit])
+            self.run_json(b, stop_reason="busy", finished=(T0 + dt.timedelta(minutes=40)).isoformat())
+            self.run_at(45)
+            self.assertEqual(started, [b.unit])                            # due STALL_S after the new record
+            self.run_at(51)
+            self.assertEqual(started, [b.unit, b.unit])                    # came back busy: a fresh try
+
+    def queue_config(self, **keys):
+        path = self.home / "config.json"
+        cfg = json.loads(path.read_text()) if path.exists() else {}
+        cfg["queue"] = {**(cfg.get("queue") or {}), **keys}
+        path.write_text(json.dumps(cfg))
+
+    def queue_file(self, *entries, **top):
+        from orche.queue import store
+        q = {**store.empty("acme-shop"), **top, "entries": list(entries)}
+        store.queue_path("acme-shop").parent.mkdir(parents=True, exist_ok=True)
+        util.write_json(store.queue_path("acme-shop"), q)
+        return store
+
+    def test_a_lost_testing_entry_is_recovered_and_restarted_by_the_next_pass(self):
+        dead = subprocess.Popen(["true"])
+        dead.wait()
+        store = self.queue_file({"id": "pr7-aaaaaaa", "pr": 7, "head": "a" * 40, "branch": "feat/x", "unit": None,
+                                 "state": "testing", "owner_ok": True, "restarts": 0,
+                                 "test": {"pid": dead.pid, "started": T0.isoformat(), "pgid": None}})
+        with mock.patch.object(self.queue, "start") as start:
+            _c, lines = self.run_at(0)
+        e = store.read("acme-shop")["entries"][0]
+        self.assertEqual((e["state"], e["restarts"]), ("waiting", 1))      # nothing else waited (review A Q2)
+        start.assert_called_once_with("acme-shop")
+        self.assertIn("recovered the lost PR #7 of acme-shop (back at the front)", lines)
+        self.assertIn("start the merge queue of acme-shop (1 waiting)", lines)
+        self.assertEqual([ln["event"] for ln in store.read_log("acme-shop")], ["lost"])
+
+    def test_land_auto_releases_an_entry_left_awaiting_the_owner(self):
+        store = self.queue_file({"id": "pr4-aaaaaaa", "pr": 4, "head": "a" * 40, "unit": "u", "state": "waiting",
+                                 "owner_ok": False})
+        with mock.patch.object(self.queue, "start") as start, mock.patch.object(self.queue, "running", return_value=False):
+            self.run_at(0)
+        start.assert_called_once_with("acme-shop")
+        self.assertTrue(store.read("acme-shop")["entries"][0]["owner_ok"])
+        self.assertEqual([(ln["event"], ln["by"]) for ln in store.read_log("acme-shop")], [("approved", "land-auto")])
+
+    def test_the_queue_starts_only_for_an_approved_entry_and_never_paused(self):
+        from orche.queue import store
+        self.queue_config(land="owner")         # under land: auto, queue.release would approve the entry
+        q = store.empty("acme-shop")
+        q["entries"] = [{"id": "4@aaaaaaa", "pr": 4, "head": "a" * 40, "unit": "u", "state": "waiting",
+                         "owner_ok": False}]
+
+        def save():
+            store.queue_path("acme-shop").parent.mkdir(parents=True, exist_ok=True)
+            util.write_json(store.queue_path("acme-shop"), q)
+        save()
+        with mock.patch.object(self.queue, "start") as start, mock.patch.object(self.queue, "running", return_value=False):
+            self.run_at(0)
+            start.assert_not_called()                                      # unapproved entries alone spawn nothing
+            q["entries"][0]["owner_ok"] = True
+            save()
+            _c, lines = self.run_at(1)
+            start.assert_called_once_with("acme-shop")
+            self.assertIn("start the merge queue of acme-shop (1 waiting)", lines)
+            self.assertTrue(any("action=queue-start project=acme-shop" in e for e in self.events()))
+            start.reset_mock()
+            q["paused"] = {"by": "div-acme-shop-build", "at": T0.isoformat()}
+            save()
+            self.run_at(2)
+            q["paused"] = None
+            save()
+            with mock.patch.object(self.guard, "paused", return_value={"by": "owner"}):
+                self.run_at(3)
+            start.assert_not_called()
+        with mock.patch.object(self.queue, "start") as start, mock.patch.object(self.queue, "running", return_value=True):
+            self.run_at(4)
+            start.assert_not_called()                                      # its integrator runs
+
+    def test_a_corrupt_queue_file_never_stops_the_pass(self):
+        from orche.queue import store
+        path = store.queue_path("acme-shop")
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("{")
+        b = self.brief()
+        self.run_json(b, stop_reason="busy", finished=(T0 - dt.timedelta(minutes=11)).isoformat())
+        started = []
+        with mock.patch.object(runs, "start", started.append), mock.patch.object(runs, "running", lambda *a: None):
+            code, _lines = self.run_at(0)
+        self.assertEqual((code, started), (0, [b.unit]))                  # the busy repair still ran
+        self.assertIn("reconcile: queue acme-shop: JsonError", (self.home / "logs" / "hooks.log").read_text())
+
+    def test_a_pending_build_review_is_started_detached_once_a_pass(self):
+        """R3: never inline; a running one is skipped, claim() decides (open PR, same head, not held,
+        under review.max_starts), and the start names the unit (its brief: tier, SCOPE, VERIFY)."""
+        from orche.review import build
+        spawned, inline, claimed = [], [], []
+        busy = {("acme-shop", 7, "a" * 40)}
+        items = [{"pr": 7, "sha": "a" * 40, "unit": "u7"}, {"pr": 9, "sha": "b" * 40, "unit": "u9"},
+                 {"pr": 11, "sha": "c" * 40, "unit": "u11"}]
+        with mock.patch.object(build, "pending", lambda p, reg=None: items if p == "acme-shop" else []), \
+                mock.patch.object(build, "running", lambda p, pr, sha: (p, pr, sha) in busy), \
+                mock.patch.object(build, "claim", lambda p, item, reg=None: claimed.append(item["pr"]) or item["pr"] != 9), \
+                mock.patch.object(build, "build_review", lambda *a, **k: inline.append(a)), \
+                mock.patch.object(reconcile.procs, "spawn_detached", lambda argv, log, **e: spawned.append(argv)):
+            _c, dry = self.run_at(0, dry_run=True)
+            self.assertEqual((spawned, claimed), ([], []))
+            self.assertIn("would start the Build review of acme-shop PR #9 (3 pending)", dry)
+            _c, lines = self.run_at(1)
+        self.assertEqual(inline, [])                                      # never inline in the pass
+        self.assertEqual(claimed, [9, 11])                                # #7 is running; #9 claim() refused
+        self.assertEqual([a[a.index("--pr") + 1] for a in spawned if "review" in a], ["11"])
+        argv = next(a for a in spawned if "review" in a)
+        self.assertEqual(argv[-5:], ["--project", "acme-shop", "--wait", "--unit", "u11"])
+        self.assertIn("start the Build review of acme-shop PR #11 (3 pending)", lines)
+        self.assertTrue(any("action=build-review project=acme-shop target=pr-11" in e for e in self.events()))
+
+    def test_one_build_review_start_per_project_a_pass(self):
+        """R3: a project's backlog never starves another's."""
+        from orche.review import build
+        started = []
+        reg = {"projects": {"a": {}, "b": {}}}
+        items = {"a": [{"pr": 1, "sha": "1" * 40, "unit": "ua"}, {"pr": 2, "sha": "2" * 40, "unit": "ua2"}],
+                 "b": [{"pr": 3, "sha": "3" * 40, "unit": "ub"}]}
+        with mock.patch.object(build, "pending", lambda p, reg=None: items[p]), \
+                mock.patch.object(build, "running", lambda *a: False), \
+                mock.patch.object(build, "claim", lambda *a, **k: True), \
+                mock.patch.object(build, "start", lambda p, pr, unit=None: started.append((p, pr, unit))):
+            rows = reconcile._reviews(reg, None, False, time.monotonic())
+        self.assertEqual(started, [("a", 1, "ua"), ("b", 3, "ub")])
+        self.assertEqual(len(rows), 2)
+
+    def test_a_build_review_lock_marks_it_running(self):
+        from orche.review import build
+        self.assertFalse(build.running("acme-shop", 7, "a" * 40))
+        lock = build._lock("acme-shop", 7, "a" * 40, 600)
+        self.assertTrue(build.running("acme-shop", 7, "a" * 40))
+        self.assertFalse(build.running("acme-shop", 7, "b" * 40))
+        lock.unlink()
+        self.assertFalse(build.running("acme-shop", 7, "a" * 40))
+
+    def test_the_usage_notice_is_appendix_a15(self):
+        with mock.patch.object(self.owner, "announce", return_value=True) as ann:
+            self.owner.usage_notice("acme-shop", "claude", "15:00", 7, T0)
+        ann.assert_called_once_with("acme-shop", "usage", "Claude usage limit reached (resets 15:00). ORCHE re-runs "
+                                    "the 7 held units then. To keep going now: run on an API key, or move some "
+                                    "divisions to Codex.", T0)
+        self.assertIn("usage", self.owner.NOTICES)                        # a held-back notice is flushed later
 
 
 if __name__ == "__main__":

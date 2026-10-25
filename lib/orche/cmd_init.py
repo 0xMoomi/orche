@@ -108,6 +108,8 @@ def _refresh(args, reg) -> int:
     ts = time.strftime("%Y%m%dT%H%M%S")
     try:
         ref = hr.refresh_project(reg, key, root=root, ts=ts, dry_run=dry_run)
+        if not dry_run:   # origin/HEAD names the base branch a done's PR targets (publish.base); best effort
+            shell.run(["git", "-C", root, "remote", "set-head", "origin", "-a"], timeout=30)
     except onboarding.UnsafeTarget as exc:
         return fail(EXIT_BLOCKED, f"refresh {key} stopped: {exc}")
     except PermissionError as exc:

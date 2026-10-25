@@ -50,6 +50,9 @@ FORBID    Retarget PR, merge, rebase, force-push, out-of-scope edits + unit bans
 REPORT    status, branch, head SHA, PR, verdict, commands run, deviations, follow-ups, memory-save
 TIER      mechanical | standard | hard
 ROLLBACK  How to revert (mandatory when the unit deploys)
+MODEL     optional: pin this brief's model (a model string as in orche hr add; at most the target division's
+  model, same vendor). Without it TIER picks the model: mechanical → Haiku (re-run once at standard if it fails),
+  standard/hard → the division's model.
 ---
 STOP <unit> Rebase went wrong on the shared worktree.
 EOF
@@ -137,6 +140,10 @@ approves the newer rev. Notes (`info` from ORCHE) wait for `[drain]` or a status
 Prompts tagged `[main]` always reach you; untagged simple prompts may be routed directly (triage) and show up as
 pointers.
 
+- Work has landed only when the merge queue merged it. Build reports its unit after every PR of it merged; a
+  lineage report lists the merged PRs. A queue that is closed or paused is an owner item only when its line says
+  OWNER.
+
 ## Question discipline
 
 - Facts that running something can settle (behavior, timing, layout, performance) are settled by
@@ -172,6 +179,9 @@ language with a short plain summary — never ask the owner to type an orche com
 
 - "상태", "뭐 하고 있어?", "진행 어때?": `orche status` plus the reports already in your prompt; at most five
   plain lines (what runs, what finished, what waits on them).
+- "하던 일 이어서 해줘", "어디까지 했어": `orche resume`, then act on its open lineages (answer what waits on the
+  owner, wait on or re-dispatch the rest) — never ask the owner to repeat the request. The work lives in files: a
+  closed Main pane reopens with its conversation (`orche wake main-<p>`), and only `/clear` drops the conversation.
 - "점검해줘", "뭔가 이상해", "안 돼": `orche doctor`; each WARN or FAIL row in plain words with the one step that
   fixes it (you take the step when it is yours to take).
 - "업데이트해줘", "최신으로": `orche update`, allowing it up to 10 minutes (Bash timeout 600000 ms); report its
@@ -179,6 +189,15 @@ language with a short plain summary — never ask the owner to type an orche com
   so and leave it. A failed step: run `orche update` once more, it resumes.
 - "부서 추가해줘", "모델 바꿔줘", "이 프로젝트에 적용해줘": skill orche-apply, section "In plain words (choices)".
 - "멈춰", "그만": `orche flow pause <p>` for the project, `STOP <unit>` for one unit.
+- "에이전트 20개까지", "30개까지", "더 많이 돌려": `orche hr choices <p> --json`, ask the scale question with its
+  choices, then `orche hr scale <preset>` (default, 20 or 30). On a Claude subscription many agents reach the usage
+  window sooner; say so once.
+- "대기열", "뭐가 합쳐지고 있어?": `orche queue <p>`; at most five plain lines (what lands next, what was returned, what
+  waits).
+- "사용량 한도", "왜 멈췄어?": a `paused … usage limit until …` line: say when it resumes and the two ways to keep going
+  (an API key, or Codex); never re-send briefs during a hold.
+- The `land: owner` question: ask once for every waiting PR (default 합치기); yes → `orche queue approve <p> --all`,
+  no → `orche queue drop <p> #N --reason owner`.
 
 ## Status card
 

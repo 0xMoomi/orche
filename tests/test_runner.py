@@ -66,6 +66,7 @@ class RunnerCase(HookCase):
         self.wt = self.root / "acme-build"
         self.git_init(self.wt, "README")
         self.head = self.rev(self.wt)
+        self.with_origin(self.wt, "div/build")
         self.fake = self.root / "fake"
         self.claude = write_fake_claude(self.fake)
         self.config({"claude_bin": str(self.claude), "delivery": "runner"})
@@ -83,6 +84,26 @@ class RunnerCase(HookCase):
                 (folder / name).write_text("x\n")
         subprocess.run(git + ["add", *files], check=True, env=env)
         subprocess.run(git + ["commit", "-q", "-m", "init"], check=True, env=env)
+
+    def with_origin(self, folder, branch):
+        """A bare `origin` holding `main` (origin/HEAD -> main), `folder` on `branch`, and the fake gh
+        first on PATH: a gated done pushes and opens its PR there (design §5.11)."""
+        env = {**os.environ, **GIT_ENV}
+        bare = self.root / f"{folder.name}-origin.git"
+        git = ["git", "-C", str(folder)]
+        subprocess.run(["git", "init", "-q", "--bare", "-b", "main", str(bare)], check=True, env=env)
+        for argv in (["remote", "add", "origin", str(bare)], ["push", "-q", "origin", "HEAD:refs/heads/main"],
+                     ["fetch", "-q", "origin"], ["remote", "set-head", "origin", "main"],
+                     ["checkout", "-q", "-b", branch]):
+            subprocess.run(git + argv, check=True, env=env)
+        self.gh = self.root / "gh"
+        support.fake_gh_publish(self.gh)
+        os.environ["PATH"] = str(self.gh) + os.pathsep + os.environ["PATH"]
+        return bare
+
+    def published(self, summary, n=1):
+        """A gated done's summary: its own text, then the PR the run pushed and opened (design §5.11)."""
+        return f"{summary}\nPR: #{n} https://github.com/acme/acme/pull/{n} head {self.rev(self.wt)}"
 
     def rev(self, folder):
         return subprocess.run(["git", "-C", str(folder), "rev-parse", "HEAD"], capture_output=True,
@@ -289,18 +310,18 @@ class DryRunArgvTest(RunnerCase):
         reg["projects"]["acme"]["divisions"]["build"]["model"] = model
         path.write_text(json.dumps(reg))
 
-    def test_mechanical_unit_uses_the_build_model_at_low_effort_and_the_narrow_tool_list(self):
+    def test_mechanical_unit_starts_on_haiku_at_low_effort_and_the_narrow_tool_list(self):
         unit = self.brief(tier="mechanical")
         code, out, err = self.orche("--dry-run", "--json", "run", unit)
         self.assertEqual(code, 0, err)
         data = json.loads(out)
         # It may commit (git add/commit); amend, -n, --no-verify and push are denied best-effort
         # (the done gate's ancestry check is the guarantee); no persona file: no flag.
-        self.assertEqual(data["argv"], self.base(unit, "claude-opus-5-5", "low", 60, MECH, *MECH_DENY))
+        self.assertEqual(data["argv"], self.base(unit, "claude-haiku-5-5", "low", 60, MECH, *MECH_DENY))
         self.assertEqual((data["cwd"], data["tier"], data["timeout_s"]), (str(self.wt), "mechanical", 1260))
         persona = self.persona()
         _, out, _ = self.orche("--dry-run", "--json", "run", unit)
-        self.assertEqual(json.loads(out)["argv"], self.base(unit, "claude-opus-5-5", "low", 60, MECH, *MECH_DENY,
+        self.assertEqual(json.loads(out)["argv"], self.base(unit, "claude-haiku-5-5", "low", 60, MECH, *MECH_DENY,
                                                              "--append-system-prompt-file", str(persona)))
 
     def test_turns_follow_timebox_at_every_tier(self):
@@ -401,13 +422,18 @@ class RunTest(RunnerCase):
         [ptr] = self.pointers("main-acme")
         self.assertEqual((ptr["unit"], ptr["from"], ptr["to"], ptr["status"], ptr["ledger_row"], ptr["head_sha"]),
                          (unit, "div-acme-build", "main-acme", "done", True, new))
-        self.assertEqual(ptr["summary"], "coupon field added\ntests pass")
+        self.assertEqual(ptr["summary"], self.published("coupon field added\ntests pass"))
+        self.assertEqual((rec["pr"], ptr["pr"]), ({"number": 1, "url": "https://github.com/acme/acme/pull/1",
+                                                   "head": new}, 1))
+        self.assertEqual([c["argv"][:2] for c in support.gh_calls(self.gh)], [["pr", "list"], ["pr", "create"]])
+        self.assertIn(f"PR: #1 https://github.com/acme/acme/pull/1 head {new}", report)
         self.assertEqual(ptr["report_path"], str(self.units_dir() / unit / "REPORT.md"))
         # The worker got the brief + footer on stdin, its session, its worktree and the plugin bin.
         stdin = (self.fake / "stdin.txt").read_text()
         self.assertTrue(stdin.startswith("rev: 1\nunit: " + unit))
         self.assertIn(f"You run headless. Work only inside {self.wt}.", stdin)
-        self.assertIn("Do not commit, push, merge or rebase unless the brief allows it.", stdin)
+        self.assertIn("Commit your work on your branch; do not push, merge or rebase: after your done passes the "
+                      "gate ORCHE pushes the branch and opens the PR.", stdin)       # A.16: Build is gated
         self.assertIn("Do not run `orche report`: the runner files your pointer from your final message.", stdin)
         self.assertIn("`STATUS: done|blocked|failed`", stdin)
         self.assertEqual((self.fake / "session.txt").read_text().strip(), "div-acme-build")
@@ -416,7 +442,7 @@ class RunTest(RunnerCase):
         self.assertIn("ORCHE_RUNNER=1\n", (self.fake / "env.txt").read_text())
         self.assertEqual(list((self.home / "runner" / "mcp").iterdir()), [])   # the run's own config: gone
         self.assertIn(f"run unit={unit} to=div-acme-build model=claude-opus-5-5 vendor=claude cost=0.31 turns=4 "
-                      "status=done stop=end_turn\n", self.events())
+                      "status=done stop=end_turn rung=standard:claude-opus-5-5:medium attempts=1 escalated=0\n", self.events())
         self.assertTrue((self.home / "activity" / "div-acme-build").exists())
         self.assertEqual(ptr["via"], "runner")
         self.assertEqual(list((self.home / "runs" / "acme").glob("*.lock")), [])
@@ -478,7 +504,7 @@ class RunTest(RunnerCase):
         self.reply("shipped\nSTATUS: release-ready\nok")
         self.assertEqual(self.orche("run", unit)[0], 0)
         [ptr] = self.pointers("main-acme")
-        self.assertEqual((ptr["status"], ptr["summary"]), ("done", "ok"))
+        self.assertEqual((ptr["status"], ptr["summary"]), ("done", self.published("ok")))
 
     def test_release_ready_below_unit_test_verified_is_unverified(self):
         unit = self.brief()
@@ -522,7 +548,7 @@ class RunTest(RunnerCase):
         self.reply("x\n1. STATUS: done\nok")
         self.assertEqual(self.orche("run", unit)[0], 0)
         [ptr] = self.pointers("main-acme")
-        self.assertEqual((ptr["status"], ptr["summary"]), ("done", "ok"))
+        self.assertEqual((ptr["status"], ptr["summary"]), ("done", self.published("ok")))
 
     def test_blocked_and_failed_pass_through(self):
         for n, word in ((1, "blocked"), (2, "failed")):
@@ -610,7 +636,7 @@ class RunTest(RunnerCase):
                                     "or split the unit"))
         self.assertEqual(self.run_record(unit)["stop_reason"], "error_max_turns")    # not the API's end_turn
         self.assertIn(f"run unit={unit} to=div-acme-build model=claude-opus-5-5 vendor=claude cost=1.234 turns=61 "
-                      "status=failed stop=error_max_turns\n", self.events())
+                      "status=failed stop=error_max_turns rung=standard:claude-opus-5-5:medium attempts=1 escalated=0\n", self.events())
         other = self.brief()
         self.reply("", is_error=True, subtype="error_during_execution", code=1, cost=None)
         self.orche("run", other)
@@ -1498,7 +1524,7 @@ class RoundTwoRunTest(RunnerCase):
         self.assertEqual(code, 0, err)
         self.assertEqual(proc.wait(timeout=20), 0)
         got = {p["unit"]: (p["status"], p["summary"]) for p in self.pointers("main-acme")}
-        self.assertEqual(got, {first: ("done", "ok"), second: ("info", "unverified: STATUS: done (no commit)\nok")})
+        self.assertEqual(got, {first: ("done", self.published("ok")), second: ("info", "unverified: STATUS: done (no commit)\nok")})
         self.assertGreater(time.monotonic() - started, 0.3)
         self.assertEqual(list((self.home / "runs" / "acme").glob("*.lock")), [])
 
@@ -1901,7 +1927,7 @@ class CodexRunTest(RunnerCase):
         self.assertIn("STATUS: done", report)
         self.assertNotIn(SECRET, report + json.dumps(rec) + json.dumps(ptr))
         self.assertEqual((ptr["status"], ptr["summary"], ptr["ledger_row"], ptr["via"]),
-                         ("done", "coupon field added\ntests pass", True, "runner"))
+                         ("done", self.published("coupon field added\ntests pass"), True, "runner"))
         [call] = self.calls()
         self.assertTrue(call["run_id"].startswith(unit + "@"), call["run_id"])
         self.assertEqual(call["argv"], self.argv(call["run_id"], effort="high"))
@@ -1914,13 +1940,13 @@ class CodexRunTest(RunnerCase):
         stdin = call["stdin"]
         self.assertTrue(stdin.startswith(f"## Your role\nYou are the build division.\n\nrev: 1\nunit: {unit}"), stdin)
         self.assertTrue(stdin.endswith(
-            "\n\n## Runner\n" + runner.FOOTER.format(worktree=self.wt) + "\n"
+            "\n\n## Runner\n" + runner.FOOTER_GATED.format(worktree=self.wt) + "\n"
             + runner.CODEX_SANDBOX.format(worktree=self.wt, units=self.units_dir(), home=self.home) + "\n"), stdin)
         self.assertEqual(list((self.home / "runner" / "codex").iterdir()), [])     # the -o file: read, removed
         self.assertEqual([(r["model"], r["vendor"], r["effort"], r["cost_usd"]) for r in self.history()],
                          [(CODEX_MODEL, "codex", "high", COST)])
         self.assertIn(f"run unit={unit} to=div-acme-build model={CODEX_MODEL} vendor=codex cost={COST} turns=1 "
-                      "status=done stop=completed\n", self.events())
+                      f"status=done stop=completed rung=hard:{CODEX_MODEL}:high attempts=1 escalated=0\n", self.events())
         self.claude_unused()
 
     def test_a_codex_done_without_its_ledger_row_is_unverified(self):
@@ -1940,8 +1966,8 @@ class CodexRunTest(RunnerCase):
     def test_codex_errors_file_failed_with_the_masked_text(self):
         cases = [([{"type": "turn.started"}, {"type": "turn.failed", "error": {"message": f"stream died {SECRET}"}}],
                   "error_turn_failed", "run failed: codex reported an error (stream died "),
-                 ([{"type": "error", "message": "rate limited"}],
-                  "error_event", "run failed: codex reported an error (rate limited)"),
+                 ([{"type": "error", "message": "connection reset"}],     # a rate limit is a hold (§8.5)
+                  "error_event", "run failed: codex reported an error (connection reset)"),
                  ([{"type": "turn.started"}, TURN],
                   "error_no_message", "run failed: codex reported an error (no final message)")]
         for events, stop_reason, summary in cases:

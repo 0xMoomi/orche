@@ -162,7 +162,7 @@ class DispatchRelayTest(HookCase):
         self.assertTrue(brief.startswith(
             f"rev: 1\nunit: {unit}\nto: div-acme-build   from: main-acme\nlineage: {unit}   parent: -\n"
             f"worktree: {self.root / 'acme-build'}   branch: div/build\n"
-            "model: claude-opus-5-5   effort: medium (TIER standard)\n"
+            "model: claude-opus-5-5 (standard rung; ceiling claude-opus-5-5)   effort: medium (TIER standard)\n"
             f"project root: {self.repo}   (brief + REPORT.md live under project root/.orche/units/{unit}/)\n"
             "Work only inside `worktree`. SCOPE paths are relative to it.\n\n"), brief)
         self.assertLess(brief.index("Never force-push"), brief.index("persona: .claude/agents/div-acme-build.md"))
@@ -877,7 +877,7 @@ class DispatchRelayTest(HookCase):
         self.assertEqual(lines[1:8], [
             f"unit: {unit}", "to: feat-acme-checkout   from: div-acme-build", f"lineage: {unit}   parent: -",
             f"worktree: {self.repo} (main checkout)   branch: feat/checkout",
-            "model: claude-opus-5-5   effort: medium (TIER standard)",
+            "model: claude-opus-5-5 (standard rung; ceiling claude-opus-5-5)   effort: medium (TIER standard)",
             f"project root: {self.repo}   (brief + REPORT.md live under project root/.orche/units/{unit}/)",
             "Work only inside `worktree`. SCOPE paths are relative to it."])
         self.assertNotIn("worktree: .", "\n".join(lines))

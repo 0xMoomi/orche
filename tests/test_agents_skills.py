@@ -285,18 +285,47 @@ class SkillsTest(unittest.TestCase):
         for n in range(1, 12):
             self.assertIn(f"R-MODEL-{n} ", spec)
 
+    def test_spec_numbers_the_queue_review_ladder_and_scale_rules(self):
+        spec = (support.ROOT / "SPEC.md").read_text()
+        for prefix, least in (("R-QUEUE", 12), ("R-REVIEW", 9), ("R-LADDER", 6), ("R-SCALE", 6)):
+            for n in range(1, least + 1):
+                self.assertIn(f"| {prefix}-{n} |", spec)
+            self.assertGreaterEqual(len(set(re.findall(prefix + r"-(\d+) \|", spec))), least, prefix)
+
+    def test_old_integration_rules_are_gone(self):
+        spec = (support.ROOT / "SPEC.md").read_text()
+        section = spec[spec.index("### 2.2"):spec.index("### 2.3")]
+        texts = {"SPEC §2.2": section}
+        for path in list(SKILLS.glob("*/SKILL.md")) + list(PERSONAS.glob("*.md")):
+            texts[str(path)] = path.read_text()
+        for name, text in texts.items():
+            for old in ("Main approves integration", "integration worktree", "Integration worktree"):
+                self.assertNotIn(old, text, name)
+
+    def test_readme_is_short_and_the_feature_persona_lands_through_the_queue(self):
+        readme = (support.ROOT / "README.md").read_text()
+        self.assertLessEqual(len(readme.splitlines()), 100)
+        self.assertIn("merge queue", readme)
+        self.assertIn("## Landing your work", (PERSONAS / "feature.md").read_text())
+
     def test_rulebooks_cover_their_topics(self):
         main = (SKILLS / "orche-main" / "SKILL.md").read_text()
         for heading in ("## Dispatch grammar", "## When a report arrives", "## Question discipline",
                         "## Status card", "## Echo-back", "## Candor"):
             self.assertIn(heading, main)
         build = (SKILLS / "orche-build" / "SKILL.md").read_text()
-        self.assertIn("Tags, releases and deploys need user approval (STANDING 5); Main approves integration.",
-                      INJECT.search(build).group(1))
+        card = INJECT.search(build).group(1)
+        self.assertIn("Tags, releases and deploys need user approval (STANDING 5).", card)
+        for phrase in ("You are traffic control", "Never merge by hand", "the merge queue (`orche queue`)",
+                       "cross-vendor pre-review", "headless Build review", "`orche queue add <unit>`",
+                       "`AMEND <unit> rev N`", "Never wait on the queue", "The verifier is never the writer",
+                       "`orche feat new`", "No direct push to main"):
+            self.assertIn(phrase, card)
         self.assertIn("filed with `orche report done`", INJECT.search(build).group(1))
         from orche import inbox
         self.assertIn("Pointer statuses are exactly: " + ", ".join(inbox.STATUSES) + ".", build)
-        for heading in ("## Ledger rules", "## Integration worktree", "## Review in a fresh session", "## Verify skill"):
+        for heading in ("## Traffic control", "## The merge queue", "## Review checklist", "## Scale",
+                        "## Ledger rules", "## Review in a fresh session", "## Verify skill"):
             self.assertIn(heading, build)
         help_ = (SKILLS / "orche" / "SKILL.md").read_text()
         for part in ("## Commands", "## Cross-project requests", "`[project]`", "`[drain]`"):

@@ -34,9 +34,6 @@ from dataclasses import dataclass
 
 from .. import brief, inbox, log, paths, util
 
-DEPTH, FANOUT = 3, 5
-
-
 def turn_path(session):
     return paths.orche_home() / "sessions" / f"{util.slugify(session)}.turn.json"
 

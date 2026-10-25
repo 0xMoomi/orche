@@ -1,0 +1,88 @@
+"""`orche review --pr N` — the reviews of an open PR before the merge queue (design §3.5, §3.8; R33).
+
+  orche review --pr N [--project <p>] [--unit <id>] [--background]
+
+For Build's own PRs (its fixes, its in-session subagents' work): the cross-vendor pre-review of the PR's
+head (one round, a ledger row of kind pre, so `orche queue add --pr N` finds it), then on PASS the
+headless Build review — both PASS queue the PR; a pre-review RETURN prints its findings and exits 3
+(fix, push, review again); anything else wakes the Build pane. `--background` starts the same detached
+and tells the caller its pre-review verdict as a waking `review` pointer. A run's own PR is reviewed
+by the run, then (internally, `--wait`) by the Build review alone.
+"""
+import argparse
+import sys
+
+from . import cli, config, log, paths, procs, registry, roster
+from .review import build as _build
+
+
+def register(subparsers):
+    p = subparsers.add_parser("review", help="the pre-review and the headless Build review of an open PR",
+                              description=__doc__.split("\n", 1)[1])
+    p.add_argument("--pr", type=int, required=True, help="the PR number")
+    p.add_argument("--project", help="the project (default: the calling session's)")
+    p.add_argument("--unit", help="the unit whose brief the PR answers")
+    p.add_argument("--background", action="store_true", help="start it detached and return")
+    p.add_argument("--wait", action="store_true", help=argparse.SUPPRESS)   # a run's Build review (after_publish)
+    p.add_argument("--tell", help=argparse.SUPPRESS)                        # --background's caller
+    p.set_defaults(func=run)
+
+
+LINES = {"off": "Build review is off (review.build: false)",
+         "already": "PR #{pr} @{h7} was already reviewed",
+         "busy": "PR #{pr} is under review now",
+         "waiting": "PR #{pr}: no pre-review yet at its head",
+         "skipped": "PR #{pr}: pre-review {pre}; the pre-review path handles it",
+         "held": "PR #{pr}: {vendor} usage limit: the Build review runs after the hold (orche review --pr {pr} again)",
+         "closed": "PR #{pr} is not open ({state})",
+         "queued": "queued PR #{pr} — position {position} of {total}"}
+
+
+def _line(project, pr, res) -> str:
+    status = res["status"]
+    if status == "no-build":
+        return f"{project} has no Build division"
+    if status.startswith("pre-"):
+        found = "".join(f"\n- {f}" for f in res.get("findings") or [])
+        why = f" — {res['error']}" if res.get("error") else ""
+        return (f"PR #{pr} @{str(res.get('head', ''))[:7]}: pre-review {status[4:].upper()} by {res.get('model', '-')} "
+                f"(round {res.get('round', '-')}){why}{found}\nFix what is right, push, then orche review --pr {pr} again"
+                + (f"\nReview: {res['path']}" if res.get("path") else ""))
+    if status in LINES:
+        return LINES[status].format(pr=pr, h7=str(res.get("head", ""))[:7], pre=res.get("pre"),
+                                    vendor=res.get("vendor"), state=res.get("state"),
+                                    position=res.get("position"), total=res.get("total"))
+    if not res.get("verdict"):       # nothing reviewed and nobody told: say what happened
+        return f"PR #{pr}: {res.get('error') or status}"
+    return f"PR #{pr}: Build review {res['verdict']}; Build was told"
+
+
+def run(args):
+    reg = registry.load()
+    key = args.project
+    if not key:
+        m = roster.Roster(reg).member(roster.env_session())
+        key = m.project if m else None
+    found = registry.project(reg, key) if key else None
+    if found is None:
+        return cli.fail(cli.EXIT_NOT_FOUND, f"unknown project: {key}" if key else "name a project: --project <p>")
+    project = found[0]
+    if args.background:
+        caller = roster.env_session() or ""
+        argv = [sys.executable, str(paths.PLUGIN_ROOT / "bin" / "orche.py"), "review", "--pr", str(args.pr),
+                "--project", project] + (["--unit", args.unit] if args.unit else []) + (["--tell", caller] if caller else [])
+        procs.spawn_detached(argv, paths.orche_home() / "logs" / "review" / f"{project}-pr{args.pr}.log")
+        cli.out(args, {"status": "started"}, f"reviews of PR #{args.pr} started")
+        return cli.EXIT_OK
+    cfg = config.load()
+    try:
+        if args.wait:
+            wait = float((_build._settings(cfg)).get("timeout_s", 480))
+            res = _build.build_review(project, args.pr, args.unit, wait_s=wait, reg=reg, cfg=cfg)
+        else:
+            res = _build.for_pr(project, args.pr, args.unit, tell=args.tell, reg=reg, cfg=cfg)
+    except Exception as exc:   # noqa: BLE001 — a detached run's log is the only witness
+        log.log("hooks", f"buildreview: {project} PR #{args.pr}: {type(exc).__name__}: {exc}")
+        return cli.fail(cli.EXIT_BLOCKED, f"review failed: {exc}")
+    cli.out(args, res, _line(project, args.pr, res))
+    return cli.EXIT_BLOCKED if res["status"] in ("error", "pre-return", "pre-error", "pre-held") else cli.EXIT_OK

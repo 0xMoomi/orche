@@ -1,17 +1,23 @@
 """`orche hr choices` (design 2026-10-23 §10.3, Appendix D): the division kinds and models of a
 project, and the owner's questions built from them (`ask`), each one element of AskUserQuestion's
-`questions` plus the value of every label. Read-only; the only subprocess is `codex --version`.
+`questions` plus the value of every label. Read-only; the only subprocesses are `codex --version` and
+the RAM probe of `ask.scale` (`procs.mem_total_mb`).
 
 Guardrails (pinned by tests/test_choices.py): never an unavailable model as an option (it is named
 in the question instead), the recommendation first and marked, a header of at most 12 characters,
 2-4 options with unique labels free of ", ", and an entry with fewer than 2 options is None.
 Question wording lives here (`TEXTS`, it is UI); descriptions live in config (`kinds`,
 `models.catalog`: owner-editable data)."""
-from .. import registry, vendors
+import os
+import shutil
+
+from .. import procs, registry, scale, vendors
 
 DEFAULT_SET = ("rnd", "research", "build", "gtm")
 LIGHT_SET = ("rnd", "build")
 HIDDEN = ("retired", "onboarding")
+SCALES = ("default", "20", "30")
+TIGHT_RAM_MB, TIGHT_DISK_MB = 32 * 1024, 30 * 1024
 
 TEXTS = {
     "ko": {
@@ -40,6 +46,12 @@ TEXTS = {
         "none": ("없음", "기본 부서만"),
         "status": {"active": "켜짐", "dormant": "쉬는 중", "paused": "멈춤", "onboarding": "만드는 중",
                    "retired": "은퇴"},
+        "scale_q": "에이전트를 몇 개까지 동시에 쓸까요?{machine}", "scale_h": "규모", "scale_now": " (지금)",
+        "scale_machine": " (이 Mac: RAM {ram}GB · 디스크 여유 {disk}GB — 30개면 부족할 수 있어요)",
+        "scale": {"default": ("기본", "동시 실행 4 · 기능 에이전트는 창과 함께 · 자율 지출 상한 $30"),
+                  "20": ("20개까지", "동시 실행 12 · 기능 에이전트는 창 없이 · 자율 지출 상한 $150 (API 환산 시간당 약 $40)"),
+                  "30": ("30개까지", "동시 실행 20 · 자율 지출 상한 $250 (시간당 약 $60) · Claude 구독은 사용량 한도에 걸려요: "
+                                    "API 키나 Codex를 섞으세요")},
         "rules": "이름: 영문 소문자로 시작하는 2–16자(소문자·숫자·하이픈, 예: marketing) · 라벨: 24자 이하 · "
                  "맡을 일: 한 문단, 400자 이하",
     },
@@ -70,6 +82,13 @@ TEXTS = {
         "none": ("None", "standard ones only"),
         "status": {"active": "active", "dormant": "dormant", "paused": "paused", "onboarding": "onboarding",
                    "retired": "retired"},
+        "scale_q": "How many agents should run at once?{machine}", "scale_h": "Scale", "scale_now": " (now)",
+        "scale_machine": " (this Mac: {ram} GB RAM · {disk} GB free disk — tight for 30)",
+        "scale": {"default": ("Default", "4 runs at once · features keep a pane · spend cap $30"),
+                  "20": ("Up to 20", "12 runs at once · features without panes · spend cap $150 "
+                                     "(about $40/h API-equivalent)"),
+                  "30": ("Up to 30", "20 runs at once · spend cap $250 (about $60/h) · a Claude subscription hits "
+                                     "its usage window: mix in an API key or Codex")},
         "rules": "name: 2–16 characters, a-z first, then a-z, 0-9 or single hyphens (e.g. marketing) · "
                  "label: ≤ 24 characters · charter: one paragraph, ≤ 400 characters",
     },
@@ -143,8 +162,35 @@ def _model_entry(t, cfg, lang, models, kind, question, current=None, active=Fals
     return _entry(question + (f" {note}" if note else ""), t["model_h"], False, opts)
 
 
-def build(reg, cfg, key, lang, avail=None) -> dict:
-    """The choices JSON (Appendix D.1) of project `key` (None: a project not under ORCHE yet)."""
+def machine_info(path=None) -> dict:
+    """RAM and free disk (MB) of this machine; None where unknown."""
+    try:
+        disk = shutil.disk_usage(path or os.path.expanduser("~")).free // (1024 * 1024)
+    except OSError:
+        disk = None
+    return {"ram_mb": procs.mem_total_mb(), "free_disk_mb": disk}
+
+
+def _scale_entry(t, cfg, reg, machine):
+    cur = scale.current(cfg, reg or {})
+    tight = [v for v, lim in ((machine.get("ram_mb"), TIGHT_RAM_MB), (machine.get("free_disk_mb"), TIGHT_DISK_MB))
+             if v is not None and v < lim]
+    note = ""
+    if tight:
+        gb = lambda v: "?" if v is None else str(round(v / 1024))  # noqa: E731
+        note = t["scale_machine"].format(ram=gb(machine.get("ram_mb")), disk=gb(machine.get("free_disk_mb")))
+    avail = scale.presets(cfg)
+    opts = []
+    for name in SCALES:
+        if name in avail:
+            lab, desc = t["scale"][name]
+            opts.append((lab + (t["scale_now"] if name == cur else ""), desc, name, name))
+    return cur, _entry(t["scale_q"].format(machine=note), t["scale_h"], False, opts)
+
+
+def build(reg, cfg, key, lang, avail=None, machine=None) -> dict:
+    """The choices JSON (Appendix D.1) of project `key` (None: a project not under ORCHE yet);
+    `machine` {ram_mb, free_disk_mb} defaults to machine_info() of the project's path."""
     t = TEXTS.get(lang) or TEXTS["en"]
     proj = ((reg or {}).get("projects") or {}).get(key) or {} if key else {}
     divs = proj.get("divisions") or {}
@@ -190,6 +236,9 @@ def build(reg, cfg, key, lang, avail=None) -> dict:
               "rules": t["rules"]}
 
     ask = {"add": None, "change": None, "model": {}, "setup": None, "pick": None}
+    if machine is None:
+        machine = machine_info(proj.get("path"))
+    cur_scale, ask["scale"] = _scale_entry(t, cfg, reg, machine)
     for k in kinds:
         k["_avail"] = avail
         if k["status"] in HIDDEN:
@@ -256,4 +305,4 @@ def build(reg, cfg, key, lang, avail=None) -> dict:
     for k in kinds:
         k.pop("_avail", None)
     return {"project": key, "lang": lang, "stage": stage, "kinds": kinds, "custom": custom, "models": models,
-            "ask": ask}
+            "scale": {"current": cur_scale, "presets": list(scale.presets(cfg)), "machine": machine}, "ask": ask}

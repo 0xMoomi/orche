@@ -2,16 +2,21 @@
 or no 3.11+ the launchers' finder can pick in a login shell), an invalid registry or an unwritable
 ORCHE_HOME. Jev is optional and fails open, so its row is WARN at worst (not configured, disabled,
 or a failed last probe)."""
+import json
 import os
 import re
 import shlex
 import shutil
 import sys
+from pathlib import Path
 
-from .. import __version__, config, headless, jev_setup, oauth, orca, paths, procs, registry, runs, shell, vendors
+from .. import (__version__, config, headless, jev_setup, ladder, mask, oauth, orca, paths, procs, registry, runs,
+                shell, units, vendors)
 from . import settings, statusline
 
 TOOLS = ("gcloud", "gh", "vercel", "age", "zstd")
+WRITE_PERMS = ("ADMIN", "MAINTAIN", "WRITE")     # gh viewerPermission the merge queue can merge with
+DEPLOY_FILES = ("vercel.json", "netlify.toml")
 
 
 def _orche_home():
@@ -165,6 +170,183 @@ def process_checks(reg) -> list:
     return rows
 
 
+# ---- 0.9.0 scale rows (design §9.2, Appendix C.5): (level, name, detail) ---------------------------
+
+def _roots(reg):
+    """(key, root) of the registered projects whose path is a directory."""
+    for key in sorted(reg.get("projects", {})):
+        path = (reg["projects"][key] or {}).get("path")
+        if path and Path(path).is_dir():
+            yield key, Path(path)
+
+
+def gh_rows(reg) -> list:
+    """`gh` per project: the account gh acts as, its viewerPermission on the project's repository (the
+    merge queue needs WRITE or more) and the base; gh not installed: one WARN."""
+    if shutil.which("gh") is None:
+        return [("WARN", "gh", "gh is not installed: the merge queue cannot open or merge PRs — brew install gh, "
+                               "then gh auth login")]
+    who = shell.run(["gh", "api", "user", "--jq", ".login"], timeout=10)
+    login = who.out.strip() if who.ok and who.out.strip() else "?"
+    rows = []
+    for key, root in _roots(reg):
+        url = shell.run(["git", "-C", str(root), "remote", "get-url", "origin"], timeout=10)
+        if not url.ok or not url.out.strip():
+            rows.append(("WARN", "gh", f"{key}: no origin remote — the merge queue lands PRs on GitHub"))
+            continue
+        res = shell.run(["gh", "repo", "view", url.out.strip(), "--json",
+                         "nameWithOwner,viewerPermission,defaultBranchRef"], timeout=10)
+        try:
+            data = json.loads(res.out) if res.ok else None
+        except ValueError:
+            data = None
+        if not isinstance(data, dict):
+            why = mask.redact(((res.err or "").strip().splitlines() or ["no answer"])[0][:120])[0]
+            rows.append(("WARN", "gh", f"{key}: gh cannot read the repository ({why}) — gh auth login, or check "
+                                       "its origin remote"))
+            continue
+        perm, repo = str(data.get("viewerPermission") or "NONE"), data.get("nameWithOwner") or "?"
+        base = (data.get("defaultBranchRef") or {}).get("name") or "?"
+        rows.append(("OK", "gh", f"{key}: gh as {login} · {perm} on {repo} · base {base}") if perm in WRITE_PERMS
+                    else ("WARN", "gh", f"{key}: gh account {login} has {perm} on {repo} — the queue cannot merge: "
+                                        "gh auth switch -u <an account with write>, or gh auth login"))
+    return rows
+
+
+def _deploys(root) -> list:
+    found = [n for n in DEPLOY_FILES if (root / n).is_file()]
+    for wf in sorted((root / ".github" / "workflows").glob("*.y*ml")):
+        try:
+            text = wf.read_text(encoding="utf-8", errors="replace").lower()
+        except OSError:
+            continue
+        if "push" in text and "deploy" in text:
+            found.append(f".github/workflows/{wf.name}")
+    return found
+
+
+def gate_rows(reg, cfg) -> list:
+    """`queue gate` (scripts/verify/ci.sh on origin/<base>) and `deploy on merge` (a deploy config that
+    makes every queue merge a deploy: WARN under queue.land auto, R1) per project with a git checkout."""
+    from .. import publish, queue
+    rows = []
+    for key, root in _roots(reg):
+        if not (root / ".git").exists():
+            continue
+        base = publish.base(root, cfg)
+        ok = bool(base) and shell.run(["git", "-C", str(root), "cat-file", "-e", f"origin/{base}:scripts/verify/ci.sh"],
+                                      timeout=10).ok
+        rows.append(("WARN", "queue gate", f"{key}: {publish.no_base(root)}") if not base else
+                    ("OK", "queue gate", f"{key}: scripts/verify/ci.sh on origin/{base}") if ok else
+                    ("WARN", "queue gate", f"{key}: no scripts/verify/ci.sh on origin/{base} — queue add refuses units "
+                                           "without a committed gate; Build's first unit adds it (templates/verify/ci.sh)"))
+        found = _deploys(root)
+        if found and queue.land_mode(cfg, key) == "owner":
+            rows.append(("OK", "deploy on merge", f"{key}: {found[0]} — merges land on the owner's word (queue.land owner)"))
+        elif found:
+            rows.append(("WARN", "deploy on merge", f"{key}: {found[0]} — every queue merge deploys {base} (queue.land "
+                                                    f"auto); for owner-approved landing set queue.per_project.{key}.land owner"))
+    return rows
+
+
+def queue_rows(reg) -> list:
+    """`queue` per project with a merge queue: open/paused/closed, waiting and testing entries, whether
+    its integrator runs; an entry testing with no integrator is a lost one (the heartbeat restarts it)."""
+    from .. import queue
+    from ..queue import store
+    rows, have = [], set(store.projects())
+    for key in sorted(reg.get("projects", {})):
+        if key not in have:
+            continue
+        try:
+            q = store.read(key)
+        except Exception as exc:  # noqa: BLE001 - a doctor row never fails the command
+            rows.append(("WARN", "queue", f"{key}: queue.json unreadable: {exc}"))
+            continue
+        entries = [e for e in q.get("entries") or [] if isinstance(e, dict)]
+        waiting = sum(1 for e in entries if e.get("state") == "waiting")
+        testing = sum(1 for e in entries if e.get("state") == "testing")
+        live = queue.running(key)
+        state = "closed" if q.get("closed") else "paused" if q.get("paused") else "open"
+        text = f"{key}: {state} · {waiting} waiting · {testing} testing · integrator {'running' if live else 'idle'}"
+        if testing and not live:
+            rows.append(("WARN", "queue", f"{text} — an entry is testing with no integrator (lost): the heartbeat "
+                                          "restarts it"))
+        elif state == "closed":
+            rows.append(("WARN", "queue", f"{text} ({queue.reopen(key, q.get('closed'))})"))
+        elif state == "paused":
+            rows.append(("WARN", "queue", f"{text} — orche queue resume {key}"))
+        else:
+            rows.append(("OK", "queue", text))
+    return rows
+
+
+def review_rows(cfg, reg) -> list:
+    """`review`: the cross-vendor mode, the reviewer of each writer vendor (the first of review.order of
+    the other vendor), the Build review, pending Build reviews (review/build.py, when present)."""
+    from .. import reconcile
+    r = cfg.get("review") or {}
+    order = [m for m in r.get("order") or [] if isinstance(m, str)]
+
+    def other(vendor):
+        return next((m for m in order if vendors.vendor_of(m) != vendor), "-")
+    mod, pending = reconcile._review_module(), 0
+    for key in sorted(reg.get("projects", {})) if mod is not None else ():
+        try:
+            pending += len(list(mod.pending(key) or []))
+        except Exception:  # noqa: BLE001 - a doctor row never fails the command
+            continue
+    text = (f"{r.get('cross_vendor', 'required')} · claude → {other('claude')} · codex → {other(vendors.CODEX)} · "
+            f"Build review {'on' if r.get('build', True) else 'off'} · {pending} pending")
+    if shutil.which("codex") is None and r.get("cross_vendor", "required") != "off":
+        return [("WARN", "review", f"{text} — codex is not installed: Claude writers get the same-vendor fallback")]
+    return [("OK", "review", text)]
+
+
+def scale_rows(cfg, reg) -> list:
+    """`scale`: the active preset (or custom) and its caps; `ladder`: the TIER table (ladder.doctor_row)."""
+    from .. import scale
+    name = scale.current(cfg, reg)
+    if name in scale.presets(cfg):
+        text = f"preset {name}: {scale.summary(cfg, name)}"
+    else:
+        per, tot = runs.caps(cfg)
+        panes = "features keep a pane" if cfg.get("feature_panes", True) else "features headless"
+        text = (f"custom: runs {per}/project, {tot} total · {panes} · spend cap "
+                f"${(cfg.get('flow') or {}).get('max_project_cost_usd')} · min free "
+                f"{(cfg.get('runner') or {}).get('min_free_mb')} MB")
+    return [("OK", "scale", text), ("OK", "ladder", ladder.doctor_row(cfg))]
+
+
+def usage_rows(now=None) -> list:
+    """`usage`: each vendor's active usage hold (flow/usage.py), else OK."""
+    from ..flow import usage
+    now = now or units.now()
+    rows = [("WARN", "usage", f"{h.get('vendor')} held until {usage.hhmm(usage.until_of(h), now)} "
+                              f"({len(usage.held_units(h))} units) — they re-run then")
+            for h in usage.holds() if usage.is_active(h, now)]
+    return rows or [("OK", "usage", "no usage hold")]
+
+
+def memory_rows(cfg, free=None, total=None) -> list:
+    """`memory`: free memory (procs.free_mb) against runner.min_free_mb (the runner's memory guard)."""
+    free = procs.free_mb() if free is None else free
+    want = (cfg.get("runner") or {}).get("min_free_mb") or 0
+    if free is None:
+        return [("WARN", "memory", "cannot read free memory: the runner's memory guard is off")]
+    total = procs.mem_total_mb() if total is None else total
+    text = f"{free / 1024:.1f} GiB free" + (f" ({free * 100 // total} %)" if total else "")
+    return [("OK", "memory", f"{text} ≥ {want} MB") if free >= want else
+            ("WARN", "memory", f"{text} < {want} MB: new runs wait for memory (runner.min_free_mb)")]
+
+
+def scale_checks(reg, cfg=None) -> list:
+    """Every 0.9.0 row, in C.5's order."""
+    cfg = config.load() if cfg is None else cfg
+    return (gh_rows(reg) + gate_rows(reg, cfg) + queue_rows(reg) + review_rows(cfg, reg) + scale_rows(cfg, reg)
+            + usage_rows() + memory_rows(cfg))
+
+
 def upgrade_checks(reg) -> list:
     """One WARN row per project whose `orche_version` is missing or older than this ORCHE."""
     projects = reg.get("projects", {})
@@ -300,6 +482,8 @@ def checks(ctx) -> list:
         for row in process_checks(reg):
             add(*row)
         for row in upgrade_checks(reg):
+            add(*row)
+        for row in scale_checks(reg):
             add(*row)
     except registry.RegistryError as exc:
         add("FAIL", "registry", str(exc).splitlines()[0] if str(exc) else "invalid")

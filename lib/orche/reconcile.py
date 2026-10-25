@@ -7,16 +7,30 @@ reconcile/heartbeat.json last. Classes (design §2.2):
 
 - unread <session>: a waking pointer pending >= inbox.LATE, the pane present and quiet (no output
   for QUIET_MS), not nudged within inbox.NUDGED_TTL, its `.deliver.lock` free -> `orche nudge`;
-- closed <session>: waking pointers pending >= inbox.LATE and no pane, outside flow.quiet_hours: a
-  Main's pane is reopened in place (`hr.project_pane(switch=False)`), an active division/feature
-  woken (`hr.wake`), then `orche nudge`, REOPEN_CAP a day (`reopens:<session>`, STALL_S apart);
+- closed <session> (never a headless feature, `pane: false`): waking pointers pending >= inbox.LATE and
+  no pane, outside flow.quiet_hours: Main's pane is reopened in place (`hr.project_pane(switch=False)`),
+  an active division/feature woken (`hr.wake`), then `orche nudge`, REOPEN_CAP a day (`reopens:<session>`, STALL_S apart);
   past the cap one escalation; a dormant or paused unit is never woken: one urgent `info` to Main;
 - undelivered <unit>: a `via: dispatch` pointer pending >= inbox.LATE -> `orche deliver --retry`; a
   `deferred` one (a runner dispatch from inside a Codex sandbox) at once, its first try in that pass;
 - drain <unit>: that pointer's revision ran, runs or was reported on (never a STOP) -> drained at
   once under the target's `.deliver.lock` taken non-blocking (uncapped, nothing else is touched);
 - busy <unit>: RUN.json of the current revision says `stop_reason: busy`, no run live ->
-  `orche run <unit>` once (cap 1, no escalation);
+  `orche run <unit>` once (cap 1, no escalation); while its project (or all projects) is at the slot
+  cap the restart waits and spends nothing, and a restart that came back busy again is a fresh try (R34);
+- held <unit> (0.9.0, design §8.5): RUN.json says `held` or `usage_limit`, no run live, no STOP since,
+  its vendor's usage hold is over -> `orche run <unit>` once per held record, oldest first, at most
+  runner.max_parallel_total a pass;
+- queue <project> (§5.10, R19): no integrator running: `land: auto` releases entries awaiting the owner,
+  a lost `testing` entry goes back to the front (integrator.recover), then an entry the integrator may
+  test or a pending proof (queue.startable), neither the queue nor the project paused -> queue.start (no
+  git, no gh in the pass; quiet hours and usage holds do not stop it);
+- usage <vendor>: an active hold nobody told yet -> the owner notice (Appendix A.15) once; a hold past
+  its `until` -> `usage resume` logged once;
+- review <project>: a pending Build review (review/build.py: a run's RUN.json `review.build: pending`)
+  not running that claim() lets start -> started detached (`orche review --pr N --wait --unit U`,
+  never inline), at most one per project a pass, after the repairs and never past
+  BUDGET_S;
 - silent <unit>: the target's newest unit, a pane unit (never Main) whose dispatch was delivered,
   not run, running or reported on at this rev, with no open child of its own, whose pane has been
   idle SILENT_IDLE_S or whose rev is SILENT_TIMEBOX × TIMEBOX old -> `orche deliver --remind` once
@@ -51,11 +65,11 @@ import signal
 import sys
 import threading
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 
 from . import __version__, brief, config, inbox, log, notify, orca, paths, procs, registry, roster, units, util
-from .flow import guard, lineage, owner
+from .flow import guard, lineage, owner, usage
 
 STATE_TTL = _dt.timedelta(hours=48)
 STALE_INTERVALS = 2       # `orche status` / `orche doctor`: the heartbeat is stale past 2 intervals
@@ -69,7 +83,8 @@ REOPEN_CAP = 2            # closed: reopens (Main) or wakes (division/feature) o
 SILENT_IDLE_S = 1200      # silent: the pane idle this long ...
 SILENT_TIMEBOX = 1.5      # ... or the revision this many TIMEBOXes old
 SILENT_ESCALATE_S = 1800  # silent: the escalation this long after the reminder, or at 2 × TIMEBOX
-KIND = {"unread": "nudge", "undelivered": "deliver", "busy": "restart", "drain": "drain", "silent": "remind"}
+KIND = {"unread": "nudge", "undelivered": "deliver", "busy": "restart", "drain": "drain", "silent": "remind",
+        "held": "rerun"}
 EVENT = {"drain": "drain-stale"}
 DAILY = ("reopens:", "waker")   # per-day counters, kept for the day
 WAKER = "com.orche.main-waker"
@@ -142,6 +157,8 @@ class Action:
             return f"drain {c.target} in {c.to} (rev {c.rev} already ran or reported)"
         if self.kind == "restart":
             return f"restart {c.target} (rev {c.rev}, target was busy {mins} min ago; try 1/1)"
+        if self.kind == "rerun":
+            return f"re-run {c.target} (rev {c.rev}, its {c.info.get('vendor')} usage hold is over; try 1/1)"
         if self.kind == "reopen":
             verb = "reopen" if c.kind == "main" else "wake"
             return (f"{verb} {c.target} pane ({c.count} report(s) waiting, {mins} min; "
@@ -193,28 +210,190 @@ def _projects(reg, keys):
             yield key, root
 
 
-def _busy(reg, now, keys) -> list:
-    """busy conditions: a unit whose RUN.json (as new as its BRIEF.md) says `stop_reason: busy`, no
-    run live. Age: since the record's `finished`."""
+def _stamp(at) -> str:
+    """An episode id from a time, UTC (`20261024T010000Z`): held keys sort oldest first."""
+    return at.astimezone(_dt.timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+
+
+def _busy(reg, now, keys, cfg_all=None) -> list:
+    """busy and held conditions from the projects' RUN.json files (one scan). busy: a unit whose
+    RUN.json (as new as its BRIEF.md) says `stop_reason: busy`, no run live; not ready while its
+    project is at the slot cap (runs.at_cap: the attempt is not spent, R34). Age: since the record's
+    `finished`. held (§8.5): `held` or `usage_limit`, no run live, no STOP marker since the record,
+    its vendor's hold over (flow/usage.py); age since that hold's `until`; one episode per record."""
     from . import runs
-    out = []
+    out, full = [], {}
+    per_pass = runs.caps(cfg_all)[1]
     for key, root in _projects(reg, keys):
         for path in sorted((root / brief.UNITS).glob("*/RUN.json")):
             try:
                 rec = util.read_json(path, default=None)
-                fresh = path.stat().st_mtime >= (path.parent / "BRIEF.md").stat().st_mtime
+                st = path.stat()
+                fresh = st.st_mtime >= (path.parent / "BRIEF.md").stat().st_mtime
             except (OSError, util.JsonError):
                 continue
-            if not isinstance(rec, dict) or rec.get("stop_reason") != "busy" or not fresh:
+            reason = rec.get("stop_reason") if isinstance(rec, dict) else None
+            if reason not in ("busy",) + usage.HELD or not fresh:
                 continue
             unit = path.parent.name
             b = brief.find(reg, unit, project=key)
             at = units.parse_iso(rec.get("finished"))
             if b is None or not b.rev or at is None or runs.running(key, unit):
                 continue
-            out.append(Condition("busy", f"busy:{unit}:{b.rev}", key, unit, (now - at).total_seconds(),
-                                 rev=b.rev, to=str(rec.get("to") or b.to)))
+            to = str(rec.get("to") or b.to)
+            if reason == "busy":
+                if key not in full:
+                    full[key] = runs.at_cap(key, cfg_all)
+                out.append(Condition("busy", f"busy:{unit}:{b.rev}", key, unit, (now - at).total_seconds(),
+                                     ready=not full[key], rev=b.rev, to=to, info={"since": rec.get("finished")}))
+                continue
+            vendor = str(rec.get("held_vendor") or rec.get("vendor") or "claude")     # the stage's vendor (R9)
+            hold, stop = usage.read(vendor), runs.marker_time(key, unit)
+            if usage.is_active(hold, now) or (stop is not None and stop >= st.st_mtime_ns):
+                continue
+            until = usage.until_of(hold)
+            since = until if until is not None and until > at else at
+            out.append(Condition("held", f"held:{_stamp(at)}:{unit}:{b.rev}", key, unit,
+                                 max(0.0, (now - since).total_seconds()), rev=b.rev, to=to,
+                                 info={"since": _stamp(at), "vendor": vendor, "per_pass": per_pass}))
     return out
+
+
+def _note(action, cls, project, target, line, failed=None) -> dict:
+    """A row of a pass step that acted itself (queue, usage, review), as owner.heartbeat's."""
+    return {"action": action, "class": cls, "project": project, "target": target, "rev": None, "attempt": 1,
+            "cap": 1, "line": line, "failed": failed}
+
+
+def _queue_starts(reg, keys, dry_run) -> list:
+    """Class `queue` (§5.10, R19), per project whose merge queue has entries and no integrator running:
+    under `land: auto` entries still waiting for the owner's word become plain waiting (queue.release);
+    a `testing` entry whose integrator is gone (its pid dead, or queue.lost_after_s passed) goes back to
+    the front (integrator.recover; only its gate's own processes are stopped); then work the integrator
+    may take (queue.startable: an approved waiting entry or a merge whose proof is pending; neither the
+    queue nor the project paused by `orche queue pause` or `orche flow pause`) -> queue.start(p). The
+    queue's own files and the process table only (no git, no gh)."""
+    from . import queue
+    from .queue import integrator, store
+    cfg = config.load()
+    rows = []
+    for key in sorted(reg.get("projects", {})):
+        if keys is not None and key not in keys:
+            continue
+        try:
+            q = store.read(key)
+            if not isinstance(q.get("entries"), list) or not q["entries"] or queue.running(key):
+                continue
+            stale = [e for e in q["entries"] if e.get("state") == "testing" and not queue.landed(e)]
+            if dry_run:
+                lost = stale
+            else:
+                queue.release(key, cfg)
+                lost = integrator.recover(key) if stale else []
+                q = store.read(key)
+            can = queue.startable(key)
+        except Exception as exc:  # noqa: BLE001 - one unreadable queue never stops the pass
+            log.log("hooks", f"reconcile: queue {key}: {type(exc).__name__}: {exc}")
+            continue
+        for e in lost:
+            rows.append(_note("queue-lost", "queue", key, key,
+                              f"{'would check the testing' if dry_run else 'recovered the lost'} PR #{e.get('pr')} "
+                              f"of {key}{'' if dry_run else ' (back at the front)'}"))
+        if not can:
+            continue
+        waiting = sum(1 for e in q.get("entries") or [] if e.get("state") == "waiting" and e.get("owner_ok"))
+        failed = None
+        if not dry_run:
+            try:
+                queue.start(key)
+            except Exception as exc:  # noqa: BLE001 - one queue never stops the pass
+                failed = type(exc).__name__
+                log.log("hooks", f"reconcile: queue start {key}: {failed}: {exc}")
+        rows.append(_note("queue-start", "queue", key, key, f"{'would start' if dry_run else 'start'} the merge "
+                                                            f"queue of {key} ({waiting} waiting)", failed))
+    return rows
+
+
+def _usage_notes(now, dry_run) -> list:
+    """Class `usage` (§8.5): an active hold nobody told yet -> the owner notice (owner.usage_notice,
+    Appendix A.15) once, marked first; a hold past its `until` -> `usage resume vendor=<v>` once."""
+    rows = []
+    for hold in usage.holds():
+        vendor, until, n = str(hold.get("vendor") or "?"), usage.until_of(hold), len(usage.held_units(hold))
+        project, at = str(hold.get("project") or ""), usage.hhmm(until, now)
+        if usage.is_active(hold, now) and not hold.get("notified") and project:
+            failed = None
+            if not dry_run:
+                try:
+                    usage.mark(vendor, notified=_iso(now))      # marked first: at most one notice per hold
+                    owner.usage_notice(project, vendor, at, n, now)
+                except Exception as exc:  # noqa: BLE001 - a notice never stops the pass
+                    failed = type(exc).__name__
+                    log.log("hooks", f"reconcile: usage notice {vendor}: {failed}: {exc}")
+            rows.append(_note("usage-notice", "usage", project, vendor, f"{'would tell' if dry_run else 'told'} the "
+                                                                        f"owner: {vendor} usage limit until {at} ({n} units held)", failed))
+        elif until is not None and not usage.is_active(hold, now) and not hold.get("resumed"):
+            if not dry_run:
+                try:
+                    usage.mark(vendor, resumed=_iso(now))
+                except OSError as exc:
+                    log.log("hooks", f"reconcile: usage resume {vendor}: {exc}")
+                    continue
+                log.log("events", f"usage resume vendor={vendor}")
+            rows.append(_note("usage-resume", "usage", project or "-", vendor,
+                              f"{vendor} usage hold over at {at}: its {n} held units re-run"))
+    return rows
+
+
+def _review_module():
+    """review/build.py (the Build review) with pending(), claim(), running() and start(); None without them."""
+    try:
+        from .review import build
+    except ImportError:
+        return None
+    ok = all(callable(getattr(build, f, None)) for f in ("pending", "claim", "running", "start"))
+    return build if ok else None
+
+
+REVIEW_CLAIMS = 3          # claim() checks (one gh call each) per project a pass
+
+
+def _reviews(reg, keys, dry_run, started) -> list:
+    """Class `review`: per project, its oldest pending Build review (review.build.pending: a run's
+    RUN.json says `review.build: pending` and no build row exists at that head) that is not running and
+    that claim() lets start (the PR open at that head, the reviewer's vendor not held, fewer than
+    `review.max_starts` starts) -> review.build.start(project, pr, unit), detached: the pass never runs
+    a review inline. At most one start per project a pass and REVIEW_CLAIMS claims, never past
+    BUDGET_S, never for a project the owner paused. Nothing without the module."""
+    mod = _review_module()
+    if mod is None:
+        return []
+    rows = []
+    for key in sorted(reg.get("projects", {})):
+        if (keys is not None and key not in keys) or guard.paused(key) is not None:
+            continue
+        if time.monotonic() - started >= BUDGET_S:
+            break
+        try:
+            items = list(mod.pending(key, reg) or [])
+            todo = [x for x in items if not mod.running(key, x["pr"], x["sha"])]
+        except Exception as exc:  # noqa: BLE001 - one project's reviews never stop the pass
+            log.log("hooks", f"reconcile: review pending {key}: {type(exc).__name__}: {exc}")
+            continue
+        for item in todo[:REVIEW_CLAIMS]:
+            pr, failed = item["pr"], None
+            if not dry_run:
+                try:
+                    if not mod.claim(key, item, reg):
+                        continue
+                    mod.start(key, pr, item.get("unit"))
+                except Exception as exc:  # noqa: BLE001 - it is pending again next pass
+                    failed = type(exc).__name__
+                    log.log("hooks", f"reconcile: build review {key} #{pr}: {failed}: {exc}")
+            rows.append(_note("build-review", "review", key, f"pr-{pr}", f"{'would start' if dry_run else 'start'} the "
+                                                                        f"Build review of {key} PR #{pr} ({len(items)} pending)", failed))
+            break
+    return rows
 
 
 def in_quiet_hours(cfg_all, now) -> bool:
@@ -354,8 +533,8 @@ def observe(reg, now, keys=None, wake=True, terms=None, cfg_all=None, hush=False
                 if t is not None and (now - t >= inbox.LATE or p.get("deferred"))]
         out += _dispatches(reg, m, session, late, now)
         waking = [(t, path, p) for t, path, p in late if inbox.wakes(p)]
-        if not wake or not waking or terms is None:
-            continue
+        if not wake or not waking or terms is None or (m.entry or {}).get("pane") is False:
+            continue   # a headless feature (`pane: false`) has no pane to reopen: its runs read the inbox
         t0, path0, p0 = min(waking, key=lambda x: (x[0], x[1].name))
         age, first = (now - t0).total_seconds(), str(p0.get("unit") or "")
         if session in terms:
@@ -367,7 +546,7 @@ def observe(reg, now, keys=None, wake=True, terms=None, cfg_all=None, hush=False
             out.append(Condition("closed", f"closed:{session}:{path0.name}", m.project, session, age,
                                  ready=not hush, count=len(waking), sender=first, kind=m.kind,
                                  status=m.status))
-    out += _busy(reg, now, keys)
+    out += _busy(reg, now, keys, cfg_all)
     if terms is not None:
         out += _silent(reg, r, now, keys, terms, cfg_all)
     return sorted(out, key=lambda c: c.key)
@@ -392,7 +571,16 @@ def _carried(e, now) -> bool:
 def timing(cls) -> tuple:
     """(first attempt after s, cap, escalates) of a class: attempt n+1 is due at first·2^n; the
     escalation at first·2^cap (silent: SILENT_ESCALATE_S after its reminder, or at 2 × TIMEBOX)."""
-    return {"busy": (STALL_S, 1, False), "silent": (0.0, 1, True)}.get(cls, (STALL_S, CAP, True))
+    return {"busy": (STALL_S, 1, False), "silent": (0.0, 1, True), "held": (0.0, 1, False)}.get(
+        cls, (STALL_S, CAP, True))
+
+
+def _came_back(e, c) -> bool:
+    """A busy episode whose last restart is older than the busy record on file: that restart came back
+    busy (R34), so it is a fresh try."""
+    tries = e.get("attempts") or []
+    last, since = (units.parse_iso(tries[-1]) if tries else None), units.parse_iso(c.info.get("since"))
+    return last is not None and since is not None and since > last
 
 
 def _iso(at) -> str:
@@ -451,7 +639,7 @@ def plan(conds, state, now, resolved=frozenset()) -> tuple:
     carries an unseen entry that has attempts or an escalation until STATE_TTL unless its key is in
     `resolved` (positively gone, resolved()), and keeps today's per-day counters; the actions are
     the attempts due now. A ready drain is due at once and keeps no state."""
-    new, actions = {}, []
+    new, actions, reruns = {}, [], 0
     day = now.date().isoformat()
     seen = {c.key for c in conds}
     for k, v in state.items():
@@ -474,11 +662,18 @@ def plan(conds, state, now, resolved=frozenset()) -> tuple:
         e = new[c.key] = _entry(state, c.key, now)
         e.update(project=c.project, target=c.target, cls=c.cls, to=c.to, seen=_iso(now),
                  **({"rev": c.rev} if c.rev is not None else {}),
-                 **({"detail": c.info["detail"]} if c.info.get("detail") else {}))
+                 **({"detail": c.info["detail"]} if c.info.get("detail") else {}),
+                 **({"since": c.info["since"]} if c.cls == "held" else {}))
         if c.cls == "closed":
             _plan_closed(c, e, new, now, actions)
-        else:
-            _plan_repair(c, e, now, actions)
+            continue
+        if c.cls == "busy" and _came_back(e, c):
+            e["attempts"] = []
+        if c.cls == "held" and reruns >= int(c.info.get("per_pass") or 1):
+            c = replace(c, ready=False)       # at most runner.max_parallel_total re-runs a pass, oldest first
+        n = len(actions)
+        _plan_repair(c, e, now, actions)
+        reruns += c.cls == "held" and len(actions) > n
     return actions, new
 
 
@@ -509,6 +704,13 @@ def _gone(reg, key, e, deliver) -> bool:
     if cls == "undelivered":
         found = deliver._dispatched(to, target) if to else None
         return found is None or deliver._rev(found[1]) != deliver._num(e.get("rev"))
+    if cls == "held":
+        b = brief.find(reg, target, project=e.get("project"))
+        if b is None or b.rev != e.get("rev"):
+            return True
+        rec = util.read_json(b.folder / "RUN.json", default=None)
+        at = units.parse_iso(rec.get("finished")) if isinstance(rec, dict) else None
+        return at is None or rec.get("stop_reason") not in usage.HELD or _stamp(at) != e.get("since")
     if cls not in ("silent", "busy"):
         return False
     b = brief.find(reg, target, project=e.get("project"))
@@ -627,7 +829,7 @@ def apply(reg, action, now) -> None:
         deliver.spawn(c.target, retry=True)
     elif kind == "drain":
         deliver.drain_now(c.to, c.target, int(c.rev or 1))
-    elif kind == "restart":
+    elif kind in ("restart", "rerun"):
         runs.start(c.target)
     elif kind == "reopen":
         _reopen(reg, c)
@@ -1017,7 +1219,11 @@ def _pass(cfg_all, cfg, now, started, dry_run, out, keys=None, as_json=False) ->
              "failed": None} for p, lin in lineage.repair(reg, dry_run, now=now, keys=scope())]
     # C10 T10: answered asks, missed secret resumes, the fallback, held notices, re-notifications
     _phase("owner")
-    notes = owner.heartbeat(reg, now, dry_run, scope())
+    notes = list(owner.heartbeat(reg, now, dry_run, scope()))
+    _phase("queue")        # 0.9.0: the merge queue's integrator, started when an entry waits
+    notes += _queue_starts(reg, scope(), dry_run)
+    _phase("usage")        # 0.9.0: a usage hold's owner notice, once; its end, once
+    notes += _usage_notes(now, dry_run)
     _phase("observe")
     try:
         state = util.read_json(state_path(), default={})
@@ -1044,6 +1250,7 @@ def _pass(cfg_all, cfg, now, started, dry_run, out, keys=None, as_json=False) ->
     actions, new = plan(conds, mine, now, resolved(reg, mine))
     new.update(others)
     if dry_run:
+        later = _reviews(reg, scope(), True, started)
         for row in shut + notes:
             doc["actions"].append(row)
             if not as_json:
@@ -1052,7 +1259,11 @@ def _pass(cfg_all, cfg, now, started, dry_run, out, keys=None, as_json=False) ->
             doc["actions"].append(_row(a, ""))
             if not as_json:
                 out(f"would {a.describe()}")
-        if not actions and not shut and not notes and not as_json:
+        for row in later:
+            doc["actions"].append(row)
+            if not as_json:
+                out(row["line"])
+        if not actions and not shut and not notes and not later and not as_json:
             out("reconcile: nothing to repair")
         return done_json()
     done = 0
@@ -1090,6 +1301,14 @@ def _pass(cfg_all, cfg, now, started, dry_run, out, keys=None, as_json=False) ->
         if not as_json:
             out(a.describe() + (f" — failed ({failed})" if failed else ""))
         done += 1
+    _phase("review")       # 0.9.0: a pending Build review, at most one a pass, after the repairs
+    for row in _reviews(reg, scope(), False, started):
+        log.log("events", f"reconcile action={row['action']} project={row['project']} target={row['target']} "
+                          f"rev=- attempt=1/1" + (f" failed={row['failed']}" if row["failed"] else ""))
+        doc["actions"].append(row)
+        if not as_json:
+            out(row["line"] + (f" — failed ({row['failed']})" if row["failed"] else ""))
+        done += 1
     took = time.monotonic() - started
     if done:
         log.log("events", f"reconcile pass took={took:.1f}s actions={done}")
@@ -1124,8 +1343,8 @@ def stalled(project) -> list:
     out = []
     for key in sorted(state if isinstance(state, dict) else {}):
         e = state[key]
-        if not isinstance(e, dict) or e.get("project") != project:
-            continue
+        if not isinstance(e, dict) or e.get("project") != project or e.get("cls") == "held":
+            continue          # a held unit's re-run in flight is not a stall
         attempts = e.get("attempts") or []
         if attempts or e.get("escalated"):
             cls = e.get("cls")

@@ -210,7 +210,12 @@ class SummaryExportTest(LedgerCase):
                           for i in range(11)])
         self.record(SHA_A, "live-ui-verified")
         self.record(SHA_A, "verifier-failed")
-        self.git = {"for-each-ref": f"feat/checkout\t{SHA_A}\nfeat/search\t{HEAD}\nfeat/ok\t{'0' * 7}{'0' * 33}\n"}
+        feats = self.reg["projects"]["acme"]["divisions"]["build"]["features"]
+        for name, branch in (("search", "work/search"), ("ok", "feat/ok")):
+            feats.append(dict(feats[0], name=name, branch=branch, session=f"feat-acme-{name}"))
+        registry.save(self.reg)
+        self.git = {"rev-parse --verify -q feat/checkout": SHA_A + "\n", "rev-parse --verify -q work/search": HEAD + "\n",
+                    "rev-parse --verify -q feat/ok": "0" * 40 + "\n"}
         code, out, err = self.orche("--json", "ledger", "summary", "--proj", "acme")
         self.assertEqual((code, err), (0, ""))
         data = json.loads(out)
@@ -218,13 +223,16 @@ class SummaryExportTest(LedgerCase):
         self.assertEqual(data["counts"]["type-check-only"], 11)
         self.assertEqual(data["counts"]["verifier-failed"], 1)
         self.assertEqual(data["counts"]["live-ui-verified"], 0)
-        self.assertEqual([u["branch"] for u in data["unverified_heads"]], ["feat/checkout", "feat/search"])
+        self.assertEqual([u["branch"] for u in data["unverified_heads"]], ["feat/checkout", "work/search"])
         self.assertEqual(len(data["last"]), 10)
         self.assertEqual(data["last"][-1]["verdict"], "verifier-failed")
-        argv = next(a for a in self.calls if "for-each-ref" in a)
+        self.assertFalse(any("for-each-ref" in a for a in self.calls))
+        argv = next(a for a in self.calls if "rev-parse" in a)
         self.assertEqual(argv[1:3], ["-C", str(self.home / "wt" / "acme-build")])
         code, out, _ = self.orche("ledger", "summary", "--proj", "acme")
-        self.assertIn("unverified feat/* heads: 2", out)
+        self.assertIn("unverified feature heads: 2", out)
+        self.git = {}
+        self.assertIn("(git rev-parse failed)", self.orche("ledger", "summary", "--proj", "acme")[1])
 
 
 class GradeTest(LedgerCase):
@@ -297,3 +305,32 @@ class ConcurrentAppendTest(support.TempHomeCase):
         lines = decisions.read_text().splitlines()
         self.assertEqual(lines[0], cmd_decide.HEADER)
         self.assertEqual(len(lines), 21)
+
+
+class ReviewTableTest(support.TempHomeCase):
+    SHA = "abc1234def"
+
+    def row(self, **kw):
+        args = {"pr": "12", "sha": self.SHA, "kind": "pre", "verdict": "pass", "reviewer": "codex-review",
+                "model": "gpt-5.5", "writer": "feat-acme-checkout", "evidence": "review/x.md", **kw}
+        return ledger.make_review_row(**args)
+
+    def test_writer_is_not_judge(self):
+        with self.assertRaises(ledger.WriterIsJudge):
+            self.row(reviewer="feat-acme-checkout")
+
+    def test_same_vendor_pre_review_needs_fallback(self):
+        with self.assertRaisesRegex(ledger.LedgerError, "writer's vendor"):
+            self.row(model="claude-sonnet-5-5", writer_model="claude-opus-5-5")
+        self.assertEqual(self.row(model="claude-sonnet-5-5", writer_model="claude-opus-5-5",
+                                  note="fallback: codex down")["model"], "claude-sonnet-5-5")
+        # a build review, or no second vendor, is not held to it
+        self.row(kind="build", model="claude-sonnet-5-5", writer_model="claude-opus-5-5")
+        self.row(model="claude-sonnet-5-5", writer_model="claude-opus-5-5", second_vendor=False)
+
+    def test_record_and_find(self):
+        ledger.record_review("acme", "pre", "12", self.SHA, "pass", "review/x.md", "codex-review", "gpt-5.5",
+                             writer="feat-acme-checkout")
+        self.assertEqual(ledger.review_for("acme", "12", self.SHA, "pre")["verdict"], "pass")
+        self.assertIsNone(ledger.review_for("acme", "12", self.SHA, "build"))
+        self.assertTrue((self.home / "ledger" / "acme.review.tsv").is_file())

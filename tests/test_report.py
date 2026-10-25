@@ -19,6 +19,7 @@ SHA = "a" * 40
 class ReportTest(support.TempHomeCase):
     def setUp(self):
         super().setUp()
+        (self.home / "config.json").write_text(json.dumps(support.no_wake({})))   # the pane's pre-review: test_prereview
         self.cli = load_cli()
         self._repo = tempfile.TemporaryDirectory()
         self.addCleanup(self._repo.cleanup)
@@ -33,13 +34,21 @@ class ReportTest(support.TempHomeCase):
         os.chdir(self.repo)
         self.addCleanup(os.chdir, self._cwd)
         self.calls = []
+        # a gated done publishes (publish.publish): branch, origin/HEAD, push, then gh pr list/create
+        self.publish_replies = {("rev-parse", "--abbrev-ref"): (0, "div/build\n"),
+                                ("symbolic-ref", "--short"): (0, "origin/main\n"),
+                                ("push", "-u"): (0, ""), ("pr", "list"): (0, "[]"),
+                                ("pr", "create"): (0, "https://github.com/acme/shop/pull/12\n")}
         self._runner, shell.RUNNER = shell.RUNNER, self.fake_runner
         self.addCleanup(setattr, shell, "RUNNER", self._runner)
 
-    def fake_runner(self, argv, *, timeout, input, env=None):
+    def fake_runner(self, argv, *, timeout, input, env=None, cwd=None):
         self.calls.append(argv)
         if argv[:1] == ["git"] and argv[-2:] == ["rev-parse", "HEAD"]:
             return shell.Result(0, SHA + "\n", "", argv)
+        reply = self.publish_replies.get(tuple(argv[3:5] if argv[0] == "git" else argv[1:3]))
+        if reply is not None:
+            return shell.Result(*reply, "", argv) if len(reply) == 2 else shell.Result(*reply, argv)
         return shell.Result(1, "", "unexpected", argv)
 
     def as_session(self, session):
@@ -96,7 +105,72 @@ class ReportTest(support.TempHomeCase):
         self.assertEqual((ptr["unit"], ptr["from"], ptr["to"], ptr["status"], ptr["brief_rev"], ptr["head_sha"],
                           ptr["ledger_row"], ptr["urgent"], ptr["summary"], ptr["report_path"]),
                          ("acme-shop-coupon-20261016-1", "div-acme-shop-build", "main-acme-shop", "done", 3, SHA,
-                          True, False, "coupon field landed", str(folder / "REPORT.md")))
+                          True, False, f"coupon field landed\nPR: #12 https://github.com/acme/shop/pull/12 head {SHA}",
+                          str(folder / "REPORT.md")))
+        self.assertEqual(ptr["pr"], 12)
+        push = [c for c in self.calls if "push" in c]
+        self.assertEqual(push, [["git", "-C", "/srv/orca/acme-shop-build", "push", "-u", "origin", "HEAD:refs/heads/div/build"]])
+        [create] = [c for c in self.calls if c[1:3] == ["pr", "create"]]
+        self.assertEqual(create[3:7], ["--base", "main", "--head", "div/build"])
+
+    def ledgered(self):
+        ledger = self.home / "ledger" / "acme-shop.tsv"
+        ledger.parent.mkdir(exist_ok=True)
+        ledger.write_text("pr\tsha\tverdict\tevidence\tverifier\tts\n"
+                          f"7\t{SHA}\tunit-test-verified\tlog\tverifier-1\t2026-10-16T00:00:00Z\n")
+
+    def test_done_publish_gap_blocks_with_owner_step(self):
+        """A gated done whose publish fails files nothing and exits 3 with the reason (and OWNER step)."""
+        self.as_session("div-acme-shop-build")
+        self.brief("acme-shop-gap-20261016-1", "div-acme-shop-build")
+        self.ledgered()
+        self.publish_replies[("pr", "list")] = (1, "", "To get started with GitHub CLI, please run:  gh auth login")
+        code, _, err = self.orche("report", "done", "--summary", "landed")
+        self.assertEqual(code, 3)
+        self.assertIn("done not filed: gh pr list: gh is not logged in", err)
+        self.assertIn("OWNER: gh auth login", err)
+        self.assertFalse((self.home / "inbox").exists())
+        self.publish_replies[("pr", "list")] = (0, "[]")
+        self.publish_replies[("push", "-u")] = (1, "", " ! [rejected] HEAD -> div/build (non-fast-forward)")
+        code, _, err = self.orche("report", "done", "--summary", "landed")
+        self.assertEqual(code, 3)
+        self.assertIn("push rejected: origin/div/build has commits this worktree lacks", err)
+        self.assertNotIn("OWNER:", err)
+
+    def coordination_done(self, branch):
+        """R5: Build's parent unit (nothing against origin/main) reports done."""
+        self.as_session("div-acme-shop-build")
+        self.brief("acme-shop-parent-20261016-1", "div-acme-shop-build")
+        self.ledgered()
+        self.publish_replies[("rev-parse", "--abbrev-ref")] = (0, branch + "\n")
+        self.publish_replies[("diff", "--quiet")] = (0, "")
+        code, _, err = self.orche("report", "done", "--summary", "all 3 child units landed")
+        self.assertEqual((code, err), (0, ""))
+        [ptr] = self.pointers("main-acme-shop")
+        self.assertEqual(ptr["status"], "done")
+        self.assertIsNone(ptr.get("pr"))
+        self.assertEqual(ptr["summary"], "all 3 child units landed\nPR: none (no change against origin/main; "
+                                         "nothing published)")
+        self.assertNotIn("review", ptr)
+        self.assertFalse([c for c in self.calls if "push" in c or c[1:2] == ["pr"]])
+
+    def test_a_coordination_done_on_builds_branch_files_without_a_pr(self):
+        self.coordination_done("div/build")
+
+    def test_a_coordination_done_on_main_files_without_a_pr(self):
+        self.coordination_done("main")
+
+    def test_done_reuses_the_open_pr(self):
+        self.as_session("div-acme-shop-build")
+        self.brief("acme-shop-again-20261016-1", "div-acme-shop-build")
+        self.ledgered()
+        self.publish_replies[("pr", "list")] = (0, json.dumps([{"number": 9, "baseRefName": "main", "isDraft": False,
+                                                                "url": "https://github.com/acme/shop/pull/9"}]))
+        code, _, err = self.orche("report", "done", "--summary", "again")
+        self.assertEqual((code, err), (0, ""))
+        [ptr] = self.pointers("main-acme-shop")
+        self.assertEqual(ptr["pr"], 9)
+        self.assertFalse([c for c in self.calls if c[1:3] == ["pr", "create"]])
 
     def test_newest_skips_folders_that_are_not_unit_ids(self):
         self.as_session("div-acme-shop-build")
@@ -167,7 +241,7 @@ class ReportTest(support.TempHomeCase):
         build_sha = "b" * 40
         real = self.fake_runner
 
-        def per_path(argv, *, timeout, input, env=None):
+        def per_path(argv, *, timeout, input, env=None, cwd=None):
             if argv[:3] == ["git", "-C", "/srv/orca/acme-shop-build"] and argv[-2:] == ["rev-parse", "HEAD"]:
                 self.calls.append(argv)
                 return shell.Result(0, build_sha + "\n", "", argv)
@@ -274,3 +348,17 @@ class ReportTest(support.TempHomeCase):
         self.assertEqual(code, 0)
         self.assertIn("[dry-run] would write pointer acme-shop-plan-20261016-1 info -> main-acme-shop", out)
         self.assertFalse((self.home / "inbox").exists())
+
+    def test_a_feature_with_no_diff_is_a_gap_never_done_without_a_pr(self):
+        """Review B G4: a pane feature whose HEAD changes nothing never files done + PR none (the parent's
+        all-landed would wait for it forever): the gap and its reason, like every pane publish gap."""
+        self.as_session("feat-acme-shop-search")
+        self.brief("acme-shop-search-20261016-1", "feat-acme-shop-search")
+        self.ledgered()                                   # HEAD has a row (e.g. the queue's (none, merge) row)
+        self.publish_replies[("rev-parse", "--abbrev-ref")] = (0, "feat/search\n")
+        self.publish_replies[("diff", "--quiet")] = (0, "")   # nothing against origin/main
+        code, _out, err = self.orche("report", "done", "--summary", "nothing needed doing")
+        self.assertEqual(code, 3)
+        self.assertIn("done not filed: nothing to publish: HEAD changes nothing against origin/main; a feature's "
+                      "done needs its commit", err)
+        self.assertEqual(self.pointers("div-acme-shop-build"), [])

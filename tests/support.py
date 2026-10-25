@@ -26,8 +26,17 @@ _NO_CLAUDE_DIR = None
 NO_CLAUDE = "#!/bin/sh\necho 'tests never run the real claude (support.NO_CLAUDE)' >&2\nexit 1\n"
 NO_ORCA = "#!/bin/sh\necho 'tests never run the real orca (support.NO_ORCA)' >&2\nexit 1\n"
 NO_CODEX = "#!/bin/sh\necho 'tests never run the real codex (support.NO_CODEX)' >&2\nexit 1\n"
-NO_WAKE = {"inbox": {"wake": False, "quiet_s": 0}}   # every test home's config: no test types into a pane
-# and no nudger waits out a quiet window (tests that exercise it set inbox.quiet_s and a fake clock)
+# No test reaches GitHub: the default `gh` records its argv in $ORCHE_HOME/gh-calls.log and fails.
+NO_GH = ("#!/bin/sh\n"
+         "[ -n \"$ORCHE_HOME\" ] && printf '%s\\n' \"$*\" >> \"$ORCHE_HOME/gh-calls.log\" 2>/dev/null\n"
+         "echo 'tests never run the real gh (support.NO_GH)' >&2\nexit 1\n")
+GH_CALLS = "gh-calls.log"
+NO_WAKE = {"inbox": {"wake": False, "quiet_s": 0}, "review": {"build": False}, "runner": {"min_free_mb": 0}}
+# every test home's config: no test types into a pane, no nudger waits out a quiet window (tests that
+# exercise it set inbox.quiet_s and a fake clock), no publish starts a detached Build review (tests that
+# want one set review.build) and no run waits on the machine's real free memory (memory tests set
+# runner.min_free_mb or pass min_free_mb, and mock procs.free_mb)
+NO_REVIEW = {"review": {"cross_vendor": "off"}}      # no_wake's configs: no pre-review (test_prereview turns it on)
 # An empty keychain for child processes (`bin/orche.py run|intake|card` read the stored OAuth token
 # through `security` on macOS); each call is recorded, argv only, in $ORCHE_HOME/security-calls.log.
 NO_SECURITY = ("#!/bin/sh\n"
@@ -61,6 +70,7 @@ def no_claude_dir() -> str:
         _NO_CLAUDE_DIR = tempfile.mkdtemp(prefix="orche-no-claude-")
         atexit.register(shutil.rmtree, _NO_CLAUDE_DIR, True)
         for name, text in (("claude", NO_CLAUDE), ("codex", NO_CODEX), ("orca", NO_ORCA), ("security", NO_SECURITY),
+                           ("gh", NO_GH),
                            ("osascript", RECORDING.format(name="osascript", code=0)),
                            ("open", RECORDING.format(name="open", code=0)),
                            ("launchctl", RECORDING.format(name="launchctl", code=113))):
@@ -71,9 +81,15 @@ def no_claude_dir() -> str:
 
 
 def no_wake(cfg: dict) -> dict:
-    """`cfg` with `inbox.wake` false unless it sets `inbox.wake` itself (test config writers)."""
+    """`cfg` with `inbox.wake` false unless it sets `inbox.wake` itself, the pre-review off unless it
+    sets `review.cross_vendor` itself (test config writers; tests/test_prereview.py turns it on) and no
+    memory guard unless it sets `runner.min_free_mb` itself."""
     inbox = cfg.get("inbox") if isinstance(cfg.get("inbox"), dict) else {}
-    return {**cfg, "inbox": {**NO_WAKE["inbox"], **inbox}}
+    review = cfg.get("review") if isinstance(cfg.get("review"), dict) else {}
+    runner = cfg.get("runner") if isinstance(cfg.get("runner"), dict) else {}
+    return {**cfg, "inbox": {**NO_WAKE["inbox"], **inbox},
+            "review": {**NO_WAKE["review"], **NO_REVIEW["review"], **review},
+            "runner": {**NO_WAKE["runner"], **runner}}
 
 
 SCRUBBED_ENV = ("ORCHE_", "ORCA_", "CLAUDE_CODE_OAUTH_TOKEN", "CLAUDE_CONFIG_DIR")
@@ -118,6 +134,7 @@ class TempHomeCase(unittest.TestCase):
         from orche import jev_setup, jevkey
         woke = (self.home / "logs" / "nudge.log").exists() and not getattr(self, "wakes", False)
         kicked = (self.home / "logs" / "reconcile.log").exists()
+        reviewed = (self.home / "logs" / "review").exists()
         jevkey.PLATFORM, jevkey.SECURITY, jev_setup.OSASCRIPT = self._jev_seams
         for key in [k for k in os.environ if k.startswith(SCRUBBED_ENV)]:
             del os.environ[key]
@@ -128,6 +145,9 @@ class TempHomeCase(unittest.TestCase):
         if kicked:
             self.fail("a reconcile pass was started (logs/reconcile.log): keep reconcile/.kicked fresh "
                       "or stub procs.spawn_detached")
+        if reviewed:
+            self.fail("a Build review was started (logs/review): keep the test home's review.build false "
+                      "(support.no_wake) or stub procs.spawn_detached")
         if woke:
             self.fail("a nudger was started (logs/nudge.log): keep the test home's inbox.wake false "
                       "(support.no_wake) or set self.wakes = True and wait for its events line")
@@ -253,3 +273,165 @@ def fake_codex(folder: Path, spec: dict) -> Path:
     script.write_text(FAKE_CODEX.format(python=sys.executable, spec=json.dumps(spec), here=str(folder)))
     script.chmod(0o755)
     return script
+
+
+# A fake `gh` for the merge-queue tests. It answers `pr list --head B [--state open]` and `pr view N`
+# from folder/spec.json (read on every call, so a test can rewrite it): {"prs": [{"number", "headRefName",
+# "baseRefName", "headRefOid", "isDraft", "state", "reviewDecision", ...}], "fail": "<stderr>"}; anything
+# else exits 1. `pr merge N --merge|--squash --match-head-commit H` acts as GitHub's merge button on the
+# bare repository spec["origin"]: it refuses a head other than the PR's (GitHub's text) or with
+# spec["merge_fail"], else writes a commit with parents (base, head) — (base) for --squash — and the
+# 3-way merge's tree (base's own tree with spec["merge_other"]: "something else landed"), moves the
+# base branch, marks the PR MERGED in spec.json and appends {"argv", "cwd", "base", "merge",
+# "clone_head"} to folder/merges.jsonl. Each call appends {"argv", "cwd"} to folder/gh-calls.jsonl.
+FAKE_GH = r"""#!{python}
+import json, os, sys
+HERE = {here!r}
+args = sys.argv[1:]
+with open(os.path.join(HERE, "gh-calls.jsonl"), "a") as fh:
+    fh.write(json.dumps({{"argv": args, "cwd": os.getcwd()}}) + "\n")
+with open(os.path.join(HERE, "spec.json")) as fh:
+    SPEC = json.load(fh)
+if SPEC.get("fail"):
+    print(SPEC["fail"], file=sys.stderr); sys.exit(1)
+def opt(name, default=None):
+    return args[args.index(name) + 1] if name in args else default
+fields = (opt("--json") or "").split(",")
+pick = lambda pr: {{k: pr.get(k) for k in fields if k}}
+prs = [dict({{"state": "OPEN", "isDraft": False}}, **p) for p in SPEC.get("prs", [])]
+if args[:2] == ["pr", "list"]:
+    head, state = opt("--head"), (opt("--state") or "open").upper()
+    hits = [p for p in prs if (head is None or p.get("headRefName") == head) and (state == "ALL" or p["state"] == state)]
+    print(json.dumps([pick(p) for p in hits[:int(opt("--limit", 30))]])); sys.exit(0)
+if args[:2] == ["pr", "view"]:
+    hit = [p for p in prs if str(p.get("number")) == args[2]]
+    if not hit:
+        print(f"GraphQL: Could not resolve to a PullRequest with the number of {{args[2]}}.", file=sys.stderr); sys.exit(1)
+    print(json.dumps(pick(hit[0]))); sys.exit(0)
+if args[:2] == ["pr", "merge"]:
+    import subprocess
+    hit = [p for p in prs if str(p.get("number")) == args[2]]
+    if not hit:
+        print(f"GraphQL: Could not resolve to a PullRequest with the number of {{args[2]}}.", file=sys.stderr); sys.exit(1)
+    pr = hit[0]
+    if SPEC.get("merge_fail"):
+        print(SPEC["merge_fail"], file=sys.stderr); sys.exit(1)
+    if opt("--match-head-commit") != pr.get("headRefOid"):
+        print("GraphQL: Head branch was modified. Review and try the merge again. (mergePullRequest)", file=sys.stderr); sys.exit(1)
+    def g(*a):
+        return subprocess.run(["git", "-c", "user.name=gh", "-c", "user.email=gh@example.invalid", "-C", SPEC["origin"], *a],
+                              check=True, capture_output=True, text=True).stdout.strip()
+    ref = "refs/heads/" + pr.get("baseRefName", "main")
+    base, head = g("rev-parse", ref), pr["headRefOid"]
+    tree = g("rev-parse", base + "^{{tree}}") if SPEC.get("merge_other") else g("merge-tree", "--write-tree", base, head).splitlines()[0]
+    parents = ["-p", base] if "--squash" in args else ["-p", base, "-p", head]
+    merge = g("commit-tree", tree, *parents, "-m", f"Merge pull request #{{pr['number']}}")
+    g("update-ref", ref, merge, base)
+    clone = subprocess.run(["git", "-C", os.getcwd(), "rev-parse", "HEAD"], capture_output=True, text=True).stdout.strip()
+    with open(os.path.join(HERE, "merges.jsonl"), "a") as fh:
+        fh.write(json.dumps({{"argv": args, "cwd": os.getcwd(), "base": base, "merge": merge, "clone_head": clone}}) + "\n")
+    for p in SPEC.get("prs", []):
+        if str(p.get("number")) == args[2]:
+            p["state"] = "MERGED"
+    with open(os.path.join(HERE, "spec.json"), "w") as fh:
+        json.dump(SPEC, fh)
+    print(f"Merged pull request #{{pr['number']}}"); sys.exit(0)
+print(f"fake gh: unsupported {{args}}", file=sys.stderr); sys.exit(1)
+"""
+
+
+def fake_gh(folder: Path, spec: dict) -> Path:
+    """An executable fake `gh` in `folder` answering from `spec` (see FAKE_GH), put on PATH right before
+    no_claude_dir (it holds only `gh`, so it shadows just the failing NO_GH stub; TempHomeCase restores PATH). Rewrite
+    folder/spec.json to change its answers; folder/gh-calls.jsonl records each call."""
+    folder.mkdir(parents=True, exist_ok=True)
+    (folder / "spec.json").write_text(json.dumps(spec))
+    script = folder / "gh"
+    script.write_text(FAKE_GH.format(python=sys.executable, here=str(folder)))
+    script.chmod(0o755)
+    parts = [p for p in os.environ.get("PATH", "").split(os.pathsep) if p != str(folder)]
+    at = parts.index(no_claude_dir()) if no_claude_dir() in parts else 0
+    os.environ["PATH"] = os.pathsep.join(parts[:at] + [str(folder)] + parts[at:])
+    return script
+
+
+# A fake `gh` over a local bare repo for publish tests (tests/test_publish.py, the runner's publish).
+# State in folder/state.json: {"prs": [{number, url, headRefName, baseRefName, headRefOid, isDraft,
+# state}], "fail": {"<subcommand>": "<stderr line>"}}; every call appends {argv, cwd} to
+# folder/calls.jsonl. Subcommands: auth status, repo view, pr list/create/view/ready/merge.
+FAKE_GH_PUBLISH = r"""#!{python}
+import json, os, subprocess, sys
+HERE = {here!r}
+STATE = os.path.join(HERE, "state.json")
+argv = sys.argv[1:]
+with open(os.path.join(HERE, "calls.jsonl"), "a") as fh:
+    fh.write(json.dumps({{"argv": argv, "cwd": os.getcwd()}}) + "\n")
+state = json.load(open(STATE)) if os.path.exists(STATE) else {{}}
+prs = state.setdefault("prs", [])
+key = " ".join(argv[:2])
+fail = state.get("fail", {{}}).get(key)
+if fail:
+    print(fail, file=sys.stderr); sys.exit(1)
+def opt(name, default=None):
+    return argv[argv.index(name) + 1] if name in argv else default
+def save():
+    json.dump(state, open(STATE, "w"))
+def remote_head(branch):
+    r = subprocess.run(["git", "ls-remote", "origin", "refs/heads/" + branch], capture_output=True, text=True)
+    return r.stdout.split()[0] if r.stdout.split() else ""
+def find(n):
+    return next((p for p in prs if str(p["number"]) == str(n)), None)
+if key == "auth status":
+    print("Logged in to github.com account tester"); sys.exit(0)
+if key == "repo view":
+    print(json.dumps({{"nameWithOwner": "acme/acme", "defaultBranchRef": {{"name": "main"}}}})); sys.exit(0)
+if key == "pr list":
+    head = opt("--head"); st = opt("--state", "open")
+    rows = [p for p in prs if (head is None or p["headRefName"] == head) and (st == "all" or p.get("state", "open") == st)]
+    fields = (opt("--json") or "number").split(",")
+    for p in rows:
+        p["headRefOid"] = remote_head(p["headRefName"]) or p.get("headRefOid", "")
+    print(json.dumps([{{f: p.get(f) for f in fields}} for p in rows[: int(opt("--limit", "30"))]])); sys.exit(0)
+if key == "pr create":
+    head, base = opt("--head"), opt("--base")
+    if not remote_head(head):
+        print("pull request create failed: head branch not pushed", file=sys.stderr); sys.exit(1)
+    n = max([p["number"] for p in prs] + [0]) + 1
+    body = open(opt("--body-file")).read() if opt("--body-file") else ""
+    url = "https://github.com/acme/acme/pull/%d" % n
+    prs.append({{"number": n, "url": url, "headRefName": head, "baseRefName": base, "isDraft": False,
+                 "state": "open", "title": opt("--title"), "body": body}})
+    save(); print(url); sys.exit(0)
+if key in ("pr view", "pr ready", "pr merge"):
+    p = find(argv[2]) if len(argv) > 2 else None
+    if p is None:
+        print("no pull requests found", file=sys.stderr); sys.exit(1)
+    if key == "pr ready":
+        p["isDraft"] = False
+    elif key == "pr merge":
+        p["state"] = "merged"
+    save()
+    if key == "pr view":
+        print(json.dumps(p))
+    sys.exit(0)
+print("fake gh: unsupported " + " ".join(argv), file=sys.stderr); sys.exit(2)
+"""
+
+
+def fake_gh_publish(folder: Path, state: dict | None = None) -> Path:
+    """An executable fake `gh` in `folder` (see FAKE_GH_PUBLISH); put `folder` first on PATH."""
+    folder.mkdir(parents=True, exist_ok=True)
+    (folder / "state.json").write_text(json.dumps(state or {"prs": []}))
+    script = folder / "gh"
+    script.write_text(FAKE_GH_PUBLISH.format(python=sys.executable, here=str(folder)))
+    script.chmod(0o755)
+    return script
+
+
+def gh_calls(folder: Path) -> list:
+    path = folder / "calls.jsonl"
+    return [json.loads(ln) for ln in path.read_text().splitlines()] if path.exists() else []
+
+
+def gh_state(folder: Path) -> dict:
+    return json.loads((folder / "state.json").read_text())

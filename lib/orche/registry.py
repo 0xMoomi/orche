@@ -33,7 +33,7 @@ LABEL_MAX, CHARTER_MAX = 24, 400
 # `onboarding`: the worktree exists but onboarding has not finished (re-run init / feat new to resume).
 DIVISION_STATUSES = ("active", "dormant", "paused", "retired", "onboarding")
 FEATURE_STATUSES = ("active", "paused", "retired", "onboarding")
-EVENT_TYPES = ("create", "sleep", "wake", "retire", "freeze", "unfreeze", "stage")
+EVENT_TYPES = ("create", "sleep", "wake", "retire", "freeze", "unfreeze", "stage", "scale")
 
 PROJECT_STR_KEYS = ("repo_id", "path", "main_session", "card", "standing")
 # Optional `orche_version`: the ORCHE version whose templates last rendered the project's files (orche init).
@@ -102,6 +102,8 @@ def _validate_feature(feat, where, errors):
         return
     _need_str(feat, FEATURE_STR_KEYS, where, errors)
     _need_enum(feat, "status", FEATURE_STATUSES, where, errors)
+    if "pane" in feat and not isinstance(feat["pane"], bool):
+        errors.append(f"{where}.pane: must be a boolean")
     scope = feat.get("scope")
     if not _is_str_list(scope) or not scope:
         errors.append(f"{where}.scope: must be a non-empty list of globs")
@@ -337,7 +339,8 @@ def awake_sessions(reg: dict) -> list:
     """Sessions of active divisions and of every active feature, whatever its division's status.
 
     The limit is about live sessions/panes, so an active feature under a paused or dormant
-    division still counts. Main sessions are not counted.
+    division still counts; a headless feature (`pane: false`) has none and does not. Main sessions
+    are not counted.
     """
     out = []
     for proj in reg.get("projects", {}).values():
@@ -345,6 +348,6 @@ def awake_sessions(reg: dict) -> list:
             if div.get("status") == "active":
                 out.append(div["session"])
             for feat in div.get("features", []):
-                if feat.get("status") == "active":
+                if feat.get("status") == "active" and feat.get("pane") is not False:
                     out.append(feat["session"])
     return out

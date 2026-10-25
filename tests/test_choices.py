@@ -31,13 +31,29 @@ def labels(entry):
 
 def entries(data):
     ask = data["ask"]
-    out = [ask["add"], ask["change"], *ask["model"].values(), *(ask["setup"] or []), *(ask["pick"] or [])]
+    out = [ask["add"], ask["change"], *ask["model"].values(), *(ask["setup"] or []), *(ask["pick"] or []), ask["scale"]]
     return [e for e in out if e is not None]
 
 
 class BuildTest(unittest.TestCase):
-    def build(self, r, key="acme", lang="ko", avail=OK, cfg=None):
-        return choices.build(r, cfg or copy.deepcopy(config.DEFAULTS), key, lang, avail)
+    def build(self, r, key="acme", lang="ko", avail=OK, cfg=None, machine=None):
+        return choices.build(r, cfg or copy.deepcopy(config.DEFAULTS), key, lang, avail,
+                             machine or {"ram_mb": 65536, "free_disk_mb": 200000})
+
+    def test_scale_question(self):
+        ko = self.build(reg())
+        e = ko["ask"]["scale"]
+        self.assertEqual(labels(e), ["기본 (지금)", "20개까지", "30개까지"])
+        self.assertEqual(e["tool"]["header"], "규모")
+        self.assertEqual(e["values"]["30개까지"], "30")
+        self.assertEqual(e["tool"]["question"], "에이전트를 몇 개까지 동시에 쓸까요?")
+        self.assertEqual(ko["scale"]["current"], "default")
+        en = self.build(reg(), lang="en", machine={"ram_mb": 24576, "free_disk_mb": 23552})
+        self.assertEqual(en["ask"]["scale"]["tool"]["question"], "How many agents should run at once? "
+                         "(this Mac: 24 GB RAM · 23 GB free disk — tight for 30)")
+        self.assertEqual(labels(en["ask"]["scale"])[0], "Default (now)")
+        tight = self.build(None, key=None, machine={"ram_mb": 16384, "free_disk_mb": None})
+        self.assertIn("이 Mac: RAM 16GB · 디스크 여유 ?GB", tight["ask"]["scale"]["tool"]["question"])
 
     def test_a_new_project_setup_and_pick(self):
         data = self.build(None, key=None)

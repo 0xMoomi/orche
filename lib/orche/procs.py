@@ -381,3 +381,81 @@ def spawn_detached(argv, log, **extra_env) -> None:
     with open(log, "ab") as fh:
         subprocess.Popen(argv, stdin=subprocess.DEVNULL, stdout=fh, stderr=subprocess.STDOUT,
                          start_new_session=True, close_fds=True, env=env)
+
+
+def mem_total_mb():
+    """The machine's RAM in MB (macOS `sysctl -n hw.memsize`, Linux /proc/meminfo), or None."""
+    try:
+        out = subprocess.run(["sysctl", "-n", "hw.memsize"], capture_output=True, text=True,
+                             timeout=PS_TIMEOUT_S).stdout.strip()
+        if out.isdigit():
+            return int(out) // (1024 * 1024)
+    except (OSError, subprocess.SubprocessError):
+        pass
+    try:
+        with open("/proc/meminfo", encoding="utf-8") as fh:
+            for line in fh:
+                if line.startswith("MemTotal:"):
+                    return int(line.split()[1]) // 1024
+    except (OSError, ValueError, IndexError):
+        pass
+    return None
+
+
+def _stdout(argv):
+    """stdout of `argv` (at most PS_TIMEOUT_S), or None when it cannot run or exits non-zero."""
+    try:
+        res = subprocess.run(argv, capture_output=True, text=True, timeout=PS_TIMEOUT_S)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    return res.stdout if res.returncode == 0 else None
+
+
+def parse_sysctl_free(out):
+    """MB free from `sysctl -n kern.memorystatus_level hw.memsize`: the kernel's free percentage × RAM."""
+    try:
+        pct, mem = (int(x) for x in (out or "").split())
+    except ValueError:
+        return None
+    return mem // (1024 * 1024) * pct // 100 if 0 <= pct <= 100 and mem > 0 else None
+
+
+VM_PAGES = ("Pages free", "Pages inactive", "Pages speculative", "Pages purgeable")
+
+
+def parse_vm_stat(out):
+    """MB free from `vm_stat`: free + inactive + speculative + purgeable pages × the page size."""
+    m = re.search(r"page size of (\d+) bytes", out or "")
+    if m is None:
+        return None
+    pages = {}
+    for line in (out or "").splitlines():
+        name, _, value = line.partition(":")
+        if name.strip() in VM_PAGES:
+            try:
+                pages[name.strip()] = int(value.strip().rstrip("."))
+            except ValueError:
+                return None
+    if "Pages free" not in pages:
+        return None
+    return sum(pages.values()) * int(m.group(1)) // (1024 * 1024)
+
+
+def free_mb(run=None):
+    """Free memory in MB, or None when unreadable (design §8.3; the runner's memory guard): macOS the
+    kernel's free percentage × RAM (`sysctl`), else `vm_stat`; Linux /proc/meminfo MemAvailable.
+    `run(argv)` returns stdout or None (tests pass fixed outputs)."""
+    run = run or _stdout
+    for argv, parse in ((["sysctl", "-n", "kern.memorystatus_level", "hw.memsize"], parse_sysctl_free),
+                        (["vm_stat"], parse_vm_stat)):
+        found = parse(run(argv))
+        if found is not None:
+            return found
+    try:
+        with open("/proc/meminfo", encoding="utf-8") as fh:
+            for line in fh:
+                if line.startswith("MemAvailable:"):
+                    return int(line.split()[1]) // 1024
+    except (OSError, ValueError, IndexError):
+        pass
+    return None

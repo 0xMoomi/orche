@@ -50,7 +50,13 @@ from .. import config, log, notify as notice, paths, units, util
 from . import guard
 
 ASK, SENT, NOTIFY_LOCK, TAGGED, RESUMED = "ask.json", "notified.json", ".notify.lock", "tagged", "secret-filled"
-NOTICES = ("done", "stuck", "fallback")     # one-off notices: flow/<p>/<kind>.json
+NOTICES = ("done", "stuck", "fallback", "usage")     # one-off notices: flow/<p>/<kind>.json
+USAGE_NOTICE = {   # Appendix A.15 (once per usage hold, sent by the heartbeat)
+    "ko": "{label} 사용량 한도에 걸렸어요 (다시 열림 {hhmm}). 그때 멈춘 작업 {n}개를 ORCHE가 자동으로 다시 돌려요. 바로 "
+          "계속하려면: API 키로 돌리거나 일부 부서를 Codex로 옮기기.",
+    "en": "{label} usage limit reached (resets {hhmm}). ORCHE re-runs the {n} held units then. To keep going now: "
+          "run on an API key, or move some divisions to Codex."}
+VENDOR_LABEL = {"claude": "Claude", "codex": "Codex"}
 ASK_MAX, STEP_MAX, LINE_MAX = 160, 200, 100
 OWNER_PRESENT_S = 120       # the owner prompted Main this recently: no first notification
 NOTIFY_GAP_S = 300          # at most one notification per project per this many seconds
@@ -389,6 +395,14 @@ def announce(project, kind, body, now=None, *, first=False) -> bool:
     rec = {"text": notice.clean(body), "at": _iso(now), "first": bool(first), "id": os.urandom(6).hex()}
     util.write_json(_path(project, f"{kind}.json"), rec)
     return notify(project, rec["text"], kind, now, notice_id=rec["id"], first=first)
+
+
+def usage_notice(project, vendor, hhmm, n, now=None) -> bool:
+    """The one owner notice of a usage hold (Appendix A.15, config `lang`), as `project`'s `usage`
+    notice (announce: a held-back one is flushed by the heartbeat)."""
+    lang = "ko" if (config.load().get("lang") or "en") == "ko" else "en"
+    text = USAGE_NOTICE[lang].format(label=VENDOR_LABEL.get(vendor, vendor), hhmm=hhmm, n=n)
+    return announce(project, "usage", text, now)
 
 
 # ---- entry points --------------------------------------------------------------------------------

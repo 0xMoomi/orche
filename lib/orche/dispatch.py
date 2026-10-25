@@ -71,6 +71,18 @@ def _check_reachable(r, t):
         raise brief.Refusal(f"{brief.REFUSE}{t.session}'s worktree {wt} is missing: re-target, or recreate it.")
 
 
+def _check_pin(r, t, block, cfg) -> None:
+    """Refuse a MODEL pin the target division cannot run (ladder.pin_error): another vendor, a model
+    priced above the division's, or Codex while it is unavailable."""
+    pin = str(block.fields.get("MODEL") or "").strip()
+    if not pin:
+        return
+    from . import ladder
+    err = ladder.pin_error(cfg, pin, vendors.of(r.reg, t) if t.owns_worktree else "claude-opus-5-5", t.session)
+    if err:
+        raise brief.Refusal(f"{brief.REFUSE}{err}")
+
+
 def plan_blocks(r, bodies, frm) -> list:
     """Parse + resolve every block before any write: one Plan per block, or its refusal text.
 
@@ -106,6 +118,7 @@ def plan_blocks(r, bodies, frm) -> list:
                     plans.append(hit if hit is not None else Plan(block, t.session, t.project, external=True))
                     continue
                 _check_reachable(r, t)
+                _check_pin(r, t, block, cfg)
                 hit = guarded(block, t.session)
                 plans.append(hit if hit is not None else Plan(block, t.session, t.project))
                 accepted += hit is None
@@ -126,6 +139,7 @@ def plan_blocks(r, bodies, frm) -> list:
                 raise brief.Refusal(_cross_project_error(r, t.session, t.project, frm.project))
             if block.kind != "stop":
                 _check_reachable(r, t)
+                _check_pin(r, t, block, cfg)
             hit = guarded(block, t.session, block.kind == "amend" and deliver.runner_wanted(r, t.session, cfg))
             plans.append(hit if hit is not None else Plan(block, t.session, prior.project, prior, block.unit))
             accepted += hit is None and block.kind != "stop"

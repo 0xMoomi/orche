@@ -8,6 +8,7 @@ import inspect
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
 import time
@@ -489,6 +490,58 @@ class CreateFeatureTest(TransitionsCase):
         self.assertIn("orche: warning: could not mark the worktree unread: x: m", err.getvalue())
 
 
+
+class HeadlessFeatureTest(CreateFeatureTest):
+    """0.9.0 scale: `feature_panes: false` creates features without panes; a disk guard."""
+
+    def config(self, **kw):
+        (self.home / "config.json").write_text(json.dumps(kw))
+
+    def test_headless_feature_opens_no_pane(self):
+        self.config(feature_panes=False)
+        before = limits.awake(registry.load())
+        data, line = self.create()
+        self.assertEqual(line, "feat-acme-shop-pay active (feat/pay)")
+        self.assertEqual(self.orca_calls("terminal create"), [])
+        self.assertIs(self.entry("feat-acme-shop-pay")["pane"], False)
+        self.assertEqual(limits.awake(registry.load()), before)
+        data, line = self.run_verb(transitions.wake, "feat-acme-shop-pay")
+        self.assertEqual(line, "feat-acme-shop-pay active (pane opened)")
+        self.assertEqual(len(self.orca_calls("terminal create")), 1)
+        self.assertNotIn("pane", self.entry("feat-acme-shop-pay"))
+        self.assertEqual(limits.awake(registry.load())[0], before[0] + 1)
+
+    def test_scale_20_and_30_make_features_headless(self):
+        from orche import scale
+        for preset in ("20", "30"):
+            with self.subTest(preset=preset):
+                scale.apply(preset, "user")
+                data, line = self.create(name=f"p{preset}", scope=(f"src/p{preset}/**",))
+                self.assertEqual(line, f"feat-acme-shop-p{preset} active (feat/p{preset})")
+                self.assertIs(self.entry(f"feat-acme-shop-p{preset}")["pane"], False)
+        self.assertEqual(self.orca_calls("terminal create"), [])
+
+    def test_headless_wake_respects_awake_limit(self):
+        self.config(feature_panes=False)
+        self.create()
+        reg = registry.load()
+        reg["limits"]["max_awake_sessions"] = limits.awake(reg)[0]
+        self.save(reg)
+        exc = self.refused(transitions.wake, "feat-acme-shop-pay")
+        self.assertIsInstance(exc, limits.AwakeLimit)
+        self.assertEqual(self.orca_calls("terminal create"), [])
+
+    def test_disk_guard_refuses(self):
+        self.config(feature_min_free_disk_mb=10240)
+        usage = shutil._ntuple_diskusage(100 * 2 ** 30, 90 * 2 ** 30, int(9.6 * 2 ** 30))
+        with mock.patch.object(shutil, "disk_usage", return_value=usage):
+            exc = self.refused_create()
+        self.assertEqual((exc.code, exc.msg), (3, "disk: 9.6 GiB free < 10 GiB (scale custom); free space or "
+                                                  "pick a smaller scale"))
+        self.assertEqual(self.calls, [])
+        with mock.patch.object(shutil, "disk_usage", return_value=usage._replace(free=11 * 2 ** 30)):
+            self.assertEqual(self.create()[1], "feat-acme-shop-pay active (feat/pay)")
+
 class DivisionsTest(test_hr.HrCase):
     SETUP = {"divisions": ["build", "gtm"], "custom": {}, "stage": "building", "aliases": []}
 
@@ -737,7 +790,7 @@ class StructureTest(test_hr.HrCase):
         orche.hr.book orche.hr.create orche.hr.limits orche.hr.models orche.hr.onboarding orche.hr.panes orche.hr.refresh
         orche.hr.retire orche.hr.transitions orche.janitor orche.janitor.archive orche.janitor.discover orche.janitor.graveyard
         orche.log orche.mask orche.metrics orche.notify orche.orca orche.paths orche.procs orche.registry orche.roster
-        orche.runs orche.setup_flow orche.shell orche.statusline orche.templates orche.units orche.util""".split())
+        orche.runs orche.scale orche.setup_flow orche.shell orche.statusline orche.templates orche.units orche.util""".split())
     FORBIDDEN = re.compile(r"orche\.(cmd_\w+|dispatch|runner|inbox|intake|triage|ledger|jev\w*)$")
 
     def sources(self):

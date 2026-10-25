@@ -11,12 +11,12 @@ from . import log, mask, shell, units, util, vendors
 if TYPE_CHECKING:
     from . import roster
 
-KEYS = ("TO", "GOAL", "SCOPE", "CONTEXT", "ACCEPT", "VERIFY", "TIMEBOX", "FORBID", "REPORT", "TIER", "ROLLBACK")
+KEYS = ("TO", "GOAL", "SCOPE", "CONTEXT", "ACCEPT", "VERIFY", "TIMEBOX", "FORBID", "REPORT", "TIER", "ROLLBACK", "MODEL")
 TIERS = ("mechanical", "standard", "hard")
 REFUSE = "[orche] dispatch refused: "
 UNITS = ".orche/units"          # a unit folder is <project root>/UNITS/<unit>
 
-_REQUIRED = tuple(k for k in KEYS if k != "ROLLBACK")
+_REQUIRED = tuple(k for k in KEYS if k not in ("ROLLBACK", "MODEL"))
 _UNIT_ID = re.compile(r"^[a-z0-9][a-z0-9-]*-\d{8}-\d+$")
 _AMEND = re.compile(r"AMEND\s+(\S+)\s+rev\s+(\d+)")
 _STOP = re.compile(r"STOP\s+(\S+)(?:\s+(.*))?")
@@ -366,9 +366,12 @@ def _render(unit, rev, supersedes, note, to, frm, at, standing, fields, lineage,
               f"to: {to}   from: {frm}",
               f"lineage: {lineage}   parent: {parent or '-'}",
               f"worktree: {worktree}   branch: {branch}"]
-    if model:   # a division/feature target: the model it runs on and the TIER's headless effort
-        tier = str(fields.get("TIER", "")).strip()
-        lines.append(f"model: {model}   effort: {vendors.EFFORT.get(tier, 'medium')} (TIER {tier or '-'})")
+    if model:   # a division/feature target: the TIER's rung under the division's model (ladder.py)
+        from . import config, ladder
+        cfg, tier = config.load(), str(fields.get("TIER", "")).strip()
+        pin = str(fields.get("MODEL") or "").strip() or None
+        lines.append(f"model: {ladder.header(cfg, model, tier, pin)}   "
+                     f"effort: {ladder.rung(cfg, model, tier, pin).effort} (TIER {tier or '-'})")
     lines += [f"project root: {root}   (brief + REPORT.md live under project root/{UNITS}/{unit}/)",
               "Work only inside `worktree`. SCOPE paths are relative to it."]
     lines += ["", standing.rstrip(), "", f"persona: .claude/agents/{to}.md", "", f"## Brief {unit}"]

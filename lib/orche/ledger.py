@@ -264,3 +264,82 @@ def save_grader_iteration(state: dict, n: int, rng: str, text: str) -> Path:
              "history": [*state["history"], {"n": n, "range": rng, "package": str(package), "at": now_utc()}]}
     util.write_json(grader_dir() / f"{unit}.json", state)
     return package
+
+
+# ---- the review table (design §6.1) -----------------------------------------
+
+REVIEW_COLUMNS = ("pr", "sha", "kind", "verdict", "reviewer", "model", "writer", "round", "note",
+                  "evidence", "ts")
+REVIEW_HEADER = "\t".join(REVIEW_COLUMNS)
+REVIEW_KINDS = ("pre", "build")
+REVIEW_VERDICTS = ("pass", "return", "error", "skipped", "held")
+REVIEW_REQUIRED = ("pr", "sha", "kind", "verdict", "reviewer", "model", "writer", "round", "evidence")
+
+
+def review_path(proj: str) -> Path:
+    return paths.orche_home() / "ledger" / f"{proj}.review.tsv"
+
+
+def make_review_row(pr, sha, kind, verdict, reviewer, model, writer, round=1, note="", evidence="",
+                    ts=None, *, writer_model=None, mode="required", second_vendor=True) -> dict:
+    """A validated review row. Refuses an empty field (note excepted), reviewer == writer, and, for a
+    `pre` row in required mode while a second vendor is available, a reviewer model of the writer's
+    vendor (`writer_model`) whose note does not carry a `fallback` reason. Raises LedgerError."""
+    from . import vendors
+    row = {"pr": cell(pr).lower(), "sha": cell(sha), "kind": cell(kind), "verdict": cell(verdict),
+           "reviewer": cell(reviewer), "model": cell(model), "writer": cell(writer), "round": cell(round),
+           "note": cell(note), "evidence": cell(evidence), "ts": ts or now_utc()}
+    empty = [c for c in REVIEW_REQUIRED if not row[c]]
+    if empty:
+        raise LedgerError(f"review row: empty {', '.join(empty)}")
+    if not PR_RE.fullmatch(row["pr"]):
+        raise LedgerError(f"pr must be a number or 'none', got {row['pr']!r}")
+    if not SHA_RE.fullmatch(row["sha"]):
+        raise LedgerError(f"sha must be 7-40 hex characters, got {row['sha']!r}")
+    if row["kind"] not in REVIEW_KINDS:
+        raise LedgerError(f"kind must be one of {'|'.join(REVIEW_KINDS)}, got {row['kind']!r}")
+    if row["verdict"] not in REVIEW_VERDICTS:
+        raise LedgerError(f"verdict must be one of {'|'.join(REVIEW_VERDICTS)}, got {row['verdict']!r}")
+    if row["reviewer"] == row["writer"]:
+        raise WriterIsJudge(f"reviewer {row['reviewer']} wrote the code (writer != judge)")
+    if (row["kind"] == "pre" and mode == "required" and second_vendor and writer_model
+            and vendors.vendor_of(row["model"]) == vendors.vendor_of(writer_model)
+            and "fallback" not in row["note"]):
+        raise LedgerError(f"pre-review by {row['model']} is the writer's vendor "
+                          f"({vendors.vendor_of(writer_model)}): use the other vendor or note `fallback: <why>`")
+    return row
+
+
+def append_review(proj: str, row: dict) -> Path:
+    """Append one review row (header created on first write). Returns the table's path."""
+    target = review_path(proj)
+    util.append_row(target, REVIEW_HEADER, "\t".join(cell(row.get(c, "")) for c in REVIEW_COLUMNS))
+    return target
+
+
+def read_reviews(proj: str) -> list:
+    try:
+        text = review_path(proj).read_text(encoding="utf-8")
+    except FileNotFoundError:
+        return []
+    lines = [line for line in text.split("\n") if line.strip()]
+    if lines and lines[0].split("\t")[:2] == ["pr", "sha"]:
+        lines = lines[1:]
+    return [dict(zip(REVIEW_COLUMNS, (c.strip() for c in line.split("\t")))) for line in lines]
+
+
+def review_for(proj, pr, sha, kind):
+    """The newest review row of `kind` for (pr, sha) (sha prefixes match), else None."""
+    for row in reversed(read_reviews(proj)):
+        if row.get("kind") == kind and row.get("pr") == str(pr).lower() and _same_commit(row.get("sha", ""), sha):
+            return row
+    return None
+
+
+def record_review(proj, kind, pr, head, verdict, findings, reviewer, model, *, writer, round=1, note="",
+                  writer_model=None, mode="required", second_vendor=True) -> dict:
+    """make_review_row + append_review; `findings` (the review's report path) is the evidence."""
+    row = make_review_row(pr, head, kind, verdict, reviewer, model, writer, round, note, findings,
+                          writer_model=writer_model, mode=mode, second_vendor=second_vendor)
+    append_review(proj, row)
+    return row

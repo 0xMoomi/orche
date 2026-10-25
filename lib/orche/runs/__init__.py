@@ -14,7 +14,7 @@ Run locks under ORCHE_HOME/runs/<proj>/, one set per live `orche run`.
   share one worktree. A second unit for the same target waits like a run over the project cap.
 
 Light on purpose: this file imports only headless, log, paths, procs, registry, shell and util,
-and loads `filing` and `job` only inside the functions that need them (the status line counts
+and loads `config`, `filing` and `job` only inside the functions that need them (the status line counts
 runs on every render; the prompt hook reconciles on every prompt).
 
 start() is the Stop hook's `orche run <unit>`, detached (procs.spawn_detached), dated by SINCE_ENV;
@@ -67,6 +67,18 @@ TARGET_SUFFIX = ".target.lock"
 SWEEP_SUFFIX = ".sweep"     # a filed lost run whose leftovers are not swept yet (holds no slot)
 SWEEP_TRIES = 3     # unreadable process tables in a row before a pending sweep is settled by kill -0
 LOST = object()     # _try_acquire: a dead run's lock is left; reconcile() first
+GLOBAL_MUTEX = ".mutex"     # ORCHE_HOME/runs/.mutex: the global cap's count (the per-project mutex stays)
+MEM_POLL_S = 10.0   # a memory wait polls this often (design §8.3)
+MEM_UNREADABLE = ".memory-unreadable"   # the day the unreadable memory reading was last logged
+
+
+class _Wait(str):
+    """Why acquire() waits, with the fields of its events line (`run unit=<u> waiting=<kind> …`, once per wait)."""
+
+    def __new__(cls, text, kind, **fields):
+        self = super().__new__(cls, text)
+        self.kind, self.fields = kind, fields
+        return self
 SINCE_ENV = "ORCHE_RUN_SINCE"   # start() dates the request; job.run_since() reads it
 
 
@@ -176,6 +188,69 @@ def count(proj: str) -> int:
     return len(live(proj))
 
 
+def _live_elsewhere(folder) -> int:
+    """Live runs of every project but `folder`'s (None: all), read without their mutexes."""
+    try:
+        dirs = [d for d in (paths.orche_home() / "runs").iterdir() if d.is_dir() and d != folder]
+    except OSError:
+        return 0
+    return sum(1 for d in dirs for path in _unit_locks(d)
+               if (data := _read(path)) is not None and alive(data.get("pid")))
+
+
+def total() -> int:
+    """Live runs of all projects together."""
+    return _live_elsewhere(None)
+
+
+def caps(cfg) -> tuple:
+    """(runner.max_parallel, runner.max_parallel_total) of config `cfg`, at least 1 each."""
+    rcfg = (cfg or {}).get("runner") or {}
+
+    def num(key, default):
+        try:
+            return max(1, int(rcfg.get(key) or default))
+        except (TypeError, ValueError):
+            return default
+    return num("max_parallel", 4), num("max_parallel_total", 8)
+
+
+def at_cap(proj: str, cfg) -> bool:
+    """The project has max_parallel live runs, or all projects together max_parallel_total (R34)."""
+    per, tot = caps(cfg)
+    n = count(proj)
+    return n >= per or n + _live_elsewhere(run_dir(proj)) >= tot
+
+
+def _memory_wait(min_mb):
+    """A _Wait while free memory (procs.free_mb) is below `min_mb` (runner.min_free_mb); None with
+    enough, no minimum, or no reading (no guard then; one hooks-log line a day)."""
+    try:
+        min_mb = int(min_mb or 0)
+    except (TypeError, ValueError):
+        return None
+    if min_mb <= 0:
+        return None
+    free = procs.free_mb()
+    if free is None:
+        mark, day = paths.orche_home() / "runs" / MEM_UNREADABLE, _dt.date.today().isoformat()
+        try:
+            seen = mark.read_text(encoding="utf-8").strip() == day
+        except OSError:
+            seen = False
+        if not seen:
+            try:
+                mark.parent.mkdir(parents=True, exist_ok=True)
+                mark.write_text(day, encoding="utf-8")
+            except OSError:
+                pass
+            log.log("hooks", "runner: free memory is unreadable: no memory guard today")
+        return None
+    if free >= min_mb:
+        return None
+    return _Wait(f"free memory {free} MB < {min_mb} MB", "memory", free_mb=free, min_mb=min_mb)
+
+
 def _owner_lock(folder: Path, data: dict):
     """The unit lock a target-lock record belongs to (same unit and pid), else None."""
     unit = data.get("unit")
@@ -183,13 +258,15 @@ def _owner_lock(folder: Path, data: dict):
     return owner if owner is not None and str(owner.get("pid")) == str(data.get("pid")) else None
 
 
-def _try_acquire(folder: Path, unit: str, info: dict, limit: int):
-    """Under the project mutex: take `<unit>.lock` (and `<to>.target.lock`) if a project slot and
-    the target are free. (lock path, None), (None, why it waits), or (None, LOST) when an unfiled
+def _try_acquire(folder: Path, unit: str, info: dict, limit: int, total=None):
+    """Under the global mutex, then the project's: take `<unit>.lock` (and `<to>.target.lock`) if a
+    project slot, a global one (`total` live runs of all projects; None: no global cap) and the
+    target are free. (lock path, None), (None, why it waits), or (None, LOST) when an unfiled
     lock of a dead `orche run` is left: reconcile() files it first (never dropped unfiled). An
     unreadable lock and a dead target lock without its unit lock are dropped here; a dead lock
     that is already filed (`reconciled`) holds nothing: it becomes its pending sweep (_settle)."""
-    with open(folder / ".mutex", "a") as fh:
+    with open(folder.parent / GLOBAL_MUTEX, "a") as gm, open(folder / ".mutex", "a") as fh:
+        fcntl.flock(gm, fcntl.LOCK_EX)
         fcntl.flock(fh, fcntl.LOCK_EX)
         busy = 0
         for path in folder.glob("*.lock"):
@@ -222,6 +299,10 @@ def _try_acquire(folder: Path, unit: str, info: dict, limit: int):
             busy += 1
         if busy >= limit:
             return None, f"{busy} live runs"
+        if total:
+            n = busy + _live_elsewhere(folder)
+            if n >= total:
+                return None, _Wait(f"{n} live runs in all projects (cap {total})", "global", n=n, cap=total)
         to = info.get("to")
         held = _read(target_lock(folder.name, to)) if to else None
         if held is not None:     # live: a dead one returned LOST above
@@ -237,9 +318,13 @@ def _try_acquire(folder: Path, unit: str, info: dict, limit: int):
 
 
 def acquire(proj: str, unit: str, info: dict, limit: int, wait_s=None, poll_s=None, cancel=None,
-            reg=None) -> Path:
+            reg=None, total=None, min_free_mb=None) -> Path:
     """Take a run slot for `unit` (and its target, `info["to"]`); waits while the project has
-    `limit` live runs or the target runs another unit. Raises Busy / Duplicate, or Cancelled when
+    `limit` live runs, all projects together `total` (runner.max_parallel_total), free memory is
+    below `min_free_mb` (runner.min_free_mb, re-read from config.json after every poll; MEM_POLL_S
+    polls) or the target runs another unit.
+    A global or memory wait logs one events line (`run unit=<u> waiting=global n=<n> cap=<c>`,
+    `… waiting=memory free_mb=<n> min_mb=<m>`). Raises Busy / Duplicate, or Cancelled when
     `cancel()` returns a reason (checked on every poll).
 
     The project's lost runs are reconciled first (reconcile(): a dead or recycled `orche run`
@@ -250,24 +335,43 @@ def acquire(proj: str, unit: str, info: dict, limit: int, wait_s=None, poll_s=No
     limit = max(1, int(limit))
     reg = registry.load() if reg is None else reg
     reconcile(reg, proj, budget_s=RECONCILE_BUDGET_S)
-    tidied = True
+    tidied, waits = True, set()
     while True:
-        mine, why = _try_acquire(folder, unit, info, limit)
-        if mine is not None:
-            return mine
-        if why is LOST:
-            if not tidied:
-                reconcile(reg, proj, budget_s=RECONCILE_BUDGET_S)
-                tidied = True
-                continue
-            why = "a lost run's lock could not be cleared yet"
+        why = _memory_wait(min_free_mb)
+        if why is None:
+            mine, why = _try_acquire(folder, unit, info, limit, total)
+            if mine is not None:
+                return mine
+            if why is LOST:
+                if not tidied:
+                    reconcile(reg, proj, budget_s=RECONCILE_BUDGET_S)
+                    tidied = True
+                    continue
+                why = "a lost run's lock could not be cleared yet"
         tidied = False
+        if isinstance(why, _Wait) and why.kind not in waits:
+            waits.add(why.kind)
+            log.log("events", f"run unit={unit} waiting={why.kind} "
+                              + " ".join(f"{k}={v}" for k, v in why.fields.items()))
         reason = cancel() if cancel is not None else None
         if reason:
             raise Cancelled(reason)
         if time.monotonic() >= deadline:
             raise Busy(f"runner busy: {why}")
-        time.sleep(POLL_S if poll_s is None else poll_s)
+        memory = isinstance(why, _Wait) and why.kind == "memory"
+        time.sleep(poll_s if poll_s is not None else MEM_POLL_S if memory else POLL_S)
+        if min_free_mb is not None:
+            min_free_mb = _min_free_mb(min_free_mb)
+
+
+def _min_free_mb(previous):
+    """runner.min_free_mb as config.json says now (a waiting run picks up a lowered guard); `previous`
+    when it cannot be read."""
+    from .. import config
+    try:
+        return (config.load().get("runner") or {}).get("min_free_mb", previous)
+    except Exception:  # noqa: BLE001 - an unreadable config keeps the guard the run started with
+        return previous
 
 
 # The run's own empty `--mcp-config` (headless.marker_path): written when claude starts, removed

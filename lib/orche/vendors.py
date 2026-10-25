@@ -5,13 +5,12 @@ A model string is a Claude model id (`claude-…`, an alias `sonnet`/`opus`/`hai
 config `models.catalog`), `codex`
 (Codex's own default model) or `codex:<model id>`. A division records one (`divisions.<d>.model`); a
 feature agent has none of its own and runs on its division's. No effort is stored: a headless run's
-effort is its TIER's (EFFORT), a pane's is its persona's (the recommendation table or the custom spec).
+effort is its TIER's rung (ladder.py), a pane's is its persona's (the recommendation table or the custom spec).
 Imports nothing from ORCHE at module top.
 """
 import unicodedata
 from typing import NamedTuple
 
-EFFORT = {"mechanical": "low", "standard": "medium", "hard": "high"}   # --effort by the dispatch TIER
 FEATURE_EFFORT = "high"   # a feature persona's effort (its model is its division's)
 CODEX = "codex"
 VENDORS = ("claude", CODEX)

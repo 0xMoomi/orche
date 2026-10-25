@@ -173,6 +173,18 @@ _Avoid_: status line (the runner's word), STATUS word, report status (that is th
 The checks a completion claim must pass before a session may stop, a pointer may say done, or a run is filed as done (`lib/orche/donegate.py`). There are three contexts: the Stop hook, `orche report` and the runner.
 _Avoid_: completion gate (the old name), ledger gate (the ledger row is one of its checks).
 
+**Pre-review**:
+The cross-vendor review of a gated unit's published head inside its own run, before Build sees it (`lib/orche/review/pre.py`): PASS, RETURN (reworked in the run, at most `review.rounds` times per revision) or error. A pane unit gets one round in `orche report done`.
+_Avoid_: code review (Build's), the done gate (that checks the ledger row, not the change).
+
+**Reviewer**:
+The model that reads a change read-only and answers `VERDICT: PASS|RETURN`, recorded as `review:pre:<model>`: never a session, so never the writer. Of another vendor than the writer's when one runs, else the other Claude model (noted).
+_Avoid_: verifier (the ledger's), judge (the general writer ≠ judge rule).
+
+**Rework**:
+The writer's attempt after a RETURN, inside the same run: the brief plus the findings as data; it fixes or rebuts each finding, commits, records the ledger row and ends with STATUS: done. History `kind: rework`.
+_Avoid_: AMEND (a new revision; a rework is not one), retry (a lost or stopped run run again), escalation (one rung up after a failed attempt).
+
 **Proof**:
 What the done gate read for a claim: HEAD, its ledger row and the missing items.
 _Avoid_: evidence (that is the ledger's evidence column), verdict (the ledger's verdict column).
@@ -284,6 +296,61 @@ _Avoid_: blocker, request.
 **Parent**:
 The unit whose work led to a brief: for a division's brief, the division's newest brief. Main's briefs have none (`parent: -`). G6 caps parent depth at 3 and children at 5.
 _Avoid_: caller, origin.
+
+**Traffic control**:
+Build's role from 0.9.0: it splits work, decides PASS or RETURN on finished features and lets the merge queue land them; it never merges by hand.
+_Avoid_: integration (Build no longer integrates).
+
+**Publish**:
+The push of a unit's branch and the opening of its PR after its done passed the gate.
+
+**Merge queue**:
+A project's FIFO of approved PRs (`orche queue`), tested one at a time on top of the newest base and landed on green by the integrator.
+_Avoid_: integration branch.
+
+**Entry**:
+One PR in the merge queue, pinned to the head SHA that was approved.
+
+**Integrator**:
+The model-free process (`orche queue run <p>`) that tests and lands entries in its own checkout (`ORCHE_HOME/queue/<p>/checkout`, a clone, never a unit's worktree); one per project.
+
+**Candidate**:
+The merge commit of an entry's head onto the fetched base (`git merge --no-ff`), which the gate tests.
+
+**Gate**:
+`scripts/verify/ci.sh` plus the entry's committed VERIFY scripts, run on the candidate (or on the base alone for main's health) with a clean environment and one timeout.
+
+**Landing**:
+The integrator's `gh pr merge --match-head-commit <head>` of a green candidate's PR, then the proof that the landed commit has the base and the head as parents and the candidate's tree.
+_Avoid_: merging by hand.
+
+**Return**:
+An entry leaving the queue red, conflicting or timed out; its writer gets an AMEND.
+_Avoid_: reject.
+
+**Closed queue**:
+The queue after the base itself failed its gate (`main-red`) or a landing failed its proof (`proof`). A main-red closure lets only `--first` entries test until main is green again (a `--first` entry landed, or main passed its gate); a proof closure takes nothing, `--first` included, until `orche queue resume <project>`.
+
+**Checklist**:
+The eight lines a Build review answers: 1 ACCEPT met by evidence, 2 VERIFY committed and passing at the head, 3 inside SCOPE, 4 no `[skip ci]` on code, 5 every pre-review [act] finding fixed or rebutted, 6 no other PR or feature on the same paths, 7 not high risk, 8 within `review.pane_lines` and not TIER hard. A failed line is `- N: why`.
+_Avoid_: rubric (that is the grader's).
+
+**Build review**:
+The headless, read-only traffic-control review with Build's persona and the checklist.
+_Avoid_: pane review (that is Build reading the PR itself).
+
+**Usage hold**:
+A vendor's pause after a usage or rate limit, across projects, until its reset (`ORCHE_HOME/flow/usage-<vendor>.json`, `lib/orche/flow/usage.py`); the units it stopped are held (a quiet `info`, never `failed`) and the heartbeat re-runs them after it.
+_Avoid_: rate-limit pause, project pause (the limit belongs to the vendor account, not to a project).
+
+**Ladder**:
+The TIER → model and effort table for headless attempts (config `ladder`); a **rung** is one row; **escalation** re-runs a failed mechanical attempt one rung up.
+
+**Attempt**:
+One model call inside a run (work, escalation, rework, review, build-review); RUN.json `attempts` lists them.
+
+**Scale preset**:
+A named set of caps (`default`, `20`, `30`) applied with `orche hr scale`.
 
 ## Relationships
 

@@ -173,7 +173,7 @@ class IntakeRunTest(IntakeCase):
         stdin = self.stdin()
         self.assertIn(f"HEAD: {head(self.repo)}", stdin)
         self.assertIn("- design (Design, custom): Owns the visual design system.", stdin)
-        self.assertIn("- build (Build): assigns features, integrates, tests, owns the ledger, opens PRs.", stdin)
+        self.assertIn("- build (Build): traffic control — assigns features, decides PASS or RETURN, lets the merge queue land PRs, owns the ledger.", stdin)
         self.assertIn('"divisions": {"research": "...", "build": "...", "design": "..."}', stdin)
         self.assertIn("at most 2000 characters", stdin)
 
