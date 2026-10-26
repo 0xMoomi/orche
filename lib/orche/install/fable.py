@@ -15,7 +15,7 @@ REPLACEMENTS = (
     (re.compile(r"(?<![\w/.\-])Sonnet 5(?!\w|\.\d)"), "Sonnet 5", "Sonnet 5.5"),
     (re.compile(r"(?<![\w/.\-])Haiku 4\.5(?!\w|\.\d)"), "Haiku 4.5", "Haiku 5.5"),
 )
-ROUTING_MARKERS = ("->", "→", "라우팅", "모델", "routing", "model")
+ROUTING_MARKERS = ("->", "→", "routing", "model")
 CODE_SPAN = re.compile(r"(`[^`\n]*`)")
 
 

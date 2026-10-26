@@ -23,9 +23,8 @@ GRANT_QUICK_S = 15     # orche install --grant: already granted? (before anythin
 GRANT_S = 300          # ... then this long after Finder and Full Disk Access were opened
 KICK_EVERY_S = 30      # ... kickstarting the job this often
 POLL_S = 1.0
-FIRST_PASS_WAIT = f"하트비트 첫 점검 확인 중… (최대 {FIRST_PASS_S}초)"   # printed (flushed) before each wait
-INTERRUPTED = ("중단됨 — 나중에 다시 확인하세요: orche install --grant / "
-               "interrupted — check later: orche install --grant")
+FIRST_PASS_WAIT = f"checking the heartbeat's first pass… (up to {FIRST_PASS_S} s)"   # printed (flushed) before each wait
+INTERRUPTED = "interrupted — check later: orche install --grant"
 EXIT_INTERRUPTED = 130   # Ctrl-C during a wait: INTERRUPTED, this exit, no traceback
 
 
@@ -36,29 +35,23 @@ def blocked(app) -> str:
 
 def grant_wait(seconds) -> str:
     """`orche install --grant`'s progress line before a wait of `seconds`."""
-    return f"권한 확인 중… (최대 {seconds // 60}분)" if seconds >= 60 else f"권한 확인 중… (최대 {seconds}초)"
+    return f"checking access… (up to {seconds // 60} min)" if seconds >= 60 else f"checking access… (up to {seconds} s)"
 GUIDANCE = (   # {name}: what Finder selects (python_app(): Python.app, or a bare python3.x binary)
-    "ORCHE 백그라운드 작업(하트비트)이 macOS 개인정보 보호 설정 때문에 프로젝트 폴더를 읽지 못합니다. 방금 열린 "
-    "Finder 창에서 선택된 항목({name})을 시스템 설정의 '전체 디스크 접근 권한' 목록으로 끌어다 놓고 스위치를 켠 다음, "
-    "터미널에서 실행하세요: orche install --grant",
+    "ORCHE's background job (the heartbeat) cannot read the project folder because of macOS privacy settings. "
     "Drag the item selected in Finder ({name}) into System Settings › Privacy & Security › Full Disk Access, "
-    "switch it on, then run: orche install --grant",
+    "switch it on, then run in the terminal: orche install --grant",
 )
 STEPS = (
-    "1. 방금 열린 Finder 창에서 선택된 항목({name})을 '전체 디스크 접근 권한' 목록으로 끌어다 놓습니다 "
-    "(안 되면 목록 아래 + → Cmd+Shift+G → 아래 경로 붙여넣기).",
-    "2. 생긴 항목의 스위치를 켭니다 (암호/Touch ID). 'Python이(가) … 폴더에 접근하려고 합니다' 창이 뜨면 "
-    "'허용'을 누르세요.",
-    "3. 이 터미널은 닫지 마세요. ORCHE가 최대 5분 동안 자동으로 확인합니다.",
-    "Drag the item selected in Finder ({name}) into the Full Disk Access list and switch it on; ORCHE checks "
-    "for up to 5 minutes (keep this terminal open).",
+    "1. Drag the item selected in the Finder window that just opened ({name}) into the Full Disk Access list "
+    "(if that fails: + below the list → Cmd+Shift+G → paste the path below).",
+    "2. Switch the new entry on (password/Touch ID). If a window says 'Python would like to access files in …', "
+    "click 'Allow'.",
+    "3. Keep this terminal open. ORCHE checks automatically for up to 5 minutes.",
 )
 NOTHING_TO_GRANT = "nothing to grant — no project is under a protected folder"
-NOT_LOADED = ("하트비트 작업이 설치되어 있지 않습니다 — 먼저 실행하세요: orche install --mode {mode} / "
-              "the heartbeat job is not loaded — run: orche install --mode {mode}")
-GRANTED = "권한 확인 완료 — 하트비트 정상 / granted — heartbeat OK"
-BLOCKED = ("아직 읽지 못합니다 — '전체 디스크 접근 권한'에서 {name} 스위치가 켜져 있는지 확인하고 다시 실행하세요: "
-           "orche install --grant / still blocked — switch {name} on in Full Disk Access, then: orche install --grant")
+NOT_LOADED = "the heartbeat job is not loaded — run: orche install --mode {mode}"
+GRANTED = "granted — heartbeat OK"
+BLOCKED = "still blocked — switch {name} on in Full Disk Access, then: orche install --grant"
 
 _sleep = time.sleep       # test seams (a fake clock advances on sleep)
 _clock = time.monotonic
@@ -132,7 +125,7 @@ def reveal(app) -> list:
 
 
 def steps(app) -> list:
-    """`orche install --grant`'s instructions: the three Korean steps, one English line, then the path
+    """`orche install --grant`'s instructions: the three steps, then the path
     to paste (Cmd+Shift+G) when dragging does not work."""
     name = Path(app).name
     return [line.format(name=name) for line in STEPS] + [f"  {name}: {app}"]

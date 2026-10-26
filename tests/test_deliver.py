@@ -18,7 +18,7 @@ from unittest import mock
 
 import support
 import contextlib
-from orche import brief, deliver, inbox, notify, orca, procs, registry, roster, runs, util
+from orche import brief, deliver, hr, inbox, notify, orca, procs, registry, roster, runs, util
 from test_hooks import HookCase
 from test_registry import load_cli
 
@@ -520,7 +520,7 @@ class DeliverTest(NudgeCase):
         self.assertNotIn("state=reopened", self.events())
         self.assertNotIn("reopened", deliver.last_delivery("div-acme-build", b.unit))
 
-    def test_a_nudge_to_a_disconnected_main_reopens_it_without_a_resume(self):
+    def test_a_nudge_to_a_disconnected_main_reopens_it_resumed_and_asks_where_things_stand(self):
         self.report()
         fake = DeadPane("main-acme", "t-main", [("div-acme-build", "t-build")])
         with mock.patch.object(orca, "terminal", fake):
@@ -529,6 +529,8 @@ class DeliverTest(NudgeCase):
         self.assertEqual(fake.subs().count("create"), 1)                  # hr.project_pane, as `orche wake` opens it
         self.assertNotIn("switch", fake.subs())
         self.assertEqual([c[2] for c in fake.calls if c[0] == "send"], ["main-acme-new"])
+        self.assertIn(("orche", True, hr.panes.RESUMED),
+                      [(p["from"], p["urgent"], p["summary"]) for _f, p in inbox.pending("main-acme")])
 
     def test_an_orca_error_on_send_is_nudge_failed(self):
         b = self.dispatched()

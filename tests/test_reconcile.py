@@ -1079,7 +1079,7 @@ class DeadMainTest(ReconcileCase):
         with mock.patch.object(orca, "terminal", fake), redirect_stderr(io.StringIO()):
             return self.run_at(minutes)
 
-    def test_a_disconnected_main_with_nothing_to_deliver_is_reopened_and_sent_nothing(self):
+    def test_a_disconnected_main_with_nothing_to_deliver_is_reopened_and_asked_where_things_stand(self):
         fake = DeadPane("main-acme-shop", "t-main", [("div-acme-shop-build", "t-b"), ("main-docs-site", "t-d")])
         code, lines = self.run_with(fake)
         self.assertEqual(code, 0)
@@ -1087,8 +1087,10 @@ class DeadMainTest(ReconcileCase):
         self.assertEqual(util.read_json(reconcile.state_path())["reopens:main-acme-shop"]["n"], 1)
         self.assertIn(("close", "--terminal", "t-main"), fake.calls)
         self.assertEqual(fake.subs().count("create"), 1)
-        self.assertNotIn("send", fake.subs())                  # no prompt, nudge or "restarted" line
-        self.assertEqual([s for s in self.spawned if s[0] == "nudge"], [])
+        self.assertNotIn("send", fake.subs())                  # no prompt or "restarted" line typed here
+        self.assertEqual([s for s in self.spawned if s[0] == "nudge"], [("nudge", "main-acme-shop")])
+        self.assertEqual([(p["from"], p["status"], p["urgent"], p["summary"]) for _f, p in inbox.pending("main-acme-shop")],
+                         [("orche", "info", True, hr.panes.RESUMED)])   # one nudge: the resumed note
         self.assertIsNotNone(reconcile.main_reopened(registry.load(), "acme-shop"))
         self.assertTrue(any("reopen session=main-acme-shop state=reopened" in l
                             for l in (self.home / "logs" / "events.log").read_text().splitlines()))

@@ -21,12 +21,12 @@ Stop hook refuses a `STATUS: done` claim until `STATUS.md` was updated in the se
 
 ## How do corrections work?
 
-Tell Main, in plain words ("pages unit: don't change fonts"). Main issues
+Tell Main, in plain words and in your language ("pages unit: don't change fonts"). Main issues
 `AMEND <unit> rev N` with `SUPERSEDES rev N-1: <what>`; the hook writes `BRIEF.md` rev N (history
 in `BRIEF.rev<N>.md`), files an inbox pointer and nudges the worker's pane. A report carrying an
 older `brief_rev` never approves the newer revision. "Stop that" becomes `STOP <unit>`. For a
-rule that should hold from now on, Main (or you) adds a numbered standing order:
-`orche hr correct <proj> --text "..."`.
+rule that should hold from now on, tell Main "from now on always …" (it runs
+`orche hr correct <proj> --text "..."`, a numbered standing order).
 
 ## How do I address another project?
 
@@ -52,9 +52,9 @@ urgent, never the reverse.
 Ops handles monitoring, incidents, releases and backups, which only matter once real users
 exist. The setup leaves Ops unchecked by default; check it in the `orche init` checklist (or add it later
 with `orche init <proj> --divisions <current>,ops`). New projects start at stage `building`, and Ops
-cannot be woken while a project is in that stage (`orche init --wake ops` is refused). When you approve going live, run
-`orche stage set <proj> public --yes`: it records the stage, wakes Ops and prints the Ops
-checklist. `orche stage set <proj> building --yes` goes back; Ops' files stay.
+cannot be woken while a project is in that stage (`orche init --wake ops` is refused). To go live, tell Main (it asks once, then runs
+`orche stage set <proj> public --yes`): it records the stage, wakes Ops and prints the Ops
+checklist. "Back to building" runs `orche stage set <proj> building --yes`; Ops' files stay.
 
 ## What does the Janitor never touch?
 
@@ -63,12 +63,12 @@ registry and cards; ledger, GRAVEYARD, DECISIONS, STATUS, HANDOFF and CHARTER fi
 live checkouts are reported as skips, not cleaned. Only state retires things (`retired`, a
 GRAVEYARD row, `orche discard`); age touches only regenerable artifacts. Sessions are archived,
 never deleted; files go to a 30-day trash with `orche janitor undo`. It stays a dry run until
-`orche janitor enable`.
+you tell Main to turn the janitor on (it runs `orche janitor enable`).
 
 ## How does Keymaster keep secrets out of transcripts?
 
-Agents only know secret names. `orche secret request NAME --env dev --why "..."` notifies you;
-you paste the value into a dialog that runs outside the agent, and Keymaster stores it in GCP
+Agents only know secret names. An agent runs `orche secret request NAME --env dev --why "..."`, which
+notifies you; tell Main to hand it over (it runs `orche secret fill`, never the value in chat) and you paste the value into a dialog that runs outside the agent, and Keymaster stores it in GCP
 Secret Manager, Vercel, GitHub or the keychain, passing it on stdin, never argv, then clears the
 clipboard. Processes get values via `orche secret run -- <cmd>`, injected into that process only.
 A PreToolUse gate denies `.env*` reads and environment dumps; `orche secret redact-transcripts`
@@ -80,8 +80,8 @@ Jev is an external, fast model for typed decisions (choice, score, true/false). 
 to decide whether a report should interrupt Main. It is never used for code. It is off because
 it sends (masked, code-stripped) text off the machine, has no published independent evaluation
 or SLA, and must first pass offline validation on your own data: `orche jev eval extract`,
-label in a separate session, `orche jev eval run`, `orche jev eval report`. Then
-`orche jev enable`. Calls time out after 1 s and fail open.
+label in a separate session, `orche jev eval run`, `orche jev eval report`. Then tell Main
+to turn Jev on (it runs `orche jev enable`). Calls time out after 1 s and fail open.
 
 ## What does `orche init` leave in my repo, and what should I commit?
 
@@ -98,12 +98,13 @@ it is archived when the unit retires. Existing files are never overwritten.
 
 Every PR passes three checks before it lands. First a pre-review by a different vendor, then the head review, then the
 merge queue gate: `scripts/verify/ci.sh` plus the brief's VERIFY, run on top of the current main. When all are green the
-queue merges it. Set `queue.land: owner` and each PR waits for your approval instead (`orche queue approve <p> --all`).
+queue merges it. Set `queue.land: owner` and each PR waits for your approval instead: tell Main to merge the waiting PRs (it runs
+`orche queue approve <p> --all`).
 A merge deploys only if your host deploys main. ORCHE never merges with `--admin` and never force-pushes.
 
 ## How many agents can run at once?
 
-Pick a preset with `orche hr scale`, or tell Main "에이전트 20개까지" or "30개까지".
+Tell Main in your language ("up to 20 agents", "30"): it asks the scale question and runs `orche hr scale <preset>`.
 
 | Preset | max_parallel | total | min_free_mb | feature_min_free_disk_mb | feature panes | about |
 |---|---|---|---|---|---|---|

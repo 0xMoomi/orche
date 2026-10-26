@@ -3,6 +3,24 @@
 All notable changes to ORCHE are listed here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow semantic versioning.
 
+## 0.11.0 — 2026-10-26
+
+### Changed
+
+- Main resumes its conversation on every reopen (`orche wake main-<p>`, the closed-Main repair, a disconnected pane); only `orche init` starts it fresh.
+- Every pane session compacts at 200K tokens (`--autocompact 200000`) and gets the project card again after a compaction.
+- A reopened Main says in five lines what was done last, what runs and what waits on the owner.
+- After `orche init`, Main reports the setup result in its own tab (divisions and models, the intake line, workspaces) and asks for the first request; init closes the window it was run from, so the applying session never writes a report, dispatches or acts as Main.
+- A pane `done` leaves quiet `verifying`/`returned` notes while its pre-review runs; the card shows the unit `verifying`.
+- Main matches the owner's intent in any language, never the wording, and runs the matching `orche` command itself; the rulebook's `## Owner's plain words` is one table that covers every owner action.
+- README, FAQ and the help card lead with words: you tell Main in your language, and commands are shown as what Main runs (and what scripts may call).
+- The repository is English-only: docs, examples, card labels and triage heuristics; Korean choice texts and the `--lang` flag are gone (Main translates for the owner); triage candidates are found by structure (a named target, not a question) in any language.
+- `orche update` on a development checkout (another branch, local changes or local commits) pulls nothing and aligns the install and every project with the checkout when the recorded version differs; it used to refuse with "update by hand".
+
+### Removed
+
+- The install's "restart any main-/div-/feat- panes" notice (a 0.6 migration line) and the "restart the pane or /clear" line after a persona refresh: panes read new files at their next session start, and no ORCHE message asks anyone to close a Main.
+
 ## 0.10.0 — 2026-10-26
 
 ### Added
@@ -132,9 +150,9 @@ All notable changes to ORCHE are listed here. The format follows
   and written nowhere — keys `project`, `lang`, `stage`, `kinds`, `custom`, `models` and `ask` (`add`, `change`,
   `model` per kind plus `*` for a new one, `setup` and `pick` for a project not under ORCHE yet). Each question
   is an AskUserQuestion `tool` (question, header, 2–4 options) plus `values` (label → value); the recommended
-  option comes first with `(권장)`/`(recommended)`, Codex is offered only when it runs (otherwise its state is
+  option comes first with "(recommended)" (in the owner's language), Codex is offered only when it runs (otherwise its state is
   in the question). An unknown project exits 2. A `--setup-file` may carry each division's model under `models`.
-- Division and model setup prompts (부서, division, department, 모델, opus, sonnet, haiku, codex) bypass
+- Division and model setup prompts (the words for division, department or model, opus, sonnet, haiku, codex) bypass
   triage with reason `setup`: Main asks the owner instead of sending a brief.
 - The model shows in `orche depts` (MODEL column), `orche status`, a brief's `model:` line and `orche doctor`
   (a `vendors` row: OK, or WARN naming the Codex divisions and the fix when Codex does not run).
@@ -189,7 +207,7 @@ All notable changes to ORCHE are listed here. The format follows
 - Plain words everywhere (R-PLAIN-1 to R-PLAIN-4): Main's rulebook gains `## Owner's plain words` (status,
   check, update, divisions, halt → the `orche` command Main runs; the owner is never asked to type an orche
   command — a step only the owner can do, such as installing Codex or granting disk access, is shown as that one
-  step — and never sees raw output) and its card says so. The README install prompt asks the first setup with choices ("기본 4개 (권장)"
+  step — and never sees raw output) and its card says so. The README install prompt asks the first setup with choices ("The default 4 (recommended)"
   first) in the owner's language (`--lang ko|en`) and passes the answers as `--setup-file` (a picked design or
   content under `"custom"`); the quick start is three plain steps; new `## Update` section.
   GLOSSARY: Update.
@@ -220,21 +238,21 @@ All notable changes to ORCHE are listed here. The format follows
   privacy) — run: orche install --grant`, or `heartbeat job loaded, no pass yet — …` — and a new `privacy` row
   checks the projects under protected folders against the job's own passes. `orche status` says `heartbeat:
   blocked by macOS privacy — run orche install --grant`.
-- `orche install` waits up to 45 s for a pass of the job itself (`하트비트 첫 점검 확인 중… (최대 45초)`; a plain
+- `orche install` waits up to 45 s for a pass of the job itself ("checking the heartbeat's first pass… (up to 45 s)", in Korean; a plain
   `launchctl kickstart` only when none came yet): `reconcile job: first pass OK (<took_s> s)`. When the job
   cannot read a project it opens Finder at the item to add (the job's Python.app, or a uv/pyenv/conda
   `python3.x`) and System Settings at Full Disk Access and prints what to do, Korean then English, after every
   other line; the install still succeeds. `orche init` of a new project under a protected folder does the same
   check. `orche install --grant` installs nothing: it walks through the grant in three steps and checks for up
-  to 5 minutes (`권한 확인 완료 — 하트비트 정상 / granted — heartbeat OK` / `아직 읽지 못합니다 — … / still blocked —
-  …`; `nothing to grant — …` with no protected project). Ctrl-C during a wait: one line, exit 130. Re-run
+  to 5 minutes ("granted" / "still blocked", in Korean then English:
+  `… / granted — heartbeat OK` / `… / still blocked — …`; `nothing to grant — …` with no protected project). Ctrl-C during a wait: one line, exit 130. Re-run
   `orche install` (same --mode as before) to get the check; after a Python upgrade the grant may not carry
   over (the doctor says so; run `--grant` again).
 - `orche setup [--project PATH ...] [--no-auth]`: one command for a new machine — the install (`--no-jev`, in
   the mode the last install used: plugin when the ORCHE plugin is enabled, else settings), the OAuth token
   status and the two commands to store one, `orche init PATH --no-intake` per project (an unknown repo is
   registered), the heartbeat job's first pass, `orche doctor`. Safe to repeat; exit 1 when a step failed or the
-  doctor has a FAIL; when macOS privacy is all that is left the last line is `setup: 한 단계 남음 — …`.
+  doctor has a FAIL; when macOS privacy is all that is left the last line is "setup: one step left — …" (in Korean).
 
 ### Fixed
 - `orche wake` right after a pane was closed: Orca can still list the closed pane, so wake printed
@@ -390,7 +408,7 @@ All notable changes to ORCHE are listed here. The format follows
 ### Changed
 - Main hands work out with `orche dispatch` (blocks on stdin or `--file`, `---` between blocks; `orche --dry-run dispatch` checks only); each block's outcome prints in the same turn and a refusal exits 2, so Main fixes and re-runs without an extra Stop-hook turn.
 - Personas name the report format a status card (was ketchup style); `orche init` re-renders them.
-- Main's report to the owner is a status card: a fenced block of at most 6 lines with Korean labels and fixed glyphs (⛔ 사장님 할 일 first when the owner must act, then 🟢 완료 · 🟡 검증중 · 🔴 실패 · ⏸ 보류 counts, ▶ 진행, ❓ 결정, ➡ 다음, 🔗 참조); it replaces the ketchup counts.
+- Main's report to the owner is a status card: a fenced block of at most 6 lines with Korean labels and fixed glyphs (⛔ owner step first when the owner must act, then 🟢 done · 🟡 verifying · 🔴 failed · ⏸ held counts, ▶ running, ❓ decision, ➡ next, 🔗 refs); it replaces the ketchup counts.
 - A dispatch or AMEND to a target that cannot be reached is refused by `orche dispatch`: an asleep division gated by stage while its project is building (`… is asleep and gated by stage (<proj> is building): re-target, or run orche stage set <proj> public --yes`), or a division/feature whose worktree is missing; before, such a brief sat `undelivered`.
 - The nudger and the deliverer take separate locks (`.wake.lock`, `.deliver.lock`), so a brief is no longer held up behind a wake's quiet window; the nudger's lock wait follows `inbox.quiet_max_s` (360 s + the cap) instead of a fixed 600 s, and urgent notifications are recorded under their own `.notify.lock` so two nudgers never show one twice.
 
@@ -645,7 +663,7 @@ downgrading. Entries registered before 0.5.0 keep the key, so they stay downgrad
   or the runner. Before, the Stop hook gated it and the runner filed the persona's spaced echo as
   `done`.
 - The Stop hook accepts headings, emoji and other symbol prefixes (`## STATUS: done`). The runner
-  accepts numbered lists, emphasis around the word, `STATUS :` and `STATUS: 완료`.
+  accepts numbered lists, emphasis around the word, `STATUS :` and the Korean word for done.
 - The Stop gate follows the session's identity: a feature agent outside its worktree is gated, and
   Main standing in a feature worktree is not. HEAD is read in the claimant's worktree, also for the
   `head_sha` of an `orche report` pointer.

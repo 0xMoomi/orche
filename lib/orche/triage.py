@@ -5,10 +5,10 @@ Runs inside the UserPromptSubmit hook (hooks/report_inject.py) of a Main session
 1. tags (first token, case-insensitive, stripped before anything reads the prompt):
    `[main]` -> Main; `[direct]`, `[build]`, `[research]`, `[rnd]`, `[gtm]`, `[ops]` -> straight to
    that division; `[drain]` and a prompt starting with `/` or `!` -> bypass.
-2. bypasses (no model): too short, a question, an acknowledgement or continuation word first
-   ("응", "그걸로", "yes", "go ahead", …), a reply to a question Main just asked (its last text,
-   trailing fenced blocks and STATUS lines stripped, ends with `?` or a confirmation request).
-3. heuristics (no model): a candidate is an imperative that names a concrete target and no negation.
+2. bypasses (no model): too short, a question (ends with `?`), a reply to a question Main just asked
+   (its last text, trailing fenced blocks and STATUS lines stripped, ends with `?`).
+3. structure (no model): a candidate names a concrete target (a path, a file name, a quoted
+   identifier) and is not a question; intent is the classifier's, in any language.
 4. classifier (candidates only): Jev (`jev.JevClient`, 1 s) or `claude -p` Haiku, the blank
    headless call (`headless.py`: a fresh temp dir outside $HOME, no tools, no inherited identity),
    killed at `triage.max_latency_s`; direct only when route == direct, confidence >=
@@ -70,59 +70,18 @@ GIT_VERIFY_OPTS = ("--short", "--stat", "--name-only", "--name-status", "--cache
 MAX_GOAL, MAX_ACCEPT, MAX_VERIFY = 500, 300, 200
 
 _TAG = re.compile(r"^\s*\[([A-Za-z]+)\](?=\s|$)\s*")      # the whole first token: `[build]s` is no tag
-_QUESTION_START = re.compile(
-    r"^\s*(?:(?:뭐|무엇|무슨|왜|어떻게|어디|언제|누가|누구|몇|어느|얼마)"
-    r"|(?:what|why|how|where|when|who|whom|whose|which|should|shall|can|could|would|may|might|is|are|was|"
-    r"were|has|have|had|do|does|did|will|any|isn'?t|aren'?t|wasn'?t|doesn'?t|didn'?t|won'?t|can'?t|"
-    r"couldn'?t|shouldn'?t|wouldn'?t)\b)", re.IGNORECASE)
-# A Korean question ending (with or without `?`): …인가(요), …일까(요)/할까/될까, …나(요), …니, …냐,
-# …는가/은가/던가/건가, …는지/은지/을지/할지, …래(요), …어때(요), 뭐야/뭐지/뭐예요.
-_QUESTION_END = re.compile(
-    r"(?:[?？]|까요?|나요?|니|냐|[는은인던건]가요?|[는은인을할될건]지|래요?|어때요?|"
-    r"(?:뭐|무엇|어디|누구|언제|얼마)(?:야|지|예요|에요|이야|이지|죠))\s*[.!~…]*\s*$")
-# Korean imperative/propositive forms. A verbal noun (수정, 추가, …) counts only with a verb ending
-# (수정해, 수정하자, 수정 부탁) or as the prompt's last word ("docs/a.md 오타 수정"): "수정 이력" is a noun.
-_KO_NOUN = r"(?:수정|추가|삭제|작성|정리|변경|제거|생성|반영|구현|적용|교체|갱신|업데이트|리팩터링|리팩토링|문서화|번역|이동|복사)"
-_KO_VERB_INF = r"(?:만들어|바꿔|고쳐|지워|넣어|빼|옮겨|붙여|올려|써|채워|늘려|줄여|나눠|합쳐|맞춰|되돌려|돌려)"
-_KO_VERB_STEM = r"(?:만들|바꾸|고치|지우|넣|빼|옮기|붙이|올리|쓰|채우|늘리|줄이|나누|합치|맞추|되돌리|돌리)"
-_KO_IMPERATIVE = re.compile(
-    _KO_NOUN + r"\s*(?:해|하자|합시다|하세요|하십시오|하라|부탁|바랍니다|바람|요망)"
-    r"|" + _KO_NOUN + r"(?:\s*좀)?\s*[.!~]*\s*$"
-    r"|" + _KO_VERB_INF + r"(?:\s*줘|\s*주세요|\s*주십시오|\s*줄래|\s*봐|라|\s*[.!~]*\s*$)"
-    r"|" + _KO_VERB_STEM + r"(?:자|세요|으세요|십시오)(?=[\s,.!~]|$)"
-    r"|해\s*줘|해\s*주세요|해\s*주십시오|하자|합시다|해\s*[.!~]*\s*$")
-_EN_VERBS = (r"add|create|write|fix|update|remove|rename|document|refactor|change|delete|replace|move|insert|"
-             r"append|prepend|implement|bump|set|edit|correct|translate|tweak|clean\s+up|tidy(?:\s+up)?|make|put|"
-             r"drop|convert|format|sort|reword|rewrite|rephrase|revert|undo|split|merge|extract|inline|"
-             r"generate|include|exclude|enable|disable|adjust|shorten|expand|simplify|polish|capitali[sz]e|"
-             r"fill\s+in|link|swap|wrap|upgrade|downgrade|comment\s+out|uncomment|mark|pin|unpin")
-_EN_IMPERATIVE = re.compile(
-    r"^\s*(?:(?:please|pls|kindly|just|also|now|then|quickly|go(?:\s+and)?|let'?s|let\s+us|"
-    r"i\s+(?:need|want)\s+you\s+to)[\s,]+)*(?:" + _EN_VERBS + r")\b", re.IGNORECASE)
-_NEGATION = re.compile(
-    r"지\s*마(?:세요|십시오|시고|라|요)?(?=[\s,.!~]|$)|지\s*말(?:고|아|라|자)|말아|"
-    r"\bdon'?t\b|\bdo not\b|\bnever\b|\bno need to\b", re.IGNORECASE)
-# An acknowledgement or continuation word first: the prompt answers Main, whatever Main's last line was.
-# Division and model setup is a conversation with the owner (choices, then orche hr), never a brief.
-SETUP_RE = re.compile(r"부서|division|department|모델|\b(opus|sonnet|haiku|codex)\b", re.I)
-
-_CONTINUATION = re.compile(
-    r"^\s*(?:(?:응|네|예|그래|좋아|아니|그걸로|그렇게|그럼)요?(?=[\s,.!?~…]|$)"
-    r"|(?:yes|yeah|ok|okay|sure|no|nope|go ahead|do it|that one)(?![\w'-]|\.\w))", re.IGNORECASE)
+# A question: the text ends with `?` or `？` (emphasis or a closing bracket may follow). One rule for
+# every language: what a prompt means is the classifier's call.
+_QUESTION_END = re.compile(r"[?？]\s*[*_`)\]]*\s*$")
 _EXT = (r"(?:md|mdx|py|ts|tsx|js|jsx|mjs|cjs|json|ya?ml|toml|txt|sh|css|scss|html|go|rs|java|kt|swift|rb|"
         r"php|c|h|cpp|hpp|sql|ini|cfg|csv|env\.example|lock)")
-# ASCII classes on purpose: a Korean particle glued to a file name ("README.md에") must not hide it.
+# ASCII classes on purpose: a word of another script glued to a file name ("README.mdを") must not hide it.
 _PATH = re.compile(r"(?<![A-Za-z0-9_/.-])(?:\.{0,2}/)?[A-Za-z0-9_.-]+(?:/[A-Za-z0-9_.-]+)+\.[A-Za-z0-9]{1,8}"
                    r"(?![A-Za-z0-9_/])")
 _FILE = re.compile(r"(?<![A-Za-z0-9_/.-])[A-Za-z0-9_-][A-Za-z0-9_.-]*\." + _EXT + r"(?![A-Za-z0-9_/])",
                    re.IGNORECASE)
-HEURISTIC_CHARS = 4000                               # heuristics read at most this much of a prompt
+HEURISTIC_CHARS = 4000                               # stage 3 reads at most this much of a prompt
 _QUOTED = re.compile(r"[`'\"“‘]([A-Za-z_][\w.:/-]{1,80})[`'\"”’]")
-_ASKED_END = re.compile(r"[?？]\s*[*_`)\]]*\s*$")
-_CONFIRM = re.compile(
-    r"shall i|should i|do you want|would you like|want me to|let me know|please confirm|ok to proceed|"
-    r"할까요|될까요|드릴까요|볼까요|괜찮을까요|괜찮으신가요|원하시나요|하시겠습니까|맞나요|맞습니까|"
-    r"확인해\s*주세요|알려\s*주세요|말씀해\s*주세요|선택해\s*주세요|결정해\s*주세요", re.IGNORECASE)
 _STATUS_LINE = re.compile(r"^\W*STATUS:", re.IGNORECASE)
 _BARE_FENCE = re.compile(r"^(?:`{3,}|~{3,})$")
 _FENCED_JSON = re.compile(r"```(?:json)?\s*(\{.*?\})\s*```", re.DOTALL)
@@ -226,7 +185,7 @@ def parse_tag(prompt: str):
 # ---- stage 2: bypasses -----------------------------------------------------
 
 def is_question(prompt: str) -> bool:
-    return bool(_QUESTION_START.match(prompt) or _QUESTION_END.search(prompt))
+    return bool(_QUESTION_END.search(prompt))
 
 
 def _tail_lines(path, size):
@@ -295,35 +254,22 @@ def strip_trailer(text: str) -> str:
 
 
 def main_asked(path) -> bool:
-    """Main's last assistant message, its trailer stripped, ends with a question or a confirmation request."""
-    text = strip_trailer(last_assistant_text(path))
-    if not text:
-        return False
-    paragraph = re.split(r"\n\s*\n", text[-600:])[-1]
-    return bool(_ASKED_END.search(text) or _CONFIRM.search(paragraph))
+    """Main's last assistant message, its trailer stripped, ends with a question."""
+    return is_question(strip_trailer(last_assistant_text(path)))
 
 
 def bypass_reason(prompt: str, transcript_path=None):
     """Why this untagged prompt skips triage, or None."""
     if len(prompt.strip()) < MIN_CHARS:
         return "short"
-    if _CONTINUATION.match(prompt):
-        return "continuation"
     if is_question(prompt):
         return "question"
-    if SETUP_RE.search(prompt):
-        return "setup"
     if main_asked(transcript_path):
         return "reply-to-main"
     return None
 
 
-# ---- stage 3: heuristics ---------------------------------------------------
-
-def is_imperative(prompt: str) -> bool:
-    prompt = prompt[:HEURISTIC_CHARS]
-    return bool(_EN_IMPERATIVE.match(prompt) or _KO_IMPERATIVE.search(prompt))
-
+# ---- stage 3: structure ----------------------------------------------------
 
 def find_paths(prompt: str) -> list:
     """Path-like tokens and file names, in order, de-duplicated."""
@@ -343,9 +289,8 @@ def has_target(prompt: str) -> bool:
 
 
 def is_candidate(prompt: str) -> bool:
-    """An imperative (a verb form, not a bare verbal noun) naming a target, with no negation, not a question."""
-    return (is_imperative(prompt) and has_target(prompt) and not _NEGATION.search(prompt[:HEURISTIC_CHARS])
-            and not is_question(prompt))
+    """A prompt naming a target that is not a question, in any language."""
+    return has_target(prompt) and not is_question(prompt)
 
 
 # ---- stage 4: classifier ---------------------------------------------------
@@ -513,7 +458,7 @@ def decide(prompt, divisions, cfg, transcript_path=None, classifier=None) -> Dec
             return Decision("bypass", 1, rest, reason="empty")
         d = Decision("direct", 1, rest, reason=f"tag {tag}", tier="standard", confidence=1.0)
         fixed = tag if tag != "direct" else ""
-        if fixed and (find_paths(rest) or is_imperative(rest)):
+        if fixed and has_target(rest):
             d.division = fixed
             return d
         result, d.backend, d.model_s, d.cost_usd = classifier(rest, divisions or [fixed], cfg)

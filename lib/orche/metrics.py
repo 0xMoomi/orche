@@ -24,10 +24,7 @@ PRICE_KEYS = ("input", "output", "cache_read", "cache_write")
 USAGE_KEYS = ("input_tokens", "output_tokens", "cache_read_input_tokens", "cache_creation_input_tokens")
 NOTIFICATION_TAG = "<task-notification>"
 # A short user message matching this is "routine" (status / resume / confirm).
-ROUTINE_RE = re.compile(
-    r"진행\s*상황|상황\s*알려|멈춘|이어서|계속\s*진행|컨펌|승인|진행해"
-    r"|\b(?:status|progress|continue|go\s+ahead|approve)\b",
-    re.IGNORECASE)
+ROUTINE_RE = re.compile(r"\b(?:status|progress|continue|go\s+ahead|approve)\b", re.IGNORECASE)
 ROUTINE_MAX_CHARS = 80
 SKIP_MODELS = {"<synthetic>"}
 

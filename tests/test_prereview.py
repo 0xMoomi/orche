@@ -16,7 +16,7 @@ import support
 from types import SimpleNamespace
 
 from orche import config, inbox, ledger, procs, reconcile, registry, runs, units, vendors
-from orche.flow import usage
+from orche.flow import lineage, usage
 from orche.review import build
 from orche.review import CHANGED, DENIED, TOOLS, fence, parse
 from orche.review import pre
@@ -426,6 +426,15 @@ class PaneRoundTest(PreReviewCase):
         subprocess.run(["/bin/sh", "-c", COMMIT + ROW.format(verdict="unit-test-verified")], cwd=self.wt,
                        check=True, capture_output=True)
 
+    def notes(self):
+        """The quiet verification notes (`verifying …`, `returned …`) cmd_report left for Main."""
+        return [p for p in self.pointers("main-acme") if p["status"] == "info"]
+
+    def one_pointer(self):
+        ptrs = [p for p in self.pointers("main-acme") if p["status"] != "info"]
+        self.assertEqual(len(ptrs), 1, [p.get("summary") for p in ptrs])
+        return ptrs[0]
+
     def test_return_refuses_then_a_fixed_head_passes(self):
         self.configure()
         self.codex_answers(f"VERDICT: RETURN\n{ACT}", "VERDICT: PASS")
@@ -435,7 +444,15 @@ class PaneRoundTest(PreReviewCase):
         self.assertEqual(code, 3, out + err + json.dumps(self.pointers("main-acme")))
         self.assertIn("pre-review RETURN by codex (round 1 of 2)", err)
         self.assertIn("[act] work.txt:1", err)
-        self.assertEqual(self.pointers("main-acme"), [])
+        notes = sorted(self.notes(), key=lambda n: not n["summary"].startswith("verifying "))
+        self.assertEqual(len(self.pointers("main-acme")), 2)         # only the two quiet notes, no report
+        head = notes[0]["summary"].split()[1].rstrip(":")
+        self.assertEqual(notes[0]["summary"], f"verifying {head}: pre-review running (up to 9 min)")
+        self.assertTrue(notes[1]["summary"].startswith(f"returned {head}: pre-review round 1: [act] work.txt:1"),
+                        notes[1]["summary"])
+        self.assertLessEqual(len(notes[1]["summary"]), len(f"returned {head}: pre-review round 1: ") + 120)
+        self.assertTrue(all(inbox.held(n) and not inbox.wakes(n) for n in notes))   # no wake, no Main turn
+        self.assertEqual(lineage.status_of(notes[0]), "verifying")
         self.commit_with_row()
         code, out, err = self.report_done(unit)
         self.assertEqual(code, 0, err)

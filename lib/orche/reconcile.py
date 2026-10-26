@@ -704,7 +704,8 @@ def _remind(unit, reason) -> None:
 def _reopen(reg, c) -> None:
     """A Main's pane opened in place (no `terminal switch`; a disconnected one closed and reopened,
     deliver.reopen_pane) and stamped MAIN_REOPENED, or an active division/feature woken (hr.wake
-    reopens its missing pane); then its nudge when reports wait (a bare reopen types nothing)."""
+    reopens its missing pane); then a division's nudge when reports wait (a bare reopen types nothing; a
+    reopened Main resumes and its `resumed:` note wakes it)."""
     from . import deliver, hr
     if c.kind == "main":
         if c.info.get("handle"):
@@ -715,7 +716,7 @@ def _reopen(reg, c) -> None:
         util.write_json(inbox.box(c.target) / MAIN_REOPENED, {"at": units.now().isoformat()})
     else:
         hr.wake(reg, roster.Roster(reg).member(c.target))
-    if c.count:
+    if c.count and c.kind != "main":   # a reopened Main's `resumed:` note wakes it (hr.project_pane)
         _nudge(c.target)
 
 

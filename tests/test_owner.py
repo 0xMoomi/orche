@@ -15,7 +15,7 @@ from orche.flow import guard, owner
 T0 = dt.datetime(2026, 10, 23, 5, 0, tzinfo=dt.timezone.utc)
 SCRIPT = ["osascript", "-e", "on run argv", "-e",
           'display notification (item 1 of argv) with title (item 2 of argv) sound name "Glass"', "-e", "end run"]
-KOREAN = '결제 키를 넣어 주세요 — "STRIPE" \\ 기본: 보류; do shell script "rm -rf ~"'
+NON_ASCII = '決済キーを入れてください — "STRIPE" \\ 既定: 保留; do shell script "rm -rf ~"'
 
 
 def at(seconds):
@@ -38,7 +38,7 @@ class ParseTest(unittest.TestCase):
         "a longer fence holds a shorter one": ("OWNER: before\n````\n```\nDONE: nested\n```\n````",
                                                ("OWNER", "before")),
         "an unclosed fence": ("OWNER: kept\n~~~\nDONE: never closed", ("OWNER", "kept")),
-        "bold, Korean intact": (f"**OWNER:** {KOREAN}", ("OWNER", KOREAN)),
+        "bold, non-ASCII intact": (f"**OWNER:** {NON_ASCII}", ("OWNER", NON_ASCII)),
         "bold around the line": ("**DONE: shipped**", ("DONE", "shipped")),
         "a fenced dispatch holds a nested snippet": ("```dispatch\nTO div-acme-build\nCONTEXT see\n  ```python\n"
                                                      "  x = 1\n  ```\n```\nOWNER: approve the plan",
@@ -48,7 +48,7 @@ class ParseTest(unittest.TestCase):
         "a bullet": ("- DONE: shipped", ("DONE", "shipped")),
         "underscore bold": ("__OWNER:__ approve", ("OWNER", "approve")),
         "underscore bold around the line": ("__DONE: shipped__", ("DONE", "shipped")),
-        "a full-width colon": ("OWNER： 결제 키", ("OWNER", "결제 키")),
+        "a full-width colon": ("OWNER： 決済キー", ("OWNER", "決済キー")),
         "a space before the colon": ("RUNNING : tests", ("RUNNING", "tests")),
         "lower case": ("owner: lower case", None),
         "a bare tag": ("OWNER:", None),
@@ -64,7 +64,7 @@ class ParseTest(unittest.TestCase):
         text = "STATUS: blocked\nOWNER: secret A\nmore\nOWNER: secret STRIPE_KEY\n```\nOWNER: in a fence\n```"
         self.assertEqual(owner.step_of(text), "secret STRIPE_KEY")
         self.assertIsNone(owner.step_of("STATUS: done\nall good"))
-        self.assertEqual(len(owner.step_of("OWNER: " + "가" * 300)), owner.STEP_MAX)
+        self.assertEqual(len(owner.step_of("OWNER: " + "あ" * 300)), owner.STEP_MAX)
         self.assertNotIn("A" * 40, owner.step_of("OWNER: use sk-ant-api03-" + "A" * 40))
         self.assertEqual(owner.kind_of("secret STRIPE_KEY, GH_TOKEN"), "secret")
         self.assertEqual(owner.kind_of("approve the secret plan"), "owner")
@@ -121,9 +121,9 @@ class OwnerCase(support.TempHomeCase):
 
 class ClosingLineTest(OwnerCase):
     def test_owner_records_the_ask_and_notifies_once_the_body_an_argument(self):
-        line = f"OWNER: {KOREAN}"
+        line = f"OWNER: {NON_ASCII}"
         self.assertEqual(owner.closing("acme", f"Research done.\n\n{line}\n", now=T0), "OWNER")
-        self.assertEqual(self.ask(), {"text": KOREAN, "at": iso(T0), "kind": "owner", "source": "main"})
+        self.assertEqual(self.ask(), {"text": NON_ASCII, "at": iso(T0), "kind": "owner", "source": "main"})
         [call] = self.notes()
         self.assertEqual(call, SCRIPT + [line, "ORCHE acme"])        # verbatim: quotes and backslashes are data
         notified = json.loads((guard.folder("acme") / owner.SENT).read_text())
@@ -131,7 +131,7 @@ class ClosingLineTest(OwnerCase):
         self.assertIn("owner ask project=acme kind=owner source=main\n", self.log())
         self.assertIn("owner notify project=acme kind=owner n=1 quiet=0\n", self.log())
         for name in ("events", "hooks"):
-            self.assertNotIn("결제", self.log(name))
+            self.assertNotIn("決済", self.log(name))
             self.assertNotIn("STRIPE", self.log(name))
 
     def test_done_closes_the_ask_and_notifies_once(self):

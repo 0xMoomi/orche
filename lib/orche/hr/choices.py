@@ -6,8 +6,9 @@ the RAM probe of `ask.scale` (`procs.mem_total_mb`).
 Guardrails (pinned by tests/test_choices.py): never an unavailable model as an option (it is named
 in the question instead), the recommendation first and marked, a header of at most 12 characters,
 2-4 options with unique labels free of ", ", and an entry with fewer than 2 options is None.
-Question wording lives here (`TEXTS`, it is UI); descriptions live in config (`kinds`,
-`models.catalog`: owner-editable data)."""
+Question wording lives here (`TEXTS`, it is UI, in English: Main asks in the owner's language and
+maps the picked label through `values`); descriptions live in config (`kinds`, `models.catalog`:
+owner-editable data)."""
 import os
 import shutil
 
@@ -20,78 +21,41 @@ SCALES = ("default", "20", "30")
 TIGHT_RAM_MB, TIGHT_DISK_MB = 32 * 1024, 30 * 1024
 
 TEXTS = {
-    "ko": {
-        "add_q": "어떤 부서를 추가할까요? (여러 개 골라도 돼요)", "add_h": "부서",
-        "new_label": "새 이름으로 만들기", "new_desc": "원하는 부서 이름과 맡을 일을 적어 주세요",
-        "change_q": "어느 부서의 모델을 바꿀까요?", "change_h": "부서",
-        "change_more": " (그 밖: {labels} — 이름을 적어 주세요)",
-        "now_rec": "지금 {model} (권장 모델)", "now_other": "지금 {model} · 권장 {rec}",
-        "model_new": "{label} 부서는 어떤 모델로 돌릴까요?", "model_star": "새 부서는 어떤 모델로 돌릴까요?",
-        "model_change": "{label} 부서를 어떤 모델로 바꿀까요? (지금: {model})", "model_h": "모델",
-        "rec": " (권장)", "keep_label": "그대로 두기", "keep_desc": "지금 모델({model}) 유지",
-        "cost": " · 비용 {dots}", "estimate": " (추정)",
-        "codex_absent": "Codex는 설치되지 않아 못 골라요(설치: npm install -g @openai/codex 후 codex login)",
-        "codex_broken": "Codex는 설치됐지만 실행되지 않아 못 골라요(고치기: npm install -g @openai/codex@latest)",
-        "codex_active": "Codex는 이 부서 패널이 켜져 있어 지금은 못 골라요(패널을 재운 뒤 다시)",
-        "setup_q": "이 프로젝트를 어떤 부서로 시작할까요?", "setup_h": "부서",
-        "preset_default": ("기본 {n}개 (권장)", "{labels}: 시제품부터 출시까지"),
-        "preset_light": ("가볍게 2개", "{labels}: 시제품과 개발만"),
-        "preset_pick": ("직접 고르기", "{extras}까지 하나씩 고르기"),
-        "setup_models_q": "부서별 모델은 어떻게 할까요?", "setup_models_h": "모델",
-        "models_fitted": ("부서에 맞춰서 (권장)", "{groups}"),
-        "models_all": ("모두 {model}", "가장 강한 모델로 통일 · 비용 {dots}"),
-        "models_pick": ("부서마다 고르기", "다음 질문에서 부서별로 고르기"),
-        "pick_std_q": "기본 부서 중 무엇을 둘까요? (여러 개 골라도 돼요)", "pick_std_h": "기본 부서",
-        "pick_extra_q": "더 둘 부서가 있나요? (여러 개 골라도 돼요)", "pick_extra_h": "추가 부서",
-        "none": ("없음", "기본 부서만"),
-        "status": {"active": "켜짐", "dormant": "쉬는 중", "paused": "멈춤", "onboarding": "만드는 중",
-                   "retired": "은퇴"},
-        "scale_q": "에이전트를 몇 개까지 동시에 쓸까요?{machine}", "scale_h": "규모", "scale_now": " (지금)",
-        "scale_machine": " (이 Mac: RAM {ram}GB · 디스크 여유 {disk}GB — 30개면 부족할 수 있어요)",
-        "scale": {"default": ("기본", "동시 실행 {par} · 기능 에이전트는 창 없이 · 자율 지출 상한 ${cap}"),
-                  "20": ("20개까지", "동시 실행 {par} · 기능 에이전트는 창 없이 · 자율 지출 상한 ${cap} (API 환산 시간당 약 ${hour})"),
-                  "30": ("30개까지", "동시 실행 {par} · 자율 지출 상한 ${cap} (시간당 약 ${hour}) · Claude 구독은 사용량 한도에 걸려요: "
-                                    "API 키나 Codex를 섞으세요")},
-        "rules": "이름: 영문 소문자로 시작하는 2–16자(소문자·숫자·하이픈, 예: marketing) · 라벨: 24자 이하 · "
-                 "맡을 일: 한 문단, 400자 이하",
-    },
-    "en": {
-        "add_q": "Which divisions should I add? (pick any)", "add_h": "Division",
-        "new_label": "A new one", "new_desc": "type its name and what it should do",
-        "change_q": "Which division's model should change?", "change_h": "Division",
-        "change_more": " (also: {labels} — type the name)",
-        "now_rec": "now {model} (recommended)", "now_other": "now {model} · recommended {rec}",
-        "model_new": "Which model should {label} run on?",
-        "model_star": "Which model should the new division run on?",
-        "model_change": "Which model should {label} switch to? (now: {model})", "model_h": "Model",
-        "rec": " (recommended)", "keep_label": "Keep", "keep_desc": "stay on {model}",
-        "cost": " · cost {dots}", "estimate": " (estimate)",
-        "codex_absent": "Codex is not installed (install: npm install -g @openai/codex, then codex login)",
-        "codex_broken": "Codex is installed but does not start (fix: npm install -g @openai/codex@latest)",
-        "codex_active": "Codex is not offered while this division's pane is open (sleep it first)",
-        "setup_q": "Which divisions should this project start with?", "setup_h": "Divisions",
-        "preset_default": ("The default {n} (recommended)", "{labels}: prototype to launch"),
-        "preset_light": ("Light: 2", "{labels}: prototypes and building only"),
-        "preset_pick": ("Pick them", "one by one, {extras} included"),
-        "setup_models_q": "Which models should the divisions use?", "setup_models_h": "Models",
-        "models_fitted": ("Fitted to each (recommended)", "{groups}"),
-        "models_all": ("All {model}", "the strongest for all · cost {dots}"),
-        "models_pick": ("Per division", "one question per division next"),
-        "pick_std_q": "Which standard divisions? (pick any)", "pick_std_h": "Standard",
-        "pick_extra_q": "Any more? (pick any)", "pick_extra_h": "Extras",
-        "none": ("None", "standard ones only"),
-        "status": {"active": "active", "dormant": "dormant", "paused": "paused", "onboarding": "onboarding",
-                   "retired": "retired"},
-        "scale_q": "How many agents should run at once?{machine}", "scale_h": "Scale", "scale_now": " (now)",
-        "scale_machine": " (this Mac: {ram} GB RAM · {disk} GB free disk — tight for 30)",
-        "scale": {"default": ("Default", "{par} runs at once · features headless · spend cap ${cap}"),
-                  "20": ("Up to 20", "{par} runs at once · features without panes · spend cap ${cap} "
-                                     "(about ${hour}/h API-equivalent)"),
-                  "30": ("Up to 30", "{par} runs at once · spend cap ${cap} (about ${hour}/h) · a Claude subscription hits "
-                                     "its usage window: mix in an API key or Codex")},
-        "rules": "name: 2–16 characters, a-z first, then a-z, 0-9 or single hyphens (e.g. marketing) · "
-                 "label: ≤ 24 characters · charter: one paragraph, ≤ 400 characters",
-    },
+    "add_q": "Which divisions should I add? (pick any)", "add_h": "Division",
+    "new_label": "A new one", "new_desc": "type its name and what it should do",
+    "change_q": "Which division's model should change?", "change_h": "Division",
+    "change_more": " (also: {labels} — type the name)",
+    "now_rec": "now {model} (recommended)", "now_other": "now {model} · recommended {rec}",
+    "model_new": "Which model should {label} run on?",
+    "model_star": "Which model should the new division run on?",
+    "model_change": "Which model should {label} switch to? (now: {model})", "model_h": "Model",
+    "rec": " (recommended)", "keep_label": "Keep", "keep_desc": "stay on {model}",
+    "cost": " · cost {dots}", "estimate": " (estimate)",
+    "codex_absent": "Codex is not installed (install: npm install -g @openai/codex, then codex login)",
+    "codex_broken": "Codex is installed but does not start (fix: npm install -g @openai/codex@latest)",
+    "codex_active": "Codex is not offered while this division's pane is open (sleep it first)",
+    "setup_q": "Which divisions should this project start with?", "setup_h": "Divisions",
+    "preset_default": ("The default {n} (recommended)", "{labels}: prototype to launch"),
+    "preset_light": ("Light: 2", "{labels}: prototypes and building only"),
+    "preset_pick": ("Pick them", "one by one, {extras} included"),
+    "setup_models_q": "Which models should the divisions use?", "setup_models_h": "Models",
+    "models_fitted": ("Fitted to each (recommended)", "{groups}"),
+    "models_all": ("All {model}", "the strongest for all · cost {dots}"),
+    "models_pick": ("Per division", "one question per division next"),
+    "pick_std_q": "Which standard divisions? (pick any)", "pick_std_h": "Standard",
+    "pick_extra_q": "Any more? (pick any)", "pick_extra_h": "Extras",
+    "none": ("None", "standard ones only"),
+    "status": {"active": "active", "dormant": "dormant", "paused": "paused", "onboarding": "onboarding",
+               "retired": "retired"},
+    "scale_q": "How many agents should run at once?{machine}", "scale_h": "Scale", "scale_now": " (now)",
+    "scale_machine": " (this Mac: {ram} GB RAM · {disk} GB free disk — tight for 30)",
+    "scale": {"default": ("Default", "{par} runs at once · features headless · spend cap ${cap}"),
+              "20": ("Up to 20", "{par} runs at once · features without panes · spend cap ${cap} "
+                                 "(about ${hour}/h API-equivalent)"),
+              "30": ("Up to 30", "{par} runs at once · spend cap ${cap} (about ${hour}/h) · a Claude subscription hits "
+                                 "its usage window: mix in an API key or Codex")},
+    "rules": "name: 2–16 characters, a-z first, then a-z, 0-9 or single hyphens (e.g. marketing) · "
+             "label: ≤ 24 characters · charter: one paragraph, ≤ 400 characters",
 }
 
 
@@ -135,7 +99,7 @@ def _active(div):
     return any(f.get("status") == "active" for f in div.get("features") or [])
 
 
-def _model_entry(t, cfg, lang, models, kind, question, current=None, active=False):
+def _model_entry(t, cfg, models, kind, question, current=None, active=False):
     """`ask.model.<kind>`: available models, the recommendation first and marked; for an existing
     division (`current`) the current model goes and Keep (None) comes."""
     rec = kind["recommended"]
@@ -150,7 +114,7 @@ def _model_entry(t, cfg, lang, models, kind, question, current=None, active=Fals
             desc += t["cost"].format(dots=m["cost"])
         opts.append((m["label"] + (t["rec"] if mark else ""), desc, m["model"], m["model"]))
     if current is not None:
-        cur = vendors.catalog(cfg, current, lang)["label"]
+        cur = vendors.catalog(cfg, current)["label"]
         keep_rec = current == rec
         keep = (t["keep_label"] + (t["rec"] if keep_rec else ""),
                 t["keep_desc"].format(model=cur) + (f" · {kind['why']}" if keep_rec and kind["why"] else ""),
@@ -191,10 +155,10 @@ def _scale_entry(t, cfg, reg, machine):
     return cur, _entry(t["scale_q"].format(machine=note), t["scale_h"], False, opts)
 
 
-def build(reg, cfg, key, lang, avail=None, machine=None) -> dict:
+def build(reg, cfg, key, avail=None, machine=None) -> dict:
     """The choices JSON (Appendix D.1) of project `key` (None: a project not under ORCHE yet);
     `machine` {ram_mb, free_disk_mb} defaults to machine_info() of the project's path."""
-    t = TEXTS.get(lang) or TEXTS["en"]
+    t = TEXTS
     proj = ((reg or {}).get("projects") or {}).get(key) or {} if key else {}
     divs = proj.get("divisions") or {}
     customs = proj.get("custom_divisions") or {}
@@ -205,7 +169,7 @@ def build(reg, cfg, key, lang, avail=None, machine=None) -> dict:
 
     models = []
     for m in catalog:
-        row = vendors.catalog(cfg, m, lang)
+        row = vendors.catalog(cfg, m)
         codex = vendors.vendor_of(m) == vendors.CODEX
         ok = not codex or (avail is not None and avail.ok)
         models.append({"model": m, "vendor": vendors.vendor_of(m), "label": row["label"], "desc": row["desc"],
@@ -216,7 +180,7 @@ def build(reg, cfg, key, lang, avail=None, machine=None) -> dict:
 
     kinds = []
     for name in _kind_order(cfg, proj):
-        info = vendors.kind(cfg, name, lang)
+        info = vendors.kind(cfg, name)
         custom = customs.get(name) or {}
         div = divs.get(name)
         status = (div or {}).get("status")
@@ -234,7 +198,7 @@ def build(reg, cfg, key, lang, avail=None, machine=None) -> dict:
                       "session": (div or {}).get("session"), "model": (div or {}).get("model") if div else None,
                       "recommended": info["model"], "pane_effort": info["effort"], "why": info["why"],
                       "suggested": suggested})
-    star = vendors.kind(cfg, "custom", lang)
+    star = vendors.kind(cfg, "custom")
     custom = {"recommended": star["model"], "pane_effort": star["effort"], "why": star["why"],
               "rules": t["rules"]}
 
@@ -249,11 +213,11 @@ def build(reg, cfg, key, lang, avail=None, machine=None) -> dict:
         elif k["exists"]:
             cur = k["model"] or k["recommended"]
             q = t["model_change"].format(label=k["label"], model=mlabel.get(cur) or cur)
-            ask["model"][k["key"]] = _model_entry(t, cfg, lang, models, k, q, cur, _active(divs[k["key"]]))
+            ask["model"][k["key"]] = _model_entry(t, cfg, models, k, q, cur, _active(divs[k["key"]]))
         else:
-            ask["model"][k["key"]] = _model_entry(t, cfg, lang, models, k, t["model_new"].format(label=k["label"]))
+            ask["model"][k["key"]] = _model_entry(t, cfg, models, k, t["model_new"].format(label=k["label"]))
     star_kind = {"recommended": custom["recommended"], "why": custom["why"], "_avail": avail}
-    ask["model"]["*"] = _model_entry(t, cfg, lang, models, star_kind, t["model_star"])
+    ask["model"]["*"] = _model_entry(t, cfg, models, star_kind, t["model_star"])
 
     if key:
         addable = [k for k in kinds if k["status"] is None]
@@ -307,5 +271,5 @@ def build(reg, cfg, key, lang, avail=None, machine=None) -> dict:
                    [(k["label"], k["desc"], k["key"], k["key"]) for k in extras[:3]] + [(nl, nd, None, "none")])]
     for k in kinds:
         k.pop("_avail", None)
-    return {"project": key, "lang": lang, "stage": stage, "kinds": kinds, "custom": custom, "models": models,
+    return {"project": key, "stage": stage, "kinds": kinds, "custom": custom, "models": models,
             "scale": {"current": cur_scale, "presets": list(scale.presets(cfg)), "machine": machine}, "ask": ask}

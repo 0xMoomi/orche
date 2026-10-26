@@ -21,9 +21,9 @@ Install ORCHE on this Mac and set it up on one of my projects. Do exactly these 
 1. Run: curl -fsSL https://raw.githubusercontent.com/0xMoomi/orche/main/install.sh | bash -s -- --yes
 2. Run: export PATH="$HOME/orche/bin:$PATH" && orche doctor
    Every line must be OK or WARN. If any line says FAIL, show it to me and stop.
-3. Ask me how to start the project, with choices, in the language I write in. Run: export PATH="$HOME/orche/bin:$PATH" && orche hr choices --lang ko --json
-   (--lang ko if I write Korean, else --lang en.) Ask the `ask.setup` questions with the choice dialog (AskUserQuestion): each entry's `tool` is one question, asked as given, so "기본 4개 (권장)" stays first; map each picked label through the entry's `values` ("직접 고르기" → also ask `ask.pick`; "부서마다 고르기" → also ask `ask.model.<division>` for each division).
-   Write my answers to a temp file outside the project as JSON: {"divisions": [...], "custom": {"<kind>": {}}, "models": {"<division>": "<model>"}} (a picked design or content goes in "custom" as {}, not in "divisions"; no "custom" when neither was picked; no "models" for "부서에 맞춰서"; "모두 …" puts that model on every division), then confirm in one line what will be made.
+3. Ask me how to start the project, with choices, in the language I write in. Run: export PATH="$HOME/orche/bin:$PATH" && orche hr choices --json
+   Ask the `ask.setup` questions with the choice dialog (AskUserQuestion): each entry's `tool` is one question, written in my language with its options in the given order, so "The default 4 (recommended)" stays first; map each picked label through the entry's `values` ("Pick them" → also ask `ask.pick`; "Per division" → also ask `ask.model.<division>` for each division).
+   Write my answers to a temp file outside the project as JSON: {"divisions": [...], "custom": {"<kind>": {}}, "models": {"<division>": "<model>"}} (a picked design or content goes in "custom" as {}, not in "divisions"; no "custom" when neither was picked; no "models" for "Fitted to each"; "All …" puts that model on every division), then confirm in one line what will be made.
    Without a choice dialog, or with no answer, take the defaults: no file, no question.
 4. If this Claude Code session is already inside the project to set up (a git repository), run: export PATH="$HOME/orche/bin:$PATH" && orche init --setup-file <that file>
    Otherwise ask me for the project's folder, then run: export PATH="$HOME/orche/bin:$PATH" && orche init <that folder> --setup-file <that file>
@@ -40,7 +40,7 @@ Then restart Claude Code once so the plugin loads.
 
 ## Set up a project
 
-The install prompt asks two or three choice questions, the recommendation first: which divisions ("기본 4개 (권장)" — rnd, research, build, gtm), and which models (fitted to each division, or one for all). Then `orche init <folder>` creates:
+The install prompt asks two or three choice questions, the recommendation first: which divisions (the default four, recommended — rnd, research, build, gtm), and which models (fitted to each division, or one for all). Then `orche init <folder>` creates:
 
 - the divisions, each a unit in its own worktree (`div-<division>`), dormant until work arrives (no pane, no cost);
 - the project's ORCHE files (`.orche/`, `PROJECT_CARD.md`, `AGENTS.md`), left untracked;
@@ -48,13 +48,7 @@ The install prompt asks two or three choice questions, the recommendation first:
 
 Already installed? Inside a project, say `orche init` to Claude Code (or `orche init ~/path/to/repo` for another folder).
 
-**Change it later** by telling Main: "디자인 부서 추가해줘", "연구 부서 모델 바꿔줘". Main asks what you left open with a choice dialog and runs the command for you. The commands, for the curious:
-
-| Command | Does |
-|---|---|
-| `orche hr add <proj> <division> [--model M]` | add a division (default: the recommended model) |
-| `orche hr model <proj> <division> <model>` | move a division to another model |
-| `orche hr choices` | list kinds, models and the questions Main asks |
+**Change it later** by telling Main in your language ("add a design division", "switch research to Sonnet"): Main asks what is open with a choice dialog and runs the command (`orche hr add`, `orche hr model`).
 
 Division kinds and their recommended models:
 
@@ -71,20 +65,20 @@ Division kinds and their recommended models:
 
 **Codex.** Enable it once with `npm install -g @openai/codex@latest` and `codex login`; then pick `codex` as a division's model. Codex divisions run headless only.
 
-**Jev (optional).** Faster routing of simple requests: `orche jev setup`.
+**Jev (optional).** Faster routing of simple requests: tell Main to connect Jev (it runs `orche jev setup`).
 
 ## Use it
 
-- Talk in the `main-<project>` tab: the work you want done, or "상태 알려줘" / "점검해줘".
+- Talk in the `main-<project>` tab, in any language: the work you want done, or a question ("what's happening", "check the setup", "update", "merge the waiting PRs", "pause everything").
 - Main ends every reply with one line: `RUNNING`, `OWNER` or `DONE`. Only `OWNER` (a decision for you) and `DONE` notify you.
-- Main이 끊겨도 일은 파일에 있습니다: /clear 뒤에도 'orche status <project>'로 이어 갑니다.
-- In a terminal: `orche status` (one line per project) and `orche doctor` (every line OK or WARN, never FAIL).
+- If Main is cut off, the work stays in files: even after /clear, say "continue" and Main picks it up from 'orche status <project>'.
 - A worker's PR is pre-reviewed by a second model (another vendor's when Codex is installed), then its head reviews and queues it; the merge queue tests it on top of `main` with `scripts/verify/ci.sh` and merges it when green; a merge deploys if your host deploys `main`.
-- Say '에이전트 30개까지' to Main to run more agents at once; on a Claude subscription many agents reach the usage window and ORCHE waits for its reset.
+- Tell Main "run up to 30 agents" to run more at once; on a Claude subscription many agents reach the usage window and ORCHE waits for its reset.
+- Every action is also an `orche` command, for scripts (`orche --help`).
 
 ## Update
 
-Say "orche 업데이트해줘" to Main, or re-run the install prompt. `orche update` pulls the newest ORCHE, reinstalls it, refreshes every project's ORCHE files (never yours) and reports the version change.
+Tell Main to update (any language), or re-run the install prompt. `orche update` pulls the newest ORCHE, reinstalls it, refreshes every project's ORCHE files (never yours) and reports the version change; a development checkout (another branch or local changes) is not pulled, the install is aligned with it instead.
 
 ## Files
 

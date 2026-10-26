@@ -54,7 +54,7 @@ def _run(args, argv, **extra) -> int:
     return code
 
 
-BLOCKED_LINE = ("setup: 한 단계 남음 — 위에서 열린 창에서 전체 디스크 접근 권한을 켠 뒤 실행하세요: "
+BLOCKED_LINE = ("setup: one step left — switch on Full Disk Access in the window opened above, then run: "
                 "orche install --grant")
 
 
@@ -75,7 +75,7 @@ def cmd_setup(args):
             print("store a token for headless runs (setup never reads it):\n  claude setup-token\n  orche auth set")
     for path in args.project:
         print(f"== init {path} ==", flush=True)
-        if _run(args, ["init", "--no-intake", "--", path], first_pass=False):   # step 4 checks once
+        if _run(args, ["init", "--no-intake", "--", path], first_pass=False, close_window=False):   # step 4 checks once
             failed.append(f"init {path}")
     blocked = False
     if not args.dry_run and cmd_install.job_loaded(target):

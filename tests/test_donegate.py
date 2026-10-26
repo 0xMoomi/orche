@@ -25,9 +25,6 @@ class ClaimTest(unittest.TestCase):
         for text, word in [
             ("STATUS: done", "done"),
             ("Status: release-ready", "release-ready"),
-            ("STATUS: 완료", "done"),
-            ("STATUS: 완료됨", "done"),
-            ("- **STATUS: 완료했습니다**", "done"),
             ("Finished.\n**STATUS: done**", "done"),
             ("**STATUS:** done", "done"),
             ("- STATUS: done", "done"),

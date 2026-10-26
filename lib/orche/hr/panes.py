@@ -17,6 +17,11 @@ from pathlib import Path
 from .. import config, orca, paths
 from ..janitor import discover
 
+# Every pane session compacts at this many tokens: bounded per-turn cost and latency; the state lives
+# in files and the project card, which the SessionStart hook re-injects after a compaction.
+AUTOCOMPACT_TOKENS = 200_000
+RESUMED = "resumed: say in five lines what was done last, what runs now and what waits on the owner"
+
 
 def session_env(session) -> str:
     """`PATH=<plugin>/bin:$PATH ORCHE_SESSION=<session> ` prefix for every ORCHE pane command.
@@ -74,14 +79,14 @@ def resume_flag(session, cwd) -> str:
 
 
 def pane_command(session, *, resume, cwd=None) -> str:
-    """`claude --permission-mode bypassPermissions` + `resume_flag(session, cwd)` for a paused unit,
-    `--name <session>` for a fresh start (and for Main): no ORCHE pane ever stops at a permission
-    prompt.
+    """`claude --permission-mode bypassPermissions --autocompact <AUTOCOMPACT_TOKENS>` +
+    `resume_flag(session, cwd)` for a reopened pane (Main included), `--name <session>` for a fresh
+    start: no ORCHE pane ever stops at a permission prompt.
 
     Prefixed with `session_env(session)`. The one builder for every ORCHE pane, Main included."""
     flag = resume_flag(session, cwd) if resume else f"--name {session}"
     return (f"{session_env(session)}{config.load().get('claude_bin', 'claude')} "
-            f"--permission-mode bypassPermissions {flag}")
+            f"--permission-mode bypassPermissions --autocompact {AUTOCOMPACT_TOKENS} {flag}")
 
 
 def open_pane(worktree_id, session, command, *, dry_run=False):
@@ -126,11 +131,13 @@ def live_pane(term, title):
     return fresh[0] if fresh else None
 
 
-def project_pane(proj, *, dry_run, switch=True) -> tuple:
+def project_pane(proj, *, dry_run, switch=True, resume=True) -> tuple:
     """Open the project's `main-<proj>` pane in its main checkout, or switch to it.
 
-    One title lookup: no pane -> create one (`pane_command`: `claude --permission-mode
-    bypassPermissions --name main-<proj>`, like every ORCHE pane); a pane -> `terminal switch` to it
+    One title lookup: no pane -> create one (`pane_command`: resume the newest transcript named
+    `main-<proj>` in the main checkout, else `--name main-<proj>`; onboarding passes resume=False),
+    then, when resuming, post one urgent `info` from orche (RESUMED) so Main says where things stand
+    once it is idle; a pane -> `terminal switch` to it
     (with switch=False it is left as it is). A pane found is verified by handle (`live_pane`; after
     the switch attempt when switching): one Orca no longer has — the list lagged a close — is
     created anew, and a failed switch to a live pane raises. Returns (data, line); data["pane"] is
@@ -138,7 +145,6 @@ def project_pane(proj, *, dry_run, switch=True) -> tuple:
     writing orca command runs. Raises orca.OrcaError.
     """
     title = proj["main_session"]
-    command = pane_command(title, resume=False)
     term = orca.find_terminal_by_title(title)
     if term is not None and (dry_run or not switch):
         term = live_pane(term, title)
@@ -158,9 +164,16 @@ def project_pane(proj, *, dry_run, switch=True) -> tuple:
     if dry_run:
         data["dry_run"] = True
     if term is None:
+        command = pane_command(title, resume=resume, cwd=proj["path"])
         result = open_pane(f"{proj['repo_id']}::{proj['path']}", title, command, dry_run=dry_run)
         if dry_run:
             data["argv"] = result["argv"]
+        elif resume:
+            from .. import inbox, log
+            try:
+                inbox.post(inbox.make(title, "orche", title, "info", urgent=True, summary=RESUMED))
+            except OSError as exc:   # the pane is open; Main still has the card
+                log.log("hooks", f"project_pane: {title}: resumed note not posted: {exc}")
         return data, (f"would open {title} pane (dry-run)" if dry_run else f"{title} pane opened")
     if not switch:
         return data, f"{title} pane already open"

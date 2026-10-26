@@ -963,7 +963,7 @@ class OwnerVoiceHookTest(HookCase):
 
     @unittest.skipUnless(sys.platform == "darwin", "the notification is macOS only")
     def test_main_owner_line_records_the_ask_and_notifies_under_stop_hook_active(self):
-        line = 'OWNER: 결제 키 "STRIPE" \\ 넣어 주세요 (기본: 보류)'
+        line = 'OWNER: 決済キー "STRIPE" \\ を入れてください (既定: 保留)'
         res = self.stop(f"Research done.\n\n{line}\n", stop_hook_active=True)
         self.assertEqual((res.returncode, res.stderr), (0, ""))
         ask = self.ask()
@@ -971,7 +971,7 @@ class OwnerVoiceHookTest(HookCase):
         [note] = self.notes()                       # the stub joins its argv: the body arrives verbatim
         self.assertTrue(note.startswith("-e on run argv -e display notification (item 1 of argv)"), note)
         self.assertIn(f"-e end run {line} ORCHE acme", note)
-        self.assertNotIn("결제", self.events())
+        self.assertNotIn("決済", self.events())
 
     def test_a_tag_stamps_the_turns_start_from_the_prompt_hooks_record(self):
         start = dt.datetime(2026, 10, 20, 11, 58).astimezone()
@@ -1053,7 +1053,7 @@ class ReportInjectTest(HookCase):
 
     def test_status_question_count_and_age_triggers(self):
         self.note("acme-a-20261016-1")
-        self.assertIn("## Inbox (1)", self.prompt("진행 상황 알려줘").stdout)
+        self.assertIn("## Inbox (1)", self.prompt("status update please").stdout)
         for i in range(4):
             self.note(f"acme-c-20261016-{i}")
         self.assertIn("## Inbox (4)", self.prompt().stdout)
@@ -1611,8 +1611,11 @@ class SessionStartEndTest(HookCase):
         self.assertTrue(out.startswith("## ORCHE role\nsession: main-acme"))
         self.assertIn("Never force-push", out)
         self.assertIn("Ten principles", out)
-        res = self.run_hook("session_start.py", self.payload("session_start_clear.json", source="compact"))
-        self.assertEqual(res.stdout, "")
+        res = self.run_hook("session_start.py", self.payload("session_start_clear.json", source="compact",
+                                                              cwd=str(self.repo)), ORCHE_SESSION="main-acme")
+        self.assertTrue(res.stdout.startswith("## ORCHE role\nsession: main-acme"))
+        self.assertIn("\n\n[orche] resume acme", res.stdout)          # the card after a compaction
+        self.assertEqual(res.stdout.count("## STANDING.md"), 1)
 
     def test_build_worktree_gets_build_card(self):
         out = self.run_hook("session_start.py", self.payload("session_start_clear.json",
@@ -1708,7 +1711,7 @@ class SessionStartEndTest(HookCase):
     def test_env_file_written_for_unmanaged_cwd_subagent_other_source_and_broken_registry(self):
         cases = [("unmanaged", self.payload("session_start_clear.json", cwd=str(self.root / "elsewhere"))),
                  ("agent", self.payload("session_start_clear.json", agent_id="agent-1")),
-                 ("compact", self.payload("session_start_clear.json", source="compact"))]
+                 ("other", self.payload("session_start_clear.json", source="other"))]
         for name, payload in cases:
             env_file = self.root / f"{name}.sh"
             res = self.env_hook(payload, env_file)

@@ -228,10 +228,11 @@ class FirstPassTest(test_install.InstallCase):
         lines = self.install("--mode", "settings", "--no-jev").splitlines()
         name = self.app.name
         guidance = [g.format(name=name) for g in privacy.GUIDANCE]
-        self.assertEqual(lines[-3:], [*guidance, f"  {name}: {self.app}"])   # last (review #10)
-        self.assertTrue(guidance[0].startswith("ORCHE 백그라운드 작업(하트비트)이 macOS 개인정보 보호 설정 때문에"))
-        self.assertIn(f"선택된 항목({name})", guidance[0])
-        self.assertLess(lines.index(test_install.MIGRATION_LINE), lines.index(privacy.FIRST_PASS_WAIT))
+        self.assertEqual(lines[-2:], [*guidance, f"  {name}: {self.app}"])   # last (review #10)
+        self.assertTrue(guidance[0].startswith("ORCHE's background job (the heartbeat) cannot read the project folder"))
+        self.assertIn(f"selected in Finder ({name})", guidance[0])
+        self.assertLess(lines.index("jev: skipped (--no-jev); add later with `orche jev setup`"),
+                        lines.index(privacy.FIRST_PASS_WAIT))
         self.assertEqual(self.opens(), [["open", "-R", str(self.app)], ["open", privacy.SETTINGS_URL]])
         self.assertGreaterEqual(self.t, privacy.FIRST_PASS_S)
         code, out, _ = self.orche("--json", "install", "--home", str(self.h), "--mode", "settings", "--no-jev")
@@ -257,8 +258,8 @@ class FirstPassTest(test_install.InstallCase):
         self.assertEqual(test_install.tree_digest(self.h), before)    # --grant installs nothing
         lines = out.splitlines()
         self.assertEqual(lines, [privacy.grant_wait(privacy.GRANT_QUICK_S), *privacy.steps(self.app),
-                                 "권한 확인 중… (최대 5분)", privacy.GRANTED])
-        self.assertEqual(lines[0], "권한 확인 중… (최대 15초)")
+                                 "checking access… (up to 5 min)", privacy.GRANTED])
+        self.assertEqual(lines[0], "checking access… (up to 15 s)")
         self.assertEqual(self.opens(), [["open", "-R", str(self.app)], ["open", privacy.SETTINGS_URL]])
         # the quick check's kick (-k, once), then a plain one once the panes are open
         self.assertEqual(self.kicks(), [["launchctl", "kickstart", "-k", f"gui/{UID}/com.orche.reconcile"],
@@ -287,14 +288,12 @@ class FirstPassTest(test_install.InstallCase):
         self.assertEqual((self.opens(), self.kicks()), ([], []))
 
     def test_grant_texts(self):
-        self.assertEqual(privacy.GRANTED, "권한 확인 완료 — 하트비트 정상 / granted — heartbeat OK")
+        self.assertEqual(privacy.GRANTED, "granted — heartbeat OK")
         self.assertEqual(privacy.blocked(Path("/x/Python.app")),
-                         "아직 읽지 못합니다 — '전체 디스크 접근 권한'에서 Python.app 스위치가 켜져 있는지 확인하고 다시 "
-                         "실행하세요: orche install --grant / still blocked — switch Python.app on in Full Disk Access, "
-                         "then: orche install --grant")
+                         "still blocked — switch Python.app on in Full Disk Access, then: orche install --grant")
         steps = privacy.steps(Path("/u/.local/bin/python3.12"))
-        self.assertTrue(steps[0].startswith("1. 방금 열린 Finder 창에서 선택된 항목(python3.12)을"))
-        self.assertEqual(steps[2], "3. 이 터미널은 닫지 마세요. ORCHE가 최대 5분 동안 자동으로 확인합니다.")
+        self.assertTrue(steps[0].startswith("1. Drag the item selected in the Finder window that just opened (python3.12)"))
+        self.assertEqual(steps[2], "3. Keep this terminal open. ORCHE checks automatically for up to 5 minutes.")
         self.assertEqual(steps[-1], "  python3.12: /u/.local/bin/python3.12")
 
     def test_grant_without_the_job_names_the_installed_mode(self):
@@ -347,5 +346,5 @@ class PythonAppTest(support.TempHomeCase):
         hint, lines = privacy.no_pass({"projects": {"p": {"path": str(Path.home() / "Documents" / "p")}}},
                                       live=False)
         self.assertEqual(hint, "privacy")
-        self.assertIn("선택된 항목(python3.12)", lines[0])
+        self.assertIn("selected in Finder (python3.12)", lines[0])
         self.assertEqual(lines[-1], f"  python3.12: {app}")

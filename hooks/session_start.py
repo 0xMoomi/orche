@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""SessionStart hook: on startup/resume/clear, print the unit's role + STANDING, CHARTER, STATUS,
+"""SessionStart hook: on startup/resume/clear/compact, print the unit's role + STANDING, CHARTER, STATUS,
 HANDOFF and the last 20 DECISIONS rows (main worktree: role + STANDING + principles pointer).
 The role comes from the Roster's identity: $ORCHE_SESSION when set (never the cwd), else the cwd's unit.
 Right after the role comes a "Role rules" card: the inject-marked block of skills/orche-main (main
@@ -18,7 +18,7 @@ if not pyguard.check_hook("session_start"):
     sys.exit(0)  # fail-open: the hook does nothing, a gate allows
 
 CAP = 6000
-SOURCES = ("startup", "resume", "clear")
+SOURCES = ("startup", "resume", "clear", "compact")
 # Over the cap the role card goes first, whole (header included); then these lose their oldest (top) lines.
 CARD = "Role rules"
 TRIM_ORDER = ("DECISIONS.tsv (last 20)", "CHARTER.md", "STANDING.md", "HANDOFF.md", "STATUS.md")
@@ -196,7 +196,7 @@ RESUME_HEAD = 20   # card lines kept when the whole card does not fit in CAP
 
 def _with_resume(r, who, source, text):
     """Main's text plus its project's card (`orche status <project>`, lib/orche/project.py): after a
-    `clear` or `resume`, and on `startup` when a lineage is open; a division or a non-member gets none.
+    `clear`, `resume` or `compact`, and on `startup` when a lineage is open; a division or a non-member gets none.
     Within CAP: the card's first RESUME_HEAD lines and a pointer to `orche status <project>` when the
     whole card does not fit. Fail-open: any error leaves `text` as it was."""
     m = who.member

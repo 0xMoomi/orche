@@ -15,7 +15,7 @@ import support
 from orche import __version__ as VERSION
 from orche import headless, oauth, registry, shell
 from orche.paths import PLUGIN_ROOT
-from orche.install import MIGRATION_LINE, doctor, launchd
+from orche.install import doctor, launchd
 from test_hr import HrCase
 from test_registry import load_cli
 
@@ -33,17 +33,17 @@ current_dir=$(basename "$current_dir_path")
 output="dir:${current_dir}"
 printf "%s\\n" "$output\""""  # no trailing newline, like the real script
 
-FABLE = """## Fable 오케스트레이션 모드
+FABLE = """## Fable orchestration mode
 
-모델 구조(2026-09-26 확정): 사고·조율 = Claude Fable 5.1(메인 세션) /
-실행 = Claude Opus 5.5(`claude-opus-5-5`) / 잡무 = Claude Haiku 4.5.
+Model structure (fixed 2026-09-26): thinking and coordination = Claude Fable 5.1 (main session) /
+execution = Claude Opus 5.5 (`claude-opus-5-5`) / chores = Claude Haiku 4.5.
 
-라우팅:
-- 읽기 전용 탐색·조사 -> model: sonnet
-  (Sonnet 5, Opus 5.5의 절반 값; 이미 Sonnet 5.5인 곳은 그대로)
-- 코드 스팬은 그대로: `Haiku 4.5`
+Routing:
+- read-only exploration and research -> model: sonnet
+  (Sonnet 5, half of Opus 5.5's price; places already on Sonnet 5.5 stay as they are)
+- code spans stay as they are: `Haiku 4.5`
 
-일반 문단의 Haiku 4.5는 라우팅 줄이 아니므로 그대로 둡니다.
+Haiku 4.5 in an ordinary paragraph stays as it is.
 """
 FIXED = FABLE.replace("Claude Haiku 4.5.", "Claude Haiku 5.5.").replace("(Sonnet 5,", "(Sonnet 5.5,")
 RUNNER = "---\nname: runner\ndescription: chores\nmodel: claude-haiku-4-5-20251001\neffort: low\n---\n\nbody\n"
@@ -162,7 +162,7 @@ class InstallTest(InstallCase):
                          f"codex: would move {self.h / '.codex' / 'AGENTS.md.recovered'}",
                          "/plugin install orche@orche"):
             self.assertIn(expected, out)
-        self.assertEqual(out.splitlines()[-1], MIGRATION_LINE)
+        self.assertEqual(out.splitlines()[-1], "  /plugin install orche@orche")
 
     def test_no_plugin_hint_drops_the_two_plugin_lines(self):
         out = self.install("--no-jev")
@@ -171,14 +171,14 @@ class InstallTest(InstallCase):
         out = self.install("--no-jev", "--no-plugin-hint")
         self.assertNotIn("/plugin", out)
         self.assertNotIn("Install the ORCHE hooks as a Claude Code plugin", out)
-        self.assertEqual(out.splitlines()[-1], MIGRATION_LINE)
+        self.assertEqual(out.splitlines()[-1], "jev: skipped (--no-jev); add later with `orche jev setup`")
         code, out, err = self.orche("--json", "install", "--home", str(self.h), "--no-jev", "--no-plugin-hint")
         self.assertEqual((code, err), (0, ""), out)
         self.assertEqual(json.loads(out)["instructions"], [])
 
     def test_install_backs_up_merges_and_is_idempotent(self):
         out = self.install()
-        self.assertEqual(out.splitlines()[-1], MIGRATION_LINE)
+        self.assertEqual(out.splitlines()[-1], "  /plugin install orche@orche")
         data = self.read_settings()
         for key, value in self.settings.items():
             if key not in ("env", "hooks"):

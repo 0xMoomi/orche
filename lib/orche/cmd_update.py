@@ -5,10 +5,12 @@ install from its clone), else the repository holding this package (`paths.PLUGIN
 the `orche` on PATH is the plugin cache copy, which has no `.git`. install.sh clones `--ref main`, so the
 update follows `origin/main`. Steps, each one a progress line on stderr:
 
-1. refuse (exit 2, nothing changed) a checkout without `.git` (`not a git checkout: <path>; reinstall
-   with the README prompt`) and a development checkout: uncommitted changes, another branch than
-   `main`, or commits not on `origin/main` — `development checkout: update by hand (git pull); nothing
-   changed`;
+1. refuse (exit 2, nothing changed) only a checkout without `.git` (`not a git checkout: <path>; reinstall
+   with the README prompt`). A development checkout — uncommitted changes, another branch than `main`, or
+   commits not on `origin/main` — pulls nothing (`development checkout (<why>): nothing pulled`; the first
+   two are known before the fetch, so no fetch runs) and, when the install state records another version
+   than the checkout's, runs steps 4-5 with the checkout's code; a current one is `already up to date
+   (<v>; development checkout, nothing pulled)`;
 2. `git fetch --quiet origin main` (never a terminal prompt, at most 120 s) and read the new version
    from `origin/main:lib/orche/__init__.py`; the same version is `already up to date (<v>)`, exit 0 —
    unless the install state records another version than the checkout's (an earlier update stopped
@@ -25,7 +27,7 @@ The closing block: `ORCHE <old> → <new>`, one line per project, the install's 
 a restart line when a card, skill, template or agent file changed. `--dry-run` fetches without moving
 any ref (FETCH_HEAD only) and prints the plan. Exit 0 ok, 1 a step failed (named; the checkout keeps
 whatever the finished steps did, a re-run resumes), 2 refused. With `--json` every outcome is one JSON
-object on stdout.
+object on stdout, carrying `development` (the reason, or null) unless refused.
 """
 import os
 import re
@@ -40,8 +42,7 @@ EXIT_REFUSED = 2
 REF = "main"   # install.sh's default --ref; a checkout on any other ref is a development checkout
 ROOT = paths.PLUGIN_ROOT   # the fallback when the install recorded no clone (a seam for tests)
 FETCH_TIMEOUT_S = 120
-REFUSAL = "development checkout: update by hand (git pull); nothing changed"
-RESTART = "Claude Code sessions (main-*, div-*) read the new cards at their next start"
+RESTART = "open panes keep running; they read the new cards and skills at their next start"
 SESSION_FILES = ("skills", "templates", "agents", ".claude-plugin")
 VERSION_RE = re.compile(r'^__version__\s*=\s*"([^"]+)"', re.M)
 
@@ -110,8 +111,8 @@ def _root(state) -> Path:
     return Path(clone) if isinstance(clone, str) and clone else ROOT
 
 
-def _refusal(root):
-    """Why the checkout is a development one (before any fetch), else None."""
+def _development(root):
+    """Why the checkout is a development one (known before any fetch), else None."""
     if git(root, "status", "--porcelain", "--untracked-files=no").strip():
         return "uncommitted changes"
     branch = git(root, "symbolic-ref", "-q", "--short", "HEAD", check=False).strip()
@@ -131,29 +132,32 @@ def cmd_update(args):
     state = _state()
     root = _root(state)
     if not (root / ".git").exists():
-        return _refuse(args, f"not a git checkout: {root}; reinstall with the README prompt", own=True)
+        return _refuse(args, f"not a git checkout: {root}; reinstall with the README prompt")
     try:
-        why = _refusal(root)
-        if why:
-            return _refuse(args, why)
         old = version_of((root / "lib" / "orche" / "__init__.py").read_text())
-        progress(f"fetching {REF} from origin" + (" (dry run: no ref moves)" if dry_run else ""))
-        if dry_run:   # FETCH_HEAD only: --refmap= keeps origin/main where it is
-            git(root, "fetch", "--quiet", "--refmap=", "origin", REF, timeout=FETCH_TIMEOUT_S)
-            target = "FETCH_HEAD"
+        why, new, target, changed = _development(root), old, None, []
+        if not why:
+            progress(f"fetching {REF} from origin" + (" (dry run: no ref moves)" if dry_run else ""))
+            if dry_run:   # FETCH_HEAD only: --refmap= keeps origin/main where it is
+                git(root, "fetch", "--quiet", "--refmap=", "origin", REF, timeout=FETCH_TIMEOUT_S)
+                target = "FETCH_HEAD"
+            else:
+                git(root, "fetch", "--quiet", "origin", REF, timeout=FETCH_TIMEOUT_S)
+                target = f"origin/{REF}"
+            ahead = int(git(root, "rev-list", "--count", f"{target}..HEAD").strip() or 0)
+            why = f"{ahead} commit(s) not on origin/{REF}" if ahead else None
+        if why:
+            progress(f"development checkout ({why}): nothing pulled")
         else:
-            git(root, "fetch", "--quiet", "origin", REF, timeout=FETCH_TIMEOUT_S)
-            target = f"origin/{REF}"
-        ahead = int(git(root, "rev-list", "--count", f"{target}..HEAD").strip() or 0)
-        if ahead:
-            return _refuse(args, f"{ahead} commit(s) not on origin/{REF}")
-        new = version_of(git(root, "show", f"{target}:lib/orche/__init__.py"))
-        resume = new == old and state.get("version") != old   # an earlier update stopped after the merge
+            new = version_of(git(root, "show", f"{target}:lib/orche/__init__.py"))
+            changed = [p for p in git(root, "diff", "--name-only", "HEAD", target).splitlines()
+                       if p.split("/", 1)[0] in SESSION_FILES]
+        # resume: an earlier update stopped after the merge, or the development checkout runs another version
+        resume = new == old and state.get("version") != old
         if new == old and not resume:
-            out(args, {"status": "current", "version": old}, f"already up to date ({old})")
+            note = "; development checkout, nothing pulled" if why else ""
+            out(args, {"status": "current", "version": old, "development": why}, f"already up to date ({old}{note})")
             return EXIT_OK
-        changed = [p for p in git(root, "diff", "--name-only", "HEAD", target).splitlines()
-                   if p.split("/", 1)[0] in SESSION_FILES]
     except StepFailed as exc:
         return _failed(args, exc, [])
     if resume:
@@ -172,7 +176,7 @@ def cmd_update(args):
         if changed:
             lines.append(f"then: {RESTART}")
         out(args, {"status": "dry-run", "old": old, "new": new, "mode": mode, "projects": keys,
-                   "session_files": changed, "resume": resume}, lines)
+                   "session_files": changed, "resume": resume, "development": why}, lines)
         return EXIT_OK
     done = [f"ORCHE {old} → {new}"]
     try:
@@ -201,22 +205,19 @@ def cmd_update(args):
     if changed or plugin or resume:
         done.append(RESTART)
     data = {"status": "failed" if failed else "updated", "old": old, "new": new, "mode": mode, "projects": keys,
-            "session_files": changed, "resume": resume, "lines": done}
+            "session_files": changed, "resume": resume, "development": why, "lines": done}
     if failed:
         done.append(f"orche update: {len(failed)} project refresh(es) failed (above); re-run: orche init <project> --refresh")
     out(args, data, done)
     return EXIT_USER if failed else EXIT_OK
 
 
-def _refuse(args, why, own=False) -> int:
-    """Exit 2, nothing changed. `own`: the reason is the whole message; else reason + REFUSAL."""
+def _refuse(args, why) -> int:
+    """Exit 2, nothing changed."""
     if args.json:
         out(args, {"status": "refused", "reason": why}, [])
-    elif own:
-        print(why)
     else:
-        print(f"orche: {why}", file=sys.stderr)
-        print(REFUSAL)
+        print(why)
     return EXIT_REFUSED
 
 

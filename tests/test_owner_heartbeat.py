@@ -434,8 +434,8 @@ class OwnerLineTest(BeatCase):
 
     def test_the_owner_line(self):
         self.assertEqual(self.line(T0), [])
-        owner.closing(P, "OWNER: " + "가" * 150, now=T0)
-        text = "가" * 99 + "…"
+        owner.closing(P, "OWNER: " + "あ" * 150, now=T0)
+        text = "あ" * 99 + "…"
         self.assertEqual(self.line(at(22)),
                          [f"  owner: asked {hm(T0)} (22 min, notified 1×, next {hm(at(30))}) — {text}"])
         self.shown_at([30, 60, 120, 240])

@@ -22,14 +22,14 @@ _WORDS = r"(?:release-ready|done|blocked|failed|stop)(?![^\W_]|-)"    # never ru
 _LINE = re.compile(
     r"(?:(?![^\W_]).|\d+[.)])*?"                  # before STATUS: no letter or digit, except a list number
     r"STATUS" + _EMPH + r"[ \t]*:[ \t]*" + _EMPH + r"[ \t]*"
-    r"(" + _WORDS + r"|완료)"                      # the status word; 완료 may run on (완료됨, 완료했습니다)
+    r"(" + _WORDS + r")"                           # the status word
     r"(?!" + _EMPH + r"[ \t]*\|[ \t]*" + _EMPH + _WORDS + r")",      # `done|blocked|failed`: a template echo
     re.IGNORECASE)
 
 
 @dataclass(frozen=True)
 class Claim:
-    """The message's STATUS line: `word` lower-case (완료 -> done), `line` stripped, `index` in splitlines()."""
+    """The message's STATUS line: `word` lower-case, `line` stripped, `index` in splitlines()."""
     word: str
     line: str
     index: int
@@ -57,7 +57,7 @@ def claim(text) -> Claim | None:
     if found is None:
         return None
     i, line, word = found
-    return Claim("done" if word == "완료" else word, line, i)
+    return Claim(word, line, i)
 
 
 def _gated(m) -> bool:

@@ -79,13 +79,12 @@ class CardTest(FlowCase):
         clear = self.session("clear").stdout
         self.assertIn("[orche] resume acme\nnothing in flight", clear)
         a, _b, _c = self.three()
-        for source in ("clear", "resume", "startup"):
+        for source in ("clear", "resume", "startup", "compact"):
             out = self.session(source).stdout
             self.assertIn("[orche] resume acme", out, source)
             self.assertIn(f"waits: owner — {a}", out)
             self.assertNotIn(CANARY, out)
             self.assertLessEqual(len(out.rstrip("\n")), 6000)
-        self.assertEqual(self.session("compact").stdout, "")
 
     def test_a_division_session_gets_no_card(self):
         self.three()
@@ -97,7 +96,7 @@ class CardTest(FlowCase):
 class CardDocsTest(FlowCase):
     def test_rulebook_and_readme_name_the_card(self):
         skill = (support.ROOT / "skills" / "orche-main" / "SKILL.md").read_text()
-        self.assertIn("하던 일 이어서 해줘", skill)
+        self.assertIn("pick up where we left off", skill)
         self.assertIn("`orche status <project>` (its card)", skill)
         self.assertNotIn("orche resume", skill)
         readme = (support.ROOT / "README.md").read_text()

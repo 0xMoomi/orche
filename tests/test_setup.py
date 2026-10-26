@@ -521,7 +521,7 @@ class UpgradeTest(SetupCase):
         self.assertEqual(len(backups), 1, lines)
         self.assertIn(f"rendered by an earlier version, now {VERSION}", lines)
         self.assertEqual(lines[-1], "personas updated for main-acme-shop, div-acme-shop-build: "
-                                    "restart the pane or /clear to load them")
+                                    "read at their next session start")
         self.assertEqual(self.user_files(), before)
         for path in self.build:
             text = path.read_text()
@@ -822,7 +822,7 @@ class AddRepoTest(SetupCase):
         lines = out.splitlines()
         self.assertEqual(lines[0], f"would add {real} to Orca (orca repo add --path {real})")
         self.assertTrue(lines[2].startswith("Summary: "), lines)
-        self.assertEqual(lines[-1], "would switch to main-new-app")
+        self.assertEqual(lines[-2], "would switch to main-new-app")
         self.assertEqual([c for c in self.calls if c[1:3] in (["repo", "add"], ["terminal", "switch"],
                                                               ["terminal", "create"], ["worktree", "create"])], [])
         self.assertIn("id:pending::", err)   # the placeholder repo id in the printed create argvs
@@ -868,7 +868,7 @@ class BareInitTest(SetupCase):
         self.assertEqual((proj["repo_id"], proj["path"]), ("repo-cwd", os.path.realpath(self.here)))
         self.assertEqual(self.created(), ["div-build"])
         self.assertEqual(self.orca_calls("repo add"), [])
-        self.assertEqual(out.splitlines()[-1], "Main is open in the main-cwd-app tab; type a request there.")
+        self.assertEqual(out.splitlines()[-2], "Main is open in the main-cwd-app tab with the setup summary; from here on, talk to Main there.")
 
     def test_bare_init_outside_any_repo_asks_for_the_path(self):
         plain = self.home / "plain"
@@ -907,14 +907,14 @@ class LandOnMainTest(SetupCase):
         code, out, err = self.orche("init", "Acme Shop", "--divisions", "build", "--no-intake")
         self.assertEqual(code, 0, err)
         self.assertNotIn("warning", err)
-        self.assertEqual(out.splitlines()[-1], "Main is open in the main-acme-shop tab; type a request there.")
+        self.assertEqual(out.splitlines()[-2], "Main is open in the main-acme-shop tab with the setup summary; from here on, talk to Main there.")
         self.assertEqual(self.orca_calls("terminal switch"),
                          [["orca", "terminal", "switch", "--terminal", "t-main-acme-shop", "--json"]])
         writes = [" ".join(c[1:3]) for c in self.calls if c[1] in ("terminal", "automations", "worktree")
                   and c[2] not in ("list",)]
         self.assertEqual(writes[-1], "terminal switch")   # after both panes were created
         [main] = [c for c in self.orca_calls("terminal create") if c[c.index("--title") + 1] == "main-acme-shop"]
-        self.assertIn("--permission-mode bypassPermissions --name main-acme-shop", main[main.index("--command") + 1])
+        self.assertIn("--permission-mode bypassPermissions --autocompact 200000 --name main-acme-shop", main[main.index("--command") + 1])
 
     def test_open_panes_are_not_switched_to_before_the_end(self):
         self.terminals = [{"handle": "t1", "title": "main-acme-shop"}]
@@ -986,7 +986,7 @@ class LandOnMainTest(SetupCase):
         self.terminals = [{"handle": "t1", "title": "main-acme-shop"}]
         code, out, err = self.orche("--dry-run", "init", "Acme Shop", "--no-intake")
         self.assertEqual(code, 0, err)
-        self.assertEqual(out.splitlines()[-1], "would switch to main-acme-shop")
+        self.assertEqual(out.splitlines()[-2], "would switch to main-acme-shop")
         self.assertEqual(self.orca_calls("terminal switch"), [])
 
 
@@ -1035,7 +1035,7 @@ class SetupFileModelTest(support.TempHomeCase):
     def test_the_readme_setup_json_with_a_picked_design_parses(self):
         readme = (support.ROOT / "README.md").read_text()
         self.assertIn('{"divisions": [...], "custom": {"<kind>": {}}, "models": {"<division>": "<model>"}}', readme)
-        self.assertIn("--lang en", readme)
+        self.assertNotIn("--lang", readme)
         data = {"divisions": ["rnd"], "custom": {"design": {}}, "models": {"rnd": "claude-sonnet-5-5"}}
         setup = setup_flow.from_data(data, setup_flow.defaults())
         self.assertIn("design", setup["custom"])

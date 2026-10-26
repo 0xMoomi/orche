@@ -22,7 +22,9 @@ line) -> one worktree/unit files/settings/persona per division (all
 pane in the main checkout when missing -> the two weekly Orca automations
 (printed as dry-run lines unless `--automations`) -> the project intake (`orche intake`, unless
 `--no-intake`; a failure is one "intake skipped: …" line and Ctrl-C one "intake interrupted; …"
-line, never a failed init) -> a switch to the `main-<proj>` tab (live only; a failure is a warning).
+line, never a failed init) -> a switch to the `main-<proj>` tab (live only; a failure is a warning) -> on a
+first registration, the setup note to Main (`_setup_note`, five lines) and, as the very last action, closing
+the one pane that ran init (`_init_window`; never inside `orche setup` or apply-all).
 A path that is a git repository but not in `orca repo list` is added with `orca repo add` once the
 setup is confirmed, right before the first write (an abort leaves Orca untouched; --dry-run never adds:
 a placeholder repo id `pending` stands in). A linked git worktree is refused. The main checkout's
@@ -34,12 +36,17 @@ import sys
 import time
 from pathlib import Path
 
-from . import __version__, config, hr, intake, mask, orca, paths, privacy, registry, setup_flow, shell, templates, util, vendors
+from . import __version__, config, hr, intake, mask, orca, paths, privacy, registry, setup_flow, shell, templates, units, util, vendors
 from .cli import EXIT_BLOCKED, EXIT_NOT_FOUND, EXIT_OK, EXIT_USER, dry, fail, out, warn
 from .hr import onboarding
 
 EXIT_INTERRUPTED = 130   # a setup given wrongly exits EXIT_USER (1), like argparse usage errors here
+PERSONAS_UPDATED = "personas updated for {names}: read at their next session start"
 SETUP_FLAGS = ("--divisions", "--custom", "--setup-file", "--stage", "--aliases", "--wake")
+SETUP_ASK = "tell the owner these in their language, in five lines, and ask for the first request"
+CLOSED = "the window that ran init was closed"
+NOT_CLOSED = "could not close the window that ran init: {why}"
+ORCHE_PANES = ("main-", "div-", "feat-")
 
 
 def register(subparsers):
@@ -125,7 +132,7 @@ def _refresh(args, reg) -> int:
              + (f"{len(refreshed)} file(s)" if refreshed else "already current")]
     lines += [f"kept {_tilde(Path(p))}: {why}" for p, why in ref.kept]
     if restart:
-        lines.append(f"personas updated for {', '.join(restart)}: restart the pane or /clear to load them")
+        lines.append(PERSONAS_UPDATED.format(names=", ".join(restart)))
     out(args, data, lines)
     return EXIT_OK
 
@@ -250,6 +257,37 @@ def _switch_to_main(proj) -> bool:
         pass
     warn(f"could not switch to {title}; open that tab in Orca")
     return False
+
+
+def _init_window(root):
+    """(handle, title, None) for the one connected non-ORCHE pane open on the project folder (the
+    window that ran init), else (None, None, why)."""
+    try:
+        terms = orca.terminals_of(orca.terminal("list"))
+    except orca.OrcaError as exc:
+        return None, None, str(exc)
+    found = [t for t in terms if not orca.disconnected(t) and t.get("worktreePath")
+             and os.path.realpath(t["worktreePath"]) == root
+             and not orca.normalize_title(t.get("title")).startswith(ORCHE_PANES)]
+    if len(found) != 1:
+        return None, None, f"{len(found)} windows open on this folder" if found else "no window found"
+    return found[0].get("handle"), found[0].get("title"), None
+
+
+def _setup_note(proj, key, intake_line, window_line) -> str:
+    """The setup result Main reports to the owner: at most five lines (`inbox.MAX_LINES`)."""
+    groups = {}
+    for name in registry.divisions_of(proj):
+        groups.setdefault((proj["divisions"].get(name) or {}).get("model") or "default", []).append(name)
+    names = "; ".join(f"{', '.join(sorted(n))} ({m})" for m, n in groups.items())
+    count = sum(len(n) for n in groups.values())
+    trees = [units.worktree_path(d["worktree"]) for d in proj["divisions"].values() if d.get("worktree")]
+    where = f"{_tilde(Path(trees[0]).parent)}/div-<division>" if trees else "none"
+    lines = [f"setup done: {key} registered with {count} divisions: {names}",
+             intake_line or "intake: off",
+             f"workspaces: {where}; nothing is committed to the repository",
+             window_line, SETUP_ASK]
+    return "\n".join(line for line in lines if line)
 
 
 def _tilde(path: Path) -> str:
@@ -598,19 +636,49 @@ def cmd_init(args):
     intake_line, data["intake"] = _intake(args, reg, key, root, names)
     if intake_line:
         lines.append(intake_line)
+    first = existing is None
+    closing = first and getattr(args, "close_window", True)   # off when init runs inside setup/apply-all
+    data["closed_window"], data["setup_note"], handle = None, False, None
     if dry_run:
         data["switched"] = False
         lines.append(f"would switch to {proj['main_session']}")
+        if closing:
+            lines.append("would close the window that ran init")
     else:
         data["switched"] = _switch_to_main(proj)   # last, so the user lands on Main when all is done
+        window_line = None
+        if closing:   # decided before the note, which states the outcome; the close itself is last
+            handle, _title, why = _init_window(root) if data["switched"] else \
+                (None, None, f"the switch to {proj['main_session']} failed")
+            window_line = CLOSED if handle else NOT_CLOSED.format(why=why)
+        if first:
+            from . import inbox
+            title = proj["main_session"]
+            try:
+                inbox.post(inbox.make(title, "orche", title, "info", urgent=True,
+                                      summary=_setup_note(proj, key, intake_line, window_line)))
+                data["setup_note"] = True
+            except OSError as exc:   # Main still has the card
+                warn(f"setup note not posted to {title}: {exc}")
         if data["switched"]:
-            lines.append(f"Main is open in the {proj['main_session']} tab; type a request there.")
+            lines.append(f"Main is open in the {proj['main_session']} tab with the setup summary; from here on, talk to Main there.")
+        if closing:
+            lines.append("closing the window that ran init" if handle else window_line)
+            data["closed_window"] = handle
     if restart:
-        lines.append(f"personas updated for {', '.join(restart)}: restart the pane or /clear to load them")
+        lines.append(PERSONAS_UPDATED.format(names=", ".join(restart)))
     out(args, data, lines)
-    if existing is None and not dry_run and not args.json and getattr(args, "first_pass", True):
-        return _first_pass_if_protected(root)
-    return EXIT_OK
+    code = EXIT_OK
+    if first and not dry_run and not args.json and getattr(args, "first_pass", True):
+        code = _first_pass_if_protected(root)
+    if handle:   # the very last action: it ends the shell that runs init
+        sys.stdout.flush()
+        sys.stderr.flush()
+        try:
+            orca.terminal("close", "--terminal", handle)
+        except orca.OrcaError as exc:
+            warn(f"could not close the window that ran init: {exc}")
+    return code
 
 
 def _first_pass_if_protected(root) -> int:

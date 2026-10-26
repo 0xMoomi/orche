@@ -90,8 +90,7 @@ class MetricsTest(support.TempHomeCase):
         self.assertIn("model 'm'", err.getvalue())
 
     def test_routine_regex(self):
-        for text in ("진행상황 알려줘", "상황 알려줘", "멈춘 거야?", "이어서 해", "계속 진행", "컨펌", "승인",
-                     "진행해", "status?", "Progress update please", "continue", "go ahead", "Approve"):
+        for text in ("status?", "Progress update please", "continue", "go ahead", "Approve"):
             self.assertTrue(metrics.ROUTINE_RE.search(text), text)
         self.assertIsNone(metrics.ROUTINE_RE.search("build the statusline widget"))
 

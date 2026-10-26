@@ -56,13 +56,6 @@ def _catalog(cfg) -> dict:
     return (_cfg(cfg).get("models") or {}).get("catalog") or {}
 
 
-def _text(value, lang) -> str:
-    """A {"ko", "en"} text in `lang` (English when that language is missing); a plain string as is."""
-    if isinstance(value, dict):
-        return str(value.get(lang) or value.get("en") or "")
-    return str(value or "")
-
-
 def vendor_of(model) -> str:
     """`codex` for `codex` and `codex:<id>`, else `claude`."""
     return CODEX if model == CODEX or str(model or "").startswith(CODEX + ":") else "claude"
@@ -84,25 +77,25 @@ def _kind_row(cfg, name) -> dict:
 
 def recommend(cfg, name) -> Choice:
     """The recommended model of division `name` from `cfg["kinds"]` (None: the defaults), falling
-    back to its `custom` entry for a name the table does not list; `why` is the English reason."""
+    back to its `custom` entry for a name the table does not list; `why` is the reason."""
     row = _kind_row(cfg, name)
-    return Choice(row["model"], row.get("effort") or "high", _text(row.get("why"), "en"))
+    return Choice(row["model"], row.get("effort") or "high", str(row.get("why") or ""))
 
 
-def kind(cfg, name, lang) -> dict:
-    """Kind `name` in `lang`: key, listed (False when `cfg["kinds"]` does not list it: the custom
+def kind(cfg, name) -> dict:
+    """Kind `name`: key, listed (False when `cfg["kinds"]` does not list it: the custom
     fallback), label, desc, charter, model, effort, why."""
     table = _cfg(cfg).get("kinds") or {}
     row = table.get(name) if isinstance(table.get(name), dict) else None
     rec = recommend(cfg, name)
     base = row or {}
     return {"key": name, "listed": row is not None,
-            "label": _text(base.get("label"), lang) or name, "desc": _text(base.get("desc"), lang),
+            "label": str(base.get("label") or name), "desc": str(base.get("desc") or ""),
             "charter": base.get("charter") or None, "model": rec.model, "effort": rec.effort,
-            "why": _text(_kind_row(cfg, name).get("why"), lang)}
+            "why": str(_kind_row(cfg, name).get("why") or "")}
 
 
-def catalog(cfg, model, lang) -> dict:
+def catalog(cfg, model) -> dict:
     """Model `model` for the owner: label, desc, cost (1..3, None unknown), dots; an id the catalog
     does not list is its own label."""
     row = _catalog(cfg).get(model)
@@ -110,7 +103,7 @@ def catalog(cfg, model, lang) -> dict:
         return {"model": model, "label": label(model) if model != CODEX else "Codex", "desc": "",
                 "cost": None, "dots": ""}
     cost = row.get("cost")
-    return {"model": model, "label": str(row.get("label") or model), "desc": _text(row.get("desc"), lang),
+    return {"model": model, "label": str(row.get("label") or model), "desc": str(row.get("desc") or ""),
             "cost": cost, "dots": DOTS.get(cost, "")}
 
 

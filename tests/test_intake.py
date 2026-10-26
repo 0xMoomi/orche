@@ -17,7 +17,7 @@ from unittest import mock
 import support
 import test_hr
 import test_runner
-from orche import intake, paths, registry, statusline
+from orche import cmd_init, inbox, intake, paths, registry, statusline
 from support import write_fake_claude
 from test_registry import load_cli
 
@@ -61,7 +61,7 @@ class FakeClaudeMixin:
         self.claude = write_fake_claude(self.fake)
         cfg = {"claude_bin": str(self.claude), "notify": False}
         cfg.update(config or {})
-        (self.home / "config.json").write_text(json.dumps(cfg))
+        (self.home / "config.json").write_text(json.dumps(support.no_wake(cfg)))
 
     def reply(self, result, cost=0.42, turns=12, duration_ms=38000, code=0, raw=None):
         """reply.json in the `--output-format json` shape the runner parses (`result` holds the text)."""
@@ -502,8 +502,8 @@ class InitIntakeTest(FakeClaudeMixin, test_hr.HrCase):
         code, out, err = self.orche("init", "Acme Shop", "--divisions", "build,gtm",
                                     "--custom", "design=Design:Owns the visual design system.")
         self.assertEqual(code, 0, err)
-        self.assertEqual(out.splitlines()[-2], "intake acme-shop: 3 divisions, $0.42, 38 s (claude-sonnet-5-5)")
-        self.assertEqual(out.splitlines()[-1], "Main is open in the main-acme-shop tab; type a request there.")
+        self.assertEqual(out.splitlines()[-3], "intake acme-shop: 3 divisions, $0.42, 38 s (claude-sonnet-5-5)")
+        self.assertEqual(out.splitlines()[-2], "Main is open in the main-acme-shop tab with the setup summary; from here on, talk to Main there.")
         self.assertIn("- design (Design, custom): Owns the visual design system.", self.stdin())
         for name in ("build", "gtm", "design"):
             self.assertTrue((self.repo / ".orche" / "div" / name / "CONTEXT.md").is_file())
@@ -526,8 +526,8 @@ class InitIntakeTest(FakeClaudeMixin, test_hr.HrCase):
     def test_dry_run_says_what_it_would_run(self):
         code, out, _ = self.orche("--dry-run", "init", "Acme Shop", "--divisions", "build")
         self.assertEqual(code, 0)
-        self.assertEqual(out.splitlines()[-2], "would run: orche intake acme-shop")
-        self.assertEqual(out.splitlines()[-1], "would switch to main-acme-shop")
+        self.assertEqual(out.splitlines()[-3], "would run: orche intake acme-shop")
+        self.assertEqual(out.splitlines()[-2], "would switch to main-acme-shop")
         self.assertFalse((self.fake / "argv.txt").exists())
         # M-4: once the stamp covers every division the dry run says so; a new division would sweep
         self.reply(answer({"build": "b"}))
@@ -585,7 +585,7 @@ class InitIntakeTest(FakeClaudeMixin, test_hr.HrCase):
         the status line and exits 0; nothing of the intake is written and its lock is free."""
         code, out, err, pid = self.init_interrupted_by(signal.SIGINT)
         self.assertEqual(code, 0, err)
-        self.assertEqual(out.splitlines()[-2], "intake interrupted; run `orche intake acme-shop` later")
+        self.assertEqual(out.splitlines()[-3], "intake interrupted; run `orche intake acme-shop` later")
         self.assertIn("initialized acme-shop", out)
         self.assertStatusLine()
         self.assertGone(pid)
@@ -597,7 +597,7 @@ class InitIntakeTest(FakeClaudeMixin, test_hr.HrCase):
     def test_sigterm_during_the_intake_finishes_init(self):
         code, out, err, pid = self.init_interrupted_by(signal.SIGTERM)
         self.assertEqual(code, 0, err)
-        self.assertEqual(out.splitlines()[-2], "intake interrupted; run `orche intake acme-shop` later")
+        self.assertEqual(out.splitlines()[-3], "intake interrupted; run `orche intake acme-shop` later")
         self.assertStatusLine()
         self.assertGone(pid)
         self.assertFalse((self.repo / ".orche" / "intake.json").exists())
@@ -611,7 +611,7 @@ class InitIntakeTest(FakeClaudeMixin, test_hr.HrCase):
         self.assertEqual(code, 0, err)
         self.assertIn("usually under a minute; Ctrl-C skips it", err)
         self.assertRegex(err, r"intake running… \d+ s \(claude-sonnet-5-5\)\n")
-        self.assertTrue(out.splitlines()[-2].startswith("intake acme-shop: 1 division, $0.42"))
+        self.assertTrue(out.splitlines()[-3].startswith("intake acme-shop: 1 division, $0.42"))
 
     def test_a_failed_intake_never_fails_init(self):
         for case in ({"result": "prose, no JSON"}, {"result": answer({}), "code": 1}):
@@ -620,17 +620,93 @@ class InitIntakeTest(FakeClaudeMixin, test_hr.HrCase):
                 code, out, _ = self.orche("init", "Acme Shop", "--divisions", "build", "--custom",
                                           f"x{len(case)}=X{len(case)}:Charter.")
                 self.assertEqual(code, 0)
-                last = out.splitlines()[-2]
+                last = [l for l in out.splitlines() if l.startswith("intake ")][-1]   # a first init adds the window line
                 self.assertTrue(last.startswith("intake skipped: "), last)
                 self.assertTrue(last.endswith("; run `orche intake acme-shop` later"), last)
                 self.assertFalse((self.repo / ".orche" / "intake.json").exists())
                 self.assertFalse((self.repo / ".orche" / "div").exists())
 
     def test_without_claude_init_prints_the_skip_line(self):
-        (self.home / "config.json").write_text(json.dumps({"claude_bin": str(self.home / "no-claude")}))
+        (self.home / "config.json").write_text(json.dumps(support.no_wake({"claude_bin": str(self.home / "no-claude")})))
         code, out, _ = self.orche("init", "Acme Shop", "--divisions", "build")
         self.assertEqual(code, 0)
-        self.assertIn("intake skipped: ", out.splitlines()[-2])
+        self.assertIn("intake skipped: ", out.splitlines()[-3])
+
+
+class InitClosesItsWindowTest(FakeClaudeMixin, test_hr.HrCase):
+    """A first live init posts Main the setup result and closes the one pane it ran from, last."""
+    INTAKE = "intake acme-shop: 2 divisions, $0.42, 38 s (claude-sonnet-5-5)"
+
+    def setUp(self):
+        super().setUp()
+        git_repo(self.repo)
+        self.setup_fake()
+        self.reply(answer({"build": "b", "gtm": "g"}))
+
+    def pane(self, handle, title, **extra):
+        return {"handle": handle, "title": title, "worktreePath": str(self.repo), "connected": True, **extra}
+
+    def note(self):
+        [(_f, ptr)] = inbox.pending("main-acme-shop")
+        self.assertEqual((ptr["from"], ptr["status"], ptr["urgent"]), ("orche", "info", True))
+        lines = ptr["summary"].splitlines()
+        self.assertLessEqual(len(lines), inbox.MAX_LINES)
+        return lines
+
+    def test_one_pane_on_the_folder_is_closed_after_the_switch(self):
+        self.terminals = [self.pane("t-run", "✳ Claude Code"), self.pane("t-gone", "other", connected=False)]
+        code, out, err = self.orche("init", "Acme Shop", "--divisions", "build,gtm")
+        self.assertEqual(code, 0, err)
+        terms = [c[2:] for c in self.calls if c[1] == "terminal" and c[2] in ("switch", "close")]
+        self.assertEqual(terms, [["switch", "--terminal", "t-main-acme-shop", "--json"],
+                                 ["close", "--terminal", "t-run", "--json"]])
+        self.assertEqual(self.calls[-1][1:3], ["terminal", "close"])
+        self.assertEqual(out.splitlines()[-1], "closing the window that ran init")
+        lines = self.note()
+        self.assertEqual(lines[0], "setup done: acme-shop registered with 2 divisions: build (claude-opus-5-5); "
+                                   "gtm (claude-sonnet-5-5)")
+        self.assertEqual(lines[1], self.INTAKE)
+        self.assertTrue(lines[2].startswith("workspaces: ") and lines[2].endswith("/div-<division>; nothing is "
+                                                                                 "committed to the repository"))
+        self.assertEqual(lines[3:], [cmd_init.CLOSED, cmd_init.SETUP_ASK])
+        self.assertEqual(json.loads(self.orche("--json", "init", "Acme Shop")[1])["closed_window"], None)  # a re-run
+
+    def test_only_orche_panes_on_the_folder_close_nothing(self):
+        self.terminals = [self.pane("t1", "main-acme-shop"), self.pane("t2", "✳ div-acme-shop-build")]
+        code, out, err = self.orche("init", "Acme Shop", "--divisions", "build,gtm")
+        self.assertEqual(code, 0, err)
+        self.assertEqual(self.orca_calls("terminal close"), [])
+        why = "could not close the window that ran init: no window found"
+        self.assertEqual(out.splitlines()[-1], why)
+        self.assertEqual(self.note()[3], why)
+
+    def test_two_panes_on_the_folder_close_nothing(self):
+        self.terminals = [self.pane("t1", "zsh"), self.pane("t2", "Claude Code")]
+        code, out, err = self.orche("--json", "init", "Acme Shop", "--divisions", "build,gtm")
+        self.assertEqual(code, 0, err)
+        self.assertEqual(self.orca_calls("terminal close"), [])
+        data = json.loads(out)
+        self.assertEqual((data["closed_window"], data["setup_note"]), (None, True))
+        self.assertEqual(self.note()[3], "could not close the window that ran init: 2 windows open on this folder")
+
+    def test_dry_run_posts_nothing_and_closes_nothing(self):
+        self.terminals = [self.pane("t-run", "Claude Code")]
+        code, out, err = self.orche("--dry-run", "init", "Acme Shop", "--divisions", "build,gtm")
+        self.assertEqual(code, 0, err)
+        self.assertEqual(out.splitlines()[-1], "would close the window that ran init")
+        self.assertEqual(self.orca_calls("terminal close"), [])
+        self.assertEqual(inbox.pending("main-acme-shop"), [])
+
+    def test_refresh_posts_nothing_and_closes_nothing(self):
+        self.assertEqual(self.orche("init", "Acme Shop", "--divisions", "build,gtm")[0], 0)
+        for path, _ptr in inbox.pending("main-acme-shop"):
+            Path(path).unlink()
+        self.terminals.append(self.pane("t-run", "Claude Code"))
+        self.calls.clear()
+        code, _out, err = self.orche("init", "acme-shop", "--refresh")
+        self.assertEqual(code, 0, err)
+        self.assertEqual(self.orca_calls("terminal close"), [])
+        self.assertEqual(inbox.pending("main-acme-shop"), [])
 
 
 class RunnerContextTest(test_runner.RunnerCase):

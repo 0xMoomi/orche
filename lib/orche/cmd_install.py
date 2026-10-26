@@ -28,7 +28,7 @@ from pathlib import Path
 
 from . import jev_setup, paths, privacy, reconcile, registry, units, util
 from .cli import EXIT_OK, EXIT_USER, fail, out
-from .install import (MIGRATION_LINE, Ctx, backup, agents, apply_all, codex, doctor, fable, launchd, settings, skills,
+from .install import (Ctx, backup, agents, apply_all, codex, doctor, fable, launchd, settings, skills,
                       statusline)
 
 STATE_FILE = "install-state.json"
@@ -363,9 +363,9 @@ def cmd_install(args):
                         f"  /plugin marketplace add {ctx.plugin_root}",
                         "  /plugin install orche@orche"]
     lines = ([f"dry run: nothing written (home {ctx.home})"] if ctx.dry_run else []) + ctx.lines()
-    lines += (jev_result or {}).get("lines", []) + instructions + [MIGRATION_LINE]
+    lines += (jev_result or {}).get("lines", []) + instructions
     data = {"home": str(ctx.home), "dry_run": ctx.dry_run, "mode": args.mode, "actions": ctx.actions,
-            "instructions": instructions, "errors": ctx.errors, "migration": MIGRATION_LINE}
+            "instructions": instructions, "errors": ctx.errors}
     if jev_result is not None:
         data["jev"] = {k: v for k, v in jev_result.items() if k != "lines"}
     if not args.json:

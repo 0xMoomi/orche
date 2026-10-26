@@ -56,7 +56,7 @@ def custom_spec(name, raw) -> dict:
     if errors:
         raise SetupError(errors)
     cfg = config.load()
-    known = vendors.kind(cfg, name, "en")
+    known = vendors.kind(cfg, name)
     label, charter = raw.get("label"), raw.get("charter")
     if known["listed"] and known["charter"]:
         label = known["label"] if label is None else label
@@ -267,7 +267,7 @@ class Checklist:
             spec = self.custom[name]
             text = f"{spec['label']} — {_short(spec['charter'])}"
         else:
-            kind = vendors.kind(config.load(), name, "en")
+            kind = vendors.kind(config.load(), name)
             text = f"{kind['label']} — {kind['desc']}"
         model = self.chosen.get(name) or (self.custom.get(name) or {}).get("model") or self.recorded.get(name) \
             or vendors.recommend(config.load(), name).model

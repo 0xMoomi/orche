@@ -127,7 +127,7 @@ The model a division records (`orche hr add --model`, `orche hr model`); `orche 
 _Avoid_: model switch (nothing switches mid-run).
 
 **Division kind**:
-A row of config `kinds` (rnd, research, build, gtm, ops, design, content, custom): recommended model and effort, label, description and reason in Korean and English, and a charter where the kind has one. Adding a division by a kind's name takes its row.
+A row of config `kinds` (rnd, research, build, gtm, ops, design, content, custom): recommended model and effort, label, description and reason (English; Main translates for the owner), and a charter where the kind has one. Adding a division by a kind's name takes its row.
 _Avoid_: division type, template.
 
 **Choices JSON**:
@@ -138,7 +138,7 @@ What a division records as its model: a Claude id (`claude-opus-5-5`, aliases su
 _Avoid_: model name (the catalog label is the name shown to the owner).
 
 **Choice dialog**:
-The AskUserQuestion questions Main builds from `orche hr choices` when the owner asks in plain words ("부서 추가해줘", "모델 바꿔줘"): only what the request leaves open, the recommendation first, an unavailable model never an option (R-MODEL-9, R-MODEL-10).
+The AskUserQuestion questions Main builds from `orche hr choices` when the owner asks in plain words, in any language ("add a division", "change a model"): only what the request leaves open, the recommendation first, an unavailable model never an option (R-MODEL-9, R-MODEL-10).
 _Avoid_: wizard, form.
 
 **Two-model reconcile**:
@@ -146,7 +146,7 @@ A hard design call sent as one brief to two divisions on different models; a thi
 _Avoid_: council (the dropped command).
 
 **Update**:
-`orche update`: the ORCHE checkout fast-forwarded to `origin/main`, reinstalled by the new code and every project refreshed (`orche init <project> --refresh`); the owner asks Main in plain words ("업데이트해줘"). A development checkout is refused, never reset (R-PLAIN-2).
+`orche update`: the ORCHE checkout fast-forwarded to `origin/main`, reinstalled by the new code and every project refreshed (`orche init <project> --refresh`); the owner asks Main in plain words, in any language ("update ORCHE"). A development checkout (uncommitted changes, another branch, local commits) is never pulled or reset: the install and the projects are aligned with it when the recorded version differs (R-PLAIN-2).
 _Avoid_: upgrade, reinstall (the reinstall is one of its steps).
 
 **Dispatch block**:
@@ -166,7 +166,7 @@ _Avoid_: version, edit.
 _Avoid_: unit dir, brief dir, `ORCHE_HOME/briefs` (removed).
 
 **Claim**:
-The status a message states: its last `STATUS:` line whose word is done, release-ready, blocked, failed or stop (완료 reads as done), never a template echo such as `done|blocked|failed` (`donegate.claim`, SPEC §14.11). Done and release-ready are completion claims.
+The status a message states: its last `STATUS:` line whose word is done, release-ready, blocked, failed or stop, never a template echo such as `done|blocked|failed` (`donegate.claim`, SPEC §14.11). Done and release-ready are completion claims.
 _Avoid_: status line (the runner's word), STATUS word, report status (that is the pointer's).
 
 **Done gate**:

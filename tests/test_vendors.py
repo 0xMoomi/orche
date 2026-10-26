@@ -48,7 +48,7 @@ class RecommendTest(support.TempHomeCase):
 
     def test_config_overrides_one_entry(self):
         (self.home / "config.json").write_text(json.dumps(dict(
-            support.NO_WAKE, kinds={"build": {"model": "codex", "effort": "high", "why": {"en": "second vendor"}}})))
+            support.NO_WAKE, kinds={"build": {"model": "codex", "effort": "high", "why": "second vendor"}})))
         cfg = config.load()
         self.assertEqual(vendors.recommend(cfg, "build"), vendors.Choice("codex", "high", "second vendor"))
         self.assertEqual(vendors.recommend(cfg, "gtm")[:2], ("claude-sonnet-5-5", "medium"))   # the rest kept

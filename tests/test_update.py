@@ -139,29 +139,58 @@ class UpdateTest(support.TempHomeCase):
         self.assertIn("would refresh acme: orche init acme --refresh", out)
         self.assertIn("would run: orche install --mode settings --no-jev", out)
 
-    def assert_refused(self):
-        self.publish()
-        before = self.head()
-        code, out, _ = self.update()
-        self.assertEqual(code, 2)
-        self.assertEqual(out.strip(), cmd_update.REFUSAL)
-        self.assertEqual(self.head(), before)
+    def test_dry_run_on_a_development_checkout_plans_no_merge(self):
+        git(self.co, "checkout", "-qb", "feature")
+        write(self.co, "0.7.4", "dev")
+        git(self.co, "commit", "-qam", "dev")
+        code, out, err = self.update(dry_run=True)
+        self.assertEqual(code, 0, out + err)
         self.assertEqual(self.calls(), [])
+        self.assertEqual(out.splitlines()[0], "ORCHE 0.7.3 → 0.7.4 (dry run: nothing changed)")
+        self.assertIn("would run: orche install --mode settings --no-jev", out)
+        self.assertIn("would refresh beta: orche init beta --refresh", out)
+        self.assertNotIn("would run: git merge", out)
+        self.assertNotIn("fetching", err)
 
-    def test_dirty_checkout_is_refused(self):
+    def assert_aligned(self, why, version):
+        """The install and every project ran the checkout's own code; nothing was fetched or merged."""
+        code, out, err = self.update()
+        self.assertEqual(code, 0, out + err)
+        lines = out.splitlines()
+        self.assertEqual(lines[0], f"ORCHE 0.7.3 → {version}")
+        self.assertIn("refreshed acme: 2 file(s)", lines)
+        self.assertIn("refreshed beta: 2 file(s)", lines)
+        self.assertEqual(lines[-1], cmd_update.RESTART)
+        self.assertIn(f"update: development checkout ({why}): nothing pulled", err)
+        calls = self.calls()
+        self.assertEqual({c["version"] for c in calls}, {version})
+        self.assertEqual([c["argv"][0] for c in calls], ["install", "init", "init"])
+        return out, err
+
+    def test_a_dirty_checkout_aligns_the_install_without_pulling(self):
+        self.publish()   # origin has 0.8.0: a dirty checkout must not fetch it
+        before = (self.head(), self.head("origin/main"))
         (self.co / "lib" / "orche" / "__init__.py").write_text('__version__ = "0.7.3-dev"\n')
-        self.assert_refused()
+        _, err = self.assert_aligned("uncommitted changes", "0.7.3-dev")
+        self.assertNotIn("fetching", err)
+        self.assertEqual((self.head(), self.head("origin/main")), before)
         self.assertIn("0.7.3-dev", (self.co / "lib" / "orche" / "__init__.py").read_text())
 
-    def test_other_branch_is_refused(self):
+    def test_another_branch_with_a_current_install_is_up_to_date(self):
+        self.publish()
         git(self.co, "checkout", "-qb", "feature")
-        self.assert_refused()
+        code, out, err = self.update()
+        self.assertEqual((code, out.strip()), (0, "already up to date (0.7.3; development checkout, nothing pulled)"))
+        self.assertEqual(self.calls(), [])
+        self.assertNotIn("fetching", err)
 
-    def test_local_commits_are_refused(self):
-        (self.co / "NOTES").write_text("mine\n")
-        git(self.co, "add", "NOTES")
-        git(self.co, "commit", "-qm", "local")
-        self.assert_refused()
+    def test_local_commits_align_without_a_merge(self):
+        self.publish()
+        write(self.co, "0.7.4", "dev")
+        git(self.co, "commit", "-qam", "local")
+        before = self.head()
+        self.assert_aligned("1 commit(s) not on origin/main", "0.7.4")
+        self.assertEqual(self.head(), before)
 
     def test_a_failing_install_names_the_step(self):
         self.publish()
@@ -228,11 +257,16 @@ class UpdateTest(support.TempHomeCase):
     def test_json_covers_refusals_and_results(self):
         git(self.co, "checkout", "-qb", "feature")
         code, out, _ = self.update(json_=True)
-        self.assertEqual((code, json.loads(out)), (2, {"status": "refused", "reason": "on feature, not main"}))
+        self.assertEqual((code, json.loads(out)), (0, {"status": "current", "version": "0.7.3",
+                                                       "development": "on feature, not main"}))
         git(self.co, "checkout", "-q", "main")
         self.publish()
         code, out, _ = self.update(json_=True)
-        self.assertEqual((code, json.loads(out)["status"], json.loads(out)["new"]), (0, "updated", "0.8.0"))
+        data = json.loads(out)
+        self.assertEqual((code, data["status"], data["new"], data["development"]), (0, "updated", "0.8.0", None))
+        self.cache_copy()
+        code, out, _ = self.update(json_=True)
+        self.assertEqual((code, json.loads(out)["status"]), (2, "refused"))
 
 
 

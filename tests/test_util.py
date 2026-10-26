@@ -21,8 +21,8 @@ class SlugAndIdsTest(unittest.TestCase):
 class JsonIoTest(support.TempHomeCase):
     def test_atomic_write_and_json_roundtrip(self):
         target = self.home / "nested" / "data.json"
-        util.write_json(target, {"a": 1, "k": "한"})
-        self.assertEqual(util.read_json(target), {"a": 1, "k": "한"})
+        util.write_json(target, {"a": 1, "k": "日"})
+        self.assertEqual(util.read_json(target), {"a": 1, "k": "日"})
         util.atomic_write(target, "replaced")
         self.assertEqual(target.read_text(), "replaced")
         self.assertEqual([p.name for p in target.parent.iterdir()], ["data.json"])
@@ -120,9 +120,9 @@ class PathsLogConfigTest(support.TempHomeCase):
         (self.home / "config.json").unlink()        # the test home's wake-off config
         self.assertEqual(config.load(), config.DEFAULTS)
         self.assertEqual(config.DEFAULTS["inbox"], {"wake": True, "quiet_s": 90, "quiet_max_s": 240})
-        (self.home / "config.json").write_text(json.dumps({"lang": "ko", "jev": {"enabled": True}}))
+        (self.home / "config.json").write_text(json.dumps({"note": "kept", "jev": {"enabled": True}}))
         cfg = config.load()
-        self.assertEqual(cfg["lang"], "ko")
+        self.assertEqual(cfg["note"], "kept")
         self.assertEqual(cfg["jev"], {**config.DEFAULTS["jev"], "enabled": True})
         self.assertEqual(cfg["orca_bin"], "orca")
 

@@ -455,8 +455,9 @@ class Pane:
     field: dict | None     # the pointer's `review`
 
 
-def pane_round(reg, member, worktree, project, b, report_text, summary, published) -> Pane:
-    """R32 / R-REVIEW-9: one synchronous round for a pane member's verified, published done."""
+def pane_round(reg, member, worktree, project, b, report_text, summary, published, note=None) -> Pane:
+    """R32 / R-REVIEW-9: one synchronous round for a pane member's verified, published done.
+    `note(text)` is called once right before a round actually runs (cmd_report's quiet `verifying` note)."""
     from ..runs import history
     cfg = config.load()
     root = (reg.get("projects", {}).get(project) or {}).get("path") or worktree
@@ -487,6 +488,8 @@ def pane_round(reg, member, worktree, project, b, report_text, summary, publishe
     if len(prior) >= rounds:
         out = exception(done, prior[-1], rounds)
         return Pane(False, "", out.summary, out.field)
+    if note is not None:
+        note(f"verifying {published.head[:7]}: pre-review running (up to {PANE_BUDGET_S // 60} min)")
     rnd = one_round(ctx, len(prior) + 1, pr=pr["number"], head=published.head, report=report_text,
                     earlier=earlier_text([(r, "") for r in prior]))
     if rnd.word in ("pass", "skipped"):

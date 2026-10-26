@@ -16,7 +16,7 @@ from . import __version__, config, inbox, project, registry, roster, runs, statu
 from .flow import guard, owner, shape, usage
 
 CAP_LINES = 3      # sub-lines per kind; the rest: `… <n> more: orche status --project <p>`
-STATE_ORDER = ("merged", "queued", "running", "held", "returned", "done", "info", "failed", "blocked", "question",
+STATE_ORDER = ("merged", "queued", "running", "verifying", "held", "returned", "done", "info", "failed", "blocked", "question",
                "stopped")
 
 CARD_LINES, CARD_CHARS = 40, 3000   # the card's budget

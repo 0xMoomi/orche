@@ -12,8 +12,6 @@ from pathlib import Path
 
 from .. import paths, util
 
-MIGRATION_LINE = ("Restart any main-/div-/feat- panes opened before this version: ORCHE now "
-                  "identifies sessions by the ORCHE_SESSION variable its pane commands set.")
 MUTATING = {"patch", "create", "backup", "symlink", "relink", "move", "remove", "set", "add", "replace", "write", "restore"}
 
 

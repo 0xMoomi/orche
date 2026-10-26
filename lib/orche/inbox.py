@@ -23,7 +23,7 @@ REPORT_LINE = ("[orche] Act on the inbox above now: read each report named (Read
 _SAFE = re.compile(r"^[A-Za-z0-9._-]+$")
 DRAIN_RE = re.compile(r"^\s*(\[drain\]|/drain)", re.IGNORECASE)
 NUDGE_RE = re.compile(r"^\s*\[orche\] inbox:")
-STATUS_RE = re.compile(r"(진행\s*상황|상황\s*알려|어디까지|status|progress|report|drain)", re.IGNORECASE)
+STATUS_RE = re.compile(r"(status|progress|report|drain)", re.IGNORECASE)
 DRAIN_COUNT = 4
 DRAIN_AGE = _dt.timedelta(minutes=90)
 STALL_AGE_MS = 20 * 60 * 1000

@@ -129,6 +129,9 @@ class LimitsTest(test_hr.FeatCase):
                                             name="build", division=None, entry={"status": "active"}))
 
 
+NO_TRANSCRIPT = "orche: no transcript named main-acme-shop; the pane starts a fresh session\n"
+
+
 class TransitionsCase(test_hr.FeatCase):
     """Runs hr.wake / hr.sleep on the sample registry, counting status-line refreshes and notes."""
 
@@ -178,7 +181,7 @@ class WakeTest(TransitionsCase):
         argv = self.create_argv()
         self.assertEqual(argv[argv.index("--worktree") + 1], "id:repo-acme::/srv/orca/acme-shop-search")
         self.assertTrue(argv[argv.index("--command") + 1].endswith(
-            "--permission-mode bypassPermissions --name feat-acme-shop-search"))
+            "--permission-mode bypassPermissions --autocompact 200000 --name feat-acme-shop-search"))
         entry = self.entry("feat-acme-shop-search")
         self.assertEqual(entry["status"], "active")
         self.assertNotEqual(entry["last_activity"], self.reg["projects"]["acme-shop"]["divisions"]["build"]["features"][1]["last_activity"])
@@ -192,7 +195,7 @@ class WakeTest(TransitionsCase):
     def test_wake_dormant_division_starts_fresh(self):  # W2
         self.run_verb(transitions.wake, "div-acme-shop-rnd")
         command = self.create_argv()[self.create_argv().index("--command") + 1]
-        self.assertTrue(command.endswith("--permission-mode bypassPermissions --name div-acme-shop-rnd"))
+        self.assertTrue(command.endswith("--permission-mode bypassPermissions --autocompact 200000 --name div-acme-shop-rnd"))
         self.assertEqual(registry.load()["events"][-1]["unit"], "rnd")
         self.assertEqual(self.entry("div-acme-shop-rnd")["status"], "active")
 
@@ -258,7 +261,7 @@ class WakeTest(TransitionsCase):
         self.terminals = [{"handle": "t-main", "title": "✳ main-acme-shop"}]
         self._read_says({"ok": False, "error": {"code": "terminal_not_found", "message": "no such terminal"}})
         code, out, err = self.orche("wake", "main-acme-shop")
-        self.assertEqual((code, out, err), (0, "main-acme-shop pane opened\n", ""))
+        self.assertEqual((code, out, err), (0, "main-acme-shop pane opened\n", NO_TRANSCRIPT))
         self.assertEqual(self.orca_calls("terminal switch"),
                          [["orca", "terminal", "switch", "--terminal", "t-main", "--json"]])   # tried first
         self.assertEqual([c[c.index("--title") + 1] for c in self.orca_calls("terminal create")], ["main-acme-shop"])

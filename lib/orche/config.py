@@ -109,62 +109,59 @@ DEFAULTS = {
     # Division kinds (lib/orche/vendors.py, lib/orche/hr/choices.py): by kind (fallback `custom`),
     # the model `orche init` / `orche hr add` give a division, its pane effort (a headless run's
     # effort is its TIER's), the owner-facing label and description and the reason for the model
-    # ({"ko": …, "en": …}), and a charter for a kind that is not standard (`hr add <p> design`).
+    # (English; Main translates for the owner), and a charter for a kind that is not standard (`hr add <p> design`).
     # Override one entry here.
     "kinds": {
         "rnd":      {"model": "claude-opus-5-5",   "effort": "high",   "charter": None,
-                     "label": {"ko": "R&D", "en": "R&D"},
-                     "desc": {"ko": "시제품·기술 검증", "en": "prototypes and technical spikes"},
-                     "why": {"ko": "시제품·검증엔 가장 강한 추론", "en": "prototypes and spikes: the strongest reasoning"}},
+                     "label": "R&D",
+                     "desc": "prototypes and technical spikes",
+                     "why": "prototypes and spikes: the strongest reasoning"},
         "research": {"model": "claude-sonnet-5-5", "effort": "medium", "charter": None,
-                     "label": {"ko": "리서치", "en": "Research"},
-                     "desc": {"ko": "시장·사용자·경쟁사 조사", "en": "market, users, competitors"},
-                     "why": {"ko": "읽고 출처 달아 요약: Opus의 절반 가격", "en": "reading and sourced summaries at half Opus's price"}},
+                     "label": "Research",
+                     "desc": "market, users, competitors",
+                     "why": "reading and sourced summaries at half Opus's price"},
         "build":    {"model": "claude-opus-5-5",   "effort": "medium", "charter": None,
-                     "label": {"ko": "빌드", "en": "Build"},
-                     "desc": {"ko": "기능 통합·테스트·PR·검증 기록", "en": "integrates features, owns the ledger, opens PRs"},
-                     "why": {"ko": "통합·테스트·장부: 정확성이 먼저",
-                             "en": "integration, tests and the ledger: correctness first (codex for a second vendor on code)"}},
+                     "label": "Build",
+                     "desc": "integrates features, owns the ledger, opens PRs",
+                     "why": "integration, tests and the ledger: correctness first (codex for a second vendor on code)"},
         "gtm":      {"model": "claude-sonnet-5-5", "effort": "medium", "charter": None,
-                     "label": {"ko": "GTM", "en": "GTM"},
-                     "desc": {"ko": "출시·콘텐츠·성장", "en": "launch, content, growth"},
-                     "why": {"ko": "출시 문구·콘텐츠: Sonnet 가격에 좋은 글", "en": "launch copy and content: writing quality at Sonnet's price"}},
+                     "label": "GTM",
+                     "desc": "launch, content, growth",
+                     "why": "launch copy and content: writing quality at Sonnet's price"},
         "ops":      {"model": "claude-sonnet-5-5", "effort": "medium", "charter": None,
-                     "label": {"ko": "운영", "en": "Ops"},
-                     "desc": {"ko": "배포·운영 (공개 단계 전엔 쉼)", "en": "deploy and operate (dormant until stage public)"},
-                     "why": {"ko": "런북·체크리스트, 위험한 단계는 어차피 사장님 승인",
-                             "en": "runbooks and checklists; risky steps are owner-gated anyway"}},
+                     "label": "Ops",
+                     "desc": "deploy and operate (dormant until stage public)",
+                     "why": "runbooks and checklists; risky steps are owner-gated anyway"},
         "design":   {"model": "claude-opus-5-5",   "effort": "high",
-                     "label": {"ko": "디자인", "en": "Design"},
-                     "desc": {"ko": "화면·UX·시각 디자인과 디자인 리뷰", "en": "UI, UX and visual design; design reviews"},
-                     "why": {"ko": "디자인 판단엔 가장 강한 추론", "en": "design calls: the strongest reasoning"},
+                     "label": "Design",
+                     "desc": "UI, UX and visual design; design reviews",
+                     "why": "design calls: the strongest reasoning",
                      "charter": "Design owns the product's user interface and experience: flows, layouts, visual style "
                                 "and design reviews of what Build ships. It drafts options with their reasons, prototypes "
                                 "one when that settles a question, and hands Build concrete specs."},
         "content":  {"model": "claude-sonnet-5-5", "effort": "medium",
-                     "label": {"ko": "콘텐츠", "en": "Content"},
-                     "desc": {"ko": "블로그·문서·SNS 글", "en": "blog posts, docs and social copy"},
-                     "why": {"ko": "글쓰기: Sonnet 가격", "en": "writing at Sonnet's price"},
+                     "label": "Content",
+                     "desc": "blog posts, docs and social copy",
+                     "why": "writing at Sonnet's price",
                      "charter": "Content writes the product's words: blog posts, docs, release notes and social copy in "
                                 "the product's voice, from facts the other divisions provide. Nothing is published without "
                                 "the owner's approval."},
         "custom":   {"model": "claude-opus-5-5",   "effort": "high",
-                     "why": {"ko": "모르는 일엔 가장 강한 모델", "en": "an unknown charter: the strongest model"}},
+                     "why": "an unknown charter: the strongest model"},
     },
     # Models (lib/orche/vendors.py). catalog: the models `orche hr choices` offers, with their label,
-    # cost (1 ●○○ .. 3 ●●●) and description ({"ko", "en"}); a Claude id listed here passes the model
+    # cost (1 ●○○ .. 3 ●●●) and description; a Claude id listed here passes the model
     # grammar as well. codex_bin: the Codex CLI; codex_sandbox: the sandbox of a Codex run; prices:
     # USD per million tokens [input, cached input, output] by Codex model id (`codex`: Codex's default
     # model), for the spend of a Codex run.
     "models": {
         "catalog": {
             "claude-opus-5-5":   {"label": "Opus 5.5", "cost": 3,
-                                  "desc": {"ko": "가장 강한 추론", "en": "the strongest reasoning"}},
+                                  "desc": "the strongest reasoning"},
             "claude-sonnet-5-5": {"label": "Sonnet 5.5", "cost": 2,
-                                  "desc": {"ko": "빠르고 충분히 똑똑해요, Opus의 절반 가격", "en": "fast and capable at half Opus's price"}},
+                                  "desc": "fast and capable at half Opus's price"},
             "codex":             {"label": "Codex", "cost": 3,
-                                  "desc": {"ko": "OpenAI Codex 기본 모델: 다른 회사 모델로 교차 검증, 백그라운드 전용",
-                                           "en": "OpenAI Codex's default model: a second vendor, headless only"}},
+                                  "desc": "OpenAI Codex's default model: a second vendor, headless only"},
         },
         "codex_bin": "codex",
         "codex_sandbox": "workspace-write",

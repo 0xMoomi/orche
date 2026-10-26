@@ -11,6 +11,9 @@ the project defines — a custom division gets this card too), **workers** each 
 headless **Liaison** that answers other projects (`orche ask`), and one global **HR**. Work moves as briefs, reports and ledger rows,
 not chat.
 
+The owner says what they want in words to Main, in any language, and Main runs the command; the commands below
+are for sessions and scripts.
+
 <!-- inject:start -->
 ORCHE unit rules (full help: /orche)
 - Your work is `<project root>/.orche/units/<unit>/BRIEF.md` (your inbox entry's `report:` path; first line `rev: N`). The brief is the contract: stay in SCOPE, meet ACCEPT, run VERIFY yourself.

@@ -107,13 +107,14 @@ class PersonaTemplatesTest(unittest.TestCase):
         apply_text = (SKILLS / "orche-apply" / "SKILL.md").read_text()
         for part in ("Apply with one call: `orche init <name> --setup-file <path>`",
                      "Pass timeout 600000 — the intake can take up to 9 minutes",
-                     "Tell the user the intake's one-line result", "Orca has switched to the Main tab"):
+                     "Init reports the intake's one-line result to Main", "and closing this window: you do not get to answer",
+                     "Do not act as Main: never set `ORCHE_SESSION`, never run `orche dispatch`"):
             self.assertIn(part, apply_text)
         self.assertNotIn("--setup-file <path> --no-intake", apply_text)
         # C7 A4: a bare `orche init` runs at once on the current repository, defaults, no questions.
         for part in ("says `orche init` (or `/orche-apply`) with no project named",
                      "Run `orche init` at once, with no argument:\n" "no checklist, no dry-run, no question",
-                     "`Main is open in the main-<proj> tab; type a request there.`",
+                     "`Main is open in the main-<proj> tab with the setup summary; from here on, talk to Main there.`",
                      "Use this only when the user names divisions, a custom division, a stage or aliases"):
             self.assertIn(part, apply_text)
 
@@ -274,6 +275,13 @@ class SkillsTest(unittest.TestCase):
                        "a step only the owner can do (install Codex, grant disk access) is shown as that one step"):
             self.assertIn(phrase, text)
         self.assertNotIn("never show the owner a command", text)
+        self.assertIn("any language", text)
+        for command in ("orche status", "orche depts", "orche queue", "orche doctor", "orche update", "orche flow pause",
+                        "orche flow resume", "orche hr scale", "orche hr correct", "orche hr freeze", "orche hr audit",
+                        "orche queue approve", "orche queue drop", "orche wake main-", "orche sleep", "orche stage set",
+                        "orche card", "orche ask", "orche ledger summary", "orche metrics", "orche secret fill",
+                        "orche jev setup", "orche triage", "orche uninstall"):
+            self.assertIn(command, text)
         block = INJECT.findall((SKILLS / "orche-main" / "SKILL.md").read_text())[0]
         self.assertIn("plain words", block)
         self.assertIn("you run `orche`, never the owner.", block)

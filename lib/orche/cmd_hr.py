@@ -49,7 +49,6 @@ def register(subparsers):
     p.set_defaults(func=cmd_model)
     p = sub.add_parser("choices", help="division kinds, models and the owner's questions (read-only)")
     p.add_argument("project", nargs="?", help="omit for a project not under ORCHE yet")
-    p.add_argument("--lang", choices=("ko", "en"), help="question language (default: config lang, else en)")
     p.set_defaults(func=cmd_choices)
     p = sub.add_parser("scale", help="print the scale presets, or set one (default, 20, 30)")
     p.add_argument("preset", nargs="?", help="omit to print the presets and the current one")
@@ -187,16 +186,15 @@ def cmd_choices(args):
                                         "run it without a project")
         key = found[0]
     cfg = config.load()
-    data = choices.build(reg, cfg, key, args.lang or cfg.get("lang") or "en")
+    data = choices.build(reg, cfg, key)
     if getattr(args, "json", False):
         print(json.dumps(data, indent=2, ensure_ascii=False))
         return EXIT_OK
-    rec = "recommended" if data["lang"] == "en" else "권장"
     for k in data["kinds"]:
         model = k["model"] or k["recommended"]
         line = f"{'✓' if k['exists'] else ' '} {k['key']}  {k['label']} — {k['desc']}  {model}"
         if k["exists"] and k["model"] != k["recommended"]:
-            line += f" ({rec} {k['recommended']})"
+            line += f" (recommended {k['recommended']})"
         print(line.rstrip())
     parts = [m["model"] + ("" if m["available"] else f" (unavailable: {m['reason']})") for m in data["models"]]
     print("models: " + ", ".join(parts))

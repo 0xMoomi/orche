@@ -71,6 +71,15 @@ def _publish(reg, member, cwd, key, unit, b, report, summary, proof):
     return publish.publish(member, donegate._root(member, cwd), root, unit=unit, title=title, body=body)
 
 
+def _note(unit, me, to, b, text) -> None:
+    """A quiet `info` to the recipient while a done is verified (held: no wake; `last:` and `[drain]`
+    show it). Never fails the report."""
+    try:
+        inbox.post(inbox.make(unit, me, to, "info", brief_rev=b.rev, summary=inbox.clip(mask.redact(text)[0])))
+    except (OSError, ValueError) as exc:
+        print(f"orche: note not posted: {exc}", file=sys.stderr)
+
+
 def _report_text(report, summary) -> str:
     if report and Path(report).is_file():
         return Path(report).read_text(encoding="utf-8", errors="replace")
@@ -140,8 +149,12 @@ def cmd_report(args):
             summary = f"{summary}\nPR: #{out.pr} {out.url} head {out.head}"
         if pr is not None and b is not None:      # one pre-review round, inside the agent's 600000 ms Bash call
             rv = pre.pane_round(reg, who.member, donegate._root(who.member, cwd), key, b,
-                                _report_text(report, summary), summary, out)
+                                _report_text(report, summary), summary, out,
+                                note=lambda text: _note(unit, me, to, b, text))
             if rv.refused:
+                first = next((ln[2:] for ln in rv.text.splitlines() if ln.startswith("- ")), "")
+                _note(unit, me, to, b, f"returned {out.head[:7]}: pre-review round "
+                                       f"{(rv.field or {}).get('pre', {}).get('round', '?')}: {first[:120]}")
                 print(rv.text, file=sys.stderr)
                 return EXIT_BLOCKED
             summary, review = rv.summary, rv.field

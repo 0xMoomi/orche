@@ -1,4 +1,4 @@
-"""Triage gate (lib/orche/triage.py): tags, bypasses, heuristics, classifier, decision rule, action, records.
+"""Triage gate (lib/orche/triage.py): tags, bypasses, structure, classifier, decision rule, action, records.
 
 Offline: the classifier is a stub, a fake `claude` (support.write_fake_claude, via config `claude_bin`)
 or a fake Jev opener; the runner spawn is monkeypatched or runs the fake claude end to end.
@@ -103,7 +103,7 @@ class TagTest(TriageCase):
         for p in ("[build]s are failing again, see ci.yml", "[main]tain README.md", "[build]: fix a.md"):
             self.assertEqual(triage.parse_tag(p), (None, p), p)
         calls = []
-        d = self.decide("[build]s are failing again, see ci.yml", stub(DIRECT, calls=calls))
+        d = self.decide("[build]s are failing again on the main branch", stub(DIRECT, calls=calls))
         self.assertEqual((d.decision, d.stage), ("main", 3))
         self.assertEqual(calls, [])
 
@@ -115,9 +115,9 @@ class TagTest(TriageCase):
             self.assertEqual((d.decision, d.stage), ("bypass", 1), p)
         self.assertEqual(calls, [])
 
-    def test_division_tag_with_a_path_or_imperative_needs_no_classifier(self):
+    def test_division_tag_with_a_target_needs_no_classifier(self):
         calls = []
-        for p in ("[build] lib/x.py header comment", "[build] 헤더 정리"):
+        for p in ("[build] lib/x.py header comment", "[build] tidy the `Header` block"):
             d = self.decide(p, stub(DIRECT, calls=calls))
             self.assertEqual((d.decision, d.stage, d.division, d.tier, d.backend), ("direct", 1, "build", "standard",
                                                                                    "none"), p)
@@ -143,31 +143,32 @@ class TagTest(TriageCase):
 
 class BypassTest(TriageCase):
     def test_short_and_question_prompts(self):
-        for p, why in (("fix a.md", "short"), ("what changed in docs/a.md", "question"),
-                       ("Should I add tests to a.py", "question"), ("README.md 수정한 거 맞아?", "question"),
-                       ("README.md 수정할까요", "question"), ("왜 README.md 를 수정했지", "question"),
-                       ("어떻게 README.md 정리하지", "question"), ("Add a section to README.md？", "question")):
+        for p, why in (("fix a.md", "short"), ("what changed in docs/a.md?", "question"),
+                       ("Should I add tests to a.py?", "question"), ("¿Por qué cambió README.md?", "question"),
+                       ("README.mdを直しましたか？", "question"), ("Is it in **docs/a.md?**", "question"),
+                       ("(did README.md change?)", "question"), ("Add a section to README.md？", "question")):
             d = self.decide(p, stub(DIRECT))
             self.assertEqual((d.decision, d.stage, d.reason), ("bypass", 2, why), p)
 
     def test_a_reply_to_a_question_main_asked_reaches_main(self):
         prompt = "Add an install section to README.md"
-        for text in ("I can do it two ways. Which one do you want?", "계획은 이렇습니다.\n\n진행할까요",
-                     "Done with step 1. Shall I proceed with step 2.", "어느 쪽으로 할지 **확인해 주세요**"):
+        for text in ("I can do it two ways. Which one do you want?", "Este es el plan.\n\n¿Sigo?",
+                     "Done with step 1. Shall I proceed with step 2?", "どちらにしますか？", "Which way **should I go?**"):
             d = self.decide(prompt, stub(DIRECT), transcript=self.assistant_transcript(text))
             self.assertEqual((d.decision, d.reason), ("bypass", "reply-to-main"), text)
-        d = self.decide(prompt, stub(DIRECT), transcript=self.assistant_transcript("Shipped. Report filed."))
-        self.assertEqual(d.decision, "direct")
+        for text in ("Shipped. Report filed.", "Done with step 1. Shall I proceed with step 2."):   # no `?`: told
+            d = self.decide(prompt, stub(DIRECT), transcript=self.assistant_transcript(text))
+            self.assertEqual(d.decision, "direct", text)
         self.assertEqual(self.decide(prompt, stub(DIRECT), transcript=str(self.root / "missing.jsonl")).decision,
                          "direct")
 
     def test_a_question_followed_by_a_dispatch_block_or_status_line_reaches_main(self):
         """I1: Main's final reply ends with its ```dispatch block (and maybe a STATUS line)."""
-        prompt = "옵션 B로 README.md 수정해줘"
+        prompt = "Go with option B in README.md"
         dispatch_block = "```dispatch\nTO build\nGOAL x\n  more\nTIER standard\n```"
         asked = ("Which option do you prefer?\n\n" + dispatch_block,
-                 "A와 B 중 어느 쪽으로 할까요\n\n" + dispatch_block + "\n\nSTATUS: waiting\n",
-                 "Plan below.\n\nShall I proceed with option B, or keep A\n" + dispatch_block,
+                 "A or B, which one?\n\n" + dispatch_block + "\n\nSTATUS: waiting\n",
+                 "Plan below.\n\nShall I proceed with option B, or keep A?\n" + dispatch_block,
                  "Which one?\n```\ncode\n```\n```dispatch\nTO build\n```")
         for text in asked:
             d = self.decide(prompt, stub(DIRECT), transcript=self.assistant_transcript(text))
@@ -184,7 +185,7 @@ class BypassTest(TriageCase):
     def test_a_dispatch_block_with_a_nested_fenced_snippet_is_stripped_whole(self):
         """m1: the strip starts at the opener of the last ```dispatch/```amend/```stop block, so an
         indented snippet inside its continuation lines no longer cuts the block short."""
-        prompt = "옵션 B로 README.md 수정해줘"
+        prompt = "Go with option B in README.md"
         nested = ("```dispatch\nTO build\nGOAL fix the parser\nCONTEXT the failing call:\n  ```py\n"
                   "  parse(x)\n  ```\n  and its bare twin:\n  ```\n  y = 1\n  ```\nTIER standard\n```")
         for opener in ("dispatch", "amend", "stop"):
@@ -203,10 +204,10 @@ class BypassTest(TriageCase):
 
     def test_tilde_fences_mirror_the_backtick_tests(self):
         """`~~~` fences are stripped like ``` fences: same character, at least the opener's length."""
-        prompt = "옵션 B로 README.md 수정해줘"
+        prompt = "Go with option B in README.md"
         tilde = "~~~dispatch\nTO build\nGOAL x\n  more\nTIER standard\n~~~"
         asked = ("Which option do you prefer?\n\n" + tilde,
-                 "A와 B 중 어느 쪽으로 할까요\n\n" + tilde + "\n\nSTATUS: waiting\n",
+                 "A or B, which one?\n\n" + tilde + "\n\nSTATUS: waiting\n",
                  "Which one?\n~~~\ncode\n~~~\n" + tilde,
                  "Which one?\n```\ncode\n```\n" + tilde,
                  "Which one?\n~~~~dispatch\nTO build\n~~~\n```\n~~~~")
@@ -231,25 +232,16 @@ class BypassTest(TriageCase):
         self.assertEqual(triage.strip_trailer("I picked B.\n\n" + nested), "I picked B.")
         self.assertEqual(triage.strip_trailer(nested + "\nShall I go?\n~~~\ncode\n~~~"), nested + "\nShall I go?")
 
-    def test_an_acknowledgement_or_continuation_word_first_reaches_main(self):
-        """I6: the prompt continues the conversation; no classifier call, whatever Main said last."""
-        calls = []
+    def test_an_acknowledgement_is_not_special_in_any_language(self):
+        """One rule for every language: after Main's statement an acknowledgement is a prompt like any other;
+        after Main's question it is a reply."""
         statement = self.assistant_transcript("Option A changes README.md, option B changes docs/a.md.")
-        yes = ("응, 그걸로 해줘. README.md도 같이 수정해줘", "네 README.md 수정해 주세요", "예, docs/a.md 정리해줘",
-               "그래 README.md에 추가해줘", "좋아요. README.md 고쳐줘", "아니, docs/a.md만 수정해줘",
-               "그걸로 README.md 수정해줘", "그렇게 docs/a.md 정리해", "그럼 README.md 바꿔줘",
-               "yes, and add it to README.md too", "Yeah add a line to README.md", "ok add it to README.md",
-               "Okay. Update CHANGELOG.md as well", "sure, fix docs/a.md", "No, add it to docs/a.md instead",
-               "nope - write it in docs/b.md", "go ahead and add the section to README.md",
-               "Do it: update README.md", "that one, add it to README.md")
-        for p in yes:
-            d = self.decide(p, stub(DIRECT, calls=calls), transcript=statement)
-            self.assertEqual((d.decision, d.stage, d.reason), ("bypass", 2, "continuation"), p)
-        self.assertEqual(calls, [])
-        for p in ("예시 파일 example.md 추가해줘", "네이버 로그인 버튼 src/a.tsx 추가해줘", "아니면 README.md 정리해줘",
-                  "Nobody reads README.md; add a summary", "Notes.md에 정리 추가해줘", "Add a yes/no toggle to a.py",
-                  "Nope.md add a heading line", "ok.py 고쳐줘 please now"):
-            self.assertNotEqual(self.decide(p, stub(DIRECT)).reason, "continuation", p)
+        question = self.assistant_transcript("Option A changes README.md, option B changes docs/a.md. Which one?",
+                                             name="asked.jsonl")
+        for p in ("yes, and add it to README.md too", "sí, añade la sección a README.md", "はい、README.md に追加して"):
+            self.assertEqual(self.decide(p, stub(DIRECT), transcript=statement).stage, 4, p)
+            d = self.decide(p, stub(DIRECT), transcript=question)
+            self.assertEqual((d.decision, d.reason), ("bypass", "reply-to-main"), p)
 
     def test_transcript_tail_read_is_cheap_on_a_big_transcript(self):
         path = self.assistant_transcript("Which one?", pad=5_000_000)
@@ -291,86 +283,54 @@ class BypassTest(TriageCase):
         self.assertNotIn("triage ", self.events())
 
 
-class HeuristicTest(TriageCase):
-    def test_imperative_and_target_make_a_candidate(self):
-        yes = ("README.md에 설치 방법 추가해줘", "docs/guide.md 오타 수정", "Add a usage section to docs/guide.md",
-               "please fix the typo in src/app.ts", "Rename `fooBar` to `foo_bar` in utils",
-               "lib/x.py 헤더 주석 작성해", "Update CHANGELOG.md for 0.3.0", "config.yaml 값 바꿔줘")
-        no = ("fix the login bug", "README.md looks great today", "새 기능 기획을 같이 해보자",
-              "Let's think about pricing for docs/pricing.md", "https://example.com/a.html 추가해줘")
-        for p in yes:
-            self.assertTrue(triage.is_candidate(p), p)
-        for p in no:
-            self.assertFalse(triage.is_candidate(p), p)
-
-    def test_a_negation_is_never_a_candidate(self):
-        """M5: "수정하지 말고", "don't change" name a target but ask for no change."""
-        for p in ("README.md는 수정하지 말고 읽어보고 의견 줘", "docs/a.md 삭제하지 마", "please don't change src/App.jsx",
-                  "Update nothing; do not touch README.md", "Never rename `fooBar` in utils"):
-            self.assertFalse(triage.is_candidate(p), p)
-
-    # M5 table: (prompt, is a candidate). Korean verb forms count, a bare verbal noun in the middle
-    # ("수정 이력") does not; a Korean question ending never makes a candidate, with or without `?`.
-    KO_TABLE = [
-        ("README.md에 설치 섹션 추가해줘", True), ("docs/a.md 오타 수정해 주세요", True), ("src/app.py 정리하자", True),
-        ("CHANGELOG.md 업데이트해줘", True), ("config.yaml에서 debug 항목 삭제해", True), ("utils.py 이름 바꿔줘", True),
-        ("README.md 고쳐 주세요", True), ("notes.txt 지워줘", True), ("docs/guide.md에 예시 넣어줘", True),
-        ("README.md 수정 부탁해", True), ("docs/guide.md 오타 수정", True), ("lib/x.py 헤더 주석 작성해", True),
-        ("package.json 버전 올려줘", True), ("README.md 링크 고치자", True), ("src/App.tsx 버튼 문구 바꾸세요", True),
-        ("README.md는 수정하지 말고 읽어보고 의견 줘", False), ("README.md 수정 이력 좀 봐줘", False),
-        ("README.md 수정했니", False), ("docs/a.md 정리해야 하나", False), ("README.md 고칠까", False),
-        ("src/App.jsx 고치고 나서 배포 계획도 세워줘", False), ("src/App.jsx 수정하고 배포 계획도 세워줘", False),
-        ("README.md 추가된 부분 어때", False), ("이거 왜 이래 README.md 보면 이상한데", False),
-        ("README.md 내용이 맞는지", False), ("docs/a.md 건드리지 마세요", False), ("README.md 수정해줄래", False),
-        ("config.yaml 변경 사항 뭐야", False), ("README.md 바꾼 게 언제냐", False), ("src/app.py 수정된 건가요", False)]
-    EN_TABLE = [
+class StructureTest(TriageCase):
+    # (prompt, is a candidate): a named target and no question, in any language; intent is the classifier's.
+    TABLE = [
         ("Add a FAQ section to README.md", True), ("Please fix the typo in docs/guide.md", True),
-        ("Let's rename utils.py to helpers.py", True), ("update CHANGELOG.md with the 0.3.3 entry", True),
-        ("remove the unused import in src/app.ts", True), ("Delete old.txt please", True),
-        ("Replace foo with bar in config.yaml", True), ("Move notes.md into docs/notes.md", True),
-        ("bump the version in package.json", True), ("Implement the parse function in lib/parse.py", True),
-        ("Just set debug to false in config.yaml", True), ("I need you to clean up src/util.py", True),
-        ("go and reword the intro of README.md", True), ("Kindly translate the intro of docs/ko.md", True),
-        ("please don't change src/App.jsx", False), ("Do not touch README.md, just read it", False),
-        ("never edit .github/ci.yml", False), ("what does README.md say?", False),
-        ("Is CHANGELOG.md up to date", False), ("Can you fix README.md", False),
-        ("README.md looks fine to me", False), ("I fixed docs/a.md yesterday", False), ("add more tests", False),
-        ("Should we rename utils.py", False), ("Do the rename of foo.py to bar.py", False),
-        ("Has anyone updated package.json", False), ("Fix README.md, or should we leave it?", False),
-        ("no need to update CHANGELOG.md", False)]
+        ("Let's rename utils.py to helpers.py", True), ("bump the version in package.json", True),
+        ("README.md looks fine to me", True), ("I fixed docs/a.md yesterday", True),
+        ("please don't change src/App.jsx", True), ("Añade una sección de preguntas a README.md", True),
+        ("Corrige la errata en docs/guide.md", True), ("README.mdにFAQを追加して", True),
+        ("docs/guide.md の誤字を直して", True), ("Rename `fooBar` to `foo_bar` in utils", True),
+        ("add more tests", False), ("fix the login bug", False), ("Let's plan the Q4 roadmap together", False),
+        ("what does README.md say?", False), ("Is CHANGELOG.md up to date?", False),
+        ("Fix README.md, or should we leave it?", False), ("¿Qué dice README.md?", False),
+        ("¿Actualizamos package.json?", False), ("README.mdは最新ですか？", False),
+        ("planifiquemos la hoja de ruta", False), ("ログイン画面のバグを直してください", False),
+        ("see https://x.com/a.html for context", False)]
 
-    def test_m5_table_korean_and_english(self):
-        for table in (self.KO_TABLE, self.EN_TABLE):
-            self.assertGreaterEqual(len(table), 20)
-            self.assertEqual(sum(1 for _p, yes in table if yes), len(table) // 2)
-            for prompt, yes in table:
-                self.assertEqual(triage.is_candidate(prompt), yes, prompt)
-                d = self.decide(prompt, stub(DIRECT))
-                if yes:
-                    self.assertEqual((d.decision, d.stage), ("direct", 4), prompt)
-                else:
-                    self.assertNotEqual(d.decision, "direct", prompt)
-                    self.assertIn(d.stage, (2, 3), prompt)
+    def test_a_named_target_that_is_not_a_question_is_a_candidate_in_any_language(self):
+        self.assertEqual(sum(1 for _p, yes in self.TABLE if yes), len(self.TABLE) // 2)
+        for prompt, yes in self.TABLE:
+            self.assertEqual(triage.is_candidate(prompt), yes, prompt)
+            d = self.decide(prompt, stub(DIRECT))
+            if yes:
+                self.assertEqual((d.decision, d.stage), ("direct", 4), prompt)
+            else:
+                self.assertNotEqual(d.decision, "direct", prompt)
+                self.assertIn(d.stage, (2, 3), prompt)
 
-    def test_division_and_model_setup_bypasses_to_main(self):
-        for p in ("디자인 부서 하나 추가해줘", "build 모델 sonnet으로 바꿔줘", "Switch the gtm division to Codex please"):
-            d = self.decide(p)
-            self.assertEqual((d.decision, d.stage, d.reason), ("bypass", 2, "setup"), p)
-        self.assertEqual(triage.bypass_reason("디자인 부서 추가해줘"), "short")  # under MIN_CHARS: still a bypass
-        self.assertNotEqual(triage.bypass_reason("로그인 버튼 고쳐줘"), "setup")
+    def test_a_spanish_prompt_naming_a_file_reaches_the_classifier(self):
+        calls = []
+        d = self.decide("Añade una sección de instalación a README.md", stub(DIRECT, calls=calls))
+        self.assertEqual((d.decision, d.stage, d.backend), ("direct", 4, "claude-haiku"))
+        self.assertEqual(calls, [("Añade una sección de instalación a README.md", ["rnd", "build"])])
+
+    def test_a_negation_or_a_plain_statement_is_the_classifiers_call(self):
+        for p in ("please don't change src/App.jsx", "README.md looks fine to me"):
+            d = self.decide(p, stub(dict(DIRECT, route="main")))
+            self.assertEqual((d.decision, d.stage, d.reason), ("main", 4, "classifier said main"), p)
+
+    def test_setup_prompts_have_no_bypass_of_their_own(self):
+        for p in ("Switch the gtm division to Codex please", "Add a design division to this project"):
+            self.assertIsNone(triage.bypass_reason(p), p)
+            self.assertEqual(self.decide(p, stub(DIRECT)).stage, 3, p)      # no target: Main
         self.assertIsNone(triage.bypass_reason("Fix the login button in src/app/login.ts"))
-
-    def test_korean_question_endings_bypass_without_a_question_mark(self):
-        for p in ("README.md 수정했니", "docs/a.md 정리해야 하나", "README.md 고칠까", "README.md 내용이 맞는지",
-                  "README.md 추가된 부분 어때", "README.md 바꾼 게 언제냐", "src/app.py 수정된 건가요",
-                  "README.md 수정해줄래", "config.yaml 변경 사항 뭐야"):
-            d = self.decide(p, stub(DIRECT))
-            self.assertEqual((d.decision, d.stage, d.reason), ("bypass", 2, "question"), p)
 
     def test_find_paths_keeps_paths_and_file_names_in_order(self):
         self.assertEqual(triage.find_paths("Refactor src/a/b.ts and src/c.py, then notes.md."),
                          ["src/a/b.ts", "src/c.py", "notes.md"])
-        self.assertEqual(triage.find_paths("README.md에 docs/a.md를 링크"), ["README.md", "docs/a.md"])
+        self.assertEqual(triage.find_paths("README.mdにdocs/a.mdをリンク"), ["README.md", "docs/a.md"])
         self.assertEqual(triage.find_paths("see https://x.com/a.html"), [])
 
     def test_non_candidates_go_to_main_without_a_model(self):
@@ -737,11 +697,11 @@ class ActionTest(TriageCase):
                                         rf"backend=claude-haiku ms=\d+ unit={unit}")
 
     def test_fallbacks_when_the_classifier_gave_no_goal_or_scope(self):
-        out = self.handle("[build] lib/x.py 헤더 주석 작성해")
+        out = self.handle("[build] lib/x.py write the header comment")
         self.assertIsNotNone(out.block)
         fields = brief.find(registry.load(), self.only_unit()).fields
         self.assertEqual((fields["GOAL"], fields["SCOPE"], fields["VERIFY"], fields["TIER"], fields["ACCEPT"]),
-                         ("lib/x.py 헤더 주석 작성해", "lib/x.py", "ls -l lib/x.py", "standard",
+                         ("lib/x.py write the header comment", "lib/x.py", "ls -l lib/x.py", "standard",
                           triage.DEFAULT_ACCEPT + "; " + triage.COMMIT_ACCEPT))
 
     def test_a_valid_classifier_verify_is_kept(self):
@@ -790,14 +750,14 @@ class ActionTest(TriageCase):
         self.assertIn("dispatch: cannot file feedback for 'main-acme'", (self.home / "logs" / "hooks.log").read_text())
 
     def test_a_multiline_prompt_with_hash_lines_survives_as_the_goal(self):
-        self.handle("[build] README.md 정리해\n# Install\n  keep this indented")
+        self.handle("[build] tidy README.md\n# Install\n  keep this indented")
         goal = brief.find(registry.load(), self.only_unit()).fields["GOAL"]
-        self.assertEqual(goal.splitlines()[:2], ["README.md 정리해", "# Install"])
+        self.assertEqual(goal.splitlines()[:2], ["tidy README.md", "# Install"])
 
     def test_a_long_prompt_gives_a_bounded_goal_and_the_whole_prompt_in_context(self):
         """M8: GOAL is an excerpt of at most GOAL_EXCERPT characters plus the pointer; CONTEXT quotes
         every line of the prompt (blank lines too), so the brief loses nothing."""
-        body = " ".join(f"step{i} README.md 정리해" for i in range(40))
+        body = " ".join(f"step{i} tidy README.md" for i in range(40))
         prompt = f"[build] {body}\n\n# keep this heading\n  {SECRET} stays where it was typed"
         out = self.handle(prompt)
         unit = self.only_unit()
@@ -998,7 +958,7 @@ class ConfigDefaultsTest(support.TempHomeCase):
         self.assertEqual((triage.min_confidence(cfg), triage.max_latency(cfg)), (0.8, 12.0))
 
 
-LABELLED = [("Add an install section to README.md", "direct"), ("docs/a.md 오타 수정해줘", "direct"),
+LABELLED = [("Add an install section to README.md", "direct"), ("Corrige la errata en docs/a.md", "direct"),
             ("Let's plan the Q4 roadmap together", "main"), ("what changed in docs/a.md?", "main"),
             ("Fix the flaky test in tests/test_x.py", "main"), ("Rename `fooBar` in utils", "direct")]
 

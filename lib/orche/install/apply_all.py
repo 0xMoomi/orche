@@ -38,7 +38,7 @@ def init_namespace(argv):
     parser = argparse.ArgumentParser(prog="orche", add_help=False)
     cmd_init.register(parser.add_subparsers(dest="command"))
     ns = parser.parse_args(argv)
-    ns.json, ns.dry_run = True, False
+    ns.json, ns.dry_run, ns.close_window = True, False, False   # the run goes on: no window is closed
     return ns
 
 
