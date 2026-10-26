@@ -19,6 +19,24 @@ def now() -> _dt.datetime:
     return _dt.datetime.now(_dt.timezone.utc).astimezone()
 
 
+def iso(at) -> str:
+    """`at` as ISO text to the second, in its own zone."""
+    return at.isoformat(timespec="seconds")
+
+
+def hhmm(at) -> str:
+    """`15:00`: `at` in local time; `?` when unknown."""
+    return at.astimezone().strftime("%H:%M") if at is not None else "?"
+
+
+def num(value, default=0) -> int:
+    """`value` as an int, else `default`."""
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return default
+
+
 def parse_iso(text):
     """Aware datetime from ISO text (naive is taken as UTC), or None."""
     try:

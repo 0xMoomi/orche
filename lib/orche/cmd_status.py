@@ -1,51 +1,38 @@
-"""`orche status [proj]` (one line per project, then its `owner:`, `undelivered:`, `unread:`, `blocked:`,
-`looping:`, `paused:`, `queue:` and `upgrade:` lines, at most CAP_LINES per kind;
-then the global `triage:` and `heartbeat:` lines), `orche status --project <p>` (the detail view: every
-sub-line, then one `L` line per lineage of the last 24 h or still open) and
-`orche statusline [--cwd PATH]`.
+"""`orche status` (one line per project, then its `owner:`, `undelivered:`, `unread:`, `blocked:`,
+`looping:`, `paused:`, `queue:` and `upgrade:` lines, at most CAP_LINES per kind; then the global
+`triage:` and `heartbeat:` lines), `orche status <project>` (its card: what a cleared or restarted Main
+picks the work up from, also shown by SessionStart), `orche status --project <p>` (the detail view: every
+sub-line, then one `L` line per lineage of the last 24 h or still open) and `orche statusline [--cwd PATH]`.
+The facts come from lib/orche/project.py.
 
 0.9.0 (design §9.1): the project line carries `queue w/t/m` (waiting / testing / merged today, when
 the merge queue has any) and `runs n/cap` (live runs / runner.max_parallel); a usage hold of the
 project's units is a `paused:` line."""
-import datetime as _dt
 import json
 import os
 import sys
 
-from . import __version__, brief, config, inbox, registry, roster, runs, statusline, units, util, vendors
+from . import __version__, config, inbox, project, registry, roster, runs, statusline, units, vendors
 from .flow import guard, owner, shape, usage
 
 CAP_LINES = 3      # sub-lines per kind; the rest: `… <n> more: orche status --project <p>`
-DETAIL_TTL = _dt.timedelta(hours=24)   # --project: closed lineages this recent
 STATE_ORDER = ("merged", "queued", "running", "held", "returned", "done", "info", "failed", "blocked", "question",
                "stopped")
 
+CARD_LINES, CARD_CHARS = 40, 3000   # the card's budget
 EXIT_OK, EXIT_NOT_FOUND = 0, 2
-WAITING = ("blocked", "question")
-WAITING_TTL = _dt.timedelta(hours=24)
 
 
 def register(subparsers):
-    p = subparsers.add_parser("status", help="one line per project: stage, awake, divisions, counters")
-    p.add_argument("project", nargs="?", help="project key or alias (default: all)")
+    p = subparsers.add_parser("status", help="one line per project: stage, awake, divisions, counters; "
+                                             "<project>: its card (open lineages, what waits on whom, the queue)")
+    p.add_argument("project", nargs="?", help="project key or alias: its card (default: one line per project)")
     p.add_argument("--project", dest="detail", metavar="PROJECT", default=None,
                    help="the detail view: every sub-line, then one line per lineage (last 24 h or still open)")
     p.set_defaults(func=cmd_status)
     p = subparsers.add_parser("statusline", help="print and cache the status-line segment for a cwd")
     p.add_argument("--cwd", default=None, help="directory to resolve the project from (default: cwd)")
     p.set_defaults(func=cmd_statusline)
-
-
-def queue_of(key):
-    """The project's merge-queue counts (queue.summary without its entries) and its closed record; None
-    when its file is unreadable."""
-    from . import queue
-    from .queue import store
-    try:
-        s, closed = queue.summary(key), store.read(key).get("closed")
-    except Exception:  # noqa: BLE001 - a status line never fails the command
-        return None
-    return {**{k: v for k, v in s.items() if k not in ("entries", "project")}, "closed": closed}
 
 
 def usage_holds(key, now=None) -> list:
@@ -64,7 +51,7 @@ def status_row(reg, key, now=None, cfg=None) -> dict:
     proj = reg["projects"][key]
     c = statusline.counts(reg, key, now)
     cfg = config.load() if cfg is None else cfg
-    q, cap = queue_of(key), runs.caps(cfg)[0]
+    q, cap = project.queue_of(key), runs.caps(cfg)[0]
     qcell = (f" · queue {q['waiting']}/{q['testing']}/{q['merged_today']}"
              if q and (q["waiting"] or q["testing"] or q["merged_today"]) else "")
     limit = reg["limits"]["max_awake_sessions"]
@@ -72,7 +59,7 @@ def status_row(reg, key, now=None, cfg=None) -> dict:
               for name in registry.divisions_of(proj)}
     # A non-Claude division is marked with its vendor (`rnd○[codex]`); the status bar is unchanged.
     cells = [cell + (f"[{vendors.vendor_of(m)}]" if m and vendors.vendor_of(m) != "claude" else "")
-             for cell, m in zip(statusline.division_cells(proj, c["active_features"]), models.values())]
+             for cell, m in zip(statusline.division_cells(proj, c["workers"]), models.values())]
     line = (f"{key} stage={proj['stage']} awake={c['awake']}/{limit} divisions: {' '.join(cells) or '-'}{qcell}"
             f" · new:{c['new']} · keys:{c['keys']} · unverified:{c['unverified']} · runs {c['running']}/{cap}")
     from . import reconcile
@@ -86,7 +73,7 @@ def status_row(reg, key, now=None, cfg=None) -> dict:
             "divisions": divisions, "models": {n: m for n, m in models.items() if m},
             "active_features": c["active_features"], "new": c["new"],
             "keys": c["keys"], "unverified": c["unverified"], "running": c["running"], "line": line,
-            "undelivered": undelivered, "unread": unread, "blocked": blocked(reg, key, now),
+            "undelivered": undelivered, "unread": unread, "blocked": project.blocked(reg, key, now),
             "upgrade": registry.upgrade(proj, __version__),
             "looping": looping(reg, key, now), "paused": paused(key, now), "owner": owner.status(key, now),
             "queue": q, "runs": {"live": c["running"], "cap": cap}, "holds": usage_holds(key, now)}
@@ -116,70 +103,41 @@ def paused(key, now):
             + ([dict(blank, by="owner", since=p.get("since"), reason=p.get("reason"))] if p else []))
 
 
-def _mtime(path):
-    try:
-        return _dt.datetime.fromtimestamp(path.stat().st_mtime, _dt.timezone.utc)
-    except OSError:
-        return None
-
-
-def blocked(reg, key, now=None) -> list:
-    """Units waiting on the owner: the newest pointer for the unit in `main-<key>`'s inbox (pending or
-    drained, under 24 h old) is blocked or question, and no later pointer or BRIEF.md revision (an
-    AMEND or STOP files a pointer too) has answered it. `[{unit, status, since, minutes}]`."""
-    now = now or units.now()
-    try:
-        folder = inbox.box(f"main-{key}")
-    except ValueError:
-        return []
-    latest = {}
-    for path in list(folder.glob("*.json")) + list((folder / inbox.DRAINED).glob("*.json")):
-        if path.name.startswith("."):
-            continue
-        try:
-            ptr = json.loads(path.read_text(encoding="utf-8"))
-        except (OSError, ValueError):
-            continue
-        if not isinstance(ptr, dict) or not ptr.get("unit"):
-            continue
-        t = inbox.pointer_time(path, ptr)
-        unit = str(ptr["unit"])
-        if t is not None and (unit not in latest or t >= latest[unit][0]):
-            latest[unit] = (t, ptr)
-    out = []
-    for unit in sorted(latest):
-        t, ptr = latest[unit]
-        if ptr.get("status") not in WAITING or now - t >= WAITING_TTL:
-            continue
-        b = brief.find(reg, unit, project=key)
-        answered = _mtime(b.path) if b is not None else None
-        if answered is not None and answered > t:
-            continue
-        out.append({"unit": unit, "status": ptr["status"], "since": t.astimezone().strftime("%H:%M"),
-                    "minutes": int((now - t).total_seconds() // 60)})
-    return out
-
-
 def overdue_lines(row) -> list:
     """The project's late deliveries and unread reports (≥ inbox.LATE), each with ORCHE's live repair
     while the heartbeat is fresh, else its command (a closed pane: `orche wake`), then the units
     waiting on the owner."""
     from . import reconcile
-    reps = reconcile.repairs() if row["undelivered"] or row["unread"] else {}
-    hb = reconcile.heartbeat_json() if reps else {}
-    fresh = bool(hb.get("enabled")) and not hb.get("stale", True)
+    hints = _hints(row)
     return (owner_lines(row.get("owner"))
             + [f"  undelivered: {u['unit']} → {u['to']} (rev {u['rev']}, {u['minutes']} min) — "
-             + reconcile.overdue_hint("undelivered", u["unit"], reps, fresh) for u in row["undelivered"]]
-            + [f"  unread: {u['session']} has {u['count']} report(s) waiting (oldest {u['minutes']} min) — "
-               + reconcile.overdue_hint("unread", u["session"], reps, fresh) for u in row["unread"]]
-            + [f"  blocked: {u['unit']} ({u['status']}, since {u['since']}, {u['minutes']} min) — waiting on the "
-               f"owner; answer in main-{row['project']}" for u in row["blocked"]]
+             + reconcile.overdue_hint("undelivered", u["unit"], *hints) for u in row["undelivered"]]
+            + _unread_lines(row, hints) + _blocked_lines(row)
             + [f"  looping: {u['unit']} — revised {u['n']}× without the owner since {u['since']}: the next AMEND "
                f"needs the owner" if u["kind"] == "revisions" else
                f"  looping: {u['unit']} — same report {u['n']}× ({u['status']}, rev {u['rev']}): repeats did not "
                f"wake Main" for u in row.get("looping") or []]
             + _paused_lines(row) + _queue_lines(row))
+
+
+def _hints(row) -> tuple:
+    """(reconcile's live repairs, whether the heartbeat is fresh), read only while a delivery or a report is
+    late."""
+    from . import reconcile
+    reps = reconcile.repairs() if row.get("undelivered") or row["unread"] else {}
+    hb = reconcile.heartbeat_json() if reps else {}
+    return reps, bool(hb.get("enabled")) and not hb.get("stale", True)
+
+
+def _unread_lines(row, hints) -> list:
+    from . import reconcile
+    return [f"  unread: {u['session']} has {u['count']} report(s) waiting (oldest {u['minutes']} min) — "
+            + reconcile.overdue_hint("unread", u["session"], *hints) for u in row["unread"]]
+
+
+def _blocked_lines(row) -> list:
+    return [f"  blocked: {u['unit']} ({u['status']}, since {u['since']}, {u['minutes']} min) — waiting on the "
+            f"owner; answer in main-{row['project']}" for u in row["blocked"]]
 
 
 def _paused_lines(row):
@@ -202,7 +160,7 @@ def _queue_lines(row):
     q = row.get("queue") or {}
     if q.get("state") == "closed":
         at = _clock((q.get("closed") if isinstance(q.get("closed"), dict) else {}).get("at"))
-        return [f"  queue: closed ({queue.reopen(row.get('project') or '<project>', q.get('closed'))})"
+        return [f"  queue: closed ({queue.closed_text(row.get('project') or '<project>', q.get('closed'))})"
                 + (f" since {at}" if at else "")]
     if q.get("state") == "paused":
         p = q.get("paused") if isinstance(q.get("paused"), dict) else {}
@@ -226,65 +184,6 @@ def capped(lines, project) -> list:
     return out
 
 
-def _read(path) -> dict:
-    try:
-        data = util.read_json(path, default=None)
-    except (OSError, util.JsonError):
-        return {}
-    return data if isinstance(data, dict) else {}
-
-
-def lineage_rows(reg, key, now=None, ttl=DETAIL_TTL, detail=False) -> list:
-    """`orche status --project <p>`: one row per lineage of the last `ttl` (None: any age) or still open,
-    newest first: {lineage, units, states: {state: n}, prs, spend, since, open}. A unit's state: running (a
-    live run), held (a usage hold), queued (a merge-queue entry), the queue's last word on it (merged,
-    returned, dropped), else its newest report's (lineage.members). `detail` adds `members`:
-    [(Brief, (path, pointer) | None, status, state)] (orche resume; not JSON)."""
-    from .flow import lineage
-    from .queue import store
-    from .runs import history
-    now = now or units.now()
-    try:
-        q, qlog = store.read(key), store.read_log(key)
-    except Exception:  # noqa: BLE001 - a status line never fails the command
-        q, qlog = {"entries": []}, []
-    queued = {e.get("unit") for e in q.get("entries") or [] if isinstance(e, dict)}
-    said = {ln["unit"]: ln.get("event") for ln in qlog
-            if ln.get("unit") and ln.get("event") in ("merged", "returned", "dropped")}
-    spent = {}
-    for r in history.read(key):
-        try:
-            spent[r.get("unit")] = spent.get(r.get("unit"), 0.0) + float(r.get("cost_usd") or 0)
-        except (TypeError, ValueError):
-            continue
-    reads, rows = lineage.Reads(reg), []
-    for name in reads.groups(key):
-        states, prs, times, cost, mine = {}, [], [], 0.0, []
-        ms = lineage.members(reg, key, name, reads)
-        for b, found, status in ms:
-            rec = _read(b.folder / "RUN.json")
-            state = ("running" if runs.running(key, b.unit) else "held" if rec.get("stop_reason") in usage.HELD
-                     else "queued" if b.unit in queued else said.get(b.unit) or status)
-            states[state] = states.get(state, 0) + 1
-            mine.append((b, found, status, state))
-            pr = rec.get("pr")
-            pr = pr.get("number") if isinstance(pr, dict) else pr
-            if isinstance(pr, int):
-                prs.append(pr)
-            cost += spent.get(b.unit, 0.0)
-            try:
-                times.append(_dt.datetime.fromtimestamp(b.path.stat().st_mtime, _dt.timezone.utc))
-            except OSError:
-                continue
-        is_open = any(s not in lineage.TERMINAL for _b, _f, s in ms)
-        if not times or (not is_open and ttl is not None and now - max(times) > ttl):
-            continue
-        rows.append({"lineage": name, "units": len(ms), "states": states, "prs": sorted(set(prs)),
-                     "spend": round(cost, 2), "since": min(times).astimezone().strftime("%H:%M"),
-                     "open": is_open, "newest": max(times).isoformat(), **({"members": mine} if detail else {})})
-    return sorted(rows, key=lambda r: r["newest"], reverse=True)
-
-
 def states_text(r) -> str:
     """`12 units: 7 merged · 2 queued · …  PRs #41 #43 #44 …` (states in STATE_ORDER)."""
     order = sorted(r["states"].items(), key=lambda kv: (STATE_ORDER.index(kv[0]) if kv[0] in STATE_ORDER
@@ -296,6 +195,36 @@ def states_text(r) -> str:
 def lineage_line(r) -> str:
     """`L <lineage>  12 units: 7 merged · 2 queued · …  PRs #41 #43 #44 …  $14.20  since 10:12`."""
     return f"L {r['lineage']}  {states_text(r)}  ${r['spend']:.2f}  since {r['since']}"
+
+
+def card_text(d) -> str:
+    """The card (project.card): `[orche] resume <project>`, then per open lineage its `L` line with the
+    GOAL, its states, its last report and what it waits on; the `owner:`, `unread:` and `blocked:` lines as
+    the status row prints them; `queue: w/t/m`; the closed lineages. At most CARD_LINES lines and CARD_CHARS
+    characters."""
+    p, q = d["project"], d["queue"]
+    out = [f"[orche] resume {p}"] + ([] if d["open"] else ["nothing in flight"])
+    for o in d["open"]:
+        last = o["last"]
+        out += [f"L {o['lineage']}" + (f" — {o['goal']}" if o["goal"] else ""), f"  {states_text(o)}"]
+        if last:
+            out.append(f"  last: {last['unit']} {last['status']}"
+                       + (f" — {last['summary']}" if last["summary"] else ""))
+        out.append(f"  {o['waits']}")
+    if d["open_total"] > len(d["open"]):
+        out.append(f"… {d['open_total'] - len(d['open'])} more open: orche status --project {p}")
+    out += owner_lines(d["owner"]) + _unread_lines(d, _hints(d)) + _blocked_lines(d)
+    out.append(f"queue: {q.get('waiting', 0)}/{q.get('testing', 0)}/{q.get('merged_today', 0)}" if q else "queue: -")
+    out += [f"closed L {c['lineage']}" + (f" — {c['goal']}" if c["goal"] else "")
+            + f"  DONE: {c['units']} unit{'' if c['units'] == 1 else 's'} ("
+            + ", ".join(f"{n} {s}" for s, n in c["statuses"].items()) + ")" for c in d["closed"]]
+    out = [ln if len(ln) <= project.WIDTH + 40 else ln[:project.WIDTH + 39] + "…" for ln in out]
+    more = f"… the rest: orche status --project {p}"
+    if len(out) > CARD_LINES:
+        out = out[:CARD_LINES - 1] + [more]
+    while len("\n".join(out)) > CARD_CHARS:
+        out = out[:-2] + [more]
+    return "\n".join(out)
 
 
 def cmd_status(args):
@@ -311,13 +240,19 @@ def cmd_status(args):
     else:
         keys = sorted(reg["projects"])
     runs.reconcile_cli(reg, args, keys)      # a lost run is filed (and noted on stderr) before counting
+    if want and not detail:
+        d = project.card(reg, keys[0])
+        text = card_text(d)
+        print(json.dumps({**d, "text": text}, indent=2, ensure_ascii=False) if args.json else text)
+        return EXIT_OK
     cfg = config.load()
     rows = [status_row(reg, key, cfg=cfg) for key in keys]
     for row in rows:
         row["stalled"] = stalled(reg, row["project"])
         if detail:
-            row["lineages"] = lineage_rows(reg, row["project"])
+            row["lineages"] = project.lineages(reg, row["project"])
     beat = heartbeat()
+    from . import reconcile
     if args.json:
         for row in rows:
             row["heartbeat"] = beat[1]
@@ -327,7 +262,7 @@ def cmd_status(args):
             print(row["line"])
             # repairs ORCHE is retrying or escalated (lib/orche/reconcile.py); upgrade: the stamp of the
             # last `orche init` is missing or older
-            sub = (overdue_lines(row) + [stalled_line(s) for s in row["stalled"]]
+            sub = (overdue_lines(row) + [reconcile.stalled_line(s) for s in row["stalled"]]
                    + ([f"  upgrade: {registry.upgrade_text(row['project'], row['upgrade'])}"] if row["upgrade"] else []))
             for line in (sub if detail else capped(sub, row["project"])):
                 print(line)
@@ -357,11 +292,6 @@ def stalled(reg, project) -> list:
     return out + [dict(blank, cls="lineage", target=s["lineage"],
                        detail=f"{s['unit']} ({s['status']} {s['minutes']} min)")
                   for s in lineage.stalled(reg, project)]
-
-
-def stalled_line(s) -> str:
-    from . import reconcile
-    return reconcile.stalled_line(s)
 
 
 def heartbeat():

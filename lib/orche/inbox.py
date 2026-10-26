@@ -3,7 +3,6 @@ import datetime as _dt
 import json
 import os
 import re
-import sys
 import time
 from pathlib import Path
 
@@ -110,8 +109,7 @@ def wake(session: str) -> None:
     try:
         if not config.load()["inbox"].get("wake", True) or nudged(session):
             return
-        procs.spawn_detached([sys.executable, str(paths.PLUGIN_ROOT / "bin" / "orche.py"), "nudge", "--", session],
-                             paths.orche_home() / "logs" / "nudge.log")
+        procs.spawn_orche(["nudge", "--", session], paths.orche_home() / "logs" / "nudge.log")
     except Exception as exc:  # noqa: BLE001 - a wake is best-effort; the pointer is on disk
         log.log("hooks", f"inbox: wake {session!r}: {type(exc).__name__}: {exc}")
 

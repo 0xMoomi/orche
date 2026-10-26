@@ -95,10 +95,11 @@ class ScaleStatusTest(CoreCase):
 
     def test_thirty_features_print_one_line_and_three_sub_lines_per_kind(self):
         self.thirty()
-        code, out, _ = self.orche("status", "shop")
+        code, out, _ = self.orche("status")
         lines = out.splitlines()
+        lines = lines[:next(i for i, ln in enumerate(lines) if ln.startswith("docs-site "))]   # acme-shop's rows
         self.assertEqual(code, 0)
-        self.assertEqual([ln for ln in lines if not ln.startswith(("  ", "heartbeat:"))], [lines[0]])
+        self.assertEqual([ln for ln in lines if not ln.startswith("  ")], [lines[0]])
         self.assertIn(" build●30 · new:", lines[0])
         blocked = [ln for ln in lines if ln.startswith("  blocked:")]
         self.assertEqual(len(blocked), 4)
@@ -117,17 +118,17 @@ class ScaleStatusTest(CoreCase):
         store.queue_path("acme-shop").parent.mkdir(parents=True, exist_ok=True)
         util.write_json(store.queue_path("acme-shop"), q)
         usage.hit("claude", "API Error: 429", {}, project="acme-shop", unit="u9", stage="work", now=NOW)
-        out = self.orche("status", "shop")[1].splitlines()
+        out = self.orche("status", "--project", "shop")[1].splitlines()
         self.assertIn(" build●1 · queue 2/1/0 · new:", out[0])
         self.assertTrue(out[0].endswith(" · runs 0/4"), out[0])
         self.assertIn(f"  paused: claude usage limit until {usage.hhmm(NOW + dt.timedelta(minutes=5), NOW)} "
                       "(1 units held)", out)
         self.assertIn(f"  queue: paused by div-acme-shop-build since {hhmm(10)} — orche queue resume acme-shop", out)
-        row = json.loads(self.orche("--json", "status", "shop")[1])[0]
+        row = json.loads(self.orche("--json", "status", "--project", "shop")[1])[0]
         self.assertEqual((row["queue"]["waiting"], row["queue"]["testing"], row["queue"]["state"]), (2, 1, "paused"))
         self.assertEqual(row["runs"], {"live": 0, "cap": 4})
         self.assertEqual([(h["vendor"], h["units"]) for h in row["holds"]], [("claude", 1)])
-        docs = json.loads(self.orche("--json", "status", "docs-site")[1])[0]
+        docs = json.loads(self.orche("--json", "status", "--project", "docs-site")[1])[0]
         self.assertEqual((docs["holds"], docs["queue"]["waiting"]), ([], 0))     # another project's hold
 
     def test_the_lineage_line_and_the_detail_json(self):
@@ -155,14 +156,14 @@ class StatusTest(CoreCase):
             f"{NEVER}\n"))
 
     def test_status_without_counter_dirs(self):
-        code, out, _ = self.orche("status", "shop")
+        code, out, _ = self.orche("status", "--project", "shop")
         self.assertEqual(code, 0)
         self.assertEqual(out, "acme-shop stage=building awake=2/12 divisions: rnd○ build●1"
                               " · new:1 · keys:0 · unverified:0 · runs 0/4\n"
                               f"{NEVER}\n")
 
     def test_status_json_and_unknown(self):
-        code, out, _ = self.orche("--json", "status", "acme")
+        code, out, _ = self.orche("--json", "status", "--project", "acme")
         row = json.loads(out)[0]
         self.assertEqual((code, row["project"], row["awake"], row["divisions"]["build"]),
                          (0, "acme-shop", 2, "active"))
@@ -200,7 +201,7 @@ class StatusTest(CoreCase):
         self.write("inbox/main-acme-shop/d.json", {"unit": "u1", "status": "done", "via": "runner", "at": at(25)})
         self.write("inbox/main-acme-shop/e.json", {"unit": "u2", "status": "question", "at": at(11)})
         self.write("inbox/main-acme-shop/f.json", {"unit": "u3", "status": "info", "from": "orche", "at": at(40)})
-        code, out, err = self.orche("status", "acme")
+        code, out, err = self.orche("status", "--project", "acme")
         self.assertEqual((code, err), (0, ""))
         self.assertEqual(out.splitlines()[1:], [
             "  undelivered: acme-shop-x-20261016-1 → div-acme-shop-build (rev 2, 12 min) — "
@@ -209,7 +210,7 @@ class StatusTest(CoreCase):
             f"  blocked: u2 (question, since {hhmm(11)}, 11 min) — waiting on the owner; answer in main-acme-shop",
             NEVER])
         self.assertTrue(out.startswith("acme-shop stage=building "))
-        row = json.loads(self.orche("--json", "status", "acme")[1])[0]
+        row = json.loads(self.orche("--json", "status", "--project", "acme")[1])[0]
         self.assertEqual(row["undelivered"], [{"unit": "acme-shop-x-20261016-1", "to": "div-acme-shop-build",
                                                "rev": 2, "minutes": 12}])
         self.assertEqual(row["unread"], [{"session": "main-acme-shop", "count": 2, "minutes": 25}])
@@ -231,19 +232,19 @@ class StatusTest(CoreCase):
                                                    "at": at(40)})
         self.write("inbox/main-acme-shop/.drained/e.json", {"unit": "acme-shop-w-20261016-4", "from": "orche",
                                                            "status": "info", "at": at(20)})   # STOP feedback
-        out = self.orche("status", "acme")[1].splitlines()[1:]
+        out = self.orche("status", "--project", "acme")[1].splitlines()[1:]
         self.assertEqual([x for x in out if "blocked:" in x], [
             f"  blocked: {unit} (blocked, since {hhmm(30)}, 30 min) — waiting on the owner; answer in main-acme-shop",
             f"  blocked: acme-shop-y-20261016-2 (question, since {hhmm(3)}, 3 min) — waiting on the owner; "
             "answer in main-acme-shop"])
-        row = json.loads(self.orche("--json", "status", "acme")[1])[0]
+        row = json.loads(self.orche("--json", "status", "--project", "acme")[1])[0]
         self.assertEqual([b["unit"] for b in row["blocked"]], [unit, "acme-shop-y-20261016-2"])
         folder = root / ".orche" / "units" / unit                          # an AMEND writes a new BRIEF.md
         folder.mkdir(parents=True)
         (folder / "BRIEF.md").write_text("rev: 2\n")
         later = (NOW - dt.timedelta(minutes=5)).timestamp()
         os.utime(folder / "BRIEF.md", (later, later))
-        self.assertEqual([b["unit"] for b in json.loads(self.orche("--json", "status", "acme")[1])[0]["blocked"]],
+        self.assertEqual([b["unit"] for b in json.loads(self.orche("--json", "status", "--project", "acme")[1])[0]["blocked"]],
                          ["acme-shop-y-20261016-2"])
 
 
@@ -373,7 +374,7 @@ class RunningVisibilityTest(CoreCase):
         out = self.orche("status")[1].splitlines()
         self.assertTrue(out[0].endswith(" · runs 2/4"), out[0])
         self.assertTrue(out[1].endswith(" · runs 0/4"), out[1])
-        self.assertEqual(json.loads(self.orche("--json", "status", "acme")[1])[0]["running"], 2)
+        self.assertEqual(json.loads(self.orche("--json", "status", "--project", "acme")[1])[0]["running"], 2)
 
     def test_depts_counts_runs_per_session(self):
         rows = {r["unit"]: r["running"] for r in json.loads(self.orche("--json", "depts")[1])}
@@ -401,10 +402,10 @@ class CustomDivisionTest(CoreCase):
         registry.save(self.reg)
 
     def test_status_lists_the_custom_division_last(self):
-        line = self.orche("status", "acme")[1]
+        line = self.orche("status", "--project", "acme")[1]
         self.assertTrue(line.startswith("acme-shop stage=building awake=2/12 divisions: rnd○ build●1 design○ · "),
                         line)
-        row = json.loads(self.orche("--json", "status", "acme")[1])[0]
+        row = json.loads(self.orche("--json", "status", "--project", "acme")[1])[0]
         self.assertEqual(row["divisions"], {"rnd": "dormant", "build": "active", "design": "dormant"})
 
     def test_depts_lists_the_custom_division(self):
@@ -412,6 +413,31 @@ class CustomDivisionTest(CoreCase):
         self.assertEqual([r["unit"] for r in rows], ["rnd", "build", "build/checkout", "build/search", "design"])
         self.assertEqual((rows[-1]["session"], rows[-1]["branch"], rows[-1]["idle_days"]),
                          ("div-acme-shop-design", "div/design", 2))
+
+    def _design_workers(self):
+        design = self.reg["projects"]["acme-shop"]["divisions"]["design"]
+        design["status"] = "active"
+        design["features"] = [{"name": n, "status": st, "session": f"feat-acme-shop-{n}", "branch": f"feat/{n}",
+                               "worktree": f"repo-acme::/srv/orca/acme-shop-{n}", "scope": [f"web/{n}/**"],
+                               "model": "claude-opus-5-5", "created": "2026-10-13T09:00:00+09:00",
+                               "last_activity": "2026-10-14T09:00:00+09:00", "reason": f"design {n}"}
+                              for n, st in (("web-roulette", "active"), ("web-hud", "active"), ("web-fx", "paused"))]
+        registry.save(self.reg)
+
+    def test_design_workers_count_in_their_cell(self):  # teams §4.5
+        self._design_workers()
+        self.assertEqual(self.orche("statusline", "--cwd", "/srv/orca/acme-shop-design")[1],
+                         "R&D○ BUILD●1 DES●2 · new1\n")
+        line = self.orche("status", "--project", "acme")[1]
+        self.assertIn("divisions: rnd○ build●1 design●2 · ", line)
+        row = json.loads(self.orche("--json", "status", "--project", "acme")[1])[0]
+        self.assertEqual(row["active_features"], 3)
+        rows = json.loads(self.orche("--json", "depts", "acme")[1])
+        self.assertEqual([(r["unit"], r["status"], r["model"], r["branch"]) for r in rows[-4:]],
+                         [("design", "active", "claude-opus-5-5", "div/design"),
+                          ("design/web-roulette", "active", "claude-opus-5-5", "feat/web-roulette"),
+                          ("design/web-hud", "active", "claude-opus-5-5", "feat/web-hud"),
+                          ("design/web-fx", "paused", "claude-opus-5-5", "feat/web-fx")])
 
     def test_statusline_cell_is_the_label_short_form(self):
         self.assertEqual(self.orche("statusline", "--cwd", "/srv/orca/acme-shop-design")[1],

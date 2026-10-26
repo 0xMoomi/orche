@@ -1,7 +1,8 @@
 """Retiring units: `orche feat retire` (retire) and the janitor's orca-removed rule (retire_gone).
 
 retire: refuses an onboarding entry, uncommitted work (anything in `git status` except untracked
-        ORCHE-owned files), a HANDOFF.md without `final:`, the main checkout, or an open pane
+        ORCHE-owned files), a HANDOFF.md without `final:` unless the branch head is already in
+        origin/<base> (landed), the main checkout, or an open pane
         titled with the session; lists git-ignored files the removal destroys; needs --yes.
         copy the unit memory files (+ other ORCHE-owned untracked files under `_worktree/`) to the
         archive dir -> tag `archive/feat-<name>-<yyyymmdd>` -> delete the ORCHE-owned untracked
@@ -36,17 +37,18 @@ WORKTREE_COPY = "_worktree"   # ORCHE files outside the unit dir, kept under <ke
 
 
 def _retire_problem(unit, proj, kept):
-    """(problem, owned): a refusal text or None, and the ORCHE-owned untracked paths of the worktree.
+    """(problem, owned, why): a refusal text or None, the ORCHE-owned untracked paths of the worktree,
+    and why it may retire: "HANDOFF final", or "landed" (its branch head is in origin/<base>).
 
     Untracked ORCHE-owned paths are expected (they are kept, then cleared before `worktree rm`);
     anything else — including a tracked ORCHE file with uncommitted changes — is uncommitted work.
     """
     wt = str(unit.worktree or Path("."))
     if not wt or units.is_within(proj["path"], wt) or discover.real(wt) == discover.real(proj["path"]):
-        return f"{unit.session}'s worktree is the project's main checkout; refusing to remove it", []
-    res = shell.run(["git", "-C", wt, "status", "--porcelain", "--untracked-files=all"], timeout=60)
+        return f"{unit.session}'s worktree is the project's main checkout; refusing to remove it", [], None
+    res = shell.git(wt, "status", "--porcelain", "--untracked-files=all", timeout=60)
     if not res.ok:
-        return f"cannot read git status of {wt}", []
+        return f"cannot read git status of {wt}", [], None
     lines = [ln for ln in res.out.splitlines() if ln.strip()]
     owned = [units.porcelain_path(ln) for ln in lines
              if ln.startswith("??") and units.orche_owned(units.porcelain_path(ln), unit.session)]
@@ -55,13 +57,30 @@ def _retire_problem(unit, proj, kept):
     if foreign:
         listed = ", ".join(foreign[:10]) + (" …" if len(foreign) > 10 else "")
         return (f"worktree has uncommitted work: {listed}; commit or stash it "
-                f"(or `orche report stop`) before retiring"), owned
+                f"(or `orche report stop`) before retiring"), owned, None
     # A re-run after a failed `worktree rm` finds the unit files already cleared: the kept HANDOFF counts.
     own = unit.memory / "HANDOFF.md"
     handoff = own if own.exists() else kept / "HANDOFF.md"
-    if not has_final(handoff):
-        return f"HANDOFF.md has no 'final:' line in its first {FINAL_LINES} lines: {own}", owned
-    return None, owned
+    if has_final(handoff):
+        return None, owned, "HANDOFF final"
+    if _landed(wt, unit.branch, proj, unit.project):
+        return None, owned, "landed"
+    return f"HANDOFF.md has no 'final:' line in its first {FINAL_LINES} lines: {own}", owned, None
+
+
+def _landed(wt, branch, proj, project) -> bool:
+    """The worker's branch head is already in origin/<base> (fetched first; a failed fetch uses what is
+    there), or the merge queue logged it `merged` (a squash merge leaves no ancestor: id `pr<N>-<head7>`)."""
+    from .. import publish, queue   # here, not at the top: hr stays free of the git/gh publish layer at import
+    base = publish.base(proj["path"], worktree=wt)
+    if not base or not branch:
+        return False
+    shell.git(wt, "fetch", "origin", base, timeout=publish.FETCH_TIMEOUT)
+    if shell.git(wt, "merge-base", "--is-ancestor", branch, f"origin/{base}").ok:
+        return True
+    head = shell.git(wt, "rev-parse", branch, timeout=20)
+    h7 = head.out.strip()[:7] if head.ok else ""
+    return bool(h7) and h7 in queue.landed_heads(project)
 
 
 def _keep_sources(unit, wt, owned) -> dict:
@@ -98,8 +117,8 @@ def _clear_owned(wt, owned) -> None:
 
 def _tag_at_head(wt, tag, branch) -> bool:
     """True when `tag` already exists and points at the branch head (a re-run may reuse it)."""
-    have = shell.run(["git", "-C", wt, "rev-parse", "-q", "--verify", f"refs/tags/{tag}^{{commit}}"], timeout=30)
-    head = shell.run(["git", "-C", wt, "rev-parse", "-q", "--verify", f"{branch}^{{commit}}"], timeout=30)
+    have = shell.git(wt, "rev-parse", "-q", "--verify", f"refs/tags/{tag}^{{commit}}", timeout=30)
+    head = shell.git(wt, "rev-parse", "-q", "--verify", f"{branch}^{{commit}}", timeout=30)
     return have.ok and head.ok and have.out.strip() == head.out.strip() != ""
 
 
@@ -129,7 +148,7 @@ def _pane_problem(unit, key, name):
 
 def _ignored_files(wt) -> list:
     """Git-ignored files in the worktree (outside `.orche/`) that `orca worktree rm` destroys."""
-    res = shell.run(["git", "-C", wt, "ls-files", "--others", "--ignored", "--exclude-standard"], timeout=60)
+    res = shell.git(wt, "ls-files", "--others", "--ignored", "--exclude-standard", timeout=60)
     if not res.ok:
         return []
     return [ln for ln in res.out.splitlines() if ln.strip() and not ln.startswith(".orche/")]
@@ -146,7 +165,7 @@ def retire(reg, unit, *, yes=False, dry_run=False):
                                          f"`orche feat new {key} {name}` (or remove the entry) before retiring")
     tag = f"archive/feat-{name}-{units.now().strftime('%Y%m%d')}"
     unit_dir, kept = unit.memory, archive.unit_dir(unit.session) / "unit-files" / tag
-    problem, owned = _retire_problem(unit, proj, kept)
+    problem, owned, why = _retire_problem(unit, proj, kept)
     if problem:
         raise book.Refused(EXIT_BLOCKED, problem)
     if dry_run:
@@ -227,7 +246,7 @@ def retire(reg, unit, *, yes=False, dry_run=False):
         book.log(f"retire {unit.session}: no transcripts to archive")
     try:
         graveyard.record(proj["path"], f"feature {name} (worktree {wt}, branch {branch})",
-                         "retired: HANDOFF final", f"git checkout -b {branch} {tag}; unit files: {kept}", by,
+                         f"retired: {why}", f"git checkout -b {branch} {tag}; unit files: {kept}", by,
                          project=key,
                          date=now.date())
     except OSError as exc:

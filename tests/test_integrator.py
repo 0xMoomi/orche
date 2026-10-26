@@ -89,15 +89,16 @@ class IntegratorCase(support.TempHomeCase):
         new = git(self.origin, "commit-tree", tip + "^{tree}", "-p", tip, "-m", "moved")
         git(self.origin, "update-ref", "refs/heads/main", new, tip)
 
-    def queue_pr(self, number, head, branch, *, unit=None, parent="", rev=1, first=False, owner_ok=True, **pr):
+    def queue_pr(self, number, head, branch, *, unit=None, parent="", rev=1, first=False, owner_ok=True,
+                 writer="feat-acme-checkout", **pr):
         self.prs.append({"number": number, "headRefName": branch, "baseRefName": "main", "headRefOid": head,
                          "isDraft": False, "state": "OPEN", "title": f"pr {number}", "reviewDecision": "APPROVED", **pr})
         self.spec()
         e = {"id": queue.entry_id(number, head), "pr": number, "head": head, "branch": branch, "unit": unit,
-             "writer": "feat-acme-checkout", "parent": parent, "rev": rev, "verify": [],
+             "writer": writer, "parent": parent, "rev": rev, "verify": [],
              "approved_by": "div-acme-build (review)", "accept": None, "first": first, "owner_ok": owner_ok,
              "at": "2026-10-24T00:00:00Z", "state": "waiting", "restarts": 0, "drop": False, "test": None}
-        queue.add("acme", e, first=first, by="div-acme-build")
+        queue.add("acme", e, first=first, by="div-acme-build", base="main")
         return e
 
     def unit(self, to="feat-acme-checkout", sender="div-acme-build", **kw):
@@ -188,6 +189,28 @@ class LandTest(IntegratorCase):
         self.assertEqual(urgent, [f"all 2 units of {bu.unit} landed: PR #1, #2 merged — report your unit to Main"])
 
 
+    def test_a_division_child_that_reported_done_counts_as_landed(self):
+        """A child that is another head's unit has no PR by design: its done report lands it."""
+        from orche import inbox
+        from test_buildreview import DESIGN, add_design
+        reg = registry.load()
+        add_design(reg, self.home / "wt")
+        registry.save(reg)
+        bu = self.unit(to="div-acme-build", sender="main-acme")
+        cd = self.unit(to=DESIGN, lineage=bu.lineage, parent=bu.unit)
+        c1 = self.unit(lineage=bu.lineage, parent=bu.unit)
+        c2 = self.unit(lineage=bu.lineage, parent=bu.unit)
+        self.queue_pr(1, self.branch("feat/a", {"src/a.txt": "a\n"}), "feat/a", unit=c1.unit, parent=bu.unit)
+        integrator.loop("acme")
+        self.assertEqual([p for p in self.notes() if p["urgent"]], [])              # Design's unit still runs
+        inbox.write(inbox.make(cd.unit, DESIGN, "div-acme-build", "done", brief_rev=1))
+        self.queue_pr(2, self.branch("feat/b", {"src/b.txt": "b\n"}), "feat/b", unit=c2.unit, parent=bu.unit)
+        integrator.loop("acme")
+        urgent = [p["summary"] for p in self.notes() if p["urgent"]]
+        self.assertEqual(urgent, [f"all 3 units of {bu.unit} landed: PR #1, #2 merged; {cd.unit} done — report "
+                                  f"your unit to Main"])
+
+
 class ReturnTest(IntegratorCase):
     def test_conflict_returns_an_amend_with_the_files(self):
         u = self.unit()
@@ -267,6 +290,60 @@ class ReturnTest(IntegratorCase):
         integrator.run_once("acme")
         failed = [p["summary"] for p in self.notes() if p["status"] == "failed"]
         self.assertEqual(failed, ["returned PR #3 (red): `scripts/verify/ci.sh` failed (exit 3)"])
+
+
+class TeamsHeadTest(IntegratorCase):
+    """T2: the queue's notes and AMENDs go to the worker's head (here Design), a --pr entry still to Build."""
+
+    def setUp(self):
+        super().setUp()
+        from test_buildreview import DESIGN, add_design
+        self.design = DESIGN
+        reg = registry.load()
+        add_design(reg, self.home / "wt")
+        divs = reg["projects"]["acme"]["divisions"]
+        divs["design"]["features"] += divs["build"].pop("features")      # checkout now works for Design
+        registry.save(reg)
+
+    def test_a_red_design_worker_is_returned_by_design(self):
+        u = self.unit(sender=self.design)
+        h = self.branch("feat/checkout", {"src/bad.txt": "RED\n"})
+        self.queue_pr(5, h, "feat/checkout", unit=u.unit)
+        self.assertEqual(integrator.run_once("acme")["event"], "returned", self.queue_log())
+        b = self.newest(u.unit)
+        self.assertEqual((b.rev, b.to, b.sender), (2, "feat-acme-checkout", self.design))
+        self.assertTrue([p for p in self.notes(self.design) if p["summary"].startswith("returned PR #5 (red)")])
+        self.assertEqual(self.notes(), [])
+
+    def test_all_landed_tells_design(self):
+        bu = self.unit(to=self.design, sender="main-acme")
+        c1 = self.unit(sender=self.design, lineage=bu.lineage, parent=bu.unit)
+        h1 = self.branch("feat/a", {"src/a.txt": "a\n"})
+        self.queue_pr(1, h1, "feat/a", unit=c1.unit, parent=bu.unit)
+        integrator.loop("acme")
+        urgent = [p["summary"] for p in self.notes(self.design) if p["urgent"]]
+        self.assertEqual(urgent, [f"all 1 units of {bu.unit} landed: PR #1 merged — report your unit to Main"])
+        self.assertEqual([p for p in self.notes() if p["urgent"]], [])
+
+    def test_a_pr_entry_without_a_worker_still_goes_to_build(self):
+        h = self.branch("feat/a", {"src/bad.txt": "RED\n"})
+        self.queue_pr(3, h, "feat/a", writer="")
+        integrator.run_once("acme")
+        self.assertEqual([p["summary"] for p in self.notes() if p["status"] == "failed"],
+                         ["returned PR #3 (red): `scripts/verify/ci.sh` failed (exit 3)"])
+        self.assertEqual(self.notes(self.design), [])
+
+    def test_a_queue_wide_pause_stays_with_build(self):
+        """A pause is traffic control: Build and Main get it, not the worker's head (0.9.0 R-QUEUE-9)."""
+        h = self.branch("feat/checkout", {"src/a.txt": "a\n"})
+        self.queue_pr(1, h, "feat/checkout", unit=self.unit(sender=self.design).unit)
+        self.spec(fail=StopsTest.LOGGED_OUT)
+        for _ in range(3):
+            integrator.run_once("acme")
+        self.assertEqual(store.read("acme")["paused"]["by"], "stops")
+        self.assertTrue([p for p in self.notes() if p["urgent"] and p["summary"].startswith("the merge queue")])
+        self.assertTrue([p for p in self.notes("main-acme") if p["urgent"] and "gh auth login" in p["summary"]])
+        self.assertEqual([p for p in self.notes(self.design) if "paused" in p["summary"]], [])
 
 
 class DropTest(IntegratorCase):
@@ -548,19 +625,55 @@ class StopsTest(IntegratorCase):
         self.assertEqual((q["stops"], q["paused"]), (0, None))
 
 
+class StaleLockTest(IntegratorCase):
+    """Smoke s13: a git killed mid-write (a lost integrator, a timeout) leaves its lock in the clone; the next
+    pass removes it instead of stopping on it pass after pass until the queue pauses."""
+
+    def test_a_lock_left_by_a_killed_git_is_removed_and_the_pr_lands(self):
+        self.branch("feat/a", {"src/a.txt": "a\n"})
+        integrator.checkout("acme")
+        git(self.clone, "fetch", "-q", "origin")                  # the clone knows feat/a's old head
+        h = self.branch("feat/a", {"src/a.txt": "a2\n"})          # the PR's head, not fetched yet
+        ref = self.clone / ".git" / "refs" / "remotes" / "origin" / "feat" / "a.lock"
+        ref.parent.mkdir(parents=True, exist_ok=True)
+        ref.write_text(h + "\n")                                  # what a fetch SIGKILLed mid-update leaves
+        index = self.clone / ".git" / "index.lock"
+        index.write_text("")                                      # and a checkout killed mid-write
+        old = time.time() - 120
+        for p in (ref, index):
+            os.utime(p, (old, old))
+        self.queue_pr(1, h, "feat/a")
+        with mock.patch.object(integrator, "_unlock"):            # kept: every fetch fails on it
+            res = integrator.run_once("acme")
+        self.assertEqual(res["event"], "error", res)
+        self.assertIn("git fetch origin failed: error: ", res["line"])   # git's error, not its `From <url>`
+        res = integrator.run_once("acme")
+        self.assertEqual(res["event"], "merged", (res, self.queue_log()))
+        self.assertFalse(ref.exists() or index.exists())
+        self.assertIn("removed stale git locks", self.queue_log())
+        self.assertEqual(store.read("acme")["stops"], 0)
+
+    def test_a_fresh_lock_survives(self):
+        integrator.checkout("acme")
+        fresh = self.clone / ".git" / "FETCH_HEAD.lock"             # `orche queue add --pr` fetching right now
+        fresh.write_text("")
+        integrator._unlock(self.clone)
+        self.assertTrue(fresh.exists())
+
+
 class ProofTest(IntegratorCase):
     """Review A Q4/Q5: a fetch error after the merge proves nothing; a proof closure needs a resume."""
 
     def test_a_failed_fetch_after_the_merge_stays_testing_and_the_next_pass_proves_it(self):
         h = self.branch("feat/a", {"src/a.txt": "a\n"})
         self.queue_pr(1, h, "feat/a")
-        real = integrator._git
+        real = shell.git
 
         def offline_after_merge(where, *argv, **kw):
             if argv and argv[0] == "fetch" and self.merges():
                 return shell.Result(128, "", "fatal: unable to access origin: Could not resolve host", ["git", *argv])
             return real(where, *argv, **kw)
-        with mock.patch.object(integrator, "_git", side_effect=offline_after_merge), \
+        with mock.patch.object(shell, "git", side_effect=offline_after_merge), \
                 mock.patch.object(integrator, "PROOF_RETRY_S", 0):
             res = integrator.run_once("acme")
         self.assertEqual((res["code"], res["event"]), (1, "unknown"), res)
@@ -665,7 +778,7 @@ class ReviewBTest(IntegratorCase):
         from orche import cmd_queue
         h1 = self.branch("feat/a", {"src/a.txt": "a\n"})
         self.queue_pr(1, h1, "feat/a")
-        real, add_wrote_fetch_head = integrator._git, []
+        real, add_wrote_fetch_head = shell.git, []
 
         def add_in_between(where, *argv, **kw):
             res = real(where, *argv, **kw)
@@ -676,7 +789,7 @@ class ReviewBTest(IntegratorCase):
                 add_wrote_fetch_head.append(before != (Path(where) / ".git" / "FETCH_HEAD").read_text())
                 real(where, "fetch", "--no-tags", "origin", "refs/heads/feat/b")   # any other FETCH_HEAD writer
             return res
-        with mock.patch.object(integrator, "_git", side_effect=add_in_between):
+        with mock.patch.object(shell, "git", side_effect=add_in_between):
             res = integrator.run_once("acme")
         self.assertEqual(add_wrote_fetch_head, [False])
         self.assertEqual((res["event"], self.events("dropped")), ("merged", []), res)

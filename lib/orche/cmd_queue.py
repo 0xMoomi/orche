@@ -8,19 +8,10 @@
   orche queue approve <p> (#N ...|--all)          land: owner projects, Main only
   orche queue run <p>                             the integrator (the driver starts it detached)
 """
-import re
-import shlex
-
-from . import brief, cli, config, inbox, ledger, publish, queue, registry, roster, shell, units, util
-from .queue import facts, repo, store
+from . import brief, cli, config, github, publish, queue, registry, roster, units
+from .queue import facts, repo
 
 ACTIONS = ("add", "drop", "pause", "resume", "approve", "run", "status")
-
-
-class Refused(Exception):
-    def __init__(self, code, msg):
-        super().__init__(msg)
-        self.code = code
 
 
 def register(subparsers):
@@ -41,9 +32,9 @@ def run(args):
     action = words.pop(0) if words and words[0] in ACTIONS else "status"
     try:
         return globals()[f"cmd_{action}"](args, words)
-    except Refused as exc:
+    except queue.Refused as exc:
         return cli.fail(exc.code, str(exc))
-    except repo.GhError as exc:
+    except github.GhError as exc:
         return cli.fail(cli.EXIT_BLOCKED, str(exc))
 
 
@@ -52,84 +43,19 @@ def run(args):
 def _project(reg, key):
     found = registry.project(reg, key) if key else None
     if found is None:
-        raise Refused(cli.EXIT_NOT_FOUND, f"unknown project: {key}" if key else "name a project")
+        raise queue.Refused(cli.EXIT_NOT_FOUND, f"unknown project: {key}" if key else "name a project")
     return found[0]
 
 
-def _caller(reg, project, *, main_only=False):
-    """The calling session's Member if it is the project's Main (or Build unless main_only)."""
-    m = roster.Roster(reg).member(roster.env_session())
+def _caller(reg, project, *, main_only=False, target=None):
+    """The calling session's Member if it is the project's Main (or, unless main_only, Build or the head
+    of `target`, roster.Roster.head)."""
+    r = roster.Roster(reg)
+    m = r.member(roster.env_session())
     ok = m is not None and m.project == project and (
-        m.kind == "main" or (not main_only and m.kind == "div" and m.name == "build"))
+        m.kind == "main" or (not main_only and m.kind == "div" and (
+            m.name == "build" or (target is not None and r.head(target) == m))))
     return m if ok else None
-
-
-def _verify_cmds(text) -> list:
-    return [c.strip() for c in re.findall(r"`([^`]+)`", str(text or "")) if c.strip()]
-
-
-def _has_gate(where, head, verify) -> bool:
-    if repo.tree_mode(where, head, "scripts/verify/ci.sh") == "100755":
-        return True
-    for cmd in verify:
-        try:
-            first = shlex.split(cmd)[0]
-        except (ValueError, IndexError):
-            continue
-        if repo.tree_mode(where, head, first.removeprefix("./")):
-            return True
-    return False
-
-
-def _review_check(cfg, project, pr, head, unit, accept):
-    """§4.3 step 6; returns the accepted reason or None."""
-    rv = cfg.get("review") or {}
-    mode, rounds = rv.get("cross_vendor", "required"), int(rv.get("rounds", 2))
-    if mode == "off":
-        return None
-    h7 = head[:7]
-    row = ledger.review_for(project, pr, head, "pre")
-    if row is None:
-        if mode == "optional":
-            return None
-        raise Refused(cli.EXIT_BLOCKED, f"no pre-review for {h7}: `orche review --pr {pr}`")
-    verdict = row["verdict"]
-    if verdict == "pass" or (mode == "optional" and verdict == "skipped"):
-        return None
-    try:
-        rnd = int(row.get("round") or 1)
-    except ValueError:
-        rnd = 1
-    capped = verdict in ("error", "held", "skipped") or (verdict == "return" and rnd >= rounds)
-    if capped and accept:
-        return accept
-    if capped:
-        raise Refused(cli.EXIT_BLOCKED, f"pre-review of {h7} is {verdict} (round {rnd} of {rounds}): "
-                                        f're-review, or queue with --accept "<why>"')
-    raise Refused(cli.EXIT_BLOCKED, f"pre-review of {h7} returned it (round {rnd} of {rounds}): fix and review again")
-
-
-def _checks(args, cfg, project, where, *, pr, head, base, unit, verify):
-    """§4.3 steps 5-8 (ledger, review, gate, [skip ci]); returns the accepted reasons."""
-    h7, accepted = head[:7], []
-    row = ledger.row_for_sha(project, head)
-    if not row or row.get("verdict") not in ledger.ORDER:
-        raise Refused(cli.EXIT_BLOCKED, f"no ledger row for {h7}")
-    why = _review_check(cfg, project, pr, head, unit, args.accept)
-    if why:
-        accepted.append(why)
-    if not _has_gate(where, head, verify):
-        raise Refused(cli.EXIT_BLOCKED, "no gate: add scripts/verify/ci.sh (Appendix A.13) or a committed VERIFY script")
-    docs = queue.settings(cfg, project)["docs_paths"]
-    if repo.SKIP_CI.search(repo.message(where, head)):
-        base_ref = f"origin/{base}" if repo.git(where, "rev-parse", "--verify", "-q", f"origin/{base}") else base
-        code = [p for p, _a, _d in repo.changed(where, base_ref, head) if not facts.is_docs(p, docs)]
-        if code and not args.accept:
-            raise Refused(cli.EXIT_BLOCKED, f"head {h7} carries [skip ci] on a code change (STANDING 4): "
-                                            "add a commit without it")
-        if code:
-            accepted.append(args.accept)
-    return accepted
 
 
 def _pr_checkout(reg, project, pr, head, base):
@@ -140,111 +66,84 @@ def _pr_checkout(reg, project, pr, head, base):
     try:
         where = integrator.checkout(project, reg)
     except integrator.Stop as exc:
-        raise Refused(cli.EXIT_BLOCKED, f"PR #{pr}: no queue checkout: {exc}") from None
-    if repo.git(where, "cat-file", "-e", f"{head}^{{commit}}") is not None:
-        return where
-    # never FETCH_HEAD: the integrator may be reading its own fetch in this clone right now
-    res = shell.run(["git", "-C", str(where), "fetch", "--no-tags", "--no-write-fetch-head", "origin", head,
-                     f"+refs/heads/{base}:refs/remotes/origin/{base}"], timeout=integrator.FETCH_S)
-    if not res.ok or repo.git(where, "cat-file", "-e", f"{head}^{{commit}}") is None:
-        why = next((ln.strip() for ln in (res.err or res.out).splitlines() if ln.strip()), f"exit {res.code}")
-        raise Refused(cli.EXIT_BLOCKED, f"cannot fetch PR #{pr}'s head {head[:7]} from origin: {why[:160]}")
+        raise queue.Refused(cli.EXIT_BLOCKED, f"PR #{pr}: no queue checkout: {exc}") from None
+    try:
+        github.fetch_pr_head(where, pr, head, base)
+    except github.GhError as exc:
+        raise queue.Refused(cli.EXIT_BLOCKED, str(exc)) from None
     return where
-
-
-def _ask_owner(reg, project, entry, frm):
-    main = roster.Roster(reg).main(project)
-    if main is None:
-        return
-    name = entry.get("unit") or entry["branch"]
-    text = (f"PR #{entry['pr']} ({name}) passed both reviews and waits for the owner's word to land "
-            f"(land: owner): orche queue approve {project} #{entry['pr']}")
-    inbox.post(inbox.make(entry.get("unit") or f"pr{entry['pr']}", frm, main.session, "question",
-                          summary=text, via="queue"))
 
 
 # ---- actions ---------------------------------------------------------------------------------
 
 def cmd_add(args, words):
     reg, cfg = registry.load(), config.load()
-    session = roster.env_session()
+    by = roster.env_session() or "auto"
     if args.pr is not None:
         if words:
-            raise Refused(cli.EXIT_USER, "add --pr N --project <p> takes no unit")
+            raise queue.Refused(cli.EXIT_USER, "add --pr N --project <p> takes no unit")
         project = _project(reg, args.project)
         if not _caller(reg, project):
-            raise Refused(cli.EXIT_BLOCKED, "only Build or Main may queue")
+            raise queue.Refused(cli.EXIT_BLOCKED, "only Build or Main may queue")
         root = units.project_root(reg, project)
         base = publish.base(root, cfg)
         if not base:
-            raise Refused(cli.EXIT_BLOCKED, publish.no_base(root))
+            raise queue.Refused(cli.EXIT_BLOCKED, publish.no_base(root))
         try:
-            view = repo.pr_view(root, args.pr)
-        except repo.GhError:
-            raise Refused(cli.EXIT_NOT_FOUND, f"unknown PR #{args.pr}") from None
+            view = github.view(root, args.pr)
+        except github.GhError:
+            raise queue.Refused(cli.EXIT_NOT_FOUND, f"unknown PR #{args.pr}") from None
         if view.get("state") not in (None, "OPEN") or view.get("baseRefName") != base:
-            raise Refused(cli.EXIT_BLOCKED, f"no open PR #{args.pr} against {base}")
+            raise queue.Refused(cli.EXIT_BLOCKED, f"no open PR #{args.pr} against {base}")
         pr, head, branch = int(view["number"]), view["headRefOid"], view.get("headRefName", "")
         where = _pr_checkout(reg, project, pr, head, base)
-        unit, writer, parent, rev, verify = None, "", "", 0, []
+        unit, writer, b = None, "", None
     else:
         if len(words) != 1:
-            raise Refused(cli.EXIT_USER, "usage: orche queue add <unit> [--first] [--accept WHY]")
+            raise queue.Refused(cli.EXIT_USER, "usage: orche queue add <unit> [--first] [--accept WHY]")
         unit = words[0]
         err = brief.unit_id_error(unit)
         if err:
-            raise Refused(cli.EXIT_USER, err)
+            raise queue.Refused(cli.EXIT_USER, err)
         b = brief.find(reg, unit)
         if b is None or b.rev == 0:
-            raise Refused(cli.EXIT_NOT_FOUND, f"unknown unit {unit!r}")
+            raise queue.Refused(cli.EXIT_NOT_FOUND, f"unknown unit {unit!r}")
         project = b.project
-        if not _caller(reg, project):
-            raise Refused(cli.EXIT_BLOCKED, "only Build or Main may queue")
         target = roster.Roster(reg).member(b.to)
+        if not _caller(reg, project, target=target):
+            raise queue.Refused(cli.EXIT_BLOCKED, "only Build, Main or the unit's head may queue")
         if target is None or not (target.kind == "feat" or (target.kind == "div" and target.name == "build")):
-            raise Refused(cli.EXIT_BLOCKED, f"{unit}: target {b.to or '?'} is not a feature agent or Build")
+            raise queue.Refused(cli.EXIT_BLOCKED, f"{unit}: target {b.to or '?'} is not a feature agent or Build")
         where = target.worktree
         if where is None or not where.is_dir():
-            raise Refused(cli.EXIT_NOT_FOUND, f"{unit}: worktree of {b.to} is missing")
+            raise queue.Refused(cli.EXIT_NOT_FOUND, f"{unit}: worktree of {b.to} is missing")
         head, branch = repo.head(where)
         if not head:
-            raise Refused(cli.EXIT_NOT_FOUND, f"{unit}: cannot read HEAD of {where}")
+            raise queue.Refused(cli.EXIT_NOT_FOUND, f"{unit}: cannot read HEAD of {where}")
         root = units.project_root(reg, project)
         base = publish.base(root, cfg, where)
         if not base:
-            raise Refused(cli.EXIT_BLOCKED, publish.no_base(root or where))
-        prs = [p for p in repo.open_prs(where, branch) if p.get("baseRefName") == base]
+            raise queue.Refused(cli.EXIT_BLOCKED, publish.no_base(root or where))
+        prs = [p for p in github.pr_for_branch(where, branch) if p.get("baseRefName") == base]
         if len(prs) != 1:
-            raise Refused(cli.EXIT_BLOCKED, f"no open PR for {branch}")
+            raise queue.Refused(cli.EXIT_BLOCKED, f"no open PR for {branch}")
         pr = int(prs[0]["number"])
         if prs[0].get("headRefOid") != head:
-            raise Refused(cli.EXIT_BLOCKED, f"PR #{pr}'s head is {str(prs[0].get('headRefOid'))[:7]}, the "
+            raise queue.Refused(cli.EXIT_BLOCKED, f"PR #{pr}'s head is {str(prs[0].get('headRefOid'))[:7]}, the "
                                             f"worktree's is {head[:7]}: report done again to publish")
-        writer, parent, rev, verify = b.to, b.parent, b.rev, _verify_cmds(b.fields.get("VERIFY"))
-    accepted = _checks(args, cfg, project, where, pr=pr, head=head, base=base, unit=unit, verify=verify)
-    owner = queue.land_mode(cfg, project) == "owner"
-    main = roster.Roster(reg).main(project)
-    owner_ok = (not owner) or queue.approved_in_log(project, pr, main.session if main else None)
-    by = session or "auto"
-    entry = {"id": queue.entry_id(pr, head), "pr": pr, "head": head, "branch": branch, "unit": unit,
-             "writer": writer, "parent": parent, "rev": rev, "verify": verify,
-             "approved_by": f"{by} (review)", "accept": "; ".join(accepted) or None, "first": bool(args.first),
-             "owner_ok": owner_ok, "at": None, "state": "waiting", "restarts": 0, "drop": False, "test": None}
+        writer = b.to
+    res = queue.admit(project, pr, head, where=where, base=base, branch=branch, unit=unit, b=b, writer=writer,
+                      accept=args.accept, first=args.first, by=by, dry_run=args.dry_run, reg=reg, cfg=cfg)
     if args.dry_run:
-        tier = brief.find(reg, unit).tier if unit else "standard"
-        scope = brief.find(reg, unit).fields.get("SCOPE", "") if unit else ""
-        f = facts.gather(where, project=project, pr=pr, head=head, base=base, tier=tier, scope=scope,
-                         docs_paths=queue.settings(cfg, project)["docs_paths"], entry_id=entry["id"])
-        cli.out(args, {"entry": entry, "facts": {k: v for k, v in f.items()}}, facts.lines(f))
+        f = facts.gather(where, project=project, pr=pr, head=head, base=base, tier=b.tier if b else "standard",
+                         scope=b.fields.get("SCOPE", "") if b else "",
+                         docs_paths=queue.DOCS_PATHS, entry_id=res["entry"]["id"])
+        cli.out(args, {"entry": res["entry"], "facts": dict(f)}, facts.lines(f))
         return cli.EXIT_OK
-    entry["at"] = util.now_iso()
-    res = queue.add(project, entry, first=args.first, by=by, base=base)
     if res["status"] == "already":
         cli.out(args, res, f"already queued, position {res['position']}")
         return cli.EXIT_OK
-    if not owner_ok:
-        _ask_owner(reg, project, entry, by)
-    started = queue.start(project) or queue.running(project)
+    started, owner_ok = res.pop("started"), res["entry"]["owner_ok"]
     line = (f"queued PR #{pr} ({branch} @ {head[:7]}) — position {res['position']} of {res['total']}; "
             f"integrator {'running' if started else 'idle'}")
     if not owner_ok:
@@ -256,16 +155,16 @@ def cmd_add(args, words):
 def cmd_status(args, words):
     reg = registry.load()
     if len(words) > 1:
-        raise Refused(cli.EXIT_USER, "usage: orche queue [<project>]")
+        raise queue.Refused(cli.EXIT_USER, "usage: orche queue [<project>]")
     if words:
         keys = [_project(reg, words[0])]
     else:
         m = roster.Roster(reg).member(roster.env_session())
-        keys = [m.project] if m else store.projects()
+        keys = [m.project] if m else queue.projects()
     data, lines, cfg = [], [], config.load()
     for key in keys:
         s = queue.summary(key)
-        data.append(s)
+        data.append({k: v for k, v in s.items() if k != "last"})
         lost_after = queue.settings(cfg, key).get("lost_after_s")
         p50 = s["gate_p50"]
         gate = "gate —" if p50 is None else f"gate p50 {round(p50 / 60)}m (≈ {int(3600 // max(p50, 1))}/h)"
@@ -273,7 +172,7 @@ def cmd_status(args, words):
         if state == "paused":
             state = f"paused ({(s['paused'] or {}).get('reason') or 'no reason'})"
         elif state == "closed":
-            state = f"closed ({queue.reopen(key, s['closed'])})"
+            state = f"closed ({queue.closed_text(key, s['closed'])})"
         await_ = f" ({s['await']} await the owner)" if s["await"] else ""
         lines.append(f"queue {key}: {s['waiting']} waiting{await_} · {s['testing']} testing · "
                      f"{s['merged_today']} merged today · {s['returned_today']} returned today · {state} · {gate}")
@@ -296,11 +195,11 @@ def cmd_status(args, words):
 
 def _gate(words, usage, reg, *, main_only=False, n=1):
     if len(words) < n:
-        raise Refused(cli.EXIT_USER, usage)
+        raise queue.Refused(cli.EXIT_USER, usage)
     project = _project(reg, words[0])
     m = _caller(reg, project, main_only=main_only)
     if m is None:
-        raise Refused(cli.EXIT_BLOCKED, "only Main approves landing in a land: owner project; report it to Main"
+        raise queue.Refused(cli.EXIT_BLOCKED, "only Main approves landing in a land: owner project; report it to Main"
                       if main_only else "only Build or Main may change the queue")
     return project, m.session
 
@@ -313,7 +212,7 @@ def cmd_drop(args, words):
         return cli.EXIT_OK
     e = queue.drop(project, words[1], reason=args.reason, by=by)
     if e is None:
-        raise Refused(cli.EXIT_NOT_FOUND, f"no entry {words[1]} in the {project} queue")
+        raise queue.Refused(cli.EXIT_NOT_FOUND, f"no entry {words[1]} in the {project} queue")
     cli.out(args, e, f"dropped PR #{e['pr']} ({e['id']}) from the {project} queue")
     return cli.EXIT_OK
 
@@ -347,7 +246,7 @@ def cmd_approve(args, words):
     project, by = _gate(words, usage, reg, main_only=True)
     refs = None if args.all else words[1:]
     if refs == []:
-        raise Refused(cli.EXIT_USER, usage)
+        raise queue.Refused(cli.EXIT_USER, usage)
     if queue.land_mode(cfg, project) != "owner":
         cli.out(args, {"approved": []}, f"{project} lands automatically (land: auto): nothing to approve")
         return cli.EXIT_OK
@@ -368,7 +267,7 @@ def cmd_run(args, words):
     """`orche queue run <p>`: the integrator in the foreground (the driver spawns it detached)."""
     project = _project(registry.load(), words[0] if words else None)
     if args.dry_run:
-        e = queue.next_entry(store.read(project))
+        e = queue.next_entry(queue.summary(project))
         cli.out(args, {"next": e}, f"next: PR #{e['pr']} @ {e['head'][:7]}" if e else "nothing to test")
         return cli.EXIT_OK
     from .queue import integrator

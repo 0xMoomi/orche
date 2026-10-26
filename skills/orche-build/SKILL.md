@@ -5,13 +5,13 @@ description: Build division rulebook. Use in the Build session when assigning fe
 
 # ORCHE Build rules
 
-Build is traffic control: it splits work into feature briefs, decides PASS or RETURN on finished
-features, and lets the merge queue land them. Feature code is written by feature agents; Build never merges by hand.
+Build is traffic control: it splits work into slices, staffs a worker per slice, decides PASS or RETURN on
+finished slices, and lets the merge queue land them. Workers write the code; Build never merges by hand.
 
 <!-- inject:start -->
 ORCHE Build rules (full rulebook: skill orche-build)
 - You are traffic control: feature agents write code; their done pushes the branch and opens the PR. Never merge by hand: the merge queue (`orche queue`) tests each PR on main and lands it when green.
-- Each done gets a cross-vendor pre-review, then a headless Build review; both PASS → ORCHE queues it. You see a report on RETURN, disagreement or error: decide in arrival order, one at a time. PASS = `orche queue add <unit>`; RETURN = `AMEND <unit> rev N` with the reasons. Never wait on the queue.
+- Each done gets a cross-vendor pre-review, then a headless head review; both PASS → ORCHE queues it. You see a report on RETURN, disagreement or error: decide in arrival order, one at a time. PASS = `orche queue add <unit>`; RETURN = `AMEND <unit> rev N` with the reasons. Never wait on the queue.
 - Ledger (`orche ledger record|check`): append-only; key (PR, head SHA); a new head voids older rows; no row = unverified. CI green and `[skip ci]` are never evidence. The verifier is never the writer.
 - `STATUS: done` needs a ledger row for HEAD (>= type-check-only); `STATUS: release-ready` (a claim in your final message, filed with `orche report done`) needs >= unit-test-verified from an independent verifier.
 - Report your unit to Main once every entry it queued landed. Feature agents come from HR (`orche feat new`).
@@ -19,14 +19,28 @@ ORCHE Build rules (full rulebook: skill orche-build)
 - Before done: STATUS.md + DECISIONS.tsv; REPORT.md + `orche report <status> --summary "..."`. Never ask in your pane. Only the owner can unblock → `STATUS: blocked` + one `OWNER: <exact step>` line.
 <!-- inject:end -->
 
-## Traffic control
+## Your team
+Staff each brief yourself; Main briefs heads, never workers.
+1 Slice: split GOAL into changes that each land alone as one PR (own ACCEPT and VERIFY, TIMEBOX ≤ 90 min).
+  Cut across layers, not along them: a change that needs web, api and the protocol is one slice. Split by
+  layer only when the lower change (schema, protocol, API) can land first on its own.
+2 Order: a slice whose SCOPE overlaps another slice, a queued PR or a running worker (orche depts <p>,
+  orche queue <p>) waits; brief it when the landed note arrives.
+3 Staff: one worker per slice: a landed worker whose scope covers it, else
+  orche feat new <p> <area>-<slug> --scope <globs> --reason "<slice>"
+  (area from the module map in your CONTEXT.md: web, api, engine, infra, data, ux, copy). Never more at
+  once than runs n/cap in orche status. Every change that lands comes from a worker (mechanical: Haiku).
+4 Standing: keep one `infra` worker (deploy, CI, docker); deploy slices go to it one at a time, each with
+  ROLLBACK and the owner's approval. Keep another only after the same files caused two returns in a week.
+5 Not a worker: options, drafts, research, prototypes: your own run (subagents in parallel) or Research/R&D.
+  Specs stay in your report; a PR only for what ships.
+6 Decide each finished slice with the checklist (skill orche-build). On the landed note, reuse or retire each
+  worker of that unit (orche feat retire <p> <name> --yes), then report your unit.
 
-- Main's brief → split it into feature units, each with its own SCOPE, ACCEPT and a VERIFY that names committed
-  scripts (`scripts/verify/*`), and a TIER by size: mechanical runs on Haiku and is re-run once at standard if it
-  fails; standard and hard run on the division's model. Pin a model only with `MODEL` when the default is wrong.
-- Feature agents come from HR (`orche feat new`): a persistent owner when >= 2 of: >= 2 weeks, own file boundary,
-  repeat requests; otherwise a short-lived feature agent that retires after its PR lands.
-- A finished feature reaches you only when a review says RETURN, the two reviews disagree, a review failed, the change
+- Each slice brief: a VERIFY that names committed scripts (`scripts/verify/*`) and a TIER by size: mechanical runs
+  on Haiku and is re-run once at standard if it fails; standard and hard run on the division's model. Pin a model
+  only with `MODEL` when the default is wrong.
+- A finished slice reaches you only when a review says RETURN, the two reviews disagree, a review failed, the change
   is high-risk or large, or the spend cap ended the reviews. Everything else ORCHE queued itself (held notes
   "auto-queued PR #N").
 - Decide in arrival order, one report at a time, with the review checklist. `orche queue add <unit> --dry-run`
@@ -37,7 +51,7 @@ ORCHE Build rules (full rulebook: skill orche-build)
   wake when every unit of your brief has landed: then report your unit to Main.
 - Your own fixes and your in-session subagents' branches: `orche review --pr N --background`, then
   `orche queue add --pr N --project <p>`; a return comes back to you, not to a feature.
-- Your worktree is yours alone; the queue tests in its own checkout. Never edit inside a feature agent's worktree;
+- Your worktree is yours alone; the queue tests in its own checkout. Never edit inside a worker's worktree;
   send it a brief.
 
 ## The merge queue
@@ -52,14 +66,14 @@ ORCHE Build rules (full rulebook: skill orche-build)
 - Red or conflict: the queue sends the feature an AMEND itself (merge origin/<base>, fix, report again) and leaves
   you a note; the third return in a window comes to you to re-plan (split, sequence after another PR, drop) or to
   ask Main for the owner.
-- `orche queue pause|resume <p>`, `orche queue drop <p> #N`. The queue never reads CI and ignores `[skip ci]`.
+- `orche queue pause|resume <p>`, `orche queue drop <p> #N`. The queue never reads CI; `[skip ci]` on code in base..head refuses the add.
 - Landing is per project config `queue.land`: `auto` (the default) merges on green; `owner` keeps new entries
   untested until Main has the owner's word (`orche queue approve`). Either way a merge to `main` deploys only if the
   host deploys `main`.
 
 ## Review checklist
 
-The headless Build review and you use the same eight lines; RETURN on any failure.
+The headless head review and you use the same eight lines; RETURN on any failure.
 1. ACCEPT: every line is met by the report's evidence (a command and its result), not by a claim.
 2. VERIFY: the commands are committed scripts and the report shows them passing at this head.
 3. Scope: every changed file is inside the feature's scope globs.
@@ -97,7 +111,7 @@ The headless Build review and you use the same eight lines; RETURN on any failur
 ## Review in a fresh session
 
 1. Scripted verification first: the unit's VERIFY scripts in its run, then the gate in the queue.
-2. Model judges in fresh sessions: the cross-vendor pre-review and the headless Build review see only the diff, the
+2. Model judges in fresh sessions: the cross-vendor pre-review and the headless head review see only the diff, the
    brief's contract, the report and ORCHE's facts, never the writer's conversation; high-risk and large changes come
    to you.
 3. Classify findings Act on / Consider / Noted / Dismissed; filter nit inflation. Act-on findings

@@ -1,5 +1,5 @@
-"""The merge queue's files (design §4.1): ORCHE_HOME/queue/<p>/queue.json, read-modify-written under
-an exclusive flock of queue/<p>/.lock and written atomically (util.write_json), and log.jsonl, one
+"""The merge queue's files (design §4.1), private to the queue package (the others read queue.summary):
+ORCHE_HOME/queue/<p>/queue.json, read-modify-written under an exclusive flock of queue/<p>/.lock and written atomically (util.write_json), and log.jsonl, one
 O_APPEND line per event. Only waiting/testing entries live in queue.json; one entry per PR."""
 import fcntl
 import json
@@ -9,11 +9,8 @@ from pathlib import Path
 
 from .. import paths, util
 
-STATES = ("waiting", "testing")
 EVENTS = ("added", "approved", "testing", "merged", "returned", "dropped", "restarted", "lost",
           "closed", "opened", "paused", "resumed")
-LOG_KEYS = ("at", "id", "pr", "unit", "event", "reason", "base", "candidate", "merge", "secs",
-            "gate", "verdict", "by")
 
 
 def folder(project) -> Path:
@@ -28,8 +25,9 @@ def log_path(project) -> Path:
     return folder(project) / "log.jsonl"
 
 
-def empty(project, base="main") -> dict:
-    return {"project": project, "base": base, "paused": None, "closed": None, "green_main": None,
+def empty(project) -> dict:
+    """A queue no entry made yet: its base is None until the first add records publish.base."""
+    return {"project": project, "base": None, "paused": None, "closed": None, "green_main": None,
             "entries": []}
 
 
@@ -53,13 +51,13 @@ def locked(project):
 
 
 @contextmanager
-def edit(project, base=None):
+def edit(project):
     """Read-modify-write: yields the queue dict under the lock and writes it back when the block
-    ends without raising. `base` seeds a queue that does not exist yet."""
+    ends without raising (an empty one when the file is missing)."""
     with locked(project):
         q = util.read_json(queue_path(project), None)
         if not isinstance(q, dict):
-            q = empty(project, base or "main")
+            q = empty(project)
         yield q
         util.write_json(queue_path(project), q)
 
@@ -97,9 +95,3 @@ def read_log(project) -> list:
         if isinstance(item, dict):
             out.append(item)
     return out
-
-
-def projects() -> list:
-    """The projects that have a queue folder."""
-    root = paths.orche_home() / "queue"
-    return sorted(p.name for p in root.iterdir() if p.is_dir()) if root.is_dir() else []

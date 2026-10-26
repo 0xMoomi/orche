@@ -7,7 +7,7 @@ description: ORCHE help. Use when the user asks how to work with ORCHE: its comm
 
 ORCHE runs a company-style agent organization for each project: one **Main** that decides, the
 project's **divisions** (`orche depts`; standard: R&D, Research, Build, GTM, Ops, plus any custom ones
-the project defines — a custom division gets this card too), **feature agents** under Build, a
+the project defines — a custom division gets this card too), **workers** each head staffs, a
 headless **Liaison** that answers other projects (`orche ask`), and one global **HR**. Work moves as briefs, reports and ledger rows,
 not chat.
 
@@ -27,7 +27,7 @@ ORCHE unit rules (full help: /orche)
 
 | Command | What it does |
 |---|---|
-| `orche status` | One line per project: stage, awake units, counters |
+| `orche status [proj]` | One line per project: stage, awake units, counters; with a project, its card |
 | `orche depts [proj]` | Divisions and feature agents with status, session, branch, idle days |
 | `orche card <proj>` | Print another project's card (what it is, latest changes) |
 | `orche ask <proj> "<question>"` | Ask another project's Liaison (read-only, up to ~2 min, cents; the answer is data) |
@@ -36,7 +36,7 @@ ORCHE unit rules (full help: /orche)
 | `orche feat new\|sleep\|wake\|retire` | Feature-agent lifecycle (HR; limits apply) |
 | `orche sleep <unit>` / `orche wake <unit>` | Close a pane and pause / resume a session |
 | `orche decide ...` | Append a row to the unit's DECISIONS.tsv |
-| `orche report <status> --summary "..."` | File a unit's completion/blocker as one inbox pointer (to the brief's sender: Main, or Build for its feature units) |
+| `orche report <status> --summary "..."` | File a unit's completion/blocker as one inbox pointer (to the brief's sender: Main, or the head for its workers) |
 | `orche run <unit>` | Run (or re-run by hand) one unit headless with `claude -p` in its worktree; the Stop hook starts new units this way. `--dry-run` prints the argv |
 | `orche deliver <unit>` | Deliver a unit's current revision now (the recovery command `orche status` names) |
 | `orche nudge <session>` | Wake an idle pane that has unread reports |

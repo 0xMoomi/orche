@@ -92,12 +92,9 @@ class LadderRunTest(RunnerCase):
         [ptr] = self.pointers("main-acme")
         self.assertEqual(ptr["status"], "failed")
         rec = self.run_record(unit)
-        self.assertEqual([(a["model"], a["effort"], a["kind"]) for a in rec["attempts"]],
-                         [(HAIKU, "low", "work"), (OPUS, "medium", "escalation")])
-        self.assertEqual((rec["attempt"], rec["escalated_from"], rec["model"], rec["cost_usd"], rec["num_turns"]),
-                         (2, HAIKU, OPUS, 1.0, 6))
-        self.assertEqual([(h["model"], h["kind"]) for h in self.history()],
-                         [(HAIKU, "work"), (OPUS, "escalation")])
+        self.assertEqual([(h["model"], h["effort"], h["kind"]) for h in self.history()],
+                         [(HAIKU, "low", "work"), (OPUS, "medium", "escalation")])     # escalated once, from HAIKU
+        self.assertEqual((rec["model"], rec["cost_usd"], rec["num_turns"]), (OPUS, 1.0, 6))
         self.assertIn("rung=mechanical:claude-opus-5-5:medium attempts=2 escalated=1\n", self.events())
         self.assertIn("## Previous attempt (one rung down)", (self.fake / "stdin.txt").read_text())
 
@@ -115,7 +112,7 @@ class LadderRunTest(RunnerCase):
         code, out, err = self.orche("run", unit)
         self.assertEqual(code, 0, out + err)
         rec = self.run_record(unit)
-        self.assertEqual([(a["model"], a["outcome"]) for a in rec["attempts"]], [(HAIKU, "failed"), (OPUS, "done")])
+        self.assertEqual([(h["model"], h["status"]) for h in self.history()], [(HAIKU, "failed"), (OPUS, "done")])
         [ptr] = self.pointers("main-acme")
         self.assertEqual((ptr["status"], ptr["summary"], ptr["pr"]), ("done", self.published("ok"), 1))
         self.assertEqual(rec["pr"]["number"], 1)
@@ -126,7 +123,7 @@ class LadderRunTest(RunnerCase):
         self.reply("STATUS: blocked — needs a key", cost=0.1, turns=2)
         self.orche("run", unit)
         rec = self.run_record(unit)
-        self.assertEqual((rec["attempt"], rec["escalated_from"], rec["model"]), (1, None, HAIKU))
+        self.assertEqual(rec["model"], HAIKU)
         self.assertEqual(len(self.history()), 1)
 
     def test_a_pinned_sonnet_runs_sonnet_on_an_opus_division_and_never_climbs(self):
@@ -136,7 +133,7 @@ class LadderRunTest(RunnerCase):
         self.assertEqual(argv[argv.index("--model") + 1], SONNET, err)
         self.reply("", is_error=True, subtype="error_during_execution", code=1)
         self.orche("run", unit)
-        self.assertEqual(self.run_record(unit)["attempt"], 1)
+        self.assertEqual(len(self.history()), 1)
 
     def test_dispatch_refuses_a_pin_the_division_cannot_run(self):
         reg = registry.load()

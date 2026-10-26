@@ -233,7 +233,7 @@ def merge(text, sections, head, date) -> str:
 
 
 def _git(root, *argv, timeout=30):
-    return shell.run(["git", "-C", str(root), "-c", "core.pager=cat", *argv], timeout=timeout)
+    return shell.git(root, "-c", "core.pager=cat", *argv, timeout=timeout)
 
 
 def gate(root, text) -> tuple:

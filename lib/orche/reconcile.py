@@ -30,7 +30,7 @@ reconcile/heartbeat.json last. Classes (design §2.2):
 - usage <vendor>: an active hold nobody told yet -> the owner notice (Appendix A.15) once; a hold past
   its `until` -> `usage resume` logged once;
 - review <project>: a pending Build review (review/build.py: a run's RUN.json `review.build: pending`)
-  not running that claim() lets start -> started detached (`orche review --pr N --wait --unit U`,
+  not running that may_start() lets start -> started detached (`orche review --pr N --wait --unit U`,
   never inline), at most one per project a pass, after the repairs and never past
   BUDGET_S;
 - silent <unit>: the target's newest unit, a pane unit (never Main) whose dispatch was delivered,
@@ -227,17 +227,10 @@ def _busy(reg, now, keys, cfg_all=None) -> list:
     out, full = [], {}
     per_pass = runs.caps(cfg_all)[1]
     for key, root in _projects(reg, keys):
-        for path in sorted((root / brief.UNITS).glob("*/RUN.json")):
-            try:
-                rec = util.read_json(path, default=None)
-                st = path.stat()
-                fresh = st.st_mtime >= (path.parent / "BRIEF.md").stat().st_mtime
-            except (OSError, util.JsonError):
+        for unit, rec, mtime_ns in runs.last_runs(root, fresh=True):
+            reason = rec.get("stop_reason")
+            if reason not in ("busy",) + usage.HELD:
                 continue
-            reason = rec.get("stop_reason") if isinstance(rec, dict) else None
-            if reason not in ("busy",) + usage.HELD or not fresh:
-                continue
-            unit = path.parent.name
             b = brief.find(reg, unit, project=key)
             at = units.parse_iso(rec.get("finished"))
             if b is None or not b.rev or at is None or runs.running(key, unit):
@@ -251,7 +244,7 @@ def _busy(reg, now, keys, cfg_all=None) -> list:
                 continue
             vendor = str(rec.get("held_vendor") or rec.get("vendor") or "claude")     # the stage's vendor (R9)
             hold, stop = usage.read(vendor), runs.marker_time(key, unit)
-            if usage.is_active(hold, now) or (stop is not None and stop >= st.st_mtime_ns):
+            if usage.is_active(hold, now) or (stop is not None and stop >= mtime_ns):
                 continue
             until = usage.until_of(hold)
             since = until if until is not None and until > at else at
@@ -276,23 +269,23 @@ def _queue_starts(reg, keys, dry_run) -> list:
     queue nor the project paused by `orche queue pause` or `orche flow pause`) -> queue.start(p). The
     queue's own files and the process table only (no git, no gh)."""
     from . import queue
-    from .queue import integrator, store
+    from .queue import integrator
     cfg = config.load()
     rows = []
     for key in sorted(reg.get("projects", {})):
         if keys is not None and key not in keys:
             continue
         try:
-            q = store.read(key)
-            if not isinstance(q.get("entries"), list) or not q["entries"] or queue.running(key):
+            s = queue.summary(key)
+            if not s["entries"] or queue.running(key):
                 continue
-            stale = [e for e in q["entries"] if e.get("state") == "testing" and not queue.landed(e)]
+            stale = [e for e in s["entries"] if e.get("state") == "testing" and not queue.landed(e)]
             if dry_run:
                 lost = stale
             else:
                 queue.release(key, cfg)
                 lost = integrator.recover(key) if stale else []
-                q = store.read(key)
+                s = queue.summary(key)
             can = queue.startable(key)
         except Exception as exc:  # noqa: BLE001 - one unreadable queue never stops the pass
             log.log("hooks", f"reconcile: queue {key}: {type(exc).__name__}: {exc}")
@@ -303,7 +296,7 @@ def _queue_starts(reg, keys, dry_run) -> list:
                               f"of {key}{'' if dry_run else ' (back at the front)'}"))
         if not can:
             continue
-        waiting = sum(1 for e in q.get("entries") or [] if e.get("state") == "waiting" and e.get("owner_ok"))
+        waiting = s["waiting"] - s["await"]
         failed = None
         if not dry_run:
             try:
@@ -313,88 +306,6 @@ def _queue_starts(reg, keys, dry_run) -> list:
                 log.log("hooks", f"reconcile: queue start {key}: {failed}: {exc}")
         rows.append(_note("queue-start", "queue", key, key, f"{'would start' if dry_run else 'start'} the merge "
                                                             f"queue of {key} ({waiting} waiting)", failed))
-    return rows
-
-
-def _usage_notes(now, dry_run) -> list:
-    """Class `usage` (§8.5): an active hold nobody told yet -> the owner notice (owner.usage_notice,
-    Appendix A.15) once, marked first; a hold past its `until` -> `usage resume vendor=<v>` once."""
-    rows = []
-    for hold in usage.holds():
-        vendor, until, n = str(hold.get("vendor") or "?"), usage.until_of(hold), len(usage.held_units(hold))
-        project, at = str(hold.get("project") or ""), usage.hhmm(until, now)
-        if usage.is_active(hold, now) and not hold.get("notified") and project:
-            failed = None
-            if not dry_run:
-                try:
-                    usage.mark(vendor, notified=_iso(now))      # marked first: at most one notice per hold
-                    owner.usage_notice(project, vendor, at, n, now)
-                except Exception as exc:  # noqa: BLE001 - a notice never stops the pass
-                    failed = type(exc).__name__
-                    log.log("hooks", f"reconcile: usage notice {vendor}: {failed}: {exc}")
-            rows.append(_note("usage-notice", "usage", project, vendor, f"{'would tell' if dry_run else 'told'} the "
-                                                                        f"owner: {vendor} usage limit until {at} ({n} units held)", failed))
-        elif until is not None and not usage.is_active(hold, now) and not hold.get("resumed"):
-            if not dry_run:
-                try:
-                    usage.mark(vendor, resumed=_iso(now))
-                except OSError as exc:
-                    log.log("hooks", f"reconcile: usage resume {vendor}: {exc}")
-                    continue
-                log.log("events", f"usage resume vendor={vendor}")
-            rows.append(_note("usage-resume", "usage", project or "-", vendor,
-                              f"{vendor} usage hold over at {at}: its {n} held units re-run"))
-    return rows
-
-
-def _review_module():
-    """review/build.py (the Build review) with pending(), claim(), running() and start(); None without them."""
-    try:
-        from .review import build
-    except ImportError:
-        return None
-    ok = all(callable(getattr(build, f, None)) for f in ("pending", "claim", "running", "start"))
-    return build if ok else None
-
-
-REVIEW_CLAIMS = 3          # claim() checks (one gh call each) per project a pass
-
-
-def _reviews(reg, keys, dry_run, started) -> list:
-    """Class `review`: per project, its oldest pending Build review (review.build.pending: a run's
-    RUN.json says `review.build: pending` and no build row exists at that head) that is not running and
-    that claim() lets start (the PR open at that head, the reviewer's vendor not held, fewer than
-    `review.max_starts` starts) -> review.build.start(project, pr, unit), detached: the pass never runs
-    a review inline. At most one start per project a pass and REVIEW_CLAIMS claims, never past
-    BUDGET_S, never for a project the owner paused. Nothing without the module."""
-    mod = _review_module()
-    if mod is None:
-        return []
-    rows = []
-    for key in sorted(reg.get("projects", {})):
-        if (keys is not None and key not in keys) or guard.paused(key) is not None:
-            continue
-        if time.monotonic() - started >= BUDGET_S:
-            break
-        try:
-            items = list(mod.pending(key, reg) or [])
-            todo = [x for x in items if not mod.running(key, x["pr"], x["sha"])]
-        except Exception as exc:  # noqa: BLE001 - one project's reviews never stop the pass
-            log.log("hooks", f"reconcile: review pending {key}: {type(exc).__name__}: {exc}")
-            continue
-        for item in todo[:REVIEW_CLAIMS]:
-            pr, failed = item["pr"], None
-            if not dry_run:
-                try:
-                    if not mod.claim(key, item, reg):
-                        continue
-                    mod.start(key, pr, item.get("unit"))
-                except Exception as exc:  # noqa: BLE001 - it is pending again next pass
-                    failed = type(exc).__name__
-                    log.log("hooks", f"reconcile: build review {key} #{pr}: {failed}: {exc}")
-            rows.append(_note("build-review", "review", key, f"pr-{pr}", f"{'would start' if dry_run else 'start'} the "
-                                                                        f"Build review of {key} PR #{pr} ({len(items)} pending)", failed))
-            break
     return rows
 
 
@@ -517,6 +428,19 @@ def _dispatches(reg, m, session, late, now) -> list:
     return out
 
 
+def _wakes_head(m) -> bool:
+    """R6: a dormant or paused Claude division head with live workers is woken for their reports, like
+    an active one (a Codex head has no pane: it keeps the escalation)."""
+    from . import vendors
+    entry = m.entry or {}
+    if m.kind != "div" or m.status not in ("dormant", "paused"):
+        return False
+    if not any(f.get("status") != "retired" for f in entry.get("features", [])):
+        return False
+    model = entry.get("model") or vendors.recommend(config.load(), m.name).model
+    return vendors.vendor_of(model) != vendors.CODEX
+
+
 def observe(reg, now, keys=None, wake=True, terms=None, cfg_all=None, hush=False) -> list:
     """The conditions for the projects `keys` (default all): [Condition], sorted by key. `terms`:
     panes() (None: Orca unreachable, no pane class). `hush` (flow.quiet_hours): no closed repair."""
@@ -553,7 +477,8 @@ def observe(reg, now, keys=None, wake=True, terms=None, cfg_all=None, hush=False
         else:
             out.append(Condition("closed", f"closed:{session}:{episode}", m.project, session, age,
                                  ready=not hush, count=len(waking), sender=first, kind=m.kind,
-                                 status=m.status, info={"handle": terms[session].get("handle")} if dead else {}))
+                                 status="active" if _wakes_head(m) else m.status,
+                                 info={"handle": terms[session].get("handle")} if dead else {}))
     out += _busy(reg, now, keys, cfg_all)
     if terms is not None:
         out += _silent(reg, r, now, keys, terms, cfg_all)
@@ -591,20 +516,16 @@ def _came_back(e, c) -> bool:
     return last is not None and since is not None and since > last
 
 
-def _iso(at) -> str:
-    return at.isoformat(timespec="seconds")
-
-
 def _plan_repair(c, e, now, actions) -> None:
     stall, cap, escalates = timing(c.cls)
     attempts = list(e.get("attempts") or [])
     n = len(attempts)
     if n < cap and c.ready and (c.age_s >= stall * 2 ** n or (n == 0 and c.info.get("deferred"))):
         actions.append(Action(KIND[c.cls], c, n + 1, cap))
-        attempts.append(_iso(now))
+        attempts.append(units.iso(now))
         n += 1
     if n < cap:
-        e["next"] = _iso(now + _dt.timedelta(seconds=max(0.0, stall * 2 ** n - c.age_s)))
+        e["next"] = units.iso(now + _dt.timedelta(seconds=max(0.0, stall * 2 ** n - c.age_s)))
         return
     if not escalates or e.get("escalated"):
         e.pop("next", None)
@@ -616,7 +537,7 @@ def _plan_repair(c, e, now, actions) -> None:
         at = min(due) if due else None
     else:
         at = now + _dt.timedelta(seconds=max(0.0, stall * 2 ** cap - c.age_s))
-    e["next"] = _iso(at) if at is not None else None
+    e["next"] = units.iso(at) if at is not None else None
     if at is not None and at <= now and len(e.get("attempts") or []) >= cap:
         actions.append(Action("escalate", c, n, cap, {"reminded": attempts[-1] if attempts else None}))
 
@@ -632,12 +553,12 @@ def _plan_closed(c, e, new, now, actions) -> None:
     r = r if isinstance(r, dict) and r.get("day") == now.date().isoformat() else {}
     n, last = int(r.get("n") or 0), units.parse_iso(r.get("at"))
     nxt = last + _dt.timedelta(seconds=STALL_S) if last is not None else now
-    e["next"] = _iso(max(nxt, now))
+    e["next"] = units.iso(max(nxt, now))
     if not c.ready or nxt > now:
         return
     if n < REOPEN_CAP:
         actions.append(Action("reopen", c, n + 1, REOPEN_CAP))
-        e["next"] = _iso(now + _dt.timedelta(seconds=STALL_S))
+        e["next"] = units.iso(now + _dt.timedelta(seconds=STALL_S))
     elif not e.get("escalated"):
         actions.append(Action("escalate", c, n, REOPEN_CAP))
 
@@ -668,7 +589,7 @@ def plan(conds, state, now, resolved=frozenset()) -> tuple:
                 actions.append(Action("notify", c, 1, 1))
             continue
         e = new[c.key] = _entry(state, c.key, now)
-        e.update(project=c.project, target=c.target, cls=c.cls, to=c.to, seen=_iso(now),
+        e.update(project=c.project, target=c.target, cls=c.cls, to=c.to, seen=units.iso(now),
                  **({"rev": c.rev} if c.rev is not None else {}),
                  **({"detail": c.info["detail"]} if c.info.get("detail") else {}),
                  **({"since": c.info["since"]} if c.cls == "held" else {}))
@@ -705,19 +626,20 @@ def resolved(reg, state) -> set:
 
 
 def _gone(reg, key, e, deliver) -> bool:
+    from . import runs
     cls, target, to = e.get("cls"), str(e.get("target") or ""), str(e.get("to") or "")
     if cls in ("unread", "closed"):
         name = key.split(":", 2)[2] if key.count(":") >= 2 else ""
         return not name or not (inbox.box(target) / name).is_file()
     if cls == "undelivered":
         found = deliver._dispatched(to, target) if to else None
-        return found is None or deliver._rev(found[1]) != deliver._num(e.get("rev"))
+        return found is None or deliver._rev(found[1]) != units.num(e.get("rev"))
     if cls == "held":
         b = brief.find(reg, target, project=e.get("project"))
         if b is None or b.rev != e.get("rev"):
             return True
-        rec = util.read_json(b.folder / "RUN.json", default=None)
-        at = units.parse_iso(rec.get("finished")) if isinstance(rec, dict) else None
+        rec = runs.last(b.folder, strict=True)
+        at = units.parse_iso(rec.get("finished")) if rec is not None else None
         return at is None or rec.get("stop_reason") not in usage.HELD or _stamp(at) != e.get("since")
     if cls not in ("silent", "busy"):
         return False
@@ -726,18 +648,14 @@ def _gone(reg, key, e, deliver) -> bool:
         return True
     if cls == "silent":
         return bool(to) and deliver._settled(b, to)
-    rec = util.read_json(b.folder / "RUN.json", default=None)
-    return not isinstance(rec, dict) or rec.get("stop_reason") != "busy"
+    rec = runs.last(b.folder, strict=True)
+    return rec is None or rec.get("stop_reason") != "busy"
 
 
 # ---- apply ---------------------------------------------------------------------------------------
 
-def _orche(*args) -> list:
-    return [sys.executable, str(paths.PLUGIN_ROOT / "bin" / "orche.py"), *args]
-
-
 def _nudge(session) -> None:
-    procs.spawn_detached(_orche("nudge", "--", session), paths.orche_home() / "logs" / "nudge.log")
+    procs.spawn_orche(["nudge", "--", session], paths.orche_home() / "logs" / "nudge.log")
 
 
 def _post(unit, to, summary, rev=1) -> None:
@@ -761,8 +679,8 @@ def _escalate(reg, action, now) -> None:
     elif c.cls == "silent":
         since = units.parse_iso(c.info.get("since"))
         reminded = units.parse_iso(action.extra.get("reminded"))
-        _post(c.target, c.sender or main, f"silent: {c.target} rev {c.rev} in {c.to} since {_hhmm(since)}, "
-                                          f"reminded {_hhmm(reminded)} — STOP, AMEND or let it run", rev=c.rev)
+        _post(c.target, c.sender or main, f"silent: {c.target} rev {c.rev} in {c.to} since {units.hhmm(since)}, "
+                                          f"reminded {units.hhmm(reminded)} — STOP, AMEND or let it run", rev=c.rev)
     elif c.cls == "undelivered":
         from . import deliver
         last = deliver.last_delivery(c.to, c.target)
@@ -779,12 +697,8 @@ def _escalate(reg, action, now) -> None:
                                f"last nudge: {_last_nudge(c.target)} — check the Main pane", now)
 
 
-def _hhmm(at) -> str:
-    return at.astimezone().strftime("%H:%M") if at is not None else "?"
-
-
 def _remind(unit, reason) -> None:
-    procs.spawn_detached(_orche("deliver", "--remind", reason, "--", unit), paths.orche_home() / "logs" / "deliver.log")
+    procs.spawn_orche(["deliver", "--remind", reason, "--", unit], paths.orche_home() / "logs" / "deliver.log")
 
 
 def _reopen(reg, c) -> None:
@@ -863,7 +777,7 @@ def apply(reg, action, now) -> None:
 def _record(new, a, now) -> None:
     """The bookkeeping of an applied action, also when its apply raised: a failing repair spends its
     attempt, so it is capped and escalated once like any other."""
-    at = _iso(now)
+    at = units.iso(now)
     if a.kind == "notify":
         new["waker"] = {"day": now.date().isoformat(), "at": at}
         return
@@ -963,7 +877,7 @@ def record_abort(frame) -> dict:
     (privacy.protected), else `slow`; the job's own aborts name its interpreter (privacy.python_app)."""
     from . import privacy
     path = stuck_path(frame)
-    rec = {"at": _iso(units.now()), "phase": PHASE, "path": path,
+    rec = {"at": units.iso(units.now()), "phase": PHASE, "path": path,
            "hint": "privacy" if privacy.protected(path) else "slow"}
     if is_job():
         rec["interpreter"] = os.path.realpath(sys.executable)
@@ -1221,6 +1135,7 @@ def _pass(cfg_all, cfg, now, started, dry_run, out, keys=None, as_json=False) ->
             _block(blocked, key, exc.filename, dry_run)
         return key is not None
     from . import runs
+    from .review import build
     _phase("runs")
     for key in every:
         if key in blocked:
@@ -1241,7 +1156,7 @@ def _pass(cfg_all, cfg, now, started, dry_run, out, keys=None, as_json=False) ->
     _phase("queue")        # 0.9.0: the merge queue's integrator, started when an entry waits
     notes += _queue_starts(reg, scope(), dry_run)
     _phase("usage")        # 0.9.0: a usage hold's owner notice, once; its end, once
-    notes += _usage_notes(now, dry_run)
+    notes += usage.heartbeat(now, dry_run)
     _phase("observe")
     try:
         state = util.read_json(state_path(), default={})
@@ -1268,7 +1183,7 @@ def _pass(cfg_all, cfg, now, started, dry_run, out, keys=None, as_json=False) ->
     actions, new = plan(conds, mine, now, resolved(reg, mine))
     new.update(others)
     if dry_run:
-        later = _reviews(reg, scope(), True, started)
+        later = build.heartbeat(reg, scope(), True, started + BUDGET_S)
         for row in shut + notes:
             doc["actions"].append(row)
             if not as_json:
@@ -1320,7 +1235,7 @@ def _pass(cfg_all, cfg, now, started, dry_run, out, keys=None, as_json=False) ->
             out(a.describe() + (f" — failed ({failed})" if failed else ""))
         done += 1
     _phase("review")       # 0.9.0: a pending Build review, at most one a pass, after the repairs
-    for row in _reviews(reg, scope(), False, started):
+    for row in build.heartbeat(reg, scope(), False, started + BUDGET_S):
         log.log("events", f"reconcile action={row['action']} project={row['project']} target={row['target']} "
                           f"rev=- attempt=1/1" + (f" failed={row['failed']}" if row["failed"] else ""))
         doc["actions"].append(row)
@@ -1398,14 +1313,14 @@ def stalled_line(s) -> str:
     if s["escalated"]:
         fix = FIX.get(s["cls"], "").format(t=s["target"])
         return (f"  stalled: escalated {s['cls']} {s['target']}{rev} at "
-                f"{_hhmm(units.parse_iso(s.get('escalated_at')))}" + (f" — {fix}" if fix else ""))
+                f"{units.hhmm(units.parse_iso(s.get('escalated_at')))}" + (f" — {fix}" if fix else ""))
     if s["cls"] == "silent":
         return (f"  stalled: silent {s['target']}{rev} in {s.get('to') or '?'} ({s.get('detail') or '?'}) — "
-                f"reminded {_hhmm(units.parse_iso(s.get('last')))}")
+                f"reminded {units.hhmm(units.parse_iso(s.get('last')))}")
     nxt = units.parse_iso(s.get("next"))
     how = "pane reopened" if s.get("reopened") else "retrying"    # the deliverer found the pane dead
     return (f"  stalled: {s['cls']} {s['target']}{rev} — ORCHE {how} ({s['tries']}/{s['cap']}"
-            + (f", next {_hhmm(nxt)})" if nxt is not None else ")"))
+            + (f", next {units.hhmm(nxt)})" if nxt is not None else ")"))
 
 
 def repairs() -> dict:
@@ -1433,7 +1348,7 @@ def overdue_hint(kind, target, reps, fresh) -> str:
     if closed is not None and (e is None or str(closed.get("seen") or "") >= str(e.get("seen") or "")):
         nxt = units.parse_iso(closed.get("next"))
         if fresh and not closed.get("escalated") and nxt is not None:
-            return f"pane closed: ORCHE reopens it at {_hhmm(nxt)}"
+            return f"pane closed: ORCHE reopens it at {units.hhmm(nxt)}"
         return f"pane closed: run `orche wake {target}`"
     tries = len((e or {}).get("attempts") or [])
     if fresh and e is not None and not e.get("escalated") and tries < CAP:
@@ -1441,7 +1356,7 @@ def overdue_hint(kind, target, reps, fresh) -> str:
         from . import deliver
         last = deliver.last_delivery(e.get("to"), target) if kind == "undelivered" and e.get("to") else None
         how = "pane reopened" if (last or {}).get("reopened") else "retrying"
-        return f"ORCHE {how} ({tries}/{CAP}" + (f", next {_hhmm(nxt)})" if nxt is not None else ")")
+        return f"ORCHE {how} ({tries}/{CAP}" + (f", next {units.hhmm(nxt)})" if nxt is not None else ")")
     return f"run `orche {'nudge' if kind == 'unread' else 'deliver'} {target}`"
 
 
@@ -1559,5 +1474,5 @@ def kick(now=None) -> bool:
     mark.parent.mkdir(parents=True, exist_ok=True)
     mark.touch()
     os.utime(mark)
-    procs.spawn_detached(_orche("reconcile"), paths.orche_home() / "logs" / "reconcile.log")
+    procs.spawn_orche(["reconcile"], paths.orche_home() / "logs" / "reconcile.log")
     return True

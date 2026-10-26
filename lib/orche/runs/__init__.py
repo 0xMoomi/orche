@@ -116,10 +116,47 @@ def execute(reg, unit, cfg):
     return job.execute(reg, unit, cfg)
 
 
+def last(folder, fresh=False, strict=False):
+    """The unit's last run: the RUN.json record in `folder` (a dict), else None (none, unreadable or not a
+    dict); with `fresh`, None as well when it is older than the folder's BRIEF.md (an earlier revision's
+    run). `strict` raises OSError / util.JsonError for an unreadable record instead (unknown is not gone)."""
+    path = Path(folder) / "RUN.json"
+    try:
+        if fresh and path.stat().st_mtime < (path.parent / "BRIEF.md").stat().st_mtime:
+            return None
+        rec = util.read_json(path, default=None)
+    except (OSError, util.JsonError):
+        if strict:
+            raise
+        return None
+    return rec if isinstance(rec, dict) else None
+
+
+def last_runs(root, fresh=False):
+    """(unit, record, the record's mtime_ns) of each unit under project `root` with a last run (last()),
+    in unit order: the heartbeat's restarts and the Build reviews due read these."""
+    from .. import brief
+    for path in sorted((Path(root) / brief.UNITS).glob("*/RUN.json")):
+        rec = last(path.parent, fresh)
+        if rec is None:
+            continue
+        try:
+            ns = path.stat().st_mtime_ns
+        except OSError:
+            continue
+        yield path.parent.name, rec, ns
+
+
+def ran_since(folder, since) -> bool:
+    """The unit's last run started at or after `since` (an aware datetime; None: False)."""
+    from .. import units      # the store stays light (test_runs.ImportTest)
+    at = units.parse_iso((last(folder) or {}).get("started"))
+    return at is not None and since is not None and at >= since
+
+
 def records(roots) -> list:
-    """filing.records: the RUN.json records under `roots` (what `orche metrics` sums)."""
-    from . import filing
-    return filing.records(roots)
+    """The last-run records under `roots` (what `orche metrics` sums), in path order."""
+    return [rec for root in roots for _unit, rec, _ns in last_runs(root)]
 
 
 def preview(reg, unit, cfg):
@@ -831,12 +868,6 @@ def stop(proj: str, unit: str, timeout=PS_TIMEOUT_S, reg=None) -> bool:
 
 # ---- start / restart ---------------------------------------------------------
 
-def _argv(unit) -> list:
-    """`orche run <unit>` under this very interpreter (the 3.11+ running the hook): no launcher has to
-    find Python again after the spawn, so a run never dies there without a pointer."""
-    return [sys.executable, str(paths.PLUGIN_ROOT / "bin" / "orche.py"), "run", unit]
-
-
 SANDBOX = "CODEX_SANDBOX"   # set in a Codex sandboxed shell; only its presence is checked, never its value
 DEFERRED = "runner-deferred"
 DEFERRED_TEXT = "the run starts at the next heartbeat pass"
@@ -887,7 +918,7 @@ def start(unit) -> bool:
     if in_sandbox():
         defer(unit)
         return False
-    procs.spawn_detached(_argv(unit), logs_dir() / f"{unit}.log", **{SINCE_ENV: str(time.time_ns())})
+    procs.spawn_orche(["run", unit], logs_dir() / f"{unit}.log", **{SINCE_ENV: str(time.time_ns())})
     drain_replaced(unit)
     return True
 

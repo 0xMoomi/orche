@@ -78,3 +78,28 @@ class EnvExampleTemplateTest(unittest.TestCase):
         self.assertEqual(names, [])
         for seeded in ("DATABASE_URL=", "STRIPE_SECRET_KEY=\n", "GOOGLE_API_KEY="):
             self.assertNotIn("\n" + seeded, text)
+
+
+class PromptTemplatesTest(unittest.TestCase):
+    """N12: the prompt texts runs/job.py, ladder.py and queue/integrator.py send live in templates/run and
+    templates/queue; a two-way text is one template plus its two small variants."""
+    PROMPTS = {"run/footer.md": {"WORKTREE", "COMMIT"}, "run/commit.md": set(), "run/commit-gated.md": set(),
+               "run/codex-sandbox.md": {"WORKTREE", "UNITS", "HOME"},
+               "run/escalation.md": {"MODEL", "EFFORT", "OUTCOME", "TAIL"},
+               "queue/conflict.md": {"BASE", "FILES"}, "queue/red.md": {"BASE", "STEP", "LOG", "TAIL", "LAST"},
+               "queue/red-last.md": set(), "queue/timeout-last.md": set()}
+
+    def test_each_prompt_template_names_exactly_the_variables_its_code_passes(self):
+        """render() leaves an unknown placeholder as it is, so a misspelt one would reach the model."""
+        for rel, names in self.PROMPTS.items():
+            text = (templates.TEMPLATES_ROOT / rel).read_text(encoding="utf-8")
+            self.assertEqual(set(re.findall(r"\{\{([A-Z][A-Z0-9_]*)\}\}", text)), names, rel)
+            self.assertNotIn("{{", templates.load(rel, **{n: "v" for n in names}), rel)
+
+    def test_load_renders_a_template_without_its_last_newline(self):
+        import tempfile
+        from pathlib import Path
+        with tempfile.TemporaryDirectory() as d:
+            path = Path(d) / "t.md"
+            path.write_text("a {{X}} {{Y}}\n\n", encoding="utf-8")
+            self.assertEqual(templates.load(path, X="{{Y}}"), "a {{Y}} {{Y}}\n")

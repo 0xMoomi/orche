@@ -429,7 +429,7 @@ class RunCapTest(RunnerCase):
         self.assertEqual(code, 0, out + err)
         [line] = history.read("acme")
         rec = self.run_record(unit)
-        self.assertEqual(line, {**{k: rec.get(k) for k in history.KEYS}, "rev": 1})
+        self.assertEqual(line, {**{k: rec.get(k) for k in history.KEYS}, "rev": 1, "kind": "work"})
         self.assertEqual((line["unit"], line["cost_usd"]), (unit, 0.5))
 
 
@@ -651,7 +651,7 @@ class ChainTest(FlowCase):
         self.assertEqual(res.returncode, 0, res.stdout + res.stderr)     # 4 children: the fifth passes
         res = child("Add child 5")
         self.assertEqual(res.returncode, 2, res.stdout + res.stderr)     # 5 children: the sixth is refused
-        since = guard._hhmm(guard.window("acme"))
+        since = units.hhmm(guard.window("acme"))
         self.assertIn(f"block 1: refused — {p.name} already has 5 child briefs since {since} without the owner "
                       "(cap 5). Do not send another: report it to your sender (`orche report blocked --summary "
                       "\"<what is left>\"`). STOP still works.", res.stdout)
@@ -900,7 +900,7 @@ class LineageCloseTest(FlowCase):
         self.assertLess(took, 1.0)
 
     def test_status_names_a_lineage_a_blocked_member_holds_open(self):
-        from orche import cmd_status, registry
+        from orche import cmd_status, reconcile, registry
         lin, (a, b) = self.lineage(2)
         with mock.patch.object(inbox, "wake"):
             self.post(a, "done", lin)
@@ -908,7 +908,7 @@ class LineageCloseTest(FlowCase):
         ptr["at"] = (units.now() - _dt.timedelta(minutes=40)).isoformat(timespec="seconds")
         inbox.write(ptr)
         [s] = [s for s in cmd_status.stalled(registry.load(), "acme") if s["cls"] == "lineage"]
-        self.assertEqual(cmd_status.stalled_line(s), f"  stalled: lineage {lin} waiting on {b} (blocked 40 min)")
+        self.assertEqual(reconcile.stalled_line(s), f"  stalled: lineage {lin} waiting on {b} (blocked 40 min)")
 
     def test_lineage_lines_follow_the_inbox_block(self):
         lin, (a, b) = self.lineage(2)

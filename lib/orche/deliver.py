@@ -20,9 +20,9 @@ urgent `info` to the brief's sender naming the fix. A runner unit is started (`r
 it runs or already ran.
 """
 import contextlib
+import datetime as _dt
 import fcntl
 import re
-import sys
 import time
 
 from . import brief, config, inbox, log, orca, paths, procs, roster, runs, shell, units, util, vendors
@@ -420,9 +420,8 @@ def runner_wanted(r, to, cfg) -> bool:
 def spawn(unit, retry=False) -> None:
     """Start `orche deliver [--retry] <unit>` detached (logs/deliver.log); never waits. Raises what
     Popen raises. `retry` (reconcile's attempts): a failure posts no pointer of its own."""
-    argv = [sys.executable, str(paths.PLUGIN_ROOT / "bin" / "orche.py"), "deliver"]
-    procs.spawn_detached(argv + (["--retry"] if retry else []) + ["--", unit],
-                         paths.orche_home() / "logs" / "deliver.log")
+    procs.spawn_orche(["deliver"] + (["--retry"] if retry else []) + ["--", unit],
+                      paths.orche_home() / "logs" / "deliver.log")
 
 
 def drain_dispatch(to, unit, rev) -> int:
@@ -456,16 +455,9 @@ def _reported(b, to) -> bool:
         return False
 
 
-def _num(value) -> int:
-    try:
-        return int(value or 0)
-    except (TypeError, ValueError):
-        return 0
-
-
 def _live_at(b, rec) -> bool:
     """`rec` (runs.running) is a live run of this very revision of `b` (the lock's `rev`)."""
-    return rec is not None and _num(rec.get("rev")) == b.rev
+    return rec is not None and units.num(rec.get("rev")) == b.rev
 
 
 def _settled(b, to) -> bool:
@@ -479,12 +471,10 @@ def _ran(b) -> bool:
     `started` is whole seconds, so a start in BRIEF.md's own second counts. REPORT.md is no proof:
     it carries no revision (a run of rev N may write it after an AMEND rewrote BRIEF.md)."""
     try:
-        since = int(b.path.stat().st_mtime)
-        rec = util.read_json(b.folder / "RUN.json", default=None)
-    except (OSError, util.JsonError):
+        since = _dt.datetime.fromtimestamp(int(b.path.stat().st_mtime), _dt.timezone.utc)
+    except OSError:
         return False
-    at = units.parse_iso(rec.get("started")) if isinstance(rec, dict) else None
-    return at is not None and at.timestamp() >= since
+    return runs.ran_since(b.folder, since)
 
 
 def drain_now(to, unit, rev) -> bool:

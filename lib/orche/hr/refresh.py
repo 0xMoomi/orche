@@ -35,8 +35,6 @@ def _units(proj):
         spec, rec = specs.get(name), vendors.recommend(cfg, name)
         model = entry.get("model") or (spec["model"] if spec else rec.model)
         yield "div", name, entry, model, spec["effort"] if spec else rec.effort, spec
-        if name != "build":
-            continue
         for feat in entry.get("features") or []:
             if feat.get("status") in SKIP or not feat.get("worktree"):
                 continue
@@ -68,9 +66,11 @@ def refresh_project(reg, key, *, root, ts, dry_run=False) -> Refresh:
 
 
 def units_of(proj, division):
-    """The `_units` rows of `division` (a build division: with its features)."""
+    """The `_units` rows of `division` and its workers (a division's row comes before its workers')."""
+    current = None
     for unit in _units(proj):
-        if (unit[0] == "div" and unit[1] == division) or (unit[0] == "feat" and division == "build"):
+        current = unit[1] if unit[0] == "div" else current
+        if current == division:
             yield unit
 
 

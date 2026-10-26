@@ -1,5 +1,4 @@
 docs/internal/
-config/orche.json
 *.jsonl
 .superpowers/
 __pycache__/

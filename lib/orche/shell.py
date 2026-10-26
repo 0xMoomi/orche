@@ -57,8 +57,16 @@ def which(name: str):
     return shutil.which(name)
 
 
+GIT_S = 60
+
+
+def git(where, *argv, timeout=GIT_S) -> Result:
+    """`git -C <where> …`: the one git runner (publish, the reviews, the queue, GitHub's remote steps)."""
+    return run(["git", "-C", str(where), *argv], timeout=timeout)
+
+
 def git_head(path, timeout=2):
     """HEAD of the git checkout at `path` (7-64 lower-case hex), else None."""
-    res = run(["git", "-C", str(path), "rev-parse", "HEAD"], timeout=timeout)
+    res = git(path, "rev-parse", "HEAD", timeout=timeout)
     out = res.out.strip()
     return out if res.ok and re.fullmatch(r"[0-9a-f]{7,64}", out) else None

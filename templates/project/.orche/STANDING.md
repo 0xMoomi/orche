@@ -10,7 +10,7 @@ enforcement (a hook, a gate, a test) instead of another order.
 -->
 
 1. No direct push to `main`.
-2. Work on a feature branch (`feat/*`) → open a PR → Build integrates.
+2. Work on a feature branch (`feat/*`) → published PR → head review → the merge queue lands it.
 3. One push per unit, after local verification.
 4. Docs-only commits include `[skip ci]`.
 5. Tags, releases and deploys require user approval.

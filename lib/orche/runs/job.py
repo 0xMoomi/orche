@@ -64,7 +64,7 @@ from dataclasses import dataclass, field, replace
 from pathlib import Path
 
 from .. import (brief, codex, config, donegate, headless, intake, ladder, ledger, log, mask, paths, procs, publish,
-                roster, runs, shell, units, util, vendors)
+                roster, runs, shell, templates, units, util, vendors)
 from ..flow import usage as holds
 from ..review import pre
 from . import filing, history
@@ -81,25 +81,6 @@ MECH_DENIED = ("Bash(git commit --amend*),Bash(git commit -n*),Bash(git commit -
 DEFAULT_TIMEBOX_S = 30 * 60
 MAX_TIMEBOX_S = 4 * 3600
 GRACE_S = 60
-FOOTER = ("You run headless. Work only inside {worktree}. Do not commit, push, merge or rebase unless "
-          "the brief allows it. Run VERIFY yourself and paste its output. Do not run `orche report`: "
-          "the runner files your pointer from your final message. End with one line "
-          "`STATUS: done|blocked|failed` and a ≤5-line summary. When only the owner can unblock you, "
-          "end `STATUS: blocked` and add one line `OWNER: <exact step>` (a secret: run `orche secret "
-          "request <NAME>` first, then `OWNER: secret <NAME>`). Your final message is filed as the "
-          "unit's REPORT.md.")
-# Appendix A.16: a ledger-gated target (Build, a feature) commits; ORCHE publishes its verified done.
-FOOTER_GATED = ("You run headless. Work only inside {worktree}. Commit your work on your branch; do not push, "
-                "merge or rebase: after your done passes the gate ORCHE pushes the branch and opens the PR. "
-                "Run VERIFY yourself, paste its output and record the ledger row for HEAD. Do not run "
-                "`orche report`: the runner files your pointer from your final message. End with one line "
-                "`STATUS: done|blocked|failed` and a ≤5-line summary. When only the owner can unblock you, "
-                "end `STATUS: blocked` and add one line `OWNER: <exact step>` (a secret: run `orche secret "
-                "request <NAME>` first, then `OWNER: secret <NAME>`). Your final message is filed as the "
-                "unit's REPORT.md.")
-CODEX_SANDBOX = ("Codex sandbox: you can write only inside {worktree}, {units}, ORCHE's state ({home}) and "
-                 "git's metadata; the network is on. A command the sandbox refuses is a fact to report, not to "
-                 "work around.")
 CODEX_OWNER = "fix codex: orche doctor (row vendors) names the step; then orche run {unit}"
 STOPPED = "stopped by Main"
 STOPPED_BEFORE_START = "stopped by Main before start"
@@ -125,7 +106,7 @@ class Job:
     text: str = field(default="", repr=False)   # BRIEF.md as read at resolve
     root: Path = None        # the project's main checkout (publish.base reads origin/HEAD there)
     kind: str = ""           # the target's roster kind: a `feat` run starts with publish.sync
-    gated: bool = False      # publish.gated(target): FOOTER_GATED, and a verified done publishes
+    gated: bool = False      # publish.gated(target): templates/run/commit-gated.md, and a verified done publishes
     sync_note: str = ""      # publish.sync's `## Branch sync` note for the prompt, set at the run's start
     effort: str = "medium"   # the rung's effort (ladder.rung)
     base: str = ""           # the ceiling: the division's model (Main: OPUS)
@@ -206,7 +187,7 @@ def resolve(reg, unit, cfg=None) -> Job:
     if pin:   # R-LADDER-3 again at run time: the division's model or Codex may have changed since dispatch
         err = ladder.pin_error(cfg, pin, base, to)
         if err:
-            pin, pin_note = "", f"{err}: ran the {b.tier if b.tier in ladder.TIERS else 'standard'} rung instead"
+            pin, pin_note = "", f"{err}: ran the {b.tier if b.tier in brief.TIERS else 'standard'} rung instead"
     r = ladder.rung(cfg, base, b.tier, pin or None)
     job = Job(unit, proj, folder, b.path, to, Path(wt or root), branch,
               b.tier, timebox_seconds(fields.get("TIMEBOX")), r.model, effort=r.effort, base=base, pinned=pin,
@@ -307,24 +288,25 @@ def context_block(ctx) -> str:
 
 
 def prompt(job, cfg) -> str:
-    """The worker's stdin: BRIEF.md, the intake context block, `## Runner` with FOOTER. A Codex worker
+    """The worker's stdin: BRIEF.md, the intake context block, `## Runner` with templates/run/footer.md. A Codex worker
     (Appendix A.2) first gets the persona body under `## Your role` (Claude reads the file through
     --append-system-prompt-file; AGENTS.md would dirty the tree) and, unless its sandbox is
-    danger-full-access, CODEX_SANDBOX after the footer."""
+    danger-full-access, templates/run/codex-sandbox.md after the footer."""
     text = job.text.rstrip("\n")
     context = context_block(intake.read_context(job.context, cfg)) if job.context is not None else ""
     if context:
         text += "\n\n" + context.rstrip("\n")
     if job.sync_note:
         text += "\n\n" + job.sync_note
-    footer = (FOOTER_GATED if job.gated else FOOTER).format(worktree=job.worktree)
+    footer = templates.load("run/footer.md", WORKTREE=job.worktree,
+                            COMMIT=templates.load("run/commit-gated.md" if job.gated else "run/commit.md"))
     if job.vendor == vendors.CODEX:
         role = persona_body(job.persona)
         if role:
             text = f"## Your role\n{role}\n\n{text}"
         if sandbox_of(cfg) != "danger-full-access":
-            footer += "\n" + CODEX_SANDBOX.format(worktree=job.worktree, units=job.unit_dir.parent,
-                                                  home=paths.orche_home())
+            footer += "\n" + templates.load("run/codex-sandbox.md", WORKTREE=job.worktree, UNITS=job.unit_dir.parent,
+                                             HOME=paths.orche_home())
     return text + "\n\n## Runner\n" + footer + "\n"
 
 
@@ -672,16 +654,11 @@ class _Try:
     def timed_out(self) -> bool:
         return self.res.error is not None and not self.res.killed and self.res.code != 127
 
-    def row(self) -> dict:
-        return {"kind": self.kind, "model": self.call.model, "vendor": vendors.vendor_of(self.call.model),
-                "effort": self.call.effort, "started": self.started, "finished": self.finished,
-                "cost_usd": self.cost, "num_turns": self.res.turns, "outcome": self.status}
-
 
 def _attempt(reg, job, call, cfg, lock, since, stop, head_before, text, kind="work") -> _Try:
     """Run the worker once with `text` on stdin and decide its outcome."""
     started = util.now_iso()
-    res = (codex.run if isinstance(call, codex.Call) else headless.run)(
+    res = adapter(call).run(
         call, text, cfg, stop=stop,
         should_stop=lambda: runs.stop_requested(job.project, job.unit, since),
         on_start=lambda pid: runs.update(lock, child_pid=pid, pgid=pid))
@@ -697,10 +674,8 @@ def _attempt(reg, job, call, cfg, lock, since, stop, head_before, text, kind="wo
         status, summary, owner = "blocked", f"codex did not start: {error}", CODEX_OWNER.format(unit=job.unit)
     else:
         status, summary = decide(reg, replace(job, model=call.model), data, error, code, head_before, head)
-    cost, usage = res.cost_usd, res.usage
-    if cost is None and code != 127 and not dead:     # the worker ran, its cost is unknown: §7.3
-        from ..flow import guard
-        cost, usage = history.reserve(started, finished, guard.unit_cap(cfg.get("flow") or {})), None
+    cost = history.cost(res, started, finished, cfg, ran=not dead)     # the worker ran, its cost unknown: §7.3
+    usage = res.usage if cost is res.cost_usd else None
     return _Try(kind, call, started, finished, res, stopped, stop_at, dead, owner, status, summary, head, cost, usage)
 
 
@@ -719,10 +694,7 @@ def _sum(values):
 
 def _review_try(answer, head, cfg) -> _Try:
     """A reviewer call as one attempt of the run (`kind: review`, R-REVIEW-8): RUN.json, cost, history."""
-    cost = answer.res.cost_usd
-    if cost is None and answer.res.code != 127:     # it ran, its cost is unknown: §7.3, as a worker's
-        from ..flow import guard
-        cost = history.reserve(answer.started, answer.finished, guard.unit_cap(cfg.get("flow") or {}))
+    cost = history.cost(answer.res, answer.started, answer.finished, cfg)     # §7.3, as a worker's
     return _Try("review", answer.call, answer.started, answer.finished, answer.res, answer.stopped, None, False,
                 None, answer.word, answer.why, head, cost, answer.res.usage)
 
@@ -739,21 +711,7 @@ def _rework_call(job, cfg, tries):
 def _spend_hit(job, cfg, tries):
     """G4 before a paid review or rework call: the unit's and the project's spend inside W, this run's
     calls so far included (history has them only once the run is filed). Fails open."""
-    from ..flow import guard
-    f = cfg.get("flow") or {}
-    if f.get("enabled") is False:
-        return None
-    try:
-        w, mine = guard.window(job.project), _sum(x.cost for x in tries) or 0.0
-        cap, spent = guard.unit_cap(f), history.spend(job.project, w, job.unit) + mine
-        if spent >= cap:
-            return f"{job.unit} spent ${spent:.2f}, cap ${cap:g} a unit"
-        cap, spent = float(f.get("max_project_cost_usd") or 30), history.spend(job.project, w) + mine
-        if spent >= cap:
-            return f"{job.project} spent ${spent:.2f}, cap ${cap:g}"
-    except Exception as exc:  # noqa: BLE001 - the guard fails open, as guard.safe
-        log.log("hooks", f"runner: {job.unit}: spend check skipped ({type(exc).__name__}: {exc})")
-    return None
+    return history.spend_hit(job.project, job.unit, cfg, _sum(x.cost for x in tries) or 0.0, tag=f"runner: {job.unit}")
 
 
 def _pre_review(reg, job, cfg, lock, since, stop, head_before, base_prompt, tries, done, resume=None) -> pre.Done:
@@ -764,7 +722,7 @@ def _pre_review(reg, job, cfg, lock, since, stop, head_before, base_prompt, trie
     writer = [x for x in tries if x.kind != "review"][-1].call
     is_stopped = lambda: runs.stop_requested(job.project, job.unit, since)   # noqa: E731
     ctx = pre.Ctx(cfg=cfg, project=job.project, unit=job.unit, rev=job.rev, unit_dir=job.unit_dir,
-                  worktree=job.worktree, base=publish.base(job.root or job.worktree, cfg, job.worktree) or "main", writer=job.to,
+                  worktree=job.worktree, base=publish.base(job.root or job.worktree, cfg, job.worktree), writer=job.to,
                   writer_model=writer.model, fields=dict(b.fields) if b is not None else {}, tag=writer.tag,
                   stop=stop, should_stop=is_stopped, on_start=lambda pid: runs.update(lock, child_pid=pid, pgid=pid),
                   record=lambda answer, head: tries.append(_review_try(answer, head, cfg)))
@@ -792,14 +750,8 @@ def _resumable(job, head):
     """§8.5: (stage, the previous REPORT.md) when the unit's last run of this revision (RUN.json as new as
     BRIEF.md) stopped on a usage limit at a review stage with its done published at `head`, the HEAD
     now; else None. That run's WORK is not redone: this run resumes at the stage."""
-    path = job.unit_dir / "RUN.json"
-    try:
-        if path.stat().st_mtime < Path(job.brief).stat().st_mtime:
-            return None
-        rec = util.read_json(path, default=None)
-    except (OSError, util.JsonError):
-        return None
-    if (not isinstance(rec, dict) or rec.get("stop_reason") != "usage_limit" or rec.get("stage") not in RESUME_STAGES
+    rec = runs.last(job.unit_dir, fresh=True)
+    if (rec is None or rec.get("stop_reason") != "usage_limit" or rec.get("stage") not in RESUME_STAGES
             or not head or rec.get("head_sha") != head or not isinstance(rec.get("pr"), dict)):
         return None
     try:
@@ -836,7 +788,7 @@ def _hold_of(job, cfg, tries) -> tuple:
 
 
 def _pre_ok(project, pr, head, review) -> bool:
-    """The Build review may start: no pre-review ran (off, no diff), or its ledger row at this head is
+    """The head review may start: no pre-review ran (off, no diff), or its ledger row at this head is
     pass/skipped (a RETURN, an error or a spend-cap skip leaves none, and the pane decides)."""
     if not review:
         return True
@@ -927,7 +879,7 @@ def _run_locked(reg, job, call, cfg, lock, since, stop) -> tuple:
     if job.pin_note:
         summary = f"{summary}\n{job.pin_note}".strip()
     t = [x for x in tries if x.kind != "review"][-1]     # the writer's last attempt: exit code, error, stop reason
-    calls = [x for x in tries if x.kind != "resumed"]       # the model calls: RUN.json attempts, history lines
+    calls = [x for x in tries if x.kind != "resumed"]       # the model calls: one history line each
     call, started, finished, res = t.call, tries[0].started, tries[-1].finished, t.res
     data, code, error = res.data, res.code, res.failure
     w = who(job, call)
@@ -939,36 +891,24 @@ def _run_locked(reg, job, call, cfg, lock, since, stop) -> tuple:
         raise filing.FilingError(f"REPORT.md: {exc}") from exc
     worker_filed = bool(filing.worker_pointers(recipient, job.unit, job.to) - before)
     filed = not worker_filed and bool(recipient)      # an unroutable target: nothing is filed (logged)
-    record = filing.run_record(
-        w, started=started, finished=finished, timeout_s=call.timeout, exit_code=code,
-        is_error=res.is_error or (error is not None and not stopped),
-        stop_reason=stop_reason_of(data, error, stopped,
-                                   timed_out=res.error is not None and not res.killed and res.code != 127),
-        cost_usd=cost, num_turns=_sum(x.res.turns for x in tries) if len(tries) > 1 else res.turns, usage=usage,
-        result_tail=mask.redact(result[-filing.TAIL_CHARS:])[0], error=error,
-        head_before=head_before, head_sha=head, status=status, pointer_filed=filed, pr=pr)
-    record["kind"] = "work"
-    record["attempts"] = [x.row() for x in calls]
-    record["attempt"] = len(calls)
-    if resume is not None:
-        record["resumed"] = resume[0]
-    if job.pin_note:
-        record["pin_note"] = job.pin_note
-    record["escalated_from"] = tries[0].call.model if len(tries) > 1 and tries[1].kind == "escalation" else None
-    if review:
-        record["review"] = review
-    if hold is not None:      # the heartbeat waits for THIS vendor's hold (reconcile._busy reads held_vendor)
-        record["stop_reason"], record["stage"], record["held_vendor"] = "usage_limit", held_stage, held_vendor
     held = filing.holds_of(job.unit_dir)     # §8.5 repeat guard: this run held → +1; a done pointer → 0
     held = held + 1 if hold is not None else 0 if status == "done" else held
-    if held:
-        record["holds"] = held
+    record = filing.run_record(      # a hold: its stage and THIS vendor, whose hold the heartbeat waits for
+        w, started=started, finished=finished, timeout_s=call.timeout, exit_code=code,
+        is_error=res.is_error or (error is not None and not stopped),
+        stop_reason="usage_limit" if hold is not None else stop_reason_of(data, error, stopped, timed_out=t.timed_out),
+        cost_usd=cost, num_turns=_sum(x.res.turns for x in tries) if len(tries) > 1 else res.turns, usage=usage,
+        result_tail=mask.redact(result[-filing.TAIL_CHARS:])[0], error=error,
+        head_before=head_before, head_sha=head, status=status, pointer_filed=filed, pr=pr, review=review,
+        stage=held_stage, held_vendor=held_vendor, holds=held)
     try:
         util.write_json(job.unit_dir / "RUN.json", record)
     except OSError as exc:
         raise filing.FilingError(f"RUN.json: {exc}") from exc
     for x in calls:
-        history.append(job.project, {**record, **x.row(), "status": x.status}, job.rev)
+        history.attempt(job.project, job.rev, unit=job.unit, to=job.to, model=x.call.model, effort=x.call.effort, res=x.res, started=x.started,
+                        finished=x.finished, status=x.status, kind=x.kind, cfg=cfg, stop_reason=record["stop_reason"],
+                        ran=not x.dead)
     if worker_filed:
         log.log("hooks", f"runner: {job.unit}: the worker filed its own pointer; the runner files none")
     else:

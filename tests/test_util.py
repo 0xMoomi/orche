@@ -131,10 +131,6 @@ class PathsLogConfigTest(support.TempHomeCase):
         self.assertEqual(config.load(), config.DEFAULTS)
         self.assertIn("using defaults", (self.home / "logs" / "config.log").read_text())
 
-    def test_example_config_matches_defaults(self):
-        example = json.loads((support.ROOT / "config" / "orche.example.json").read_text())
-        self.assertEqual(example, config.DEFAULTS)
-
 
 if __name__ == "__main__":
     unittest.main()

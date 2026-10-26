@@ -15,7 +15,7 @@ from unittest import mock
 import support
 from types import SimpleNamespace
 
-from orche import inbox, ledger, procs, reconcile, registry, runs, units, vendors
+from orche import config, inbox, ledger, procs, reconcile, registry, runs, units, vendors
 from orche.flow import usage
 from orche.review import build
 from orche.review import CHANGED, DENIED, TOOLS, fence, parse
@@ -141,11 +141,11 @@ class StageTest(PreReviewCase):
         usage.mark("codex", until="2020-01-01T00:00:00+00:00")
         self.assertEqual(held(), [unit])
         self.codex_answers("VERDICT: PASS")
+        n = len(self.history())
         code, _out, err = self.orche("run", unit)
         self.assertEqual(code, 0, err)
         rec = self.run_record(unit)
-        self.assertEqual((rec["status"], rec["resumed"]), ("done", "review"))
-        self.assertEqual([a["kind"] for a in rec["attempts"]], ["review"])     # WORK is not redone
+        self.assertEqual((rec["status"], [h["kind"] for h in self.history()[n:]]), ("done", ["review"]))   # resumed: WORK is not redone
         self.assertNotIn("unverified", self.pointers("main-acme")[-1]["summary"])
 
     def test_a_hand_over_reviewer_that_answered_is_no_hold_of_the_unit(self):
@@ -160,17 +160,17 @@ class StageTest(PreReviewCase):
 
     def test_a_pin_that_no_longer_runs_falls_to_the_rung_with_a_note(self):
         """R13: the MODEL pin is checked again at run time (here: the division moved to Codex)."""
-        from orche import brief, roster
+        from orche import brief, config, roster
         from orche.runs import job as jobmod
         fields = {"TO": "div-acme-build", "GOAL": "Add coupon field", "SCOPE": "src/**", "CONTEXT": "none",
                   "ACCEPT": "works", "VERIFY": "true", "TIMEBOX": "20m", "FORBID": "merge", "REPORT": "status",
                   "TIER": "standard", "MODEL": SONNET}
         target = roster.Roster(registry.load()).member("div-acme-build")
         unit = brief.write(brief.Block("brief", fields), target, "main-acme", "1. Never force-push.", timeout=0).unit
-        self.assertEqual(jobmod.resolve(registry.load(), unit, {}).pinned, SONNET)
+        self.assertEqual(jobmod.resolve(registry.load(), unit, config.load()).pinned, SONNET)
         self.build_model("codex:gpt-6.1-sol")
         with mock.patch.object(jobmod.ladder.vendors, "available", lambda cfg: SimpleNamespace(ok=True, state="ok")):
-            job = jobmod.resolve(registry.load(), unit, {})
+            job = jobmod.resolve(registry.load(), unit, config.load())
         self.assertEqual((job.pinned, job.model), ("", "codex:gpt-6.1-sol"))
         self.assertIn(f"MODEL {SONNET} is another vendor than div-acme-build", job.pin_note)
         self.assertTrue(job.pin_note.endswith("ran the standard rung instead"))
@@ -182,18 +182,17 @@ class StageTest(PreReviewCase):
         self.claude_calls(("say", "could not do it\nSTATUS: failed"))
         unit = self.brief(tier="mechanical")
         code, _o, err = self.orche("run", unit)
-        rec = self.run_record(unit)
-        self.assertEqual([a["kind"] for a in rec["attempts"]], ["work"])
+        self.assertEqual([h["kind"] for h in self.history()], ["work"])
         self.assertIn("no escalation: spend cap (", self.one_pointer()["summary"])
 
     def test_choose_skips_a_held_vendor_and_says_so(self):
         ok = SimpleNamespace(ok=True, state="ok")
         usage.hit("codex", "You've hit your usage limit", {}, project="acme", unit="x", stage="work")
-        c = pre.choose({}, OPUS, avail=ok)
+        c = pre.choose(config.DEFAULTS, OPUS, avail=ok)
         self.assertEqual(c.model, SONNET)
         self.assertRegex(c.note, r"^fallback: same vendor \(codex held: usage limit until \d\d:\d\d\)$")
         usage.hit("claude", "You've hit your usage limit", {}, project="acme", unit="x", stage="work")
-        c = pre.choose({}, OPUS, avail=ok)
+        c = pre.choose(config.DEFAULTS, OPUS, avail=ok)
         self.assertEqual((c.model, c.held), (None, "codex"))
 
 
@@ -213,11 +212,10 @@ class InRunTest(PreReviewCase):
                          ("pre", "pass", "review:pre:codex", "codex", "div-acme-build", "1"))
         self.assertEqual(row["sha"], self.rev(self.wt))
         self.assertTrue(Path(row["evidence"]).is_file())
-        rec = self.run_record(unit)
-        self.assertEqual([a["kind"] for a in rec["attempts"]], ["work", "review"])
-        self.assertAlmostEqual(rec["cost_usd"], sum(a["cost_usd"] for a in rec["attempts"]), places=4)
-        self.assertGreater(rec["attempts"][1]["cost_usd"], 0)
-        self.assertEqual([h["kind"] for h in self.history()], ["work", "review"])
+        rec, lines = self.run_record(unit), self.history()
+        self.assertEqual([h["kind"] for h in lines], ["work", "review"])
+        self.assertAlmostEqual(rec["cost_usd"], sum(h["cost_usd"] for h in lines), places=4)
+        self.assertGreater(lines[1]["cost_usd"], 0)
         [event] = self.prereview_events()
         self.assertIn(f"prereview unit={unit} reviewer=codex verdict=pass round=1", event)
         [call] = self.codex_calls()
@@ -248,8 +246,8 @@ class InRunTest(PreReviewCase):
         self.assertNotEqual(rows[0]["sha"], rows[1]["sha"])
         self.assertEqual(rows[1]["sha"], self.rev(self.wt))
         rec = self.run_record(unit)
-        self.assertEqual([a["kind"] for a in rec["attempts"]], ["work", "review", "rework", "review"])
-        self.assertAlmostEqual(rec["cost_usd"], sum(a["cost_usd"] for a in rec["attempts"]), places=4)
+        self.assertEqual([h["kind"] for h in self.history()], ["work", "review", "rework", "review"])
+        self.assertAlmostEqual(rec["cost_usd"], sum(h["cost_usd"] for h in self.history()), places=4)
         self.assertEqual(rec["head_sha"], self.rev(self.wt))
         round2 = self.codex_calls()[1]["stdin"]
         self.assertIn("Round 1: RETURN by codex", round2)
@@ -267,14 +265,14 @@ class InRunTest(PreReviewCase):
         ptr = self.one_pointer()
         self.assertEqual(ptr["status"], "done")
         self.assertTrue(ptr["summary"].startswith("PR #1 @"), ptr["summary"])
-        self.assertIn("needs you: pre-review return (codex, round 2 of 2), Build review not run", ptr["summary"])
+        self.assertIn("needs you: pre-review return (codex, round 2 of 2), head review not run", ptr["summary"])
         self.assertIn("[act] work.txt:1", ptr["summary"])
         self.assertEqual(ptr["review"]["pre"]["open"], [ACT[2:]])
         rows = self.rows()
         self.assertEqual([(r["verdict"], r["round"]) for r in rows], [("return", "1"), ("return", "2")])
         self.assertEqual(rows[0]["sha"], rows[1]["sha"])        # a rebut-only rework: the same head, round 2
         rec = self.run_record(unit)
-        self.assertEqual([a["kind"] for a in rec["attempts"]], ["work", "review", "rework", "review"])
+        self.assertEqual([h["kind"] for h in self.history()], ["work", "review", "rework", "review"])
         self.assertEqual(len(pre.returns(self.units_dir() / unit, 1)), 2)
 
     def run_spawning(self):
@@ -300,7 +298,7 @@ class InRunTest(PreReviewCase):
         self.codex_answers(f"VERDICT: RETURN\n{ACT}", f"VERDICT: RETURN\n{ACT}")
         _, spawned = self.run_spawning()
         self.assertEqual(spawned, [])
-        self.assertIn("Build review not run", self.one_pointer()["summary"])
+        self.assertIn("head review not run", self.one_pointer()["summary"])
 
     def test_mechanical_rework_runs_at_standard_and_the_next_reviewer_differs_from_it(self):
         self.configure(codex=False)
@@ -337,7 +335,7 @@ class InRunTest(PreReviewCase):
         self.assertFalse(any("Bash(" in a or "git diff" in a for a in argv))
         self.assertIn("+work", self.claude_stdin(1))                                  # the package carries the diff
         self.assertIn("--no-session-persistence", argv)
-        self.assertEqual([a["kind"] for a in self.run_record(unit)["attempts"]], ["work", "review"])
+        self.assertEqual([h["kind"] for h in self.history()], ["work", "review"])
 
     def test_no_second_vendor_reviews_on_the_other_claude_model_and_says_so(self):
         self.configure(codex=False)
@@ -370,7 +368,7 @@ class InRunTest(PreReviewCase):
         self.assertNotIn("review", ptr)
         self.assertEqual(self.rows(), [])
         self.assertEqual(self.codex_calls(), [])
-        self.assertEqual([a["kind"] for a in self.run_record(unit)["attempts"]], ["work"])
+        self.assertEqual([h["kind"] for h in self.history()], ["work"])
 
     def test_reviewer_without_verdict_hands_over_once_then_error_goes_to_the_pane(self):
         self.configure()
@@ -383,7 +381,7 @@ class InRunTest(PreReviewCase):
         self.assertEqual((row["verdict"], row["model"]), ("error", SONNET))
         self.assertIn("fallback: same vendor (codex gave no verdict)", row["note"])
         self.assertIn("no VERDICT line", row["note"])
-        self.assertEqual([a["kind"] for a in self.run_record(unit)["attempts"]], ["work", "review", "review"])
+        self.assertEqual([h["kind"] for h in self.history()], ["work", "review", "review"])
 
     def test_a_pass_row_for_the_head_is_reused(self):
         self.configure()
@@ -391,7 +389,7 @@ class InRunTest(PreReviewCase):
         self.codex_answers("VERDICT: PASS")
         self.run_unit()
         head = self.rev(self.wt)
-        ctx = pre.Ctx(cfg={"review": {"cross_vendor": "required"}}, project="acme", unit="u", rev=1,
+        ctx = pre.Ctx(cfg=config.DEFAULTS, project="acme", unit="u", rev=1,
                       unit_dir=self.root / "u", worktree=self.wt, base="main", writer="div-acme-build",
                       writer_model=OPUS, fields={})
         done = pre.Done("done", "s", None, {"number": 1, "url": "u", "head": head}, "r", head)
@@ -478,13 +476,13 @@ class GrammarTest(support.TempHomeCase):
 
     def test_reviewer_choice(self):
         ok, absent = vendors.Availability("ok", "", ""), vendors.Availability("absent", "", "")
-        cfg = {"review": {"cross_vendor": "required"}}
+        cfg = config.DEFAULTS
         self.assertEqual(pre.choose(cfg, OPUS, ok), pre.Choice("codex", "", (SONNET,)))
         self.assertEqual(pre.choose(cfg, "codex", ok).model, OPUS)
         self.assertEqual(pre.choose(cfg, OPUS, absent), pre.Choice(SONNET, "codex not installed", ()))
         self.assertEqual(pre.choose(cfg, SONNET, absent).model, OPUS)
         self.assertEqual(pre.choose(cfg, "claude-haiku-5-5", absent).model, OPUS)
-        self.assertIsNone(pre.choose({"review": {"cross_vendor": "optional"}}, OPUS, absent).model)
+        self.assertIsNone(pre.choose({"review": {**config.DEFAULTS["review"], "cross_vendor": "optional"}}, OPUS, absent).model)
         self.assertEqual(CHANGED, "the reviewer changed files")
 
 
@@ -517,10 +515,11 @@ class ReviewStageHoldTest(PreReviewCase):
         self._git(other, "push", "-q", "origin", "HEAD:refs/heads/main")
         usage.mark("codex", until="2020-01-01T00:00:00+00:00")
         self.codex_answers("VERDICT: PASS")
+        n = len(self.history())
         self.orche("run", unit)
         rec = self.run_record(unit)
-        self.assertEqual((rec["status"], rec.get("resumed"), [a["kind"] for a in rec["attempts"]]),
-                         ("done", "review", ["review"]))                   # the work is not run again
+        self.assertEqual((rec["status"], [h["kind"] for h in self.history()[n:]]),
+                         ("done", ["review"]))                   # resumed at review: the work is not run again
         self.assertEqual((rec["head_before"], rec["head_sha"]), (held["head_sha"], held["head_sha"]))
         self.assertNotIn("holds", rec)                                     # a final done resets the count
         self.assertEqual([p["summary"] for p in self.pointers("div-acme-build") if "unverified" in p["summary"]], [])
@@ -532,10 +531,12 @@ class ReviewStageHoldTest(PreReviewCase):
         support.fake_codex(self.codex_dir, {"events": [LIMIT], "code": 1})
         unit = self.brief()
         for n in (1, 2, 3):
+            m = len(self.history())
             self.orche("run", unit)
             rec = self.run_record(unit)
-            self.assertEqual((rec["stop_reason"], rec["stage"], rec.get("resumed"), rec["holds"]),
-                             ("usage_limit", "review", "review" if n > 1 else None, n))
+            worked = "work" in [h["kind"] for h in self.history()[m:]]     # runs 2 and 3 resume at review
+            self.assertEqual((rec["stop_reason"], rec["stage"], worked, rec["holds"]),
+                             ("usage_limit", "review", n == 1, n))
             usage.mark("codex", until="2020-01-01T00:00:00+00:00")
         self.orche("run", unit)
         self.assertNotEqual(self.run_record(unit)["stop_reason"], "usage_limit")   # refused: no fourth hold

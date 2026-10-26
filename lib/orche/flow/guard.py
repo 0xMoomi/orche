@@ -29,7 +29,6 @@ from . import lineage
 
 BLOCKED, STREAK = 2, 3
 STREAK_TTL = _dt.timedelta(minutes=30)
-WAITING = ("blocked", "question")
 ASK = "Ask the owner before {what}: close your reply with OWNER: <the decision>. STOP still works."
 STREAK_TEXT = "refusal {n} in a row: stop re-sending; tell the user what you tried"
 _REV_FILE = re.compile(r"^BRIEF\.rev(\d+)\.md$")
@@ -104,10 +103,6 @@ def resume(project, by):
     return True, at
 
 
-def _hhmm(t):
-    return t.astimezone().strftime("%H:%M")
-
-
 def _revs(folder_, since):
     """[(N, mtime)] of a unit's BRIEF.rev<N>.md written at or after `since` (a timestamp)."""
     out = []
@@ -160,7 +155,7 @@ def _blocked_twice(b, sender, since):
         if t is not None:
             found.append((t, ptr.get("status")))
     last = [s for t, s in sorted(found, key=lambda x: x[0])[-BLOCKED:] if t >= since]
-    return len(last) == BLOCKED and all(s in WAITING for s in last)
+    return len(last) == BLOCKED and all(s in lineage.WAITING for s in last)
 
 
 def _chain(reg, block, sender, w):
@@ -180,7 +175,7 @@ def _chain(reg, block, sender, w):
                        f"Main to dispatch it. STOP still works.", "G6", p.unit, d + 1)
     n = lineage.children(reg, p, _unit_dirs(reg, sender.project), since=w.timestamp())
     if n >= fanout:
-        return Refused(f"{p.unit} already has {n} child briefs since {_hhmm(w)} without the owner (cap "
+        return Refused(f"{p.unit} already has {n} child briefs since {units.hhmm(w)} without the owner (cap "
                        f"{fanout}). Do not send another: report it to your sender (`orche report blocked "
                        f"--summary \"<what is left>\"`). STOP still works.", "G6", p.unit, n + 1)
     return None
@@ -207,7 +202,7 @@ def check(reg, block, sender, now=None, to=None, runner=False, accepted=0):
     if p is not None:
         at = units.parse_iso(p.get("at"))
         reason = f" ({p['reason']})" if p.get("reason") else ""
-        return Refused(f"{proj} is paused by the owner since {_hhmm(at) if at else '?'}{reason}. Nothing is "
+        return Refused(f"{proj} is paused by the owner since {units.hhmm(at) if at else '?'}{reason}. Nothing is "
                        f"relayed until the owner resumes it: tell the user, and wait for their word "
                        f"(orche flow resume {proj}). STOP still works.", "G8", block.unit or "-", 1)
     if not (config.load().get("flow") or {}).get("enabled", True):
@@ -223,11 +218,11 @@ def check(reg, block, sender, now=None, to=None, runner=False, accepted=0):
         if b is not None:
             revs = [n for n, _ in _revs(b.folder, since) if n >= 2]
             if len(revs) >= cap("revisions"):
-                return Refused(f"{unit} was revised {len(revs)} times since {_hhmm(w)} without the owner "
+                return Refused(f"{unit} was revised {len(revs)} times since {units.hhmm(w)} without the owner "
                                f"(rev {revs[0]}–{revs[-1]}). " + ASK.format(what="revising it again"),
                                "G1", unit, len(revs))
             if _blocked_twice(b, sender.session, w):
-                return Refused(f"{unit} reported blocked {BLOCKED} times in a row since {_hhmm(w)} without "
+                return Refused(f"{unit} reported blocked {BLOCKED} times in a row since {units.hhmm(w)} without "
                                f"the owner. " + ASK.format(what="re-sending it"), "G2", unit, BLOCKED)
     else:
         goal = _norm(block.fields.get("GOAL"))
@@ -235,7 +230,7 @@ def check(reg, block, sender, now=None, to=None, runner=False, accepted=0):
             b = brief.find(reg, d.name, project=proj)
             if (b is not None and b.rev and b.to == to and _norm(b.fields.get("GOAL")) == goal
                     and _blocked_twice(b, sender.session, w)):
-                return Refused(f"{b.unit} reported blocked {BLOCKED} times in a row since {_hhmm(w)} without "
+                return Refused(f"{b.unit} reported blocked {BLOCKED} times in a row since {units.hhmm(w)} without "
                                f"the owner, and this brief sends {to} the same GOAL again. "
                                + ASK.format(what="re-sending it"), "G2", b.unit, BLOCKED)
     hit = _spend(proj, unit if block.kind == "amend" else None, w)
@@ -246,13 +241,13 @@ def check(reg, block, sender, now=None, to=None, runner=False, accepted=0):
         n = history.runs_of(proj, unit, w)
         runs = cap("runs_per_unit")
         if n >= runs:
-            return Refused(f"{unit} ran {n} times since {_hhmm(w)} without the owner (cap {runs}). "
+            return Refused(f"{unit} ran {n} times since {units.hhmm(w)} without the owner (cap {runs}). "
                            + ASK.format(what="running it again"), "G5", unit, n)
     start = max(w, now - _dt.timedelta(hours=1))
     n = accepted + sum(len(_revs(d, start.timestamp())) for d in _unit_dirs(reg, proj))
     rate = cap("briefs_per_hour")
     if n >= rate:
-        return Refused(f"{proj} sent {n} briefs and AMENDs since {_hhmm(start)} without the owner "
+        return Refused(f"{proj} sent {n} briefs and AMENDs since {units.hhmm(start)} without the owner "
                        f"(cap {rate} an hour). " + ASK.format(what="sending more"), "G3", unit or "-", n)
     return None
 
@@ -291,13 +286,13 @@ def _spend(proj, unit, w):
     cap = _cap(f, "max_project_cost_usd", 30)
     spent = history.spend(proj, w)
     if spent >= cap:
-        return (f"{proj} spent ${spent:.2f} on headless runs since {_hhmm(w)} without the owner "
+        return (f"{proj} spent ${spent:.2f} on headless runs since {units.hhmm(w)} without the owner "
                 f"(cap ${cap:g})", int(spent))
     if unit:
         cap = unit_cap(f)
         spent = history.spend(proj, w, unit)
         if spent >= cap:
-            return (f"{unit} spent ${spent:.2f} on headless runs since {_hhmm(w)} without the owner "
+            return (f"{unit} spent ${spent:.2f} on headless runs since {units.hhmm(w)} without the owner "
                     f"(cap ${cap:g} a unit)", int(spent))
     return None
 
@@ -314,7 +309,7 @@ def run_refusal(proj, unit, now=None):
     n = history.runs_of(proj, unit, w)
     runs = cap("runs_per_unit")
     if n >= runs:
-        return Refused(f"{unit} ran {n} times since {_hhmm(w)} without the owner (cap {runs})", "G5", unit, n)
+        return Refused(f"{unit} ran {n} times since {units.hhmm(w)} without the owner (cap {runs})", "G5", unit, n)
     return None
 
 
@@ -326,7 +321,7 @@ def spend_status(project, now=None):
     w = window(project, now)
     cap = _cap(_flow(), "max_project_cost_usd", 30)
     spent = history.spend(project, w)
-    return {"spent": spent, "since": _hhmm(w), "cap": cap} if spent >= cap else None
+    return {"spent": spent, "since": units.hhmm(w), "cap": cap} if spent >= cap else None
 
 
 def _marker(session):
@@ -377,7 +372,7 @@ def looping(reg, project, now=None):
     for d in _unit_dirs(reg, project):
         n = len([r for r, _ in _revs(d, w.timestamp()) if r >= 2])
         if n >= cap("revisions"):
-            out.append({"unit": d.name, "n": n, "since": _hhmm(w)})
+            out.append({"unit": d.name, "n": n, "since": units.hhmm(w)})
     return out
 
 
@@ -387,4 +382,4 @@ def pause_status(project):
     if p is None:
         return None
     at = units.parse_iso(p.get("at"))
-    return dict(p, since=_hhmm(at) if at else "?")
+    return dict(p, since=units.hhmm(at) if at else "?")

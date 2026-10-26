@@ -12,7 +12,7 @@ import json
 import math
 import os
 
-from .. import log, paths, units, util
+from .. import log, paths, units
 
 KEYS = ("unit", "rev", "to", "model", "vendor", "effort", "status", "stop_reason", "cost_usd", "num_turns",
         "started", "finished", "kind")
@@ -39,6 +39,48 @@ def reserve(started, finished, cap):
     a, b = units.parse_iso(started), units.parse_iso(finished)
     seconds = (b - a).total_seconds() if a is not None and b is not None else 0
     return round(min(float(cap), max(1, math.ceil(seconds / 60)) * UNKNOWN_USD_PER_MIN), 2)
+
+
+def cost(res, started, finished, cfg, ran=True):
+    """What one model call counts against G4: `res.cost_usd`, else — it ran (`ran`, exit not 127) without a
+    cost figure (killed, timed out, crashed) — the reservation of its wall time (reserve(), §7.3)."""
+    if res.cost_usd is not None or not ran or res.code == 127:
+        return res.cost_usd
+    from ..flow import guard
+    return reserve(started, finished, guard.unit_cap(cfg.get("flow") or {}))
+
+
+def attempt(proj, rev, *, unit, to, model, effort, res, started, finished, status, kind, cfg, stop_reason=None, ran=True):
+    """Append the history line of one model call inside a unit's work (`kind`: work, escalation, rework,
+    review, build-review; the run's, a pane's or a head review's), its cost counted by cost(). Logs, never
+    raises for the write."""
+    from .. import vendors
+    append(proj, {"unit": unit, "to": to, "model": model, "vendor": vendors.vendor_of(model),
+                  "effort": effort, "status": status, "stop_reason": stop_reason,
+                  "cost_usd": cost(res, started, finished, cfg, ran), "num_turns": res.turns,
+                  "started": started, "finished": finished, "kind": kind}, rev)
+
+
+def spend_hit(proj, unit, cfg, mine=0.0, tag="runner"):
+    """G4 before a paid call: the unit's (when given) and the project's headless spend inside W (flow.guard),
+    `mine` (calls not filed yet) included; the refusal, else None. Fails open, as guard.safe (`tag` names
+    the caller in the hooks log)."""
+    from ..flow import guard
+    f = cfg.get("flow") or {}
+    if f.get("enabled") is False:
+        return None
+    try:
+        w = guard.window(proj)
+        if unit:
+            cap, spent = guard.unit_cap(f), spend(proj, w, unit) + mine
+            if spent >= cap:
+                return f"{unit} spent ${spent:.2f}, cap ${cap:g} a unit"
+        cap, spent = float(f.get("max_project_cost_usd") or 30), spend(proj, w) + mine
+        if spent >= cap:
+            return f"{proj} spent ${spent:.2f}, cap ${cap:g}"
+    except Exception as exc:  # noqa: BLE001 - the guard fails open, as guard.safe
+        log.log("hooks", f"{tag}: spend check skipped ({type(exc).__name__}: {exc})")
+    return None
 
 
 def append(proj, rec, rev):

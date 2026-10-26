@@ -1,7 +1,7 @@
 """The A.7 facts block: six lines a reviewer and the integrator read about a queued head."""
 import re
 
-from .. import ledger, units
+from .. import ledger, publish, units
 from . import repo, store
 
 
@@ -19,18 +19,23 @@ def is_docs(rel, docs_paths) -> bool:
 
 
 def skip_ci_commits(where, base_ref, head, docs_paths) -> list:
-    """Short shas of the commits base..head whose message carries [skip ci] and that change code."""
-    out = []
-    for sha in repo.commits(where, base_ref, head):
-        if repo.SKIP_CI.search(repo.message(where, sha)) and any(
-                not is_docs(p, docs_paths) for p in repo.commit_paths(where, sha)):
-            out.append(sha[:7])
+    """STANDING 4's one rule (the facts, the queue's admission): short shas of the commits base..head
+    whose message carries [skip ci] and that change code, and the head's when its message carries it
+    and the PR changes code (GitHub skips a PR's CI on its head's message)."""
+    def code(paths):
+        return any(not is_docs(p, docs_paths) for p in paths)
+
+    out = [sha[:7] for sha in repo.commits(where, base_ref, head)
+           if repo.SKIP_CI.search(repo.message(where, sha)) and code(repo.commit_paths(where, sha))]
+    if head[:7] not in out and repo.SKIP_CI.search(repo.message(where, head)) and code(
+            p for p, _a, _d in repo.changed(where, base_ref, head)):
+        out.append(head[:7])
     return out
 
 
 def gather(where, *, project, pr, head, base, tier="standard", scope="", docs_paths=(), entry_id=None) -> dict:
     """Read the facts of `head` (PR `pr`) against `base` in the checkout `where`."""
-    base_ref = f"origin/{base}" if repo.git(where, "rev-parse", "--verify", "-q", f"origin/{base}") else base
+    base_ref = publish.base_ref(where, base)
     base_sha = repo.git(where, "rev-parse", base_ref) or ""
     files = repo.changed(where, base_ref, head)
     paths_ = [f[0] for f in files]

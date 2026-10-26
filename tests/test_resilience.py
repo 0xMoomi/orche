@@ -1010,6 +1010,6 @@ class ScaleDoctorTest(support.TempHomeCase):
         with mock.patch.object(procs, "free_mb", return_value=None):
             self.assertEqual(doctor.memory_rows(cfg)[0][0], "WARN")
         self.assertEqual(doctor.scale_rows(cfg, reg), [
-            ("OK", "scale", "preset default: runs 4/project, 8 total · features keep a pane · spend cap $30 · "
+            ("OK", "scale", "preset default: runs 4/project, 8 total · features headless · spend cap $30 · "
                             "min free 2048 MB"),
             ("OK", "ladder", ladder.doctor_row(cfg))])

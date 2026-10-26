@@ -17,7 +17,7 @@ A correction is `AMEND <unit> rev N` + `SUPERSEDES rev N-1: <what>`; a halt is `
 TO        <session: div-<project>-<division> | feat-<project>-<feature>>
 GOAL      <one-sentence outcome a stranger could execute without chat history>
 SCOPE     <writable paths> / <forbidden paths> / <worktree + branch>
-CONTEXT   <file and PR pointers; paste an upstream report in full if needed>
+CONTEXT   <Pointers (files, PRs, an upstream report in full) + the plan: the shape of the change, the order when it matters, decisions already fixed, constraints>
 ACCEPT    <checkable criterion, one per line>
   <another criterion>
 VERIFY    <exact command or committed verify-skill path> + <known pitfalls>

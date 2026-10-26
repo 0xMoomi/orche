@@ -2,7 +2,6 @@
 or no 3.11+ the launchers' finder can pick in a login shell), an invalid registry or an unwritable
 ORCHE_HOME. Jev is optional and fails open, so its row is WARN at worst (not configured, disabled,
 or a failed last probe)."""
-import json
 import os
 import re
 import shlex
@@ -10,8 +9,8 @@ import shutil
 import sys
 from pathlib import Path
 
-from .. import (__version__, config, headless, jev_setup, ladder, mask, oauth, orca, paths, procs, registry, runs,
-                shell, units, vendors)
+from .. import (__version__, config, github, headless, jev_setup, ladder, mask, oauth, orca, paths, procs, registry,
+                runs, shell, units, vendors)
 from . import settings, statusline
 
 TOOLS = ("gcloud", "gh", "vercel", "age", "zstd")
@@ -186,22 +185,23 @@ def gh_rows(reg) -> list:
     if shutil.which("gh") is None:
         return [("WARN", "gh", "gh is not installed: the merge queue cannot open or merge PRs — brew install gh, "
                                "then gh auth login")]
-    who = shell.run(["gh", "api", "user", "--jq", ".login"], timeout=10)
-    login = who.out.strip() if who.ok and who.out.strip() else "?"
+    try:
+        login = github.run(None, "api", "user", "--jq", ".login", timeout=10).strip() or "?"
+    except github.GhError:
+        login = "?"
     rows = []
     for key, root in _roots(reg):
-        url = shell.run(["git", "-C", str(root), "remote", "get-url", "origin"], timeout=10)
+        url = shell.git(root, "remote", "get-url", "origin", timeout=10)
         if not url.ok or not url.out.strip():
             rows.append(("WARN", "gh", f"{key}: no origin remote — the merge queue lands PRs on GitHub"))
             continue
-        res = shell.run(["gh", "repo", "view", url.out.strip(), "--json",
-                         "nameWithOwner,viewerPermission,defaultBranchRef"], timeout=10)
         try:
-            data = json.loads(res.out) if res.ok else None
-        except ValueError:
-            data = None
+            data, err = github.data(None, "repo", "view", url.out.strip(), "--json",
+                                    "nameWithOwner,viewerPermission,defaultBranchRef", timeout=10), ""
+        except github.GhError as exc:
+            data, err = None, exc.result.err if exc.result else ""
         if not isinstance(data, dict):
-            why = mask.redact(((res.err or "").strip().splitlines() or ["no answer"])[0][:120])[0]
+            why = mask.redact(((err or "").strip().splitlines() or ["no answer"])[0][:120])[0]
             rows.append(("WARN", "gh", f"{key}: gh cannot read the repository ({why}) — gh auth login, or check "
                                        "its origin remote"))
             continue
@@ -253,27 +253,22 @@ def queue_rows(reg) -> list:
     """`queue` per project with a merge queue: open/paused/closed, waiting and testing entries, whether
     its integrator runs; an entry testing with no integrator is a lost one (the heartbeat restarts it)."""
     from .. import queue
-    from ..queue import store
-    rows, have = [], set(store.projects())
+    rows, have = [], set(queue.projects())
     for key in sorted(reg.get("projects", {})):
         if key not in have:
             continue
         try:
-            q = store.read(key)
+            s = queue.summary(key)
         except Exception as exc:  # noqa: BLE001 - a doctor row never fails the command
             rows.append(("WARN", "queue", f"{key}: queue.json unreadable: {exc}"))
             continue
-        entries = [e for e in q.get("entries") or [] if isinstance(e, dict)]
-        waiting = sum(1 for e in entries if e.get("state") == "waiting")
-        testing = sum(1 for e in entries if e.get("state") == "testing")
-        live = queue.running(key)
-        state = "closed" if q.get("closed") else "paused" if q.get("paused") else "open"
+        waiting, testing, state, live = s["waiting"], s["testing"], s["state"], queue.running(key)
         text = f"{key}: {state} · {waiting} waiting · {testing} testing · integrator {'running' if live else 'idle'}"
         if testing and not live:
             rows.append(("WARN", "queue", f"{text} — an entry is testing with no integrator (lost): the heartbeat "
                                           "restarts it"))
         elif state == "closed":
-            rows.append(("WARN", "queue", f"{text} ({queue.reopen(key, q.get('closed'))})"))
+            rows.append(("WARN", "queue", f"{text} ({queue.closed_text(key, s['closed'])})"))
         elif state == "paused":
             rows.append(("WARN", "queue", f"{text} — orche queue resume {key}"))
         else:
@@ -290,14 +285,15 @@ def review_rows(cfg, reg) -> list:
 
     def other(vendor):
         return next((m for m in order if vendors.vendor_of(m) != vendor), "-")
-    mod, pending = reconcile._review_module(), 0
-    for key in sorted(reg.get("projects", {})) if mod is not None else ():
+    from ..review import build
+    pending = 0
+    for key in sorted(reg.get("projects", {})):
         try:
-            pending += len(list(mod.pending(key) or []))
+            pending += len(list(build.pending(key) or []))
         except Exception:  # noqa: BLE001 - a doctor row never fails the command
             continue
     text = (f"{r.get('cross_vendor', 'required')} · claude → {other('claude')} · codex → {other(vendors.CODEX)} · "
-            f"Build review {'on' if r.get('build', True) else 'off'} · {pending} pending")
+            f"head review {'on' if r.get('build', True) else 'off'} · {pending} pending")
     if shutil.which("codex") is None and r.get("cross_vendor", "required") != "off":
         return [("WARN", "review", f"{text} — codex is not installed: Claude writers get the same-vendor fallback")]
     return [("OK", "review", text)]

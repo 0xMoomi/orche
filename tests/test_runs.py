@@ -432,7 +432,7 @@ class OnePointerTest(RunnerCase):
         return len(self.inbox(session)) + len(self.inbox(session, drained=True))
 
     def execute(self, unit):
-        return runs.execute(registry.load(), unit, util.read_json(self.home / "config.json", {}))
+        return runs.execute(registry.load(), unit, config.load())
 
     def record(self, unit):
         path = self.units_dir() / unit / "RUN.json"

@@ -168,7 +168,30 @@ class QueueCmdTest(support.TempHomeCase):
         os.environ["ORCHE_SESSION"] = "feat-acme-checkout"
         code, _, err = self.orche("queue", "add", self.unit)
         self.assertEqual(code, 3)
-        self.assertIn("only Build or Main may queue", err)
+        self.assertIn("only Build, Main or the unit's head may queue", err)
+
+    def heads(self):
+        """T2: checkout moves under a Design division; a GTM division heads nobody here."""
+        from test_buildreview import add_design
+        reg = registry.load()
+        add_design(reg, self.home / "wt", gtm=True)
+        divs = reg["projects"]["acme"]["divisions"]
+        divs["design"]["features"] += divs["build"].pop("features")
+        registry.save(reg)
+
+    def test_the_units_head_may_queue_another_head_may_not(self):
+        self.ready()
+        self.heads()
+        os.environ["ORCHE_SESSION"] = "div-acme-gtm"
+        code, _, err = self.orche("queue", "add", self.unit)
+        self.assertEqual(code, 3)
+        self.assertIn("only Build, Main or the unit's head may queue", err)
+        self.assertFalse(self.queued() if (self.home / "queue").exists() else [])
+        os.environ["ORCHE_SESSION"] = "div-acme-design"
+        code, out, err = self.orche("queue", "add", self.unit)
+        self.assertEqual(code, 0, err)
+        self.assertIn("queued PR #12", out)
+        self.assertEqual(self.queued()[0]["writer"], "feat-acme-checkout")
 
     def test_unknown_unit(self):
         code, _, err = self.orche("queue", "add", "acme-nope-20261024-1")
@@ -237,6 +260,22 @@ class QueueCmdTest(support.TempHomeCase):
         code, _, err = self.orche("queue", "add", self.unit)
         self.assertEqual(code, 3)
         self.assertIn(f"head {self.head[:7]} carries [skip ci] on a code change (STANDING 4): add a commit without it", err)
+
+    def test_skip_ci_below_the_head_on_code(self):
+        """One [skip ci] rule with the facts (every commit base..head): a code commit below the head counts too."""
+        (self.feat / "src" / "pay.py").write_text("x = 2\n")
+        git(self.feat, "commit", "-q", "-am", "tweak [skip ci]")
+        skipped = git(self.feat, "rev-parse", "HEAD")
+        (self.feat / "docs").mkdir(exist_ok=True)
+        (self.feat / "docs" / "notes.md").write_text("notes\n")
+        git(self.feat, "add", "docs/notes.md")
+        git(self.feat, "commit", "-q", "-m", "notes")
+        self.head = git(self.feat, "rev-parse", "HEAD")
+        self.spec({"prs": [self.pr()]})
+        self.ready()
+        code, _, err = self.orche("queue", "add", self.unit)
+        self.assertEqual(code, 3)
+        self.assertIn(f"commit {skipped[:7]} carries [skip ci] on a code change (STANDING 4)", err)
 
     # ---- success, duplicates, dry run ----------------------------------------------------
 
@@ -381,7 +420,7 @@ class QueueCmdTest(support.TempHomeCase):
 
     def test_a_closed_queue_names_its_reason_and_what_reopens_it(self):
         """Review B G8e: --first reopens only main-red; a proof closure needs orche queue resume."""
-        from orche import cmd_status, util
+        from orche import cmd_status, project, util
         from orche.install import doctor
         for reason, step in (("proof", "check it, then orche queue resume acme"),
                              ("main-red", "queue the fix with --first")):
@@ -391,8 +430,8 @@ class QueueCmdTest(support.TempHomeCase):
             util.write_json(store.queue_path("acme"), q)
             _code, out, _ = self.orche("queue", "acme")
             [(_level, _name, detail)] = doctor.queue_rows(registry.load())
-            [line] = cmd_status._queue_lines({"project": "acme", "queue": cmd_status.queue_of("acme")})
+            [line] = cmd_status._queue_lines({"project": "acme", "queue": project.queue_of("acme")})
             for text in (out, detail, line):
                 self.assertIn(f"{reason} — ", text)
                 self.assertIn(step, text)
-        self.assertNotIn("--first", queue.reopen("acme", {"reason": "proof", "main": "d" * 40}))
+        self.assertNotIn("--first", queue.closed_text("acme", {"reason": "proof", "main": "d" * 40}))

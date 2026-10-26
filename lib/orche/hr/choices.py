@@ -48,9 +48,9 @@ TEXTS = {
                    "retired": "은퇴"},
         "scale_q": "에이전트를 몇 개까지 동시에 쓸까요?{machine}", "scale_h": "규모", "scale_now": " (지금)",
         "scale_machine": " (이 Mac: RAM {ram}GB · 디스크 여유 {disk}GB — 30개면 부족할 수 있어요)",
-        "scale": {"default": ("기본", "동시 실행 4 · 기능 에이전트는 창과 함께 · 자율 지출 상한 $30"),
-                  "20": ("20개까지", "동시 실행 12 · 기능 에이전트는 창 없이 · 자율 지출 상한 $150 (API 환산 시간당 약 $40)"),
-                  "30": ("30개까지", "동시 실행 20 · 자율 지출 상한 $250 (시간당 약 $60) · Claude 구독은 사용량 한도에 걸려요: "
+        "scale": {"default": ("기본", "동시 실행 {par} · 기능 에이전트는 창 없이 · 자율 지출 상한 ${cap}"),
+                  "20": ("20개까지", "동시 실행 {par} · 기능 에이전트는 창 없이 · 자율 지출 상한 ${cap} (API 환산 시간당 약 ${hour})"),
+                  "30": ("30개까지", "동시 실행 {par} · 자율 지출 상한 ${cap} (시간당 약 ${hour}) · Claude 구독은 사용량 한도에 걸려요: "
                                     "API 키나 Codex를 섞으세요")},
         "rules": "이름: 영문 소문자로 시작하는 2–16자(소문자·숫자·하이픈, 예: marketing) · 라벨: 24자 이하 · "
                  "맡을 일: 한 문단, 400자 이하",
@@ -84,10 +84,10 @@ TEXTS = {
                    "retired": "retired"},
         "scale_q": "How many agents should run at once?{machine}", "scale_h": "Scale", "scale_now": " (now)",
         "scale_machine": " (this Mac: {ram} GB RAM · {disk} GB free disk — tight for 30)",
-        "scale": {"default": ("Default", "4 runs at once · features keep a pane · spend cap $30"),
-                  "20": ("Up to 20", "12 runs at once · features without panes · spend cap $150 "
-                                     "(about $40/h API-equivalent)"),
-                  "30": ("Up to 30", "20 runs at once · spend cap $250 (about $60/h) · a Claude subscription hits "
+        "scale": {"default": ("Default", "{par} runs at once · features headless · spend cap ${cap}"),
+                  "20": ("Up to 20", "{par} runs at once · features without panes · spend cap ${cap} "
+                                     "(about ${hour}/h API-equivalent)"),
+                  "30": ("Up to 30", "{par} runs at once · spend cap ${cap} (about ${hour}/h) · a Claude subscription hits "
                                      "its usage window: mix in an API key or Codex")},
         "rules": "name: 2–16 characters, a-z first, then a-z, 0-9 or single hyphens (e.g. marketing) · "
                  "label: ≤ 24 characters · charter: one paragraph, ≤ 400 characters",
@@ -129,10 +129,10 @@ def _codex_note(t, avail):
     return t["codex_absent"] if avail.state == "absent" else t["codex_broken"]
 
 
-def _active(div, key):
+def _active(div):
     if div.get("status") == "active":
         return True
-    return key == "build" and any(f.get("status") == "active" for f in div.get("features") or [])
+    return any(f.get("status") == "active" for f in div.get("features") or [])
 
 
 def _model_entry(t, cfg, lang, models, kind, question, current=None, active=False):
@@ -184,6 +184,9 @@ def _scale_entry(t, cfg, reg, machine):
     for name in SCALES:
         if name in avail:
             lab, desc = t["scale"][name]
+            conf = scale.target(cfg, name)[0]
+            desc = desc.format(par=conf["runner.max_parallel"], cap=conf["flow.max_project_cost_usd"],
+                               hour=avail[name].get("estimate_usd_per_hour"))
             opts.append((lab + (t["scale_now"] if name == cur else ""), desc, name, name))
     return cur, _entry(t["scale_q"].format(machine=note), t["scale_h"], False, opts)
 
@@ -246,7 +249,7 @@ def build(reg, cfg, key, lang, avail=None, machine=None) -> dict:
         elif k["exists"]:
             cur = k["model"] or k["recommended"]
             q = t["model_change"].format(label=k["label"], model=mlabel.get(cur) or cur)
-            ask["model"][k["key"]] = _model_entry(t, cfg, lang, models, k, q, cur, _active(divs[k["key"]], k["key"]))
+            ask["model"][k["key"]] = _model_entry(t, cfg, lang, models, k, q, cur, _active(divs[k["key"]]))
         else:
             ask["model"][k["key"]] = _model_entry(t, cfg, lang, models, k, t["model_new"].format(label=k["label"]))
     star_kind = {"recommended": custom["recommended"], "why": custom["why"], "_avail": avail}

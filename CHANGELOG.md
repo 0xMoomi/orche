@@ -3,6 +3,36 @@
 All notable changes to ORCHE are listed here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow semantic versioning.
 
+## 0.10.0 — 2026-10-26
+
+### Added
+- Teams: workers (feature agents) under any head but Research, R&D and Ops; each head staffs a worker per slice.
+- Status: every division's cell shows its active workers (`BUILD●4 DES●2`).
+- `orche feat new` wakes a dormant head (R6), refuses a worker staffing workers, checks overlap across divisions.
+
+### Changed
+- The writer's head reviews and queues its own workers; queue AMENDs, pointers and landed notes go to that head;
+  queue-wide notes (a pause, exhausted restarts, a GitHub refusal) stay with Build. Only `infra` under Build stands.
+- Default preset: headless workers, up to 8 a day, 40 a week, 4 per request (was 3/10/2); a landed worker retires.
+  Upgrade: an existing registry keeps 3/10/2 until `orche hr scale default` is run once.
+- A head's child unit that is another division's counts as landed once it reports done.
+- Personas, orche-build ("Your team"), orche-main, SPEC and the glossary say heads; SPEC R-REVIEW-8/9 are now 10/11.
+- `orche status <p>` prints the project card (`--json`: an object), `orche status --project <p>` the detail view; `[skip ci]`
+  admission refuses a code commit anywhere in base..head (`--accept` as before).
+- A review attempt without a cost figure counts its wall time like a worker's (§7.3); head-review wording and a
+  `no-head` status; scale presets list only their differences.
+- Merge-queue admission, GitHub calls, the base branch, the queue record, the run record and the reviewer call each live in one module.
+
+### Removed
+- `orche resume`; `config/orche.example.json`; config keys `review.effort/max_diff_lines/build_timeout_s/timeout_s/
+  max_starts/tier_audit`, `queue.method/max_returns/max_stops/docs_paths`, `jev.min_confidence` (now constants;
+  landing is always a merge commit; the Jev tier audit runs whenever Jev is on).
+- RUN.json keys `kind, attempts, attempt, resumed, pin_note, escalated_from` (history lines keep every call).
+
+### Fixed
+- The merge queue removes the lock files a killed git left in its clone before a pass (one used to stop every
+  later pass until the queue paused); a failed git step names git's `error:` line instead of `From <url>`.
+
 ## 0.9.1 — 2026-10-25
 
 ### Fixed

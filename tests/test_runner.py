@@ -20,6 +20,7 @@ from unittest import mock
 
 import support
 from orche import brief, deliver, dispatch, headless, inbox, procs, registry, roster, runs
+from orche import templates
 from orche.runs import job as runner
 from support import write_fake_claude
 from test_hooks import GIT_ENV, HookCase
@@ -97,7 +98,7 @@ class RunnerCase(HookCase):
                      ["checkout", "-q", "-b", branch]):
             subprocess.run(git + argv, check=True, env=env)
         self.gh = self.root / "gh"
-        support.fake_gh_publish(self.gh)
+        support.fake_gh(self.gh)
         os.environ["PATH"] = str(self.gh) + os.pathsep + os.environ["PATH"]
         return bare
 
@@ -1940,8 +1941,9 @@ class CodexRunTest(RunnerCase):
         stdin = call["stdin"]
         self.assertTrue(stdin.startswith(f"## Your role\nYou are the build division.\n\nrev: 1\nunit: {unit}"), stdin)
         self.assertTrue(stdin.endswith(
-            "\n\n## Runner\n" + runner.FOOTER_GATED.format(worktree=self.wt) + "\n"
-            + runner.CODEX_SANDBOX.format(worktree=self.wt, units=self.units_dir(), home=self.home) + "\n"), stdin)
+            "\n\n## Runner\n" + templates.load("run/footer.md", WORKTREE=self.wt, COMMIT=templates.load("run/commit-gated.md"))
+            + "\n" + templates.load("run/codex-sandbox.md", WORKTREE=self.wt, UNITS=self.units_dir(), HOME=self.home)
+            + "\n"), stdin)
         self.assertEqual(list((self.home / "runner" / "codex").iterdir()), [])     # the -o file: read, removed
         self.assertEqual([(r["model"], r["vendor"], r["effort"], r["cost_usd"]) for r in self.history()],
                          [(CODEX_MODEL, "codex", "high", COST)])

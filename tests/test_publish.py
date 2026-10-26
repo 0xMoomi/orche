@@ -36,7 +36,7 @@ class PublishCase(TempHomeCase):
                      ("checkout", "-q", "-b", "div/build")):
             self.git(self.repo, *argv)
         self.gh = self.root / "gh"
-        support.fake_gh_publish(self.gh)
+        support.fake_gh(self.gh)
         os.environ["PATH"] = str(self.gh) + os.pathsep + os.environ["PATH"]
 
     def git_at(self, cwd, *argv):
@@ -90,7 +90,7 @@ class PublishTest(PublishCase):
 
     def test_pr_on_another_base_is_a_gap_never_retargeted(self):
         self.commit(self.repo, "b.txt", "b\n")
-        support.fake_gh_publish(self.gh, {"prs": [{"number": 4, "url": "u4", "headRefName": "div/build",
+        support.fake_gh(self.gh, {"prs": [{"number": 4, "url": "u4", "headRefName": "div/build",
                                                    "baseRefName": "release", "isDraft": False}]})
         out = self.run_publish()
         self.assertIsInstance(out, publish.Gap)
@@ -99,7 +99,7 @@ class PublishTest(PublishCase):
 
     def test_draft_pr_is_made_ready(self):
         head = self.commit(self.repo, "b.txt", "b\n")
-        support.fake_gh_publish(self.gh, {"prs": [{"number": 5, "url": "u5", "headRefName": "div/build",
+        support.fake_gh(self.gh, {"prs": [{"number": 5, "url": "u5", "headRefName": "div/build",
                                                    "baseRefName": "main", "isDraft": True}]})
         self.assertEqual(self.run_publish(), publish.Published(5, "u5", head))
         self.assertEqual(self.gh_verbs(), [["pr", "list"], ["pr", "ready"]])
@@ -109,13 +109,13 @@ class PublishTest(PublishCase):
         self.commit(self.repo, "b.txt", "b\n")
         prs = [{"number": n, "url": f"u{n}", "headRefName": "div/build", "baseRefName": "main", "isDraft": False}
                for n in (6, 7)]
-        support.fake_gh_publish(self.gh, {"prs": prs})
+        support.fake_gh(self.gh, {"prs": prs})
         out = self.run_publish()
         self.assertEqual(out.text, "two open PRs for div/build: #6, #7; Build decides")
 
     def test_gh_not_logged_in_is_a_gap_with_owner_step(self):
         self.commit(self.repo, "b.txt", "b\n")
-        support.fake_gh_publish(self.gh, {"prs": [], "fail": {
+        support.fake_gh(self.gh, {"prs": [], "fail": {
             "pr list": "To get started with GitHub CLI, please run:  gh auth login"}})
         out = self.run_publish()
         self.assertIn("gh pr list: gh is not logged in", out.text)
@@ -123,7 +123,7 @@ class PublishTest(PublishCase):
 
     def test_protected_branch_is_a_gap_with_owner_step(self):
         self.commit(self.repo, "b.txt", "b\n")
-        support.fake_gh_publish(self.gh, {"prs": [], "fail": {
+        support.fake_gh(self.gh, {"prs": [], "fail": {
             "pr create": "GraphQL: Resource not accessible by integration (createPullRequest) HTTP 403"}})
         out = self.run_publish()
         self.assertIn("gh pr create:", out.text)

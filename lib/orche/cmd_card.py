@@ -76,8 +76,7 @@ def cmd_refresh(args, name):
     key = target[0]
     if args.background and not args.dry_run:
         log = paths.orche_home() / "logs" / "liaison" / f"{key}.log"
-        procs.spawn_detached([sys.executable, str(paths.PLUGIN_ROOT / "bin" / "orche.py"), "card", "refresh", key],
-                             log)
+        procs.spawn_orche(["card", "refresh", key], log)
         cli.out(args, {"project": key, "status": "started", "log": str(log)},
                 f"card refresh started in the background (log: {log})")
         return EXIT_OK

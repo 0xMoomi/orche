@@ -5,17 +5,21 @@ DIVISIONS) plus its custom ones (`custom_divisions`: name -> {label, charter, mo
 a custom division's runtime record (worktree, session, status) lives in `divisions` like a
 standard one. `divisions_of(proj)` is the one enumeration every command uses.
 """
+import contextlib
 import copy
+import fcntl
 import re
+import threading
+import time
 import unicodedata
 
 from . import paths, util
 
 VERSION = 1
 LIMIT_DEFAULTS = {
-    "per_project_per_day": 3,
-    "per_project_per_week": 10,
-    "per_request_auto": 2,
+    "per_project_per_day": 8,
+    "per_project_per_week": 40,
+    "per_request_auto": 4,
     "global_per_day_freeze": 20,
     "idle_days_to_sleep": 14,
     "max_awake_sessions": 12,
@@ -55,6 +59,45 @@ class RegistryError(ValueError):
 
 def path():
     return paths.orche_home() / "registry.json"
+
+
+_held = threading.local()
+LOCK_WAIT_S = 90
+
+
+class Busy(RuntimeError):
+    """Another process held `registry.lock` for LOCK_WAIT_S."""
+
+
+@contextlib.contextmanager
+def lock():
+    """Hold `registry.lock` (flock) from a load to its save, so two writers cannot lose each
+    other's entries. Re-entrant in one thread; another thread or process waits up to LOCK_WAIT_S,
+    then gets Busy."""
+    if getattr(_held, "depth", 0):
+        _held.depth += 1
+        try:
+            yield
+        finally:
+            _held.depth -= 1
+        return
+    path().parent.mkdir(parents=True, exist_ok=True)
+    with open(path().with_name("registry.lock"), "a") as fh:
+        deadline = time.monotonic() + LOCK_WAIT_S
+        while True:
+            try:
+                fcntl.flock(fh, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                break
+            except BlockingIOError:
+                if time.monotonic() >= deadline:
+                    raise Busy("registry busy: another orche feat/sleep/wake is running; try again") from None
+                time.sleep(0.2)
+        _held.depth = 1
+        try:
+            yield
+        finally:
+            _held.depth = 0
+            fcntl.flock(fh, fcntl.LOCK_UN)
 
 
 def empty() -> dict:
@@ -204,9 +247,7 @@ def _validate_division(name, div, where, errors, customs=()):
     if "gated_by_stage" in div and not isinstance(div["gated_by_stage"], bool):
         errors.append(f"{where}.gated_by_stage: must be a boolean")
     if "features" in div:
-        if name != "build":
-            errors.append(f"{where}.features: only allowed under build")
-        elif not isinstance(div["features"], list):
+        if not isinstance(div["features"], list):
             errors.append(f"{where}.features: must be a list")
         else:
             for i, feat in enumerate(div["features"]):

@@ -86,7 +86,7 @@ def _project(args, reg=None):
 
 
 def _git(argv, cwd=None):
-    res = shell.run(["git", *(["-C", str(cwd)] if cwd else []), *argv])
+    res = shell.git(cwd or ".", *argv, timeout=20)
     if not res.ok:
         raise _Exit(EXIT_USER, f"git {' '.join(argv)} failed: {res.err.strip() or res.code}")
     return res.out
@@ -126,20 +126,21 @@ def cmd_check(args):
 
 
 def _feat_heads(reg, proj):
-    """[(branch, sha)] for the registry's feature branches (any naming), or None when git fails."""
-    build = reg["projects"][proj].get("divisions", {}).get("build") or {}
-    where = units.worktree_path(build.get("worktree", "")) or None
-    if where and not Path(where).is_dir():
-        where = None
+    """[(branch, sha)] for every division's worker branches (any naming), resolved in that division's
+    worktree, or None when git fails."""
     heads = []
-    for feat in build.get("features", []):
-        branch = feat.get("branch")
-        if not branch:
-            continue
-        res = shell.run(["git", *(["-C", where] if where else []), "rev-parse", "--verify", "-q", branch])
-        if not res.ok:
-            return None
-        heads.append((branch, res.out.strip()))
+    for div in (reg["projects"][proj].get("divisions") or {}).values():
+        where = units.worktree_path((div or {}).get("worktree", "")) or None
+        if where and not Path(where).is_dir():
+            where = None
+        for feat in (div or {}).get("features") or []:
+            branch = feat.get("branch")
+            if not branch:
+                continue
+            res = shell.git(where or ".", "rev-parse", "--verify", "-q", branch, timeout=20)
+            if not res.ok:
+                return None
+            heads.append((branch, res.out.strip()))
     return heads
 
 

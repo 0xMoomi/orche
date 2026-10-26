@@ -1,0 +1,1 @@
+Codex sandbox: you can write only inside {{WORKTREE}}, {{UNITS}}, ORCHE's state ({{HOME}}) and git's metadata; the network is on. A command the sandbox refuses is a fact to report, not to work around.

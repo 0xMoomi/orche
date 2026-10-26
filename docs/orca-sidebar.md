@@ -21,19 +21,19 @@ my-app                                   (Orca repo)
 |---|---|---|
 | Main pane | `main-<proj>` | the project's main checkout |
 | Division card / pane | worktree `div-<division>`, pane `div-<proj>-<division>` | its own worktree, branch `div/<division>` |
-| Feature card / pane | worktree `feat-<feature>`, pane `feat-<proj>-<feature>` | child worktree of Build, branch `feat/<feature>` |
+| Feature card / pane | worktree `feat-<feature>`, pane `feat-<proj>-<feature>` | child worktree of its head's division, branch `feat/<feature>` |
 
 Pane titles equal Claude Code session names. ORCHE starts a division or feature pane with
 `PATH=<plugin>/bin:$PATH ORCHE_SESSION=<session> claude --permission-mode bypassPermissions --name <session>`
-(or `--resume <session>` on wake), and the Main pane with the same command (since 0.6.0 Main also
+(or `--resume <session id>` on wake), and the Main pane with the same command (since 0.6.0 Main also
 starts in bypass, like every pane), so hooks know the pane's role and `orche` is on the pane's PATH. `orche init` creates the division worktrees; `orche feat new` creates
 feature worktrees.
 
 ## Lineage
 
-Division worktrees have no Orca parent. Feature worktrees are created with the **Build worktree
-as their Orca parent**, so they nest under `div-build` in the sidebar: everything a feature agent
-produces is integrated and verified by Build.
+Division worktrees have no Orca parent. Feature worktrees are created with **their head's worktree
+as their Orca parent**, so they nest under `div-<division>` in the sidebar: everything a worker
+produces is reviewed and queued by its head.
 
 ## Unit states
 
@@ -59,7 +59,7 @@ R&D● RS○ BUILD●3 GTM● OPS○ · new1 · 🔑2 · unverified1
 | Token | Meaning |
 |---|---|
 | `●` / `○` / `◐` | division active / asleep (dormant, paused, retired) / onboarding |
-| `BUILD●N` | N active feature agents |
+| `BUILD●N` | N active workers under that head (any division with workers, e.g. `DES●2`) |
 | `DES○` | a custom division: the first three letters of its label (four or five, then a digit, when that cell is taken; one cell per division the project has) |
 | `newN` | feature agents created in the last 24 hours |
 | `🔑N` | pending secret requests |

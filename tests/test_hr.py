@@ -7,6 +7,7 @@ import os
 import shlex
 import shutil
 import subprocess
+import threading
 import unittest
 from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
@@ -14,7 +15,7 @@ from unittest import mock
 
 import support
 from orche import hr, registry, roster, shell, statusline, templates, units
-from orche.hr import audit, book, limits, onboarding
+from orche.hr import audit, book, limits, onboarding, refresh
 from orche.paths import PLUGIN_ROOT
 from test_registry import load_cli
 
@@ -56,7 +57,8 @@ class HrCase(support.TempHomeCase):
         self.claude_root = self.home / "claude-projects"
         self.claude_root.mkdir()
         (self.home / "config.json").write_text(json.dumps(
-            {"notify": False, "janitor": {"claude_projects": str(self.claude_root)}}))
+            {"notify": False, "feature_panes": True,   # the pane path; headless is the default
+             "janitor": {"claude_projects": str(self.claude_root)}}))
         self._orig_now, units.now = units.now, lambda: NOW
         self.addCleanup(setattr, units, "now", self._orig_now)
         self.personas = self.home / "no-personas"
@@ -556,6 +558,16 @@ class RefreshTest(HrCase):
         self.assertEqual(backup.read_text(), self.OLD)
         self.assertEqual([p.name for p in backup.parent.iterdir()], [backup.name])   # the new worktree copy: none
 
+    def test_units_of_a_division_carry_its_workers(self):  # teams §4.5
+        proj = registry.load()["projects"]["acme-shop"]
+        proj["divisions"]["design"]["features"] = [
+            {"name": "web-hud", "status": "active", "worktree": "x::/w/hud"},
+            {"name": "web-old", "status": "retired", "worktree": "x::/w/old"}]
+        self.assertEqual([(u[0], u[1]) for u in refresh.units_of(proj, "design")],
+                         [("div", "design"), ("feat", "web-hud")])
+        self.assertEqual([(u[0], u[1]) for u in refresh.units_of(proj, "build")],
+                         [("div", "build"), ("feat", "checkout")])
+
     def test_a_unit_without_a_template_is_kept_byte_identical(self):
         self.outdate("div-acme-shop-rnd")
         ref = self.refresh()
@@ -799,17 +811,159 @@ class FeatNewTest(FeatCase):
         self.assertEqual(code, 0)
         self.assertEqual(err, "orche: warning: scope src/search/x.py overlaps feature search (src/search/**)\n")
 
-    def test_awake_limit_and_inactive_build_warning(self):
+    def test_awake_limit(self):
         self.reg["limits"]["max_awake_sessions"] = 2
         self.save(self.reg)
         code, _, err = self.orche("feat", "new", "acme", "x", "--scope", "src/x/**", "--reason", "r")
         self.assertEqual(code, 3)
         self.assertIn("awake limit reached (2/2); sleep a unit first", err)
-        self.reg["limits"]["max_awake_sessions"] = 12
+
+    def test_dormant_head_is_woken_on_creation(self):
         self.reg["projects"]["acme-shop"]["divisions"]["build"]["status"] = "dormant"
         self.save(self.reg)
         code, _, err = self.orche("feat", "new", "acme", "x", "--scope", "src/x/**", "--reason", "r")
-        self.assertEqual((code, err), (0, "orche: warning: parent division build is dormant\n"))
+        self.assertEqual((code, err), (0, ""))
+        titles = [c[c.index("--title") + 1] for c in self.orca_calls("terminal create")]
+        self.assertEqual(titles, ["div-acme-shop-build", "feat-acme-shop-x"])
+        build = registry.load()["projects"]["acme-shop"]["divisions"]["build"]
+        self.assertEqual(build["status"], "active")
+        self.assertEqual(build["features"][-1]["name"], "x")
+
+    # -- teams: a worker joins the calling division's head --------------------------------------
+    def add_design(self, status="active"):
+        proj = self.reg["projects"]["acme-shop"]
+        proj["divisions"]["design"] = {"status": status, "worktree": "repo-acme::/srv/orca/acme-shop-design",
+                                       "branch": "div/design", "session": "div-acme-shop-design",
+                                       "model": "claude-sonnet-5-5", "last_activity": ago(hours=1)}
+        proj["custom_divisions"] = {"design": {"label": "Design", "charter": "Owns the visual design.",
+                                               "model": "claude-sonnet-5-5", "effort": "high"}}
+        return self.save(self.reg)
+
+    def test_design_head_creates_a_worker_under_design(self):
+        self.add_design()
+        code, out, err = self.orche("feat", "new", "acme", "icons", "--scope", "assets/icons/**",
+                                    "--reason", "icon set", "--by", "div-acme-shop-design")
+        self.assertEqual((code, err), (0, ""), out)
+        create = self.orca_calls("worktree create")[0]
+        self.assertEqual(create[create.index("--parent-worktree") + 1], "id:repo-acme::/srv/orca/acme-shop-design")
+        persona = self.repo / ".claude" / "agents" / "feat-acme-shop-icons.md"
+        self.assertIn("model: claude-sonnet-5-5\n", persona.read_text())
+        reg = registry.load()
+        divisions = reg["projects"]["acme-shop"]["divisions"]
+        self.assertEqual(divisions["design"]["features"][-1]["name"], "icons")
+        self.assertNotIn("icons", [f["name"] for f in divisions["build"]["features"]])
+        self.assertEqual(reg["events"][-1]["unit"], "design/icons")
+
+    def test_headless_run_of_a_head_creates_under_it(self):
+        self.add_design()
+        with mock.patch.dict(os.environ, {"ORCHE_SESSION": "div-acme-shop-design", "ORCHE_RUNNER": "1"}):
+            code, _, err = self.orche("feat", "new", "acme", "icons", "--scope", "assets/**", "--reason", "r")
+        self.assertEqual(code, 0, err)
+        event = registry.load()["events"][-1]
+        self.assertEqual((event["unit"], event["by"]), ("design/icons", "div-acme-shop-design"))
+
+    def test_main_still_creates_under_build(self):
+        self.add_design()
+        code, _, err = self.orche("feat", "new", "acme", "pay", "--scope", "src/pay/**", "--reason", "r",
+                                  "--by", "main-acme-shop")
+        self.assertEqual(code, 0, err)
+        self.assertEqual(registry.load()["events"][-1]["unit"], "build/pay")
+
+    def test_a_worker_does_not_staff_workers(self):
+        code, _, err = self.orche("feat", "new", "acme", "sub", "--scope", "src/sub/**", "--reason", "r",
+                                  "--by", "feat-acme-shop-checkout")
+        self.assertEqual(code, 1)
+        self.assertIn("workers do not staff workers", err)
+        self.assertEqual(self.orca_calls("worktree create"), [])
+
+    def test_overlap_with_another_divisions_worker_names_it(self):
+        self.add_design()
+        args = ("feat", "new", "acme", "icons", "--scope", "src/checkout/icons/**", "--reason", "r",
+                "--by", "div-acme-shop-design")
+        code, _, err = self.orche(*args, "--strict")
+        self.assertEqual(code, 3)
+        self.assertIn("overlaps feature build/checkout (src/checkout/**)", err)
+        code, _, err = self.orche(*args)
+        self.assertEqual(code, 0)
+        self.assertIn("overlaps feature build/checkout (src/checkout/**)", err)
+
+    def test_daily_budget_is_shared_across_divisions(self):
+        self.add_design()
+        reg = self.creates(2)
+        reg["events"].append({"at": ago(hours=1), "type": "create", "project": "acme-shop",
+                              "unit": "design/old", "by": "div-acme-shop-design"})
+        self.save(reg)
+        code, _, err = self.orche("feat", "new", "acme", "icons", "--scope", "assets/**", "--reason", "r",
+                                  "--by", "div-acme-shop-design")
+        self.assertEqual(code, 3, err)
+        self.assertIn("acme-shop: daily limit reached (3/3 in 24h)", err)
+        self.assertEqual(self.orca_calls("worktree create"), [])
+
+    def test_a_workerless_head_is_refused(self):
+        code, _, err = self.orche("feat", "new", "acme", "probe", "--scope", "lab/**", "--reason", "r",
+                                  "--by", "div-acme-shop-rnd")
+        self.assertEqual(code, 1)
+        self.assertIn("rnd has no workers; use subagents or brief Build/Design", err)
+        self.assertEqual(self.orca_calls("worktree create"), [])
+
+    def test_by_is_only_for_main(self):
+        self.add_design()
+        with mock.patch.dict(os.environ, {"ORCHE_SESSION": "feat-acme-shop-checkout"}):
+            code, _, err = self.orche("feat", "new", "acme", "sub", "--scope", "src/sub/**", "--reason", "r",
+                                      "--by", "div-acme-shop-build")
+        self.assertEqual(code, 1)
+        self.assertIn("workers do not staff workers", err)
+        with mock.patch.dict(os.environ, {"ORCHE_SESSION": "div-acme-shop-design"}):
+            code, _, err = self.orche("feat", "new", "acme", "icons", "--scope", "assets/**", "--reason", "r",
+                                      "--by", "div-acme-shop-build")
+        self.assertEqual(code, 0, err)
+        event = registry.load()["events"][-1]
+        self.assertEqual((event["unit"], event["by"]), ("design/icons", "div-acme-shop-design"))
+
+    def test_batch_defaults_to_the_callers_current_brief(self):
+        self.add_design()
+        from orche import brief
+        with mock.patch.object(brief, "newest", return_value=mock.Mock(unit="u-icons")):
+            code, _, err = self.orche("feat", "new", "acme", "icons", "--scope", "assets/**", "--reason", "r",
+                                      "--by", "div-acme-shop-design")
+        self.assertEqual(code, 0, err)
+        self.assertEqual(registry.load()["events"][-1].get("batch"), "u-icons")
+
+    def test_a_worker_of_a_retired_division_reports_to_build(self):
+        self.add_design()
+        reg = registry.load()
+        div = reg["projects"]["acme-shop"]["divisions"]["design"]
+        worker = dict(reg["projects"]["acme-shop"]["divisions"]["build"]["features"][0], name="icons",
+                      session="feat-acme-shop-icons")
+        div["features"], div["status"] = [worker], "retired"
+        self.save(reg)
+        r = roster.Roster(registry.load())
+        self.assertEqual(r.head(r.member("feat-acme-shop-icons")).session,
+                         "div-acme-shop-build")
+
+    def test_registry_lock_serialises_creations(self):
+        held, done = threading.Event(), threading.Event()
+
+        def other():
+            held.wait()
+            with registry.lock():
+                done.set()
+        t = threading.Thread(target=other, daemon=True)
+        t.start()
+        with registry.lock():
+            with registry.lock():          # re-entrant in one thread
+                held.set()
+                self.assertFalse(done.wait(0.3))
+        t.join(5)
+        self.assertTrue(done.is_set())
+        self.add_design()
+        for name, by in (("icons", "div-acme-shop-design"), ("pay", "main-acme-shop")):
+            code, _, err = self.orche("feat", "new", "acme", name, "--scope", f"{name}/**", "--reason", "r",
+                                      "--by", by)
+            self.assertEqual(code, 0, err)
+        divs = registry.load()["projects"]["acme-shop"]["divisions"]
+        self.assertIn("icons", [f["name"] for f in divs["design"]["features"]])
+        self.assertIn("pay", [f["name"] for f in divs["build"]["features"]])
 
     def test_bad_inputs(self):
         self.assertEqual(self.orche("feat", "new", "nope", "x", "--scope", "a", "--reason", "r")[0], 2)
@@ -1102,6 +1256,35 @@ class FeatRetireTest(FeatCase):
         self.assertEqual(reg["events"][-1]["type"], "retire")
         self.assertIn("GRAVEYARD row failed", hr.log_path().read_text())
 
+    def test_landed_worker_retires_without_final_line(self):
+        self.handoff.write_text("# HANDOFF\n\n## Next\nnothing\n")
+        origin = self.home / "origin.git"
+        git("init", "-q", "--bare", str(origin), cwd=self.home)
+        git("remote", "add", "origin", str(origin), cwd=self.wt)
+        git("push", "-q", "origin", "feat/checkout:main", cwd=self.wt)
+        git("remote", "set-head", "origin", "main", cwd=self.wt)
+        code, out, err = self.orche("feat", "retire", "acme", "checkout", "--yes")
+        self.assertEqual(code, 0, err)
+        self.assertIn("retired: landed", (self.repo / "docs" / "GRAVEYARD.md").read_text())
+
+    def test_squash_landed_worker_retires_without_final_line(self):
+        from orche.queue import store
+        self.handoff.write_text("# HANDOFF\n\n## Next\nnothing\n")
+        origin = self.home / "origin.git"
+        git("init", "-q", "--bare", str(origin), cwd=self.home)
+        git("remote", "add", "origin", str(origin), cwd=self.wt)
+        git("push", "-q", "origin", "feat/checkout:main", cwd=self.wt)
+        git("remote", "set-head", "origin", "main", cwd=self.wt)
+        git("commit", "-q", "--allow-empty", "-m", "after the push", cwd=self.wt)
+        code, _, err = self.orche("feat", "retire", "acme", "checkout", "--yes")
+        self.assertEqual(code, 3, err)       # not an ancestor and nothing merged yet
+        head = subprocess.run(["git", "rev-parse", "feat/checkout"], cwd=self.wt, capture_output=True,
+                              text=True).stdout.strip()
+        store.log("acme-shop", "merged", {"id": f"pr7-{head[:7]}", "pr": 7, "unit": "feat-acme-shop-checkout"})
+        code, _, err = self.orche("feat", "retire", "acme", "checkout", "--yes")
+        self.assertEqual(code, 0, err)
+        self.assertIn("retired: landed", (self.repo / "docs" / "GRAVEYARD.md").read_text())
+
     def test_refuses_without_final_line(self):
         self.handoff.write_text("# HANDOFF\n\n## Next\nfinish tests\n")
         code, _, err = self.orche("feat", "retire", "acme", "checkout", "--yes")
@@ -1369,9 +1552,21 @@ class AuditTest(FeatCase):
         self.save(self.reg)
         data = json.loads(self.orche("--json", "hr", "audit")[1])
         self.assertEqual([(p["unit"], p["handoff"]) for p in data["proposals"]], [("feat-acme-shop-checkout", True)])
-        self.assertEqual([(o["a"], o["b"]) for o in data["overlaps"]], [("checkout", "search")])
+        self.assertEqual([(o["a"], o["b"]) for o in data["overlaps"]], [("build/checkout", "build/search")])
         code, out, _ = self.orche("hr", "audit", "--apply")
         self.assertIn("applied: refused feat-acme-shop-checkout: HANDOFF.md is stale", out)
+
+    def test_overlaps_span_every_divisions_workers(self):  # teams §4.5
+        divs = self.reg["projects"]["acme-shop"]["divisions"]
+        divs["build"]["features"][1]["scope"] = ["src/**"]
+        divs["rnd"]["features"] = [{"name": "probe", "status": "active", "session": "feat-acme-shop-probe",
+                                    "worktree": "repo-acme::/srv/orca/acme-shop-probe", "branch": "feat/probe",
+                                    "scope": ["src/search/**"], "created": ago(days=2), "last_activity": ago(days=1),
+                                    "reason": "probe the search index"}]
+        self.save(self.reg)
+        data = json.loads(self.orche("--json", "hr", "audit")[1])
+        self.assertEqual([(o["a"], o["b"]) for o in data["overlaps"]],
+                         [("rnd/probe", "build/search"), ("build/checkout", "build/search")])
 
     def test_git_history_and_decision_rev_rows(self):
         git_repo(self.repo)  # commits the three fixture orders
@@ -1622,6 +1817,20 @@ class HrAddModelTest(HrCase):
         self.assertIn("sleep its pane first: orche sleep div-acme-shop-build", err)
         self.assertEqual(self.orche("hr", "model", "acme-shop", "gtm", "codex")[0], 2)
         self.assertEqual(self.orche("hr", "model", "acme-shop", "build", "openai:gpt-4")[0], 1)
+
+    def test_a_dormant_division_with_an_awake_worker_keeps_codex_off(self):  # teams §4.5
+        reg = registry.load()
+        reg["projects"]["acme-shop"]["divisions"]["research"]["features"] = [
+            {"name": "survey", "status": "active", "session": "feat-acme-shop-survey", "branch": "feat/survey",
+             "worktree": "repo-acme::/srv/orca/acme-shop-survey", "scope": ["docs/survey/**"],
+             "created": "2026-10-10T10:00:00+09:00", "last_activity": "2026-10-15T18:00:00+09:00",
+             "reason": "user survey"}]
+        registry.save(reg)
+        code, _, err = self.orche("hr", "model", "acme-shop", "research", "codex")
+        self.assertEqual(code, 3)
+        self.assertIn("sleep its pane first: orche sleep feat-acme-shop-survey", err)
+        data = json.loads(self.orche("--json", "hr", "choices", "acme-shop", "--lang", "en")[1])
+        self.assertNotIn("codex", data["ask"]["model"]["research"]["values"].values())
 
     def test_choices_json(self):
         code, out, _ = self.orche("--json", "hr", "choices", "acme-shop", "--lang", "en")

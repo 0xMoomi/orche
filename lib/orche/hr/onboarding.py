@@ -155,6 +155,13 @@ def persona_template(role, name, custom=False):
     return next((PERSONAS / n for n in names if (PERSONAS / n).is_file()), None)
 
 
+def render_persona(tmpl, **vars) -> str:
+    """Persona template `tmpl` rendered: first each `{{PART}}` line with the block every persona shares,
+    `personas/parts/<part>.md`, then `vars` (so a `{{...}}` inside a value, e.g. a charter, stays as is)."""
+    parts = {p.stem.upper(): templates.load(p) for p in sorted((PERSONAS / "parts").glob("*.md"))}
+    return templates.render(templates.render(tmpl.read_text(encoding="utf-8"), **parts), **vars)
+
+
 def _with_header(text, file) -> str:
     """`text` with PERSONA_HEADER as the line right after the frontmatter's closing `---` (on top
     when there is no frontmatter)."""
@@ -175,8 +182,8 @@ def persona_text(role, *, project, name, session, model, effort, custom=None):
     tmpl = persona_template(role, name, custom=bool(custom))
     if tmpl is not None:
         extra = {"LABEL": custom["label"], "CHARTER": custom["charter"]} if custom else {}
-        text = templates.render(tmpl.read_text(encoding="utf-8"), PROJECT=project, NAME=name,
-                                SESSION=session, MODEL=model, EFFORT=effort, **extra)
+        text = render_persona(tmpl, PROJECT=project, NAME=name, SESSION=session, MODEL=model, EFFORT=effort,
+                              **extra)
         return _with_header(text, tmpl.name), True
     text = (f"---\nname: {session}\ndescription: ORCHE {role} agent for {project} ({name})\nmodel: {model}\n---\n"
             f"{ROLE_TEXT[role].format(name=name, project=project)}\n"

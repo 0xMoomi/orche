@@ -195,28 +195,29 @@ RESUME_HEAD = 20   # card lines kept when the whole card does not fit in CAP
 
 
 def _with_resume(r, who, source, text):
-    """Main's text plus its project's resume card (lib/orche/resume.py): after a `clear` or `resume`,
-    and on `startup` when a lineage is open; a division or a non-member gets none. Within CAP: the
-    card's first RESUME_HEAD lines and a pointer to `orche resume` when the whole card does not fit.
-    Fail-open: any error leaves `text` as it was."""
+    """Main's text plus its project's card (`orche status <project>`, lib/orche/project.py): after a
+    `clear` or `resume`, and on `startup` when a lineage is open; a division or a non-member gets none.
+    Within CAP: the card's first RESUME_HEAD lines and a pointer to `orche status <project>` when the
+    whole card does not fit. Fail-open: any error leaves `text` as it was."""
     m = who.member
     if not text or m is None or m.kind != "main":
         return text
     try:
-        from orche import resume
-        if source == "startup" and not resume.has_open(r.reg, m.project):
+        from orche import project
+        if source == "startup" and not project.has_open(r.reg, m.project):
             return text
-        card = resume.card(r.reg, m.project)
+        from orche import cmd_status
+        card = cmd_status.card_text(project.card(r.reg, m.project))
         room = CAP - len(text) - 2
         if len(card) > room:
-            tail = f"… orche resume {m.project} for the rest"
+            tail = f"… orche status {m.project} for the rest"
             card = "\n".join(card.splitlines()[:RESUME_HEAD])
             card = card[:max(0, room - len(tail) - 1)].rstrip() + "\n" + tail
         return text + "\n\n" + card if len(card) <= room else text
     except Exception as exc:  # noqa: BLE001 - fail-open
         try:
             from orche import log
-            log.log("hooks", f"session_start: resume: {type(exc).__name__}: {exc}")
+            log.log("hooks", f"session_start: card: {type(exc).__name__}: {exc}")
         except Exception:  # noqa: BLE001
             pass
         return text

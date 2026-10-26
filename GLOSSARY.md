@@ -174,8 +174,8 @@ The checks a completion claim must pass before a session may stop, a pointer may
 _Avoid_: completion gate (the old name), ledger gate (the ledger row is one of its checks).
 
 **Pre-review**:
-The cross-vendor review of a gated unit's published head inside its own run, before Build sees it (`lib/orche/review/pre.py`): PASS, RETURN (reworked in the run, at most `review.rounds` times per revision) or error. A pane unit gets one round in `orche report done`.
-_Avoid_: code review (Build's), the done gate (that checks the ledger row, not the change).
+The cross-vendor review of a gated unit's published head inside its own run, before the writer's division head sees it (`lib/orche/review/pre.py`): PASS, RETURN (reworked in the run, at most `review.rounds` times per revision) or error. A pane unit gets one round in `orche report done`.
+_Avoid_: code review (the head's), the done gate (that checks the ledger row, not the change).
 
 **Reviewer**:
 The model that reads a change read-only and answers `VERDICT: PASS|RETURN`, recorded as `review:pre:<model>`: never a session, so never the writer. Of another vendor than the writer's when one runs, else the other Claude model (noted).
@@ -214,7 +214,7 @@ A Run whose `orche run` died without filing (SIGKILL, OOM, power loss) or whose 
 _Avoid_: crashed run, zombie; a stale lock is a Lost run whose pointer was already filed.
 
 **Run record**:
-`RUN.json` in the unit folder: 24 keys in a fixed order — what ran (unit, project, target, worktree, branch, TIER, model, vendor, effort), then the result. Built by one constructor; it holds the unit's last Run.
+`RUN.json` in the unit folder: 25 keys in a fixed order — what ran (unit, project, to, worktree, branch, tier, model, vendor, effort), then the result (started … pr); then review, stage, held_vendor and holds when set. Built by one constructor; it holds the unit's last Run.
 _Avoid_: run log (that is `logs/runs/<unit>.log`).
 
 **Reservation**:
@@ -298,8 +298,16 @@ The unit whose work led to a brief: for a division's brief, the division's newes
 _Avoid_: caller, origin.
 
 **Traffic control**:
-Build's role from 0.9.0: it splits work, decides PASS or RETURN on finished features and lets the merge queue land them; it never merges by hand.
-_Avoid_: integration (Build no longer integrates).
+A head's role (Build's from 0.9.0, every head's from 0.10.0): it splits a brief into slices, staffs a worker per slice, decides PASS or RETURN on finished work and lets the merge queue land it; it never merges by hand.
+_Avoid_: integration (no head integrates).
+
+**Head**:
+The division session a worker belongs to (its Orca parent): it staffs, briefs, reviews and queues its own workers and reports its unit to Main. Main briefs heads, never workers.
+_Avoid_: manager, lead.
+
+**Worker**:
+A feature agent (`feat/<name>`) under any head but Research, R&D and Ops: one slice per brief; it retires once its work landed. Standing workers are only `infra` under Build and an owner the same files earned by two queue returns in a week.
+_Avoid_: Build's feature (features are not Build-only from 0.10.0).
 
 **Publish**:
 The push of a unit's branch and the opening of its PR after its done passed the gate.
@@ -332,12 +340,12 @@ _Avoid_: reject.
 The queue after the base itself failed its gate (`main-red`) or a landing failed its proof (`proof`). A main-red closure lets only `--first` entries test until main is green again (a `--first` entry landed, or main passed its gate); a proof closure takes nothing, `--first` included, until `orche queue resume <project>`.
 
 **Checklist**:
-The eight lines a Build review answers: 1 ACCEPT met by evidence, 2 VERIFY committed and passing at the head, 3 inside SCOPE, 4 no `[skip ci]` on code, 5 every pre-review [act] finding fixed or rebutted, 6 no other PR or feature on the same paths, 7 not high risk, 8 within `review.pane_lines` and not TIER hard. A failed line is `- N: why`.
+The eight lines a head review answers: 1 ACCEPT met by evidence, 2 VERIFY committed and passing at the head, 3 inside SCOPE, 4 no `[skip ci]` on code, 5 every pre-review [act] finding fixed or rebutted, 6 no other PR or feature on the same paths, 7 not high risk, 8 within `review.pane_lines` and not TIER hard. A failed line is `- N: why`.
 _Avoid_: rubric (that is the grader's).
 
-**Build review**:
-The headless, read-only traffic-control review with Build's persona and the checklist.
-_Avoid_: pane review (that is Build reading the PR itself).
+**Head review**:
+The headless, read-only traffic-control review with the writer's head's persona (Build's for PR entries) and the checklist.
+_Avoid_: Build review (any head reviews its own workers); pane review (that is the head reading the PR itself).
 
 **Usage hold**:
 A vendor's pause after a usage or rate limit, across projects, until its reset (`ORCHE_HOME/flow/usage-<vendor>.json`, `lib/orche/flow/usage.py`); the units it stopped are held (a quiet `info`, never `failed`) and the heartbeat re-runs them after it.
@@ -347,14 +355,14 @@ _Avoid_: rate-limit pause, project pause (the limit belongs to the vendor accoun
 The TIER → model and effort table for headless attempts (config `ladder`); a **rung** is one row; **escalation** re-runs a failed mechanical attempt one rung up.
 
 **Attempt**:
-One model call inside a run (work, escalation, rework, review, build-review); RUN.json `attempts` lists them.
+One model call inside a run (work, escalation, rework, review, build-review); the run's history lines record each one.
 
 **Scale preset**:
 A named set of caps (`default`, `20`, `30`) applied with `orche hr scale`.
 
 ## Relationships
 
-- A project has one Main, divisions and (under Build) feature agents; each is a **Member**. The **Liaison** is a *sealed* **Headless call**, not a Member.
+- A project has one Main, divisions and (under their heads) workers; each is a **Member**. The **Liaison** is a *sealed* **Headless call**, not a Member.
 - An **Identity** names at most one Member; a **Place** names at most one project and one unit worktree.
 - A **Target** receives **Units**; a **Recipient** receives pointers.
 - A **Unit** is carried out by one **Unit worker** per run.

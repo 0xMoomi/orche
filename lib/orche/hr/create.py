@@ -4,6 +4,7 @@ from typing import NamedTuple
 
 from .. import cli, config, orca, registry, roster, scale, setup_flow, units, util, vendors
 from . import book, limits, onboarding, panes
+from .transitions import wake
 
 
 class Plan(NamedTuple):
@@ -208,47 +209,64 @@ def add_division(reg, key, name, *, model=None, label=None, charter=None, wake=F
 
 def create_feature(reg, key, name, *, scope, reason, by=None, batch=None, strict=False, dry_run=False) -> tuple:
     """`orche feat new` end to end (SPEC §2.5). `scope`: the globs, split and non-empty (the CLI checks).
-    Order: build division (2) -> name is a slug (1) -> session free registry-wide (1) -> no live feature
-    of that name (1) -> creation limits (3; the global cap also freezes creation, unless dry_run) ->
-    scope overlaps (warning; 3 with `strict`) -> free disk >= `feature_min_free_disk_mb` (3) -> awake limit
-    (3; not for a headless feature: Codex, or `feature_panes` false) -> parent-division warning -> child
-    worktree of the build worktree, a provisional `onboarding` entry saved at once (a re-run resumes it),
+    The head is the caller's division (`by`, else $ORCHE_SESSION): a division of this project staffs
+    itself, Main / the owner / anyone else staffs build, a worker is refused (1).
+    Order: head division (2) -> name is a slug (1) -> session free registry-wide (1) -> no live feature
+    of that name in any division (1) -> creation limits (3, one budget for every division; the global
+    cap also freezes creation, unless dry_run) -> scope overlaps with every division's workers (warning;
+    3 with `strict`) -> free disk >= `feature_min_free_disk_mb` (3) -> awake limit (3; the pane unless
+    headless: Codex, or `feature_panes` false; plus the head when it must wake) -> a dormant or paused
+    Claude head woken (`orche wake`) -> child worktree of the head's worktree, a provisional `onboarding` entry saved at once (a re-run resumes it),
     unit files, settings, persona, pane -> the `create` record and notification -> Orca unread dot
     (a failure is a warning). A headless Claude feature is `active` with `pane: false` (no pane, no
     awake slot; `orche feat wake` opens one); a Codex feature is `paused`. Returns (data, line)."""
     proj = reg["projects"][key]
+    real = roster.Roster(reg).member(roster.env_session())
+    if real is not None and real.kind != "main":   # --by is Main's / the owner's only
+        by = real.session
     by = by or roster.actor()
+    if not batch:   # per_request_auto: one request = the caller's current brief
+        from .. import brief
+        current = brief.newest(reg, key, by)
+        batch = current.unit if current else None
     session = onboarding.session_name("feat", key, name)
-    build = proj["divisions"].get("build")
-    if build is None:
-        raise book.Refused(cli.EXIT_NOT_FOUND, f"{key} has no build division (run orche init first)")
+    division = _head_division(reg, key, by)
+    head = proj["divisions"].get(division)
+    if head is None or not head.get("worktree"):
+        raise book.Refused(cli.EXIT_NOT_FOUND, f"{key} has no {division} division (run orche init first)")
     if util.slugify(name) != name:
         raise book.Refused(cli.EXIT_USER, f"feature name must be lowercase [a-z0-9-]: {name!r}")
     owner = onboarding.session_owner(reg, key, session)
     if owner:
         raise book.Refused(cli.EXIT_USER, f"session {session} is taken by project {owner}; pick another name")
-    if any(f["name"] == name and f["status"] not in ("retired", "onboarding")
-           for f in build.get("features", [])):
-        raise book.Refused(cli.EXIT_USER, f"feature {name} already exists in {key}")
+    clashes = []
+    for div_name, div in proj["divisions"].items():   # every division's workers: one tree, shared files
+        theirs_all = div.get("features", [])
+        if any(f["name"] == name and f["status"] != "retired"
+               and (f["status"] != "onboarding" or div_name != division) for f in theirs_all):
+            raise book.Refused(cli.EXIT_USER, f"feature {name} already exists in {key}")
+        clashes += [(other if div_name == division else f"{div_name}/{other}", theirs, mine)
+                    for other, theirs, mine in limits.overlaps(scope, theirs_all)]
     verdict = limits.check_create(reg, key, batch=batch)
     if not verdict.ok:
         if verdict.freeze and not dry_run:
             limits.freeze(reg, by, verdict.reason)
         raise book.Refused(cli.EXIT_BLOCKED, verdict.reason)
-    for other, theirs, mine in limits.overlaps(scope, build.get("features", [])):
+    for other, theirs, mine in clashes:
         if strict:
             raise book.Refused(cli.EXIT_BLOCKED, f"scope {mine} overlaps feature {other} ({theirs})")
         cli.warn(f"scope {mine} overlaps feature {other} ({theirs})")
     cfg = config.load()
     _disk_guard(cfg, reg, proj["path"])
-    model, effort = build.get("model") or vendors.recommend(cfg, "build").model, vendors.FEATURE_EFFORT
+    model, effort = head.get("model") or vendors.recommend(cfg, division).model, vendors.FEATURE_EFFORT
     codex = vendors.vendor_of(model) == vendors.CODEX   # headless only: no pane, no awake slot, `paused`
     headless = codex or cfg.get("feature_panes", True) is False
-    if not headless:
-        limits.need_awake(reg)
-    if build.get("status") != "active":
-        cli.warn(f"parent division build is {build.get('status')}")
-    features = build.setdefault("features", [])
+    wake_head = head.get("status") in ("dormant", "paused") and not codex   # R6: a head with workers is awake
+    if not headless or wake_head:
+        limits.need_awake(reg, (not headless) + wake_head)
+    if wake_head:
+        wake(reg, roster.Roster(reg).member(head["session"]), dry_run=dry_run)
+    features = head.setdefault("features", [])
     resume = next((f for f in features if f["name"] == name and f["status"] == "onboarding"), None)
     now = util.now_iso()
     feature = {"name": name, "scope": list(scope), "session": session,
@@ -259,7 +277,7 @@ def create_feature(reg, key, name, *, scope, reason, by=None, batch=None, strict
         registry.save(reg)
     try:
         entry = onboarding.onboard(project=key, repo_root=proj["path"], repo_id=proj["repo_id"], kind="feat",
-                                   name=name, model=model, effort=effort, wake=not headless, parent=build["worktree"],
+                                   name=name, model=model, effort=effort, wake=not headless, parent=head["worktree"],
                                    existing=resume, on_created=provisional, dry_run=dry_run)
         if dry_run:
             orca.worktree("set", "--worktree", f"id:{entry['worktree']}", "--unread", dry_run=True)
@@ -277,7 +295,7 @@ def create_feature(reg, key, name, *, scope, reason, by=None, batch=None, strict
         feature["pane"] = False
     features[:] = [f for f in features if not (f["name"] == name and f["status"] == "onboarding")]
     features.append(feature)
-    event = {"type": "create", "project": key, "unit": f"build/{name}", "by": by}
+    event = {"type": "create", "project": key, "unit": f"{division}/{name}", "by": by}
     if batch:
         event["batch"] = batch
     book.record(reg, f"create {session} by {by}: {reason}", event=event,
@@ -287,6 +305,21 @@ def create_feature(reg, key, name, *, scope, reason, by=None, batch=None, strict
     except orca.OrcaError as exc:
         cli.warn(f"could not mark the worktree unread: {exc}")
     return {"project": key, "feature": feature}, f"{session} {status} ({entry['branch']})"
+
+
+WORKERLESS = ("research", "rnd", "ops")   # R-TOPO-2: these heads use subagents, not workers
+
+
+def _head_division(reg, key, by) -> str:
+    """The division a new worker joins: the caller's own division in `key`, else build. A worker: 1."""
+    caller = roster.Roster(reg).member(by)
+    if caller and caller.kind == "feat":
+        raise book.Refused(cli.EXIT_USER, "workers do not staff workers; ask your division's head")
+    if caller and caller.kind == "div" and caller.project == key:
+        if caller.name in WORKERLESS:
+            raise book.Refused(cli.EXIT_USER, f"{caller.name} has no workers; use subagents or brief Build/Design")
+        return caller.name
+    return "build"
 
 
 def _disk_guard(cfg, reg, path):

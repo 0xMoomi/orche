@@ -1,6 +1,7 @@
 """Creation limits, scope overlaps, the awake limit, the stage gate and the freeze switch.
 
-Creation limits count `create` events whose unit starts with `build/` (feature agents), by their `at` time:
+Creation limits count `create` events whose unit is `<division>/<name>` (workers of any division: one
+per-project budget shared by all divisions), by their `at` time:
 per project in the last 24 h and 7 days, globally in the last 24 h, and per `batch` id. The
 caller applies a `freeze` verdict through `freeze` (set `frozen`, record the event, notify).
 """
@@ -27,7 +28,7 @@ class Verdict:
 
 def _feature_creates(reg):
     for ev in reg.get("events", []):
-        if ev.get("type") == "create" and str(ev.get("unit", "")).startswith("build/"):
+        if ev.get("type") == "create" and "/" in str(ev.get("unit", "")):
             at = units.parse_iso(ev.get("at"))
             if at is not None:
                 yield ev, at

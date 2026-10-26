@@ -39,10 +39,9 @@ def set_model(reg, key, name, model, *, by=None, dry_run=False) -> tuple:
         if not avail.ok:
             raise book.Refused(cli.EXIT_BLOCKED, vendors.refusal(avail))
         awake = [session] if entry.get("status") == "active" else []
-        if name == "build":
-            awake += [f.get("session") or onboarding.session_name("feat", key, f["name"])
-                      for f in entry.get("features") or []
-                      if f.get("status") == "active"]
+        awake += [f.get("session") or onboarding.session_name("feat", key, f["name"])
+                  for f in entry.get("features") or []
+                  if f.get("status") == "active"]
         if awake:
             raise book.Refused(cli.EXIT_BLOCKED, "sleep its pane first: "
                                + " && ".join(f"orche sleep {s}" for s in awake))

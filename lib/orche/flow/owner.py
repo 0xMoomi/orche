@@ -150,10 +150,6 @@ def _iso(now) -> str:
     return now.astimezone().isoformat(timespec="seconds")
 
 
-def _hhmm(at) -> str:
-    return at.astimezone().strftime("%H:%M")
-
-
 def _mtime(path):
     try:
         return path.stat().st_mtime
@@ -509,7 +505,7 @@ def _tell(project, unit, rev, names, marker, filled) -> bool:
         return False
     try:
         inbox.post(inbox.make(unit, "orche", f"main-{project}", "info", brief_rev=rev, urgent=True,
-                              summary=f"owner step done: secret {', '.join(names)} filled at {_hhmm(filled)} — "
+                              summary=f"owner step done: secret {', '.join(names)} filled at {units.hhmm(filled)} — "
                                       f"resume {unit} (AMEND or orche run {unit})"))
     except Exception as exc:  # noqa: BLE001 - the heartbeat tries again
         marker.unlink(missing_ok=True)
@@ -681,7 +677,7 @@ def _flush(p, now, dry_run):
             return None
         if _gap(sent, now):
             return None
-        row = _row(p, kind, f"notify the owner: the held {kind} notice from {_hhmm(at)}", dry_run)
+        row = _row(p, kind, f"notify the owner: the held {kind} notice from {units.hhmm(at)}", dry_run)
         if dry_run or _show(p, sent, str(rec.get("text") or ""), kind, now, notice_id=rec.get("id")):
             return row
     return None
@@ -697,7 +693,7 @@ def _next(p, a, now, dry_run):
     skip = not n and present(p, now)
     if (skip and dry_run) or (_gap(sent, now) and not skip):
         return None
-    asked = _hhmm(units.parse_iso(a["at"]))
+    asked = units.hhmm(units.parse_iso(a["at"]))
     body = f"OWNER (asked {asked}): {a['text']}" if n else f"OWNER: {a['text']}"
     row = (_row(p, "owner", f"re-notify the owner: {p} ask from {asked} ({n}/{len(RENOTIFY_S)})", dry_run,
                 attempt=n, cap=len(RENOTIFY_S)) if n
@@ -755,6 +751,6 @@ def status(project, now=None):
         quiet = bool(n) and _quiet(at)
     else:
         at = None
-    return {"text": one_line(a.get("text"), LINE_MAX), "at": a.get("at"), "since": _hhmm(asked),
+    return {"text": one_line(a.get("text"), LINE_MAX), "at": a.get("at"), "since": units.hhmm(asked),
             "minutes": int((now - asked).total_seconds() // 60), "kind": a.get("kind"), "source": a.get("source"),
-            "unit": a.get("unit"), "notified": n, "next": None if quiet or at is None else _hhmm(at), "quiet": quiet}
+            "unit": a.get("unit"), "notified": n, "next": None if quiet or at is None else units.hhmm(at), "quiet": quiet}

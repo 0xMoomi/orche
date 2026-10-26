@@ -7,7 +7,7 @@ import unittest
 
 import support
 import test_hooks
-from orche import templates
+from orche.hr import onboarding
 
 AGENTS = support.ROOT / "agents"
 PERSONAS = support.ROOT / "templates" / "personas"
@@ -119,7 +119,7 @@ class PersonaTemplatesTest(unittest.TestCase):
 
     def test_rendered_personas_carry_the_rules(self):
         for path in sorted(p for p in PERSONAS.glob("*.md") if p.name not in PROMPTS):
-            text = templates.render(path.read_text(), **VARS)
+            text = onboarding.render_persona(path, **VARS)
             self.assertNotIn("{{", text, path.name)
             self.assertIn("acme", text, path.name)
             self.assertIn("## Always-pause", text, path.name)
@@ -134,7 +134,7 @@ class PersonaTemplatesTest(unittest.TestCase):
             self.assertIn("## Dispatch and inbox", text, path.name)
             self.assertNotRegex(text, r"STATUS: [^`]*stopped|inbox pointer JSON in|orche/inbox/", path.name)
             self.assertIn("orche report ", text, path.name)
-        unit = templates.render((PERSONAS / "feature.md").read_text(), **VARS)
+        unit = onboarding.render_persona(PERSONAS / "feature.md", **VARS)
         for part in (".orche/units/<unit>/BRIEF.md", "orche report stop", "Never hand-write pointer JSON",
                      "Never `/clear` mid-unit", "STATUS: done | blocked | failed | stop`"):
             self.assertIn(part, unit)
@@ -198,7 +198,7 @@ class SkillsTest(unittest.TestCase):
         # Setup wave S3: the chat procedure goes through --print-setup, a setup file and a dry-run preview.
         for part in ("`orche init --print-setup <name>`", "\"defaults\" keeps it", "\"without ops\"",
                      "\"add a design division:", "`orche --dry-run init <name> --setup-file <path>`",
-                     "`orche status <proj>`", "`orche depts <proj>`", "out of scope for `orche init`",
+                     "`orche status --project <proj>`", "`orche depts <proj>`", "out of scope for `orche init`",
                      # Setup fix round: status shows names (M8); `:` in a charter or model id needs the file.
                      "its division names, custom ones included", "Only the status-line cell uses the label",
                      "a charter\n  or model id containing `:` goes in the setup file"):
@@ -296,7 +296,7 @@ class SkillsTest(unittest.TestCase):
         spec = (support.ROOT / "SPEC.md").read_text()
         section = spec[spec.index("### 2.2"):spec.index("### 2.3")]
         texts = {"SPEC §2.2": section}
-        for path in list(SKILLS.glob("*/SKILL.md")) + list(PERSONAS.glob("*.md")):
+        for path in list(SKILLS.glob("*/SKILL.md")) + list(PERSONAS.rglob("*.md")):
             texts[str(path)] = path.read_text()
         for name, text in texts.items():
             for old in ("Main approves integration", "integration worktree", "Integration worktree"):
@@ -317,19 +317,77 @@ class SkillsTest(unittest.TestCase):
         card = INJECT.search(build).group(1)
         self.assertIn("Tags, releases and deploys need user approval (STANDING 5).", card)
         for phrase in ("You are traffic control", "Never merge by hand", "the merge queue (`orche queue`)",
-                       "cross-vendor pre-review", "headless Build review", "`orche queue add <unit>`",
+                       "cross-vendor pre-review", "headless head review", "`orche queue add <unit>`",
                        "`AMEND <unit> rev N`", "Never wait on the queue", "The verifier is never the writer",
                        "`orche feat new`", "No direct push to main"):
             self.assertIn(phrase, card)
         self.assertIn("filed with `orche report done`", INJECT.search(build).group(1))
         from orche import inbox
         self.assertIn("Pointer statuses are exactly: " + ", ".join(inbox.STATUSES) + ".", build)
-        for heading in ("## Traffic control", "## The merge queue", "## Review checklist", "## Scale",
+        for heading in ("## Your team", "## The merge queue", "## Review checklist", "## Scale",
                         "## Ledger rules", "## Review in a fresh session", "## Verify skill"):
             self.assertIn(heading, build)
         help_ = (SKILLS / "orche" / "SKILL.md").read_text()
         for part in ("## Commands", "## Cross-project requests", "`[project]`", "`[drain]`"):
             self.assertIn(part, help_)
+
+    def test_team_rule_is_one_text_with_only_the_standing_line_per_division(self):
+        """Design §4.3: one team rule, personas/parts/team.md; the orche-build skill keeps a copy (a skill cannot
+        include a template) that differs only in Build's standing infra worker."""
+        def team(text):
+            block = text.split("## Your team\n", 1)[1].split("\n\n", 1)[0].rstrip("\n")
+            return re.sub(r"^4 Standing:.*(\n  .*)*", "4 Standing: <division>", block, flags=re.M)
+        part = (PERSONAS / "parts" / "team.md").read_text()
+        skill = (SKILLS / "orche-build" / "SKILL.md").read_text()
+        self.assertIn("\n4 Standing: none; deploy, CI and docker slices go to Build.\n", part)
+        self.assertIn("\n4 Standing: keep one `infra` worker", skill)
+        self.assertEqual(team(part), team(skill))
+        for name in ("div-custom.md", "div-gtm.md"):
+            self.assertIn("\n\n" + part + "\n", onboarding.render_persona(PERSONAS / name, **VARS), name)
+
+    def test_shared_persona_blocks_live_once_in_parts(self):
+        """N12: a block several personas share is one `personas/parts/<part>.md`, placed by a `{{PART}}` line of
+        its own; every part is used and no template keeps a copy of one."""
+        parts = {p.stem.upper(): p.read_text() for p in (PERSONAS / "parts").glob("*.md")}
+        self.assertEqual(sorted(parts), ["ALWAYS_PAUSE", "DISPATCH", "MEMORY_SAVE", "PRINCIPLES", "REPORT_FORMAT",
+                                         "RESUME", "TEAM"])
+        used = set()
+        for path in sorted(p for p in PERSONAS.glob("*.md") if p.name not in PROMPTS):
+            text = path.read_text()
+            for name, body in parts.items():
+                self.assertNotIn(body, text, f"{path.name} copies {name}")
+                if "{{" + name + "}}" in text:
+                    self.assertRegex(text, r"(?m)^\{\{" + name + r"\}\}$", path.name)
+                    used.add(name)
+        self.assertEqual(used, set(parts))
+
+    def test_review_checklist_keeps_its_eight_numbered_lines(self):
+        """N12: templates/review/build.md's checklist is the source of the eight numbered lines. The skill words
+        them for the pane (the report's evidence; the pane decides 7 and 8) under the same numbers and names; the
+        code's findings and its pane routing (7, 8: review/build.py) use those numbers; the skill's line count is
+        the config default."""
+        from orche import config
+        from orche.review import build as review_build
+        def items(text, heading):
+            block = text.split(heading + "\n\n", 1)[1].split("\n\n", 1)[0]
+            return {int(n): body for n, body in re.findall(r"(?ms)^(\d)\. (.*?)(?=^\d\. |\Z)", block)}
+        def names(found):
+            return {n: body.split(":", 1)[0].strip("`") for n, body in found.items()}
+        template = items((support.ROOT / "templates" / "review" / "build.md").read_text(), "## Checklist")
+        skill = items((SKILLS / "orche-build" / "SKILL.md").read_text(), "## Review checklist")
+        self.assertEqual(names(template), {1: "ACCEPT", 2: "VERIFY", 3: "Scope", 4: "[skip ci]", 5: "Pre-review",
+                                           6: "Overlap", 7: "Risk", 8: "Size"})
+        self.assertEqual(names(skill), names(template))
+        lines = config.DEFAULTS["review"]["pane_lines"]
+        facts = {"skip_ci": ["abc1234"], "scope_outside": ["x.py"], "overlap": [{"pr": 5, "paths": ["a.py"]}],
+                 "paths": ["lib/payments/x.py"], "added": lines + 1, "deleted": 0, "tier": "standard"}
+        found = dict(review_build.deterministic(facts, lines))
+        self.assertEqual(sorted(found), [3, 4, 6, 7, 8])
+        for n in (6, 7, 8):
+            phrase = re.search(r'RETURN\s+"([^"#]+)', template[n]).group(1)
+            self.assertTrue(found[n].startswith(phrase), (n, phrase, found[n]))
+        self.assertIn('"pane review: high risk"', skill[7])
+        self.assertIn(f"`review.pane_lines` ({lines})", skill[8])
 
     def test_no_card_template_or_readme_names_the_removed_owner_notification(self):
         """C10 T11: `inbox.notify` and the per-pointer owner notification are gone (0.7.0)."""

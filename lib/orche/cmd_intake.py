@@ -99,8 +99,7 @@ def cmd_intake(args):
 
 def background_argv(key, if_stale=False) -> list:
     """`orche intake <key> [--if-stale]` under this very interpreter (like runs.start's)."""
-    return [sys.executable, str(paths.PLUGIN_ROOT / "bin" / "orche.py"), "intake", key] \
-        + (["--if-stale"] if if_stale else [])
+    return procs.orche_argv("intake", key, *(["--if-stale"] if if_stale else []))
 
 
 def _background(args, key):

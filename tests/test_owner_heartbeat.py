@@ -442,7 +442,7 @@ class OwnerLineTest(BeatCase):
         self.assertEqual(self.line(at(300)), [f"  owner: asked {hm(T0)} (300 min, notified 5×) — {text}"])
         out = io.StringIO()
         with mock.patch.object(units, "now", lambda: at(301)), redirect_stdout(out), redirect_stderr(io.StringIO()):
-            load_cli().main(["status", P])
+            load_cli().main(["status", "--project", P])
         lines = out.getvalue().splitlines()
         self.assertTrue(lines[0].startswith(f"{P} stage="), lines)
         self.assertEqual(lines[1], f"  owner: asked {hm(T0)} (301 min, notified 5×) — {text}")

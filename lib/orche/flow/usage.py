@@ -10,8 +10,8 @@ strings the CLIs print are unverified (U4), hence a config list.
 The hold: ORCHE_HOME/flow/usage-<vendor>.json {vendor, at, until, source, step, text (masked, at most
 TEXT_MAX), project (the first unit's), units: [{project, unit, stage, at}], notified, resumed},
 written under flow/.usage-<vendor>.lock. A run start of a held vendor joins the hold (job._held); an
-attempt that hits a limit records it (hit). The heartbeat (reconcile) sends the owner notice once
-per hold, logs `usage resume` once `until` passed and re-runs the held units (class `held`)."""
+attempt that hits a limit records it (hit). The heartbeat (reconcile, heartbeat()) sends the owner
+notice once per hold, logs `usage resume` once `until` passed and re-runs the held units (class `held`)."""
 import contextlib
 import datetime as _dt
 import fcntl
@@ -174,10 +174,6 @@ def holds() -> list:
     return [h for h in (read(v) for v in VENDORS) if h is not None]
 
 
-def _iso(at) -> str:
-    return at.isoformat(timespec="seconds")
-
-
 def hhmm(at, now=None) -> str:
     """`15:00` (local), with the date when not today: `10-26 15:00`; `?` when unknown."""
     if at is None:
@@ -189,7 +185,7 @@ def hhmm(at, now=None) -> str:
 def _join(hold, project, unit, stage, now) -> None:
     rows = [u for u in hold.get("units") or [] if isinstance(u, dict)
             and not (u.get("project") == project and u.get("unit") == unit)]
-    hold["units"] = rows + [{"project": project, "unit": unit, "stage": stage, "at": _iso(now)}]
+    hold["units"] = rows + [{"project": project, "unit": unit, "stage": stage, "at": units.iso(now)}]
 
 
 def repeats(project, unit) -> int:
@@ -221,13 +217,13 @@ def hit(vendor, text, cfg, *, project, unit, stage, now=None):
         if is_active(hold, now):
             at = reset_time(text, cfg, now)
             if at is not None and at > until_of(hold):
-                hold.update(until=_iso(at), source="reset")
+                hold.update(until=units.iso(at), source="reset")
             _join(hold, project, unit, stage, now)
             util.write_json(path(vendor), hold)
             return hold
         step = _next_step(hold, now)
         until, source = detect(text, vendor, cfg, now, step=step)
-        hold = {"vendor": vendor, "at": _iso(now), "until": _iso(until), "source": source, "step": step,
+        hold = {"vendor": vendor, "at": units.iso(now), "until": units.iso(until), "source": source, "step": step,
                 "text": mask.redact(text)[0][:TEXT_MAX], "project": project, "units": [], "notified": None,
                 "resumed": None}
         _join(hold, project, unit, stage, now)
@@ -265,3 +261,42 @@ def held_units(hold, project=None) -> list:
 def held_text(hold, vendor, now=None) -> str:
     """The quiet `info` of a held unit: `held: claude usage limit until 15:00; this unit runs then`."""
     return f"held: {vendor} usage limit until {hhmm(until_of(hold), now)}; this unit runs then"
+
+
+def _row(action, project, target, line, failed=None) -> dict:
+    """A heartbeat pass row (reconcile), as owner.heartbeat's."""
+    return {"action": action, "class": "usage", "project": project, "target": target, "rev": None, "attempt": 1,
+            "cap": 1, "line": line, "failed": failed}
+
+
+def heartbeat(now, dry_run) -> list:
+    """The heartbeat's class `usage` (reconcile): an active hold nobody told yet -> the owner notice
+    (owner.usage_notice, Appendix A.15) once, marked first; a hold past its `until` -> `usage resume
+    vendor=<v>` once. Rows as owner.heartbeat's."""
+    from . import owner
+    rows = []
+    for hold in holds():
+        vendor, until, n = str(hold.get("vendor") or "?"), until_of(hold), len(held_units(hold))
+        project, at = str(hold.get("project") or ""), hhmm(until, now)
+        if is_active(hold, now) and not hold.get("notified") and project:
+            failed = None
+            if not dry_run:
+                try:
+                    mark(vendor, notified=units.iso(now))      # marked first: at most one notice per hold
+                    owner.usage_notice(project, vendor, at, n, now)
+                except Exception as exc:  # noqa: BLE001 - a notice never stops the pass
+                    failed = type(exc).__name__
+                    log.log("hooks", f"reconcile: usage notice {vendor}: {failed}: {exc}")
+            rows.append(_row("usage-notice", project, vendor, f"{'would tell' if dry_run else 'told'} the "
+                                                            f"owner: {vendor} usage limit until {at} ({n} units held)", failed))
+        elif until is not None and not is_active(hold, now) and not hold.get("resumed"):
+            if not dry_run:
+                try:
+                    mark(vendor, resumed=units.iso(now))
+                except OSError as exc:
+                    log.log("hooks", f"reconcile: usage resume {vendor}: {exc}")
+                    continue
+                log.log("events", f"usage resume vendor={vendor}")
+            rows.append(_row("usage-resume", project or "-", vendor,
+                             f"{vendor} usage hold over at {at}: its {n} held units re-run"))
+    return rows

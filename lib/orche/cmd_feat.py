@@ -1,8 +1,10 @@
-"""`orche feat new|sleep|wake|retire <proj> <name>` — feature-agent lifecycle under the build division.
+"""`orche feat new|sleep|wake|retire <proj> <name>` — feature-agent lifecycle under a division's head
+(the caller's division, `--by` or $ORCHE_SESSION; Main and the owner staff build; a worker cannot).
 
 new:    session `feat-<proj>-<name>` free registry-wide (hr.session_owner; else exit 1) ->
         frozen? -> limits (hr/limits.py; the global cap freezes) -> scope overlap (warn, or exit 3
-        with --strict) -> awake limit -> child worktree of the build worktree -> unit files,
+        with --strict; every division's workers) -> awake limit -> dormant head woken -> child worktree
+        of the head's worktree -> unit files,
         settings, persona -> pane -> registry entry + `create` event -> notify, hr-log,
         status line, Orca unread dot. A provisional `onboarding` entry is saved as soon as the
         worktree exists; re-running `feat new` resumes it without a second worktree.
@@ -10,13 +12,13 @@ sleep/wake: the `orche sleep|wake` flow (hr.sleep / hr.wake through cmd_sleep_wa
 retire: hr.retire (hr/retire.py).
 """
 from . import cmd_sleep_wake, hr, registry, roster
-from .cli import EXIT_NOT_FOUND, EXIT_OK, EXIT_USER, fail, out
+from .cli import EXIT_BLOCKED, EXIT_NOT_FOUND, EXIT_OK, EXIT_USER, fail, out
 
 
 def register(subparsers):
     feat = subparsers.add_parser("feat", help="create, sleep, wake or retire a feature agent")
     sub = feat.add_subparsers(dest="feat_command", metavar="<feat-command>", required=True)
-    p = sub.add_parser("new", help="create a feature agent under the build division")
+    p = sub.add_parser("new", help="create a feature agent under the calling division (else build)")
     p.add_argument("project")
     p.add_argument("name")
     p.add_argument("--scope", required=True, help="comma-separated globs the feature owns")
@@ -44,6 +46,14 @@ def _project(reg, name):
 
 
 def cmd_new(args):
+    try:
+        with registry.lock():
+            return _new(args)
+    except registry.Busy as exc:
+        return fail(EXIT_BLOCKED, str(exc))
+
+
+def _new(args):
     reg = registry.load()
     found, err = _project(reg, args.project)
     if found is None:
@@ -69,6 +79,14 @@ def _feature_unit(reg, key, name):
 
 
 def _lifecycle(args, verb):
+    try:
+        with registry.lock():
+            return _lifecycle_locked(args, verb)
+    except registry.Busy as exc:
+        return fail(EXIT_BLOCKED, str(exc))
+
+
+def _lifecycle_locked(args, verb):
     reg = registry.load()
     found, err = _project(reg, args.project)
     if found is None:
@@ -85,6 +103,14 @@ def cmd_wake(args):
 
 
 def cmd_retire(args):
+    try:
+        with registry.lock():
+            return _retire(args)
+    except registry.Busy as exc:
+        return fail(EXIT_BLOCKED, str(exc))
+
+
+def _retire(args):
     reg = registry.load()
     found, err = _project(reg, args.project)
     if found is None:

@@ -356,6 +356,27 @@ class ResolveToTest(RosterCase):
         self.assertEqual(self.r.resolve_to("build", None).project, "build")
 
 
+class HeadTest(RosterCase):
+    def test_a_workers_head_is_its_division_and_build_is_the_fallback(self):
+        def hero(reg):
+            reg["projects"]["acme"]["divisions"]["design"].setdefault("features", []).append(
+                _feat(self.root, "hero", "acme-design", "feat-acme-hero", ["src/**"]))
+        r = self.edited(hero)
+        name = lambda m: m.session if m else None
+        self.assertEqual(name(r.head(r.member("div-acme-design"))), "div-acme-design")
+        self.assertEqual(name(r.head(r.member("feat-acme-hero"))), "div-acme-design")
+        self.assertEqual(name(r.head(r.member("feat-acme-checkout"))), "div-acme-build")
+        self.assertEqual(name(r.head(r.member("main-acme"))), "div-acme-build")
+        self.assertEqual(name(r.head(None, "acme")), "div-acme-build")
+        self.assertIsNone(r.head(None, "build"))
+
+        def headless(reg):
+            hero(reg)
+            reg["projects"]["acme"]["divisions"]["design"]["session"] = ""
+        r = self.edited(headless)
+        self.assertEqual(name(r.head(r.member("feat-acme-hero"))), "div-acme-build")
+
+
 class ImportClosureTest(unittest.TestCase):
     def test_imports_only_the_allowed_modules(self):
         code = "import sys, orche.roster; print(sorted(m for m in sys.modules if m.startswith('orche')))"

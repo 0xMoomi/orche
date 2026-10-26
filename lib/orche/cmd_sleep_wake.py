@@ -34,6 +34,14 @@ def run(args, verb, name, reg) -> int:
 
 
 def cmd_sleep(args):
+    try:
+        with registry.lock():
+            return _sleep(args)
+    except registry.Busy as exc:
+        return cli.fail(cli.EXIT_BLOCKED, str(exc))
+
+
+def _sleep(args):
     reg = registry.load()
     m = roster.Roster(reg).member(args.unit)
     if m is not None and not m.owns_worktree:
@@ -42,6 +50,14 @@ def cmd_sleep(args):
 
 
 def cmd_wake(args):
+    try:
+        with registry.lock():
+            return _wake(args)
+    except registry.Busy as exc:
+        return cli.fail(cli.EXIT_BLOCKED, str(exc))
+
+
+def _wake(args):
     reg = registry.load()
     m = roster.Roster(reg).member(args.unit)
     if m is not None and not m.owns_worktree:   # Main: no awake limit, stage gate or onboarding check

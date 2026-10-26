@@ -28,7 +28,7 @@ def _norm(line) -> str:
 
 
 def _git(root, *argv):
-    res = shell.run(["git", "-C", str(root), *argv], timeout=30)
+    res = shell.git(root, *argv, timeout=30)
     return res.out if res.ok else None
 
 
@@ -96,8 +96,8 @@ def corrections(reg, now) -> list:
 def overlaps(reg) -> list:
     found = []
     for key, proj in sorted(reg.get("projects", {}).items()):
-        feats = [f for f in proj.get("divisions", {}).get("build", {}).get("features", [])
-                 if f.get("status") in ("active", "paused")]
+        feats = [{**f, "name": f"{name}/{f['name']}"} for name, div in (proj.get("divisions") or {}).items()
+                 for f in (div or {}).get("features") or [] if f.get("status") in ("active", "paused")]
         for i, feat in enumerate(feats):
             for other, theirs, mine in limits.overlaps(feat["scope"], feats[i + 1:]):
                 found.append({"project": key, "a": feat["name"], "b": other, "glob_a": mine, "glob_b": theirs})

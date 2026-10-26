@@ -23,11 +23,13 @@ def _json_files(pattern):
 
 
 def counts(reg: dict, key: str, now=None, r=None) -> dict:
-    """{awake, active_features, new, keys, unverified, running} for project `key` (running = live
-    `orche run` lock files). `r` is the caller's Roster of `reg`, built here when absent."""
+    """{awake, active_features, workers, new, keys, unverified, running} for project `key` (running = live
+    `orche run` lock files; workers = {division: active workers}, active_features their sum). `r` is the
+    caller's Roster of `reg`, built here when absent."""
     now = now or units.now()
     proj = reg["projects"][key]
-    build = proj.get("divisions", {}).get("build", {})
+    workers = {name: n for name, div in (proj.get("divisions") or {}).items()
+               if (n := sum(1 for f in (div or {}).get("features") or [] if f.get("status") == "active"))}
     new = 0
     for ev in reg.get("events", []):
         at = units.parse_iso(ev.get("at"))
@@ -48,7 +50,8 @@ def counts(reg: dict, key: str, now=None, r=None) -> dict:
             unverified += 1
     return {
         "awake": len(registry.awake_sessions({"projects": {key: proj}})),
-        "active_features": sum(1 for f in build.get("features", []) if f.get("status") == "active"),
+        "active_features": sum(workers.values()),
+        "workers": workers,
         "new": new,
         "keys": keys,
         "unverified": unverified,
@@ -85,24 +88,25 @@ def short_label(proj: dict, name: str) -> str:
     return custom_cells(proj).get(name) or name.upper()
 
 
-def division_cells(proj: dict, active_features: int, short=False) -> list:
-    """One cell per division of the project (`registry.divisions_of`); a custom division whose
-    record is missing renders as asleep. `short` uses the status-line names (`short_label`)."""
+def division_cells(proj: dict, workers: dict, short=False) -> list:
+    """One cell per division of the project (`registry.divisions_of`), with its active worker count
+    from `workers` ({division: n}, `counts`); a custom division whose record is missing renders as
+    asleep. `short` uses the status-line names (`short_label`)."""
     cells, names = [], {**custom_cells(proj), **SHORT} if short else {}
     for name in registry.divisions_of(proj):
         div = proj.get("divisions", {}).get(name, {})
         glyph = {"active": ACTIVE, "onboarding": ONBOARDING}.get(div.get("status"), ASLEEP)
         cell = names.get(name, name) + glyph
-        if name == "build" and active_features:
-            cell += str(active_features)
+        if workers.get(name):
+            cell += str(workers[name])
         cells.append(cell)
     return cells
 
 
 def segment(reg: dict, key: str, now=None, r=None) -> str:
-    """`R&D● RS○ BUILD●3 GTM● OPS○ · run2 · new1 · 🔑2 · unverified1` (zero trailing cells omitted)."""
+    """`R&D● RS○ BUILD●3 DES●2 GTM● OPS○ · run2 · new1 · 🔑2 · unverified1` (zero trailing cells omitted)."""
     c = counts(reg, key, now, r)
-    cells = division_cells(reg["projects"][key], c["active_features"], short=True)
+    cells = division_cells(reg["projects"][key], c["workers"], short=True)
     parts = [" ".join(cells)] if cells else []
     for label, n in (("run", c["running"]), ("new", c["new"]), ("🔑", c["keys"]),
                      ("unverified", c["unverified"])):

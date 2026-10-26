@@ -5,7 +5,7 @@ call, fenced and masked package values, the verdict grammar and the tree check. 
 
 A reviewer reads, never writes. Claude runs sealed (`--restricted --tools Read,Glob,Grep`, no Bash at
 all: `git diff --output=<path>` or `--no-index` would write or read any file; intake's deny rules, no
-session persistence); the package carries the diff (up to review.max_diff_lines, then the full file
+session persistence); the package carries the diff (up to pre.MAX_DIFF_LINES, then the full file
 list and a note). Codex runs `-s read-only` (codex.REVIEW_SANDBOX: no writable root, no network).
 Both get headless.base_env (no ORCHE_SESSION, no Jev key; Codex no CLAUDE*/ANTHROPIC* name). ask()
 compares `git status --porcelain` before and after the call: a change is the terminal error "the
@@ -33,8 +33,8 @@ _TICKS = re.compile(r"`+")
 
 @dataclass(frozen=True)
 class Verdict:
-    verdict: str        # "pass" | "return"
-    findings: tuple     # "[act] …", "[consider] …", "[noted] …" (masked), in order
+    verdict: str        # "pass" | "return" (the head review's checklist: also "held", a usage limit)
+    findings: tuple     # in order: "[act] …", "[consider] …", "[noted] …" (masked); the checklist's (n, why)
 
     @property
     def acts(self) -> tuple:
@@ -110,14 +110,27 @@ class Answer:
         return self.verdict.verdict if self.verdict is not None else ("stopped" if self.stopped else "error")
 
 
-def ask(model, package, *, cwd, cfg, timeout, effort, tag=None, stop=None, should_stop=None, on_start=None) -> Answer:
-    """Run reviewer `model` once on `package` (stdin) in `cwd`; never raises for what the reviewer does."""
-    call = call_for(model, cwd=cwd, timeout=timeout, effort=effort, tag=tag)
+def findings(text, res, cfg):
+    """The pre-review's grammar (ask): (Verdict, "") from parse(), else (None, why): the call failed or no
+    VERDICT line came first."""
+    if res.error is not None:
+        return None, res.failure or res.error
+    verdict = parse(text)
+    return verdict, "" if verdict is not None else res.failure or ("no VERDICT line" if text.strip() else "an empty answer")
+
+
+def ask(model, package, grammar=findings, *, cwd, cfg, timeout=None, effort=None, tag=None, stop=None,
+        should_stop=None, on_start=None, call=None) -> Answer:
+    """Run reviewer `model` once on `package` (stdin) in `cwd` — its `call`, else call_for's — started by
+    job.adapter: the one reviewer call. A call that was stopped or changed the tree has no verdict; otherwise `grammar(text,
+    res, cfg)` reads it (findings: the pre-review's; build.checklist: the head review's). Never raises for
+    what the reviewer does."""
+    from ..runs import job
+    call = call or call_for(model, cwd=cwd, timeout=timeout, effort=effort, tag=tag)
     before = tree(cwd)
     started = util.now_iso()
     try:
-        res = (codex.run if isinstance(call, codex.Call) else headless.run)(
-            call, package, cfg, stop=stop, should_stop=should_stop, on_start=on_start)
+        res = job.adapter(call).run(call, package, cfg, stop=stop, should_stop=should_stop, on_start=on_start)
     except (OSError, ValueError) as exc:
         why = masked(f"could not start: {exc}")
         res = headless.Result(127, {}, why, why, False)
@@ -129,10 +142,6 @@ def ask(model, package, *, cwd, cfg, timeout, effort, tag=None, stop=None, shoul
         why = "stopped"
     elif before is not None and after is not None and before != after:
         why = CHANGED
-    elif res.error is not None:
-        why = res.failure or res.error
     else:
-        verdict = parse(text)
-        if verdict is None:
-            why = res.failure or ("no VERDICT line" if text.strip() else "an empty answer")
+        verdict, why = grammar(text, res, cfg)
     return Answer(model, call, res, started, finished, verdict, one_line(why, 200), text)

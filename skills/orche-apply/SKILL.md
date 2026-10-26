@@ -125,7 +125,7 @@ customise. In chat there is no terminal, so the setup goes through a JSON file. 
    without `--dry-run`). Pass timeout 600000 — the intake can take up to 9 minutes (it runs last and
    prints nothing until it ends). Tell the user the intake's one-line result, e.g.
    `intake <proj>: 4 divisions, $0.42, 38 s (claude-sonnet-5-5)`, or the `intake skipped: …` line and
-   that `orche intake <proj>` can be re-run. Verify with `orche status <proj>` (the project appears with
+   that `orche intake <proj>` can be re-run. Verify with `orche status --project <proj>` (the project appears with
    its division names, custom ones included, `○` = dormant) and `orche depts <proj>` (one row per
    division, also by name). Only the status-line cell uses the label (`Design` → `DES○`).
 6. Hand over in three lines: Orca has switched to the Main tab (`main-<proj>`; if init warned that it could
@@ -146,7 +146,7 @@ customise. In chat there is no terminal, so the setup goes through a JSON file. 
   first, In plain words.
 - Removing a division, or changing a custom division's definition, is out of scope for `orche init` and `orche hr`: sleep
   it (`orche sleep div-<proj>-<division>`) or remove it by hand.
-- Wake / sleep a division: `orche wake|sleep div-<proj>-<division>`; feature agents under Build:
+- Wake / sleep a division: `orche wake|sleep div-<proj>-<division>`; a head's workers:
   `orche feat new|sleep|wake|retire` (or ask the `hr` agent).
 - Leave ORCHE: retire the feature agents (`orche feat retire … --yes`), remove the division worktrees with
   `orca worktree rm`, delete the project's ORCHE files from the main checkout and its registry entry; the

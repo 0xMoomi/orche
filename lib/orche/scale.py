@@ -2,6 +2,8 @@
 agents run at once. A preset sets dotted config keys (config.json) and registry `limits`; scale is
 machine-wide, so it is an HR record (event `scale`, HR-log "scale <p> by <who>").
 
+A preset lists only the values that differ from config.DEFAULTS and registry.LIMIT_DEFAULTS (`default`
+lists none); target() is its whole set over KEYS and LIMITS, which the rest compares and sets.
 current(cfg, reg): the preset every key of which matches, else "custom".
 changes(cfg, reg, preset): [(key, old, new)] the preset would change ("limits.<k>" for registry keys).
 apply(preset, by, dry_run): write config keys and limits; returns (data, lines).
@@ -10,6 +12,11 @@ from . import config, registry, util
 from .hr import book
 
 CUSTOM = "custom"
+KEYS = ("runner.max_parallel", "runner.max_parallel_total", "runner.min_free_mb", "runner.queue_wait_s",
+        "feature_panes", "feature_min_free_disk_mb", "flow.fanout", "flow.depth", "flow.briefs_per_hour",
+        "flow.revisions", "flow.runs_per_unit", "flow.max_unit_cost_usd", "flow.max_project_cost_usd")
+LIMITS = ("per_project_per_day", "per_project_per_week", "per_request_auto", "global_per_day_freeze",
+          "max_awake_sessions")
 
 
 def presets(cfg) -> dict:
@@ -35,12 +42,18 @@ def _put(cfg, dotted, value):
     cur[last] = value
 
 
-def changes(cfg, reg, name) -> list:
+def target(cfg, name) -> tuple:
+    """(config keys, limits) preset `name` sets: the defaults of KEYS and LIMITS, its differences over them."""
     p = presets(cfg)[name]
-    out = [(k, get(cfg, k), v) for k, v in (p.get("config") or {}).items() if get(cfg, k) != v]
+    return ({**{k: get(config.DEFAULTS, k) for k in KEYS}, **(p.get("config") or {})},
+            {**{k: registry.LIMIT_DEFAULTS[k] for k in LIMITS}, **(p.get("limits") or {})})
+
+
+def changes(cfg, reg, name) -> list:
+    conf, lims = target(cfg, name)
     limits = {**registry.LIMIT_DEFAULTS, **(reg.get("limits") or {})}
-    out += [(f"limits.{k}", limits.get(k), v) for k, v in (p.get("limits") or {}).items() if limits.get(k) != v]
-    return out
+    return ([(k, get(cfg, k), v) for k, v in conf.items() if get(cfg, k) != v]
+            + [(f"limits.{k}", limits.get(k), v) for k, v in lims.items() if limits.get(k) != v])
 
 
 def current(cfg, reg) -> str:
@@ -56,16 +69,15 @@ def _show(v):
 
 def summary(cfg, name) -> str:
     """`runs 20/project, 24 total · features headless · spend cap $250 · min free 3072 MB`."""
-    c = presets(cfg)[name].get("config") or {}
-    panes = "features keep a pane" if c.get("feature_panes", True) else "features headless"
-    return (f"runs {c.get('runner.max_parallel')}/project, {c.get('runner.max_parallel_total')} total · {panes} · "
-            f"spend cap ${_show(c.get('flow.max_project_cost_usd'))} · min free {c.get('runner.min_free_mb')} MB")
+    c = target(cfg, name)[0]
+    panes = "features keep a pane" if c["feature_panes"] else "features headless"
+    return (f"runs {c['runner.max_parallel']}/project, {c['runner.max_parallel_total']} total · {panes} · "
+            f"spend cap ${_show(c['flow.max_project_cost_usd'])} · min free {c['runner.min_free_mb']} MB")
 
 
 def cost_line(cfg, name) -> str:
-    p = presets(cfg)[name]
-    spend = _show((p.get("config") or {}).get("flow.max_project_cost_usd"))
-    est = p.get("estimate_usd_per_hour")
+    spend = _show(target(cfg, name)[0]["flow.max_project_cost_usd"])
+    est = presets(cfg)[name].get("estimate_usd_per_hour")
     head = f"about ${est} an hour API-equivalent at full speed; " if est else ""
     return f"cost: {head}the spend cap stops at ${spend} per window until the owner's next word"
 
@@ -89,7 +101,7 @@ def apply(name, by, *, dry_run=False):
             if not k.startswith("limits."):
                 _put(raw, k, v)
         config.save(raw)
-        reg["limits"].update(presets(cfg)[name].get("limits") or {})
+        reg["limits"].update(target(cfg, name)[1])
         book.record(reg, f"scale {name} by {by}", event={"type": "scale", "project": "*", "unit": "hr", "by": by},
                     note=f"HR scale {name}: {summary(cfg, name)}")
     data = {"preset": name, "was": was, "dry_run": dry_run, "changed": bool(diff) and not dry_run,

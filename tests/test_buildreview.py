@@ -9,13 +9,12 @@ from types import SimpleNamespace
 from unittest import mock
 
 import support
-import orche
-import orche.cmd_queue
 from pathlib import Path
 
 from orche import brief, codex, config, headless, inbox, ledger, procs, queue, registry, units, util
 from orche.flow import usage
 from orche.review import CHANGED, build, pre
+from orche.runs import history, job as jobmod
 from test_ledger import make_registry
 from test_registry import load_cli
 
@@ -50,10 +49,9 @@ class BuildReviewCase(support.TempHomeCase):
         patches = [mock.patch.object(build, "_pr", lambda where, pr: dict(VIEW)),
                    mock.patch.object(build, "_gather", lambda where, **kw: dict(self.facts)),
                    mock.patch.object(build, "_diff", lambda *a: "diff --git a/src/cart.py b/src/cart.py"),
-                   mock.patch.object(build, "_call", self.fake_call),
+                   mock.patch.object(jobmod, "adapter", lambda call: SimpleNamespace(run=self.fake_call)),
                    mock.patch.object(build, "_checkout", lambda *a, **k: contextlib.nullcontext(self.home)),
-                   # the package attribute: what build imports (bin/orche.py may load a second cmd_queue)
-                   mock.patch.object(orche.cmd_queue, "_checks", lambda *a, **kw: []),
+                   mock.patch.object(queue, "checks", lambda *a, **kw: []),
                    mock.patch.object(queue, "add", self.fake_add),
                    mock.patch.object(queue, "start", lambda project: True),
                    mock.patch.object(inbox, "wake", lambda session: None)]
@@ -66,7 +64,7 @@ class BuildReviewCase(support.TempHomeCase):
         publish = cfg.get("publish") or {"base": "main"}     # the fixture's root has no git: name the base (R12)
         (self.home / "config.json").write_text(json.dumps(support.no_wake({**cfg, "review": review, "publish": publish})))
 
-    def fake_call(self, call, prompt, cfg):
+    def fake_call(self, call, prompt, cfg, **kw):
         self.calls.append((call, prompt))
         return self.reply
 
@@ -100,7 +98,7 @@ class Decisions(BuildReviewCase):
         (ptr,) = self.pointers()
         self.assertFalse(ptr["urgent"])
         self.assertTrue(ptr["quiet"])
-        self.assertIn("auto-queued PR #7 @aaaaaaa: pre-review PASS (gpt-5.5-codex, round 1), Build review PASS"
+        self.assertIn("auto-queued PR #7 @aaaaaaa: pre-review PASS (gpt-5.5-codex, round 1), head review PASS"
                       " — position 1 of 2", ptr["summary"])
         row = self.build_row()
         self.assertEqual((row["verdict"], row["reviewer"], row["writer"]), ("pass", f"{BUILD} (review)",
@@ -119,7 +117,7 @@ class Decisions(BuildReviewCase):
         self.assertEqual(self.added, [])
         (ptr,) = self.pointers()
         self.assertTrue(ptr["urgent"])
-        self.assertIn("pre-review PASS (gpt-5.5-codex), Build review RETURN — 1: ACCEPT not met", ptr["summary"])
+        self.assertIn("pre-review PASS (gpt-5.5-codex), head review RETURN — 1: ACCEPT not met", ptr["summary"])
         self.assertIn("- 5: VERIFY not run", ptr["summary"])
         self.assertEqual(self.build_row()["verdict"], "return")
 
@@ -151,7 +149,7 @@ class Decisions(BuildReviewCase):
         self.assertEqual((out["status"], out["error"]), ("error", "timed out after 240s"))
         (ptr,) = self.pointers()
         self.assertTrue(ptr["urgent"])
-        self.assertIn("Build review ERROR — timed out after 240s", ptr["summary"])
+        self.assertIn("head review ERROR — timed out after 240s", ptr["summary"])
         self.assertEqual(self.build_row()["verdict"], "error")
 
     def test_no_verdict_line_is_an_error(self):
@@ -179,9 +177,8 @@ class Decisions(BuildReviewCase):
         self.assertEqual(self.review(), {"status": "off"})
 
     def test_the_queue_refusing_wakes_build(self):
-        from orche import cmd_queue
         self.pre("pass")
-        with mock.patch.object(queue, "add", side_effect=cmd_queue.Refused(2, "checks are red")):
+        with mock.patch.object(queue, "add", side_effect=queue.Refused(2, "checks are red")):
             out = self.review()
         self.assertEqual(out["status"], "pane")
         (ptr,) = self.pointers()
@@ -271,28 +268,28 @@ class Pending(BuildReviewCase):
         self.write_cfg({"review": {"build": False}})
         self.assertEqual(build.pending("acme", self.reg), [])
 
-    def test_claim_counts_starts_then_gives_up_with_one_pointer(self):
+    def test_may_start_counts_starts_then_gives_up_with_one_pointer(self):
         self.run_json("u1")
         [item] = build.pending("acme", self.reg)
-        self.assertEqual([build.claim("acme", item, self.reg) for _ in range(4)], [True, True, True, False])
+        self.assertEqual([build.may_start("acme", item, self.reg) for _ in range(4)], [True, True, True, False])
         (ptr,) = self.pointers()
         self.assertTrue(ptr["urgent"])
-        self.assertIn("PR #7 @aaaaaaa needs you: pre-review OFF (-), Build review not run — started 3 times", ptr["summary"])
+        self.assertIn("PR #7 @aaaaaaa needs you: pre-review OFF (-), head review not run — started 3 times", ptr["summary"])
         self.assertEqual(build.pending("acme", self.reg), [])             # given up: never re-spawned
 
-    def test_claim_asks_gh_nothing_and_the_review_ends_a_closed_pr_or_a_moved_head_quietly(self):
+    def test_may_start_asks_gh_nothing_and_the_review_ends_a_closed_pr_or_a_moved_head_quietly(self):
         """Review B G8a: no gh call inside the heartbeat; the started review reads the PR and ends the marker."""
         self.run_json("u1")
         [item] = build.pending("acme", self.reg)
         with mock.patch.object(build, "_pr", side_effect=AssertionError("gh inside the heartbeat")):
-            self.assertTrue(build.claim("acme", item, self.reg))
+            self.assertTrue(build.may_start("acme", item, self.reg))
         with mock.patch.object(build, "_pr", lambda where, pr: {**VIEW, "state": "MERGED"}):
             self.assertEqual(self.review(unit="u1")["status"], "closed")
         self.run_json("u2", pr=8, head="e" * 40)
         with mock.patch.object(build, "_pr", lambda where, pr: {**VIEW, "number": 8}):    # its head is aaaa…, not eeee…
             build.build_review("acme", 8, "u2", reg=self.reg, cfg=config.load())
             [item] = build.pending("acme", self.reg)          # unclaimed: GitHub's view may lag a fresh push
-            self.assertTrue(build.claim("acme", item, self.reg))
+            self.assertTrue(build.may_start("acme", item, self.reg))
             build.build_review("acme", 8, "u2", reg=self.reg, cfg=config.load())
         self.assertEqual((build.pending("acme", self.reg), self.pointers()), ([], []))
         self.assertEqual({k: v["end"] for k, v in build._starts("acme").items()},
@@ -305,18 +302,19 @@ class Pending(BuildReviewCase):
         self.run_json("u1")
         started = []
         with mock.patch.object(build, "_pr", side_effect=AssertionError("gh inside the heartbeat")), \
-                mock.patch.object(build.repo, "gh", side_effect=AssertionError("gh inside the heartbeat")), \
+                mock.patch.object(build.github, "run", side_effect=AssertionError("gh inside the heartbeat")), \
+                mock.patch.object(build.github, "data", side_effect=AssertionError("gh inside the heartbeat")), \
                 mock.patch.object(build, "start", lambda p, pr, unit=None: started.append((p, pr, unit))), \
                 mock.patch.object(registry, "load", lambda: self.reg):
-            rows = reconcile._reviews(self.reg, None, False, time.monotonic())
+            rows = build.heartbeat(self.reg, None, False, time.monotonic() + reconcile.BUDGET_S)
         self.assertEqual(started, [("acme", 7, "u1")])
         self.assertEqual(len(rows), 1)
 
-    def test_claim_waits_out_a_held_reviewer_without_counting(self):
+    def test_may_start_waits_out_a_held_reviewer_without_counting(self):
         self.run_json("u1")
         [item] = build.pending("acme", self.reg)
         usage.hit("claude", "You've hit your usage limit", {}, project="acme", unit="x", stage="work")
-        self.assertFalse(build.claim("acme", item, self.reg))
+        self.assertFalse(build.may_start("acme", item, self.reg))
         self.assertEqual(build._starts("acme"), {})
 
 
@@ -339,7 +337,7 @@ class Cli(BuildReviewCase):
         self.reply = answer("", failure="boom")
         code, out = self.run_cli("review", "--pr", "7", "--project", "acme")
         self.assertNotEqual(code, 0)
-        self.assertIn("Build review error; Build was told", out)
+        self.assertIn("head review error; the head was told", out)
 
     def test_unknown_project(self):
         code, _ = self.run_cli("review", "--pr", "7", "--project", "nope")
@@ -366,7 +364,7 @@ class Hardening(BuildReviewCase):
     def test_a_reviewer_that_changed_files_is_an_error(self):
         """R1: git status before and after the call."""
         self.pre("pass")
-        with mock.patch.object(build, "_tree", side_effect=["", " M src/cart.py\n"]):
+        with mock.patch("orche.review.tree", side_effect=["", " M src/cart.py\n"]):
             out = self.review()
         self.assertEqual((out["status"], out["error"]), ("error", CHANGED))
         self.assertEqual(self.build_row()["verdict"], "error")
@@ -443,7 +441,7 @@ class SpendAndHolds(BuildReviewCase):
         self.assertEqual(self.build_row()["verdict"], "skipped")
         (ptr,) = self.pointers()
         self.assertTrue(ptr["urgent"])
-        self.assertIn("Build review SKIPPED — spend cap: Build review not run (u1 spent $999.00", ptr["summary"])
+        self.assertIn("head review SKIPPED — spend cap: head review not run (u1 spent $999.00", ptr["summary"])
 
     def test_a_held_reviewer_defers_quietly_without_a_row(self):
         self.pre("pass")
@@ -536,12 +534,12 @@ class ReviewBTest(BuildReviewCase):
         ledger.record_review("acme", "pre", 7, head, "pass", "/x/pre.md", "codex (pre)", "gpt-5.5-codex",
                              writer="feat-acme-checkout")
 
-        def writer_keeps_working(call, prompt, cfg):
+        def writer_keeps_working(call, prompt, cfg, **kw):
             self.calls.append((call, prompt))
             (live / "live.txt").write_text("the writer's next change\n")
             return self.reply
         with mock.patch.object(build, "_checkout", REAL_CHECKOUT), \
-                mock.patch.object(build, "_call", writer_keeps_working), \
+                mock.patch.object(jobmod, "adapter", lambda call: SimpleNamespace(run=writer_keeps_working)), \
                 mock.patch.object(build, "_pr", lambda where, pr: {**VIEW, "headRefOid": head}):
             out = build.build_review("acme", 7, reg=self.reg, cfg=config.load())
         self.assertEqual(out["status"], "queued", out)
@@ -552,30 +550,91 @@ class ReviewBTest(BuildReviewCase):
 
     def test_a_gh_outage_in_a_started_review_tells_build_quietly(self):
         """Review B G8a: the heartbeat no longer filters gh failures, so one start must not wake Build."""
-        with mock.patch.object(build, "_pr", side_effect=build.repo.GhError("gh: HTTP 502")):
+        with mock.patch.object(build, "_pr", side_effect=build.github.GhError("gh: HTTP 502")):
             out = self.review()
         self.assertEqual(out["status"], "error")
         (ptr,) = self.pointers()
         self.assertEqual((ptr["quiet"], ptr["urgent"]), (True, False))
-        self.assertIn("Build review could not read the PR — gh: HTTP 502", ptr["summary"])
+        self.assertIn("head review could not read the PR — gh: HTTP 502", ptr["summary"])
 
     def test_a_spend_cap_stops_the_pre_review_round_before_its_paid_call(self):
         """Review B G7: G4 before the R33 pre-review round."""
-        with mock.patch.object(build, "_spend_hit", lambda *a: "acme spent $31.00, cap $30"), \
+        with mock.patch.object(history, "spend_hit", lambda *a, **k: "acme spent $31.00, cap $30"), \
                 mock.patch.object(build.pre, "one_round", side_effect=AssertionError("a paid call")):
             out = build.for_pr("acme", 7, reg=self.reg, cfg=config.load())
         self.assertEqual((out["status"], out["error"]), ("pre-error", "spend cap: pre-review not run (acme spent $31.00, cap $30)"))
 
     def test_a_gh_failure_says_what_happened_and_tells_nobody(self):
-        """Review B G7: `orche review --pr N` when gh cannot read the PR prints no "Build was told"."""
+        """Review B G7: `orche review --pr N` when gh cannot read the PR prints no "the head was told"."""
         cli, out = load_cli(), io.StringIO()
-        with mock.patch.object(build, "_pr", side_effect=build.repo.GhError("gh: HTTP 502")), \
+        with mock.patch.object(build, "_pr", side_effect=build.github.GhError("gh: HTTP 502")), \
                 contextlib.redirect_stdout(out), contextlib.redirect_stderr(io.StringIO()):
             code = cli.main(["review", "--pr", "7", "--project", "acme"])
         self.assertNotEqual(code, 0)
         self.assertIn("PR #7: gh cannot read it (gh: HTTP 502); nothing was reviewed", out.getvalue())
-        self.assertNotIn("Build was told", out.getvalue())
+        self.assertNotIn("the head was told", out.getvalue())
         self.assertEqual(self.pointers(), [])
+
+
+DESIGN = "div-acme-design"
+
+
+def add_design(reg, root, *, gtm=False):
+    """A Design division (model sonnet) with one worker `feat-acme-hero` on feat/hero; optionally a GTM one
+    (`feat-acme-launch`)."""
+    divs = reg["projects"]["acme"]["divisions"]
+    reg["projects"]["acme"]["custom_divisions"] = {"design": {"label": "Design", "charter": "the look",
+                                                              "model": "sonnet", "effort": "medium"}}
+    for name, model, feat in (("design", "sonnet", "hero"), *((("gtm", "opus", "launch"),) if gtm else ())):
+        divs[name] = {"worktree": f"repo-acme::{root / f'acme-{name}'}", "branch": f"div/{name}",
+                      "session": f"div-acme-{name}", "model": model, "status": "active",
+                      "last_activity": "2026-10-16T00:00:00Z",
+                      "features": [{"name": feat, "worktree": f"repo-acme::{root / f'acme-{feat}'}",
+                                    "branch": f"feat/{feat}", "session": f"feat-acme-{feat}", "status": "active",
+                                    "created": "2026-10-16", "last_activity": "2026-10-16", "reason": "x",
+                                    "scope": ["src/**"]}]}
+        (root / f"acme-{name}").mkdir(parents=True, exist_ok=True)
+        (root / f"acme-{feat}").mkdir(parents=True, exist_ok=True)
+    registry.save(reg)
+    return reg
+
+
+class TeamsHead(BuildReviewCase):
+    """T2: a worker's head (its division) reviews it — persona, model, the exception pane; the row stays build."""
+
+    def setUp(self):
+        super().setUp()
+        add_design(self.reg, self.home / "wt")
+        persona = self.home / "wt" / "acme-design" / ".claude" / "agents" / f"{DESIGN}.md"
+        persona.parent.mkdir(parents=True)
+        persona.write_text("You are Design's head.\n")
+        p = mock.patch.object(build, "_pr", lambda where, pr: {**VIEW, "headRefName": "feat/hero"})
+        p.start()
+        self.addCleanup(p.stop)
+
+    def test_a_design_workers_done_is_reviewed_as_design_and_a_return_wakes_design(self):
+        from orche import ladder
+        self.pre("pass")
+        self.reply = answer("VERDICT: RETURN\n- 1: ACCEPT not met: the hero has no alt text\n")
+        out = self.review()
+        self.assertEqual(out["status"], "returned")
+        ((call, _prompt),) = self.calls
+        self.assertEqual(call.model, ladder.rung(config.load(), "sonnet", "standard").model)
+        self.assertEqual(Path(call.append_file).name, f"{DESIGN}.md")
+        (ptr,) = [json.loads(p.read_text()) for p in sorted(inbox.box(DESIGN).glob("*.json"))]
+        self.assertTrue(ptr["urgent"])
+        self.assertEqual(self.pointers(), [])                               # Build hears nothing
+        row = self.build_row()
+        self.assertEqual((row["verdict"], row["reviewer"]), ("return", f"{DESIGN} (review)"))
+        self.assertIn("reviewer: design", (self.home / "reviews" / "acme" / "pr7-aaaaaaa-build.md").read_text())
+
+    def test_a_pr_without_a_worker_is_still_reviewed_by_build(self):
+        with mock.patch.object(build, "_pr", lambda where, pr: {**VIEW, "headRefName": "someone/else"}):
+            self.pre("pass")
+            self.reply = answer("VERDICT: RETURN\n- 1: ACCEPT not met: x\n")
+            self.assertEqual(self.review()["status"], "returned")
+        self.assertEqual(len(self.pointers()), 1)
+        self.assertEqual(self.build_row()["reviewer"], f"{BUILD} (review)")
 
 
 if __name__ == "__main__":

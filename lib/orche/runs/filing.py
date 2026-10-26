@@ -8,7 +8,6 @@ the worker's own (`orche report`), and then nothing is filed for that run. This 
 runs.job, dispatch or cmd_report: reconcile loads it inside the prompt hook.
 """
 import os
-from pathlib import Path
 
 from .. import brief, inbox, ledger, log, mask, roster, runs, units, util
 from . import history
@@ -31,16 +30,20 @@ class FilingError(Exception):
 
 def run_record(who, *, started, finished, status, stop_reason, is_error, error, pointer_filed,
                timeout_s=None, exit_code=None, cost_usd=None, num_turns=None, usage=None,
-               result_tail="", head_before=None, head_sha=None, pr=None) -> dict:
-    """The RUN.json record: `who`'s IDENTITY keys, then the RESULT keys, always in this order (25);
-    `pr`: what a gated done published ({number, url, head}, publish.Published.record), else None.
-    Values are written as given; callers mask claude's strings (D5)."""
+               result_tail="", head_before=None, head_sha=None, pr=None, review=None, stage=None,
+               held_vendor=None, holds=0) -> dict:
+    """The RUN.json record: `who`'s IDENTITY keys, then the RESULT keys, always in this order (25), then
+    those of `review`, `stage`, `held_vendor` and `holds` that are set. `pr`: what a gated done published
+    ({number, url, head}, publish.Published.record), else None; `review`: the pointer's review field;
+    `stage`, `held_vendor`: where a usage limit held the run (stop reason usage_limit); `holds`: holds_of's
+    count. Values are written as given; callers mask claude's strings (D5)."""
     result = {"started": started, "finished": finished, "timeout_s": timeout_s, "exit_code": exit_code,
               "is_error": is_error, "stop_reason": stop_reason, "cost_usd": cost_usd,
               "num_turns": num_turns, "usage": usage, "result_tail": result_tail, "error": error,
               "head_before": head_before, "head_sha": head_sha, "status": status,
               "pointer_filed": pointer_filed, "pr": pr}
-    return {**{k: who[k] for k in IDENTITY}, **{k: result[k] for k in RESULT}}
+    held = {"review": review, "stage": stage, "held_vendor": held_vendor, "holds": holds}
+    return {**{k: who[k] for k in IDENTITY}, **{k: result[k] for k in RESULT}, **{k: v for k, v in held.items() if v}}
 
 
 def masked(value):
@@ -68,31 +71,6 @@ def write_report(folder, result) -> None:
     path = folder / "REPORT.md"
     if not path.exists() and str(result or "").strip():
         util.atomic_write(path, mask.redact(str(result))[0].rstrip("\n") + "\n")
-
-
-def record_since(folder, started) -> bool:
-    """RUN.json already holds this run (its `started` is at or after the lock's)."""
-    try:
-        rec = util.read_json(folder / "RUN.json", default=None)
-    except util.JsonError:
-        return False
-    since, at = units.parse_iso(started), units.parse_iso((rec or {}).get("started"))
-    return isinstance(rec, dict) and since is not None and at is not None and at >= since
-
-
-def records(roots) -> list:
-    """Every RUN.json record (a dict) under `<root>/.orche/units/*/` of `roots`, in path order; an
-    unreadable or malformed file is skipped."""
-    out = []
-    for root in roots:
-        for path in sorted(Path(root).glob(f"{brief.UNITS}/*/RUN.json")):
-            try:
-                rec = util.read_json(path, default=None)
-            except (OSError, util.JsonError):
-                continue
-            if isinstance(rec, dict):
-                out.append(rec)
-    return out
 
 
 def worker_pointers(rcpt, unit, to) -> set:
@@ -148,11 +126,7 @@ def events(who, cost, turns, status, stop=None, rung=None, attempts=1) -> None:
 def holds_of(folder) -> int:
     """RUN.json `holds`: the unit's runs a usage limit stopped since its last done pointer (§8.5's repeat
     guard, flow/usage.repeats); 0 without one."""
-    try:
-        rec = util.read_json(Path(folder) / "RUN.json", default=None)
-    except (OSError, util.JsonError):
-        return 0
-    n = rec.get("holds") if isinstance(rec, dict) else None
+    n = (runs.last(folder) or {}).get("holds")
     return n if isinstance(n, int) and not isinstance(n, bool) and n > 0 else 0
 
 
@@ -171,10 +145,8 @@ def unrun(reg, who, rev, folder, status, summary, error, stop_reason, record=Tru
     except Exception:  # noqa: BLE001 - file_pointer below logs the same failure
         routed = False
     rec = run_record(who, started=now, finished=now, status=status, stop_reason=stop_reason,
-                     is_error=status == "failed", error=masked(error), pointer_filed=routed)
-    held = holds_of(folder)      # a run that never started neither adds a hold nor ends the count
-    if held:
-        rec["holds"] = held
+                     is_error=status == "failed", error=masked(error), pointer_filed=routed,
+                     holds=holds_of(folder))      # a run that never started neither adds a hold nor ends the count
     extra = ({"retry": True, "quiet": True} if stop_reason in ("busy", "duplicate")
              else {"quiet": True} if stop_reason in ("capped", "held") else None)
     steps = [lambda: file_pointer(reg, who, rev, folder, status, summary, None, link_report=False, extra=extra),
@@ -243,7 +215,7 @@ def lost(reg, proj, data) -> str:
         return "stale-lock"
     error = f"runner process {pid} died without filing"
     _drop_codex_out(data)
-    if not record_since(folder, started):
+    if not runs.ran_since(folder, units.parse_iso(started)):
         from ..flow import guard     # lazy, as lineage below: reconcile loads this module inside the prompt hook
         timeout_s = data.get("timeout_s")
         timeout_s = timeout_s if isinstance(timeout_s, (int, float)) and not isinstance(timeout_s, bool) \

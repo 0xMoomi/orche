@@ -271,8 +271,8 @@ def _ends(b):
     return (m.group(1), m.group(2)) if m else ("", "")
 
 
-def _key(path, p):
-    """A pointer's newest-last order: its `at`, then its file's mtime."""
+def report_key(path, p):
+    """A report pointer's newest-last order: its `at`, then its file's mtime."""
     t = inbox.pointer_time(path, p)
     try:
         ns = path.stat().st_mtime_ns
@@ -295,7 +295,7 @@ def _newest(b, reads):
     for path, p in found:
         if p.get("via") == "dispatch" or str(p.get("brief_rev")) != str(b.rev):
             continue
-        k = _key(path, p)
+        k = report_key(path, p)
         if best is None or k > best[0]:
             best = (k, path, p)
     return (best[1], best[2]) if best else None
@@ -415,8 +415,8 @@ def settle(sc):
 def _covered(reads, main, lineage, ms):
     """A close pointer for `lineage` in `main`'s inbox (pending or drained) is newer than every member's
     newest report: that close went out, only its record is missing."""
-    newest = max((_key(f[0], f[1]) for _b, f, _s in ms if f), default=None)
-    return newest is not None and any(p.get("lineage_closed") and _key(path, p) > newest
+    newest = max((report_key(f[0], f[1]) for _b, f, _s in ms if f), default=None)
+    return newest is not None and any(p.get("lineage_closed") and report_key(path, p) > newest
                                       for path, p in reads.about(main, lineage, "orche"))
 
 

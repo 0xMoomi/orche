@@ -1,4 +1,4 @@
-"""Template files under `<repo>/templates`: unit memory files, project docs, verify-skill.
+"""Template files under `<repo>/templates`: unit memory files, project docs, verify-skill, prompt texts.
 
 `render` substitutes `{{VAR}}` placeholders; unknown placeholders are left as they are.
 Copies never overwrite existing files and go through `util.atomic_write` (umask modes).
@@ -17,6 +17,12 @@ _VAR = re.compile(r"\{\{([A-Z][A-Z0-9_]*)\}\}")
 def render(text: str, **vars) -> str:
     """Replace `{{NAME}}` with `vars["NAME"]` for every NAME given."""
     return _VAR.sub(lambda m: str(vars[m.group(1)]) if m.group(1) in vars else m.group(0), text)
+
+
+def load(path, **vars) -> str:
+    """Template `path` (relative to TEMPLATES_ROOT, or absolute) rendered, without its last newline:
+    a template file's last newline ends the file, not the text it holds."""
+    return render((TEMPLATES_ROOT / path).read_text(encoding="utf-8").removesuffix("\n"), **vars)
 
 
 def _copy_tree(src_root: Path, dest_root: Path, rels, vars) -> list:

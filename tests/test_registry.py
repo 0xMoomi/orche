@@ -53,10 +53,12 @@ class ValidateTest(unittest.TestCase):
         reg["projects"]["acme-shop"]["divisions"]["build"]["features"][0]["scope"] = []
         self.assertTrue(any("features[0].scope" in e for e in registry.validate(reg)))
 
-    def test_features_only_under_build(self):
+    def test_features_under_any_division(self):
         reg = sample()
         reg["projects"]["acme-shop"]["divisions"]["rnd"]["features"] = []
-        self.assertTrue(any("only allowed under build" in e for e in registry.validate(reg)))
+        self.assertEqual(registry.validate(reg), [])
+        reg["projects"]["acme-shop"]["divisions"]["rnd"]["features"] = {}
+        self.assertTrue(any("rnd.features: must be a list" in e for e in registry.validate(reg)))
 
     def test_bad_statuses_limits_and_events(self):
         reg = sample()
@@ -247,7 +249,7 @@ class CliTest(support.TempHomeCase):
         return cp.returncode, cp.stdout, cp.stderr
 
     def test_version(self):
-        self.assertEqual(self.orche("version"), (0, "orche 0.9.1\n", ""))
+        self.assertEqual(self.orche("version"), (0, "orche 0.10.0\n", ""))
 
     def test_projects_json_empty_home(self):
         self.assertEqual(self.orche("projects", "--json"), (0, "[]\n", ""))
@@ -330,3 +332,27 @@ class DiscoveryTest(support.TempHomeCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class BusyTest(support.TempHomeCase):
+    def test_a_held_lock_refuses_after_the_deadline_with_the_blocked_code(self):
+        import fcntl
+        import types
+        from contextlib import redirect_stderr
+        from unittest import mock
+        from orche import cli, cmd_feat, cmd_sleep_wake
+        registry.path().parent.mkdir(parents=True, exist_ok=True)
+        with open(registry.path().with_name("registry.lock"), "a") as other, \
+                mock.patch.object(registry, "LOCK_WAIT_S", 0.3):
+            fcntl.flock(other, fcntl.LOCK_EX)                       # another orche holds it
+            with self.assertRaisesRegex(registry.Busy, "registry busy: another orche feat/sleep/wake"):
+                with registry.lock():
+                    pass
+            err = io.StringIO()
+            with redirect_stderr(err):
+                self.assertEqual(cmd_sleep_wake.cmd_sleep(types.SimpleNamespace(unit="x")), cli.EXIT_BLOCKED)
+                self.assertEqual(cmd_feat.cmd_wake(types.SimpleNamespace(project="p", name="n")),
+                                 cli.EXIT_BLOCKED)
+            self.assertIn("registry busy", err.getvalue())
+        with registry.lock():                                       # released: it takes the lock again
+            pass

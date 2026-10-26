@@ -251,7 +251,7 @@ class GradeTest(LedgerCase):
             self.assertIn("src/a.py | 2 +-", text)
             self.assertIn("## Files\n\n- src/a.py\n", text)
         diff_call = next(a for a in self.calls if "--stat" in a)
-        self.assertEqual(diff_call, ["git", "diff", "--stat", "main..feat/checkout", "--"])
+        self.assertEqual(diff_call, ["git", "-C", ".", "diff", "--stat", "main..feat/checkout", "--"])
         state = json.loads((self.home / "grader" / "acme-coupon-20261016-1.json").read_text())
         self.assertEqual(state["iterations"], 3)
         code, out, err = self.orche("ledger", "grade", "--unit", "acme-coupon-20261016-1",

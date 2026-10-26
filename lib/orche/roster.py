@@ -259,6 +259,20 @@ class Roster:
         main = self.main(member.project)
         return main.session if main else None
 
+    def head(self, member, project=None) -> Member | None:
+        """Who leads `member`: a division itself; a worker its division (when that has a session); anything
+        else (Main, a PR entry, None) the Build division of `member.project` or `project`; None without one."""
+        if member is not None and member.kind == "div":
+            return member
+        proj = self.reg.get("projects", {}).get(member.project if member is not None else project) or {}
+        divs = proj.get("divisions", {})
+        if member is not None and member.kind == "feat":
+            own = self.member((divs.get(member.division) or {}).get("session"))
+            if own is not None and own.kind == "div" and own.status != "retired":
+                return own
+        build = self.member((divs.get("build") or {}).get("session"))
+        return build if build is not None and build.kind == "div" else None
+
     def resolve_to(self, text, home) -> Member | None:
         """D9: exact session, else a division of `home`, else a project key or alias -> its Main."""
         text = (text or "").strip()

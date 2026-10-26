@@ -402,17 +402,17 @@ class StatusHintTest(ReconcileCase):
     def status(self):
         out = io.StringIO()
         with redirect_stdout(out), redirect_stderr(io.StringIO()):
-            load_cli().main(["status", "acme-shop"])
+            load_cli().main(["status", "--project", "acme-shop"])
         return out.getvalue()
 
     def test_unread_lines(self):
         self.pointer("main-acme-shop", 12)
         self.assertIn("— run `orche nudge main-acme-shop`", self.status())           # no pass on file
         self.run_at(0)
-        self.assertIn(f"— ORCHE retrying (1/3, next {reconcile._hhmm(T0 + dt.timedelta(minutes=8))})", self.status())
+        self.assertIn(f"— ORCHE retrying (1/3, next {units.hhmm(T0 + dt.timedelta(minutes=8))})", self.status())
         self.set_panes("div-acme-shop-build", "main-docs-site")                      # Main's pane closes
         self.run_at(1)
-        self.assertIn(f"— pane closed: ORCHE reopens it at {reconcile._hhmm(T0 + dt.timedelta(minutes=11))}",
+        self.assertIn(f"— pane closed: ORCHE reopens it at {units.hhmm(T0 + dt.timedelta(minutes=11))}",
                       self.status())
         self.now = T0 + dt.timedelta(hours=1)                                         # the heartbeat is stale
         self.assertIn("— pane closed: run `orche wake main-acme-shop`", self.status())
@@ -422,7 +422,7 @@ class StatusHintTest(ReconcileCase):
                      **{"from": "main-acme-shop"})
         self.run_at(0)
         self.assertIn(f"undelivered: u7 → div-acme-shop-build (rev 1, 12 min) — ORCHE retrying (1/3, next "
-                      f"{reconcile._hhmm(T0 + dt.timedelta(minutes=8))})", self.status())
+                      f"{units.hhmm(T0 + dt.timedelta(minutes=8))})", self.status())
         (self.home / "config.json").write_text(json.dumps({**WAKE, "reconcile": {"enabled": False}}))
         self.assertIn("— run `orche deliver u7`", self.status())                     # heartbeat off
 
@@ -601,8 +601,8 @@ class SilentUnitTest(RepairCase):
         [esc] = self.escalations()
         self.assertTrue(esc["urgent"])
         self.assertEqual(esc["summary"], f"silent: {self.b.unit} rev 1 in div-acme-shop-build since "
-                                         f"{reconcile._hhmm(T0 - dt.timedelta(minutes=25))}, reminded "
-                                         f"{reconcile._hhmm(T0)} — STOP, AMEND or let it run")
+                                         f"{units.hhmm(T0 - dt.timedelta(minutes=25))}, reminded "
+                                         f"{units.hhmm(T0)} — STOP, AMEND or let it run")
         self.assertEqual(len(self.reminders()), 1)
 
     def test_the_escalation_comes_30_min_after_the_reminder_when_that_is_first(self):
@@ -645,7 +645,7 @@ class SilentUnitTest(RepairCase):
                          [("silent", self.b.unit, 1, 1, 1, False)])
         self.assertEqual(reconcile.stalled_line(rows[0]),
                          f"  stalled: silent {self.b.unit} rev 1 in div-acme-shop-build (idle 1 min, TIMEBOX 0h20m) "
-                         f"— reminded {reconcile._hhmm(T0 + dt.timedelta(minutes=5))}")
+                         f"— reminded {units.hhmm(T0 + dt.timedelta(minutes=5))}")
         out = io.StringIO()
         with redirect_stdout(out):
             load_cli().main(["status"])
@@ -713,6 +713,25 @@ class ClosedUnitTest(ReconcileCase):
         self.assertEqual(self.woke, [])
         [esc] = self.to_main()
         self.assertIn("closed: div-acme-shop-rnd has 1 report(s) waiting (12 min) while dormant", esc)
+
+    def dormant_build(self, model):
+        reg = registry.load()
+        div = reg["projects"]["acme-shop"]["divisions"]["build"]
+        div["model"], div["status"] = model, "dormant"
+        registry.save(reg)
+        self.set_panes("main-acme-shop", "main-docs-site")
+        self.pointer("div-acme-shop-build", 12, unit="u3", **{"from": "feat-acme-shop-checkout"})
+
+    def test_a_dormant_claude_head_with_a_live_worker_is_woken_for_its_report(self):
+        self.dormant_build("claude-sonnet-5-5")
+        got = self.run_at(0)[1]
+        self.assertTrue(got and got[0].startswith("wake div-acme-shop-build pane"), got)
+        self.assertEqual(self.woke, ["div-acme-shop-build"])
+
+    def test_a_dormant_codex_head_still_escalates(self):
+        self.dormant_build("codex")
+        self.assertEqual(self.run_at(0)[1], ["escalate closed div-acme-shop-build (dormant, 12 min)"])
+        self.assertEqual(self.woke, [])
 
     def test_quiet_hours_hold_it(self):
         (self.home / "config.json").write_text(json.dumps({**WAKE, "flow": {"quiet_hours": "08:00-10:00"}}))
@@ -983,8 +1002,8 @@ class ScaleHeartbeatTest(RepairCase):
         self.assertIn("reconcile: queue acme-shop: JsonError", (self.home / "logs" / "hooks.log").read_text())
 
     def test_a_pending_build_review_is_started_detached_once_a_pass(self):
-        """R3: never inline; a running one is skipped, claim() decides (open PR, same head, not held,
-        under review.max_starts), and the start names the unit (its brief: tier, SCOPE, VERIFY)."""
+        """R3: never inline; a running one is skipped, may_start() decides (open PR, same head, not held,
+        under build.MAX_STARTS), and the start names the unit (its brief: tier, SCOPE, VERIFY)."""
         from orche.review import build
         spawned, inline, claimed = [], [], []
         busy = {("acme-shop", 7, "a" * 40)}
@@ -992,19 +1011,19 @@ class ScaleHeartbeatTest(RepairCase):
                  {"pr": 11, "sha": "c" * 40, "unit": "u11"}]
         with mock.patch.object(build, "pending", lambda p, reg=None: items if p == "acme-shop" else []), \
                 mock.patch.object(build, "running", lambda p, pr, sha: (p, pr, sha) in busy), \
-                mock.patch.object(build, "claim", lambda p, item, reg=None: claimed.append(item["pr"]) or item["pr"] != 9), \
+                mock.patch.object(build, "may_start", lambda p, item, reg=None: claimed.append(item["pr"]) or item["pr"] != 9), \
                 mock.patch.object(build, "build_review", lambda *a, **k: inline.append(a)), \
                 mock.patch.object(reconcile.procs, "spawn_detached", lambda argv, log, **e: spawned.append(argv)):
             _c, dry = self.run_at(0, dry_run=True)
             self.assertEqual((spawned, claimed), ([], []))
-            self.assertIn("would start the Build review of acme-shop PR #9 (3 pending)", dry)
+            self.assertIn("would start the head review of acme-shop PR #9 (3 pending)", dry)
             _c, lines = self.run_at(1)
         self.assertEqual(inline, [])                                      # never inline in the pass
-        self.assertEqual(claimed, [9, 11])                                # #7 is running; #9 claim() refused
+        self.assertEqual(claimed, [9, 11])                                # #7 is running; #9 may_start() refused
         self.assertEqual([a[a.index("--pr") + 1] for a in spawned if "review" in a], ["11"])
         argv = next(a for a in spawned if "review" in a)
         self.assertEqual(argv[-5:], ["--project", "acme-shop", "--wait", "--unit", "u11"])
-        self.assertIn("start the Build review of acme-shop PR #11 (3 pending)", lines)
+        self.assertIn("start the head review of acme-shop PR #11 (3 pending)", lines)
         self.assertTrue(any("action=build-review project=acme-shop target=pr-11" in e for e in self.events()))
 
     def test_one_build_review_start_per_project_a_pass(self):
@@ -1016,9 +1035,9 @@ class ScaleHeartbeatTest(RepairCase):
                  "b": [{"pr": 3, "sha": "3" * 40, "unit": "ub"}]}
         with mock.patch.object(build, "pending", lambda p, reg=None: items[p]), \
                 mock.patch.object(build, "running", lambda *a: False), \
-                mock.patch.object(build, "claim", lambda *a, **k: True), \
+                mock.patch.object(build, "may_start", lambda *a, **k: True), \
                 mock.patch.object(build, "start", lambda p, pr, unit=None: started.append((p, pr, unit))):
-            rows = reconcile._reviews(reg, None, False, time.monotonic())
+            rows = build.heartbeat(reg, None, False, time.monotonic() + reconcile.BUDGET_S)
         self.assertEqual(started, [("a", 1, "ua"), ("b", 3, "ub")])
         self.assertEqual(len(rows), 2)
 

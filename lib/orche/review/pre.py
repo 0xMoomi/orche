@@ -46,23 +46,22 @@ MIN_CALL_S = 30          # a hand-over call with less time left is not started
 REPORT_CHARS = 2000
 ANSWER_CHARS = 1500      # a rework's answer quoted to the next round
 OPEN_LINES = 3
+TIMEOUT_S = 480         # one reviewer call
+EFFORT = "medium"
+MAX_DIFF_LINES = 3000   # the package's diff, then it says so
 OPUS, SONNET = "claude-opus-5-5", "claude-sonnet-5-5"
 _WHY = {"codex not installed": "codex is not installed"}
 _HEADER = re.compile(r"^# pre-review r(\d+) — (\S+) rev (\d+) ")
 
 
-def settings(cfg) -> dict:
-    return {**config.DEFAULTS["review"], **((cfg or {}).get("review") or {})}
-
-
 def mode_of(cfg) -> str:
-    mode = str(settings(cfg).get("cross_vendor") or "required").lower()
+    mode = str(cfg["review"]["cross_vendor"] or "required").lower()
     return mode if mode in MODES else "required"
 
 
 def rounds_of(cfg) -> int:
     try:
-        return max(1, int(settings(cfg).get("rounds") or 2))
+        return max(1, int(cfg["review"]["rounds"] or 2))
     except (TypeError, ValueError):
         return 2
 
@@ -84,7 +83,7 @@ class Choice:
 
 def choose(cfg, writer_model, avail=None) -> Choice:
     """The reviewer of a head written by `writer_model` (R-REVIEW-2, R3; §8.5: held vendors skipped)."""
-    order = [str(m) for m in (settings(cfg).get("order") or config.DEFAULTS["review"]["order"]) if m]
+    order = [str(m) for m in cfg["review"]["order"] if m]
     writer_vendor = vendors.vendor_of(writer_model)
     state, held = {"avail": avail}, {}
 
@@ -129,18 +128,9 @@ def choose(cfg, writer_model, avail=None) -> Choice:
 
 # ---- the package -----------------------------------------------------------------------------------
 
-def _git(worktree, *args, timeout=60):
-    return shell.run(["git", "-C", str(worktree), *args], timeout=timeout)
-
-
-def base_ref(worktree, base) -> str:
-    """`origin/<base>` when the worktree knows it, else `<base>`."""
-    return f"origin/{base}" if _git(worktree, "rev-parse", "--verify", "-q", f"origin/{base}^{{commit}}").ok else base
-
-
 def has_diff(worktree, ref) -> bool:
     """Whether `<ref>...HEAD` changes anything (git's error counts as a change: review rather than skip)."""
-    return _git(worktree, "diff", "--quiet", f"{ref}...HEAD").code != 0
+    return shell.git(worktree, "diff", "--quiet", f"{ref}...HEAD").code != 0
 
 
 def _template(name) -> str:
@@ -154,11 +144,11 @@ def _clip(text, limit) -> str:
 
 def package(ctx, *, pr, head, k, rounds, reviewer, why, report, earlier) -> str:
     """Appendix A.6 rendered: every value masked, the untrusted ones fenced as data."""
-    ref = base_ref(ctx.worktree, ctx.base)
-    limit = int(settings(ctx.cfg).get("max_diff_lines") or 3000)
-    stat = _git(ctx.worktree, "diff", "--stat=1000", f"{ref}...HEAD").out or ""     # every path, in full
-    lines = (_git(ctx.worktree, "diff", f"{ref}...HEAD").out or "").splitlines()
-    base7 = (_git(ctx.worktree, "rev-parse", "--short=7", ref, timeout=20).out or ref).strip()[:7]
+    ref = publish.base_ref(ctx.worktree, ctx.base)
+    limit = MAX_DIFF_LINES
+    stat = shell.git(ctx.worktree, "diff", "--stat=1000", f"{ref}...HEAD").out or ""     # every path, in full
+    lines = (shell.git(ctx.worktree, "diff", f"{ref}...HEAD").out or "").splitlines()
+    base7 = (shell.git(ctx.worktree, "rev-parse", "--short=7", ref, timeout=20).out or ref).strip()[:7]
     fields = ctx.fields or {}
     values = {
         "UNIT": ctx.unit, "PR": pr, "HEAD7": str(head)[:7], "ROUND": k, "ROUNDS": rounds, "REVIEWER": reviewer,
@@ -193,7 +183,7 @@ class Ctx:
     rev: int
     unit_dir: Path
     worktree: Path
-    base: str                 # the base branch (publish.base)
+    base: str | None          # the base branch (publish.base; None: nothing names one, no round, R12)
     writer: str               # the session that wrote the head
     writer_model: str
     fields: dict              # the brief's keys (GOAL, SCOPE, ACCEPT, VERIFY)
@@ -279,7 +269,7 @@ def _why(ctx, choice, first, model) -> str:
 def one_round(ctx, k, *, pr, head, report, earlier) -> Round:
     """Round k: the chosen reviewer, the next one once if it gave no verdict; the REVIEW file, the row,
     the events line. Never raises for what a reviewer does."""
-    rounds, s = rounds_of(ctx.cfg), settings(ctx.cfg)
+    rounds = rounds_of(ctx.cfg)
     choice = choose(ctx.cfg, ctx.writer_model)
     if choice.model is None and choice.held:     # §8.5: no reviewer of an unheld vendor; no row
         return Round(k, "held", "none", choice.note, (), head, None, choice.held)
@@ -288,7 +278,7 @@ def one_round(ctx, k, *, pr, head, report, earlier) -> Round:
         return _recorded(ctx, rnd, rounds, pr, [], second_vendor=False)
     answers, note = [], choice.note
     for i, model in enumerate((choice.model,) + choice.rest[:1]):
-        timeout = float(s.get("timeout_s") or 480)
+        timeout = float(TIMEOUT_S)
         if ctx.deadline is not None:
             left = ctx.deadline - time.monotonic()
             if left < MIN_CALL_S:
@@ -298,7 +288,7 @@ def one_round(ctx, k, *, pr, head, report, earlier) -> Round:
         note = f"fallback: same vendor ({why})" if why else ""
         text = package(ctx, pr=pr, head=head, k=k, rounds=rounds, reviewer=model, why=why, report=report,
                        earlier=earlier)
-        a = ask(model, text, cwd=ctx.worktree, cfg=ctx.cfg, timeout=timeout, effort=s.get("effort") or "medium",
+        a = ask(model, text, cwd=ctx.worktree, cfg=ctx.cfg, timeout=timeout, effort=EFFORT,
                 tag=ctx.tag, stop=ctx.stop, should_stop=ctx.should_stop, on_start=ctx.on_start)
         answers.append(a)
         if ctx.record is not None:
@@ -373,7 +363,7 @@ def exception(done, rnd, rounds, reason=None) -> Done:
     acts = rnd.acts if rnd.word == "return" else ()
     first = reason or (acts[0] if acts else rnd.why or rnd.word)
     lines = [f"PR #{done.pr['number']} @{str(done.head)[:7]} needs you: pre-review {rnd.word} ({rnd.model}, "
-             f"round {rnd.k} of {rounds}), Build review not run — {one_line(first, 160)}",
+             f"round {rnd.k} of {rounds}), head review not run — {one_line(first, 160)}",
              *[one_line(f, 160) for f in acts[:OPEN_LINES]]]
     said = "\n".join(lines)
     return replace(done, status="done", summary=said,
@@ -406,7 +396,7 @@ def in_run(ctx, done, *, rework, publish_again, stopped, capped, resume=None) ->
     again = history.pop()[0] if resume == "rework" and history and history[-1][0].k < rounds else None
     k = len(history) + 1
     while True:
-        if not has_diff(ctx.worktree, base_ref(ctx.worktree, ctx.base)):
+        if not ctx.base or not has_diff(ctx.worktree, publish.base_ref(ctx.worktree, ctx.base)):
             return done
         if again is not None:     # the resumed rework of the last RETURN (round k)
             rnd, again = replace(again, head=done.head), None
@@ -475,21 +465,18 @@ def pane_round(reg, member, worktree, project, b, report_text, summary, publishe
 
     def record(a, head):
         try:
-            history.append(project, {"unit": b.unit, "to": to, "model": a.model, "vendor": vendors.vendor_of(a.model),
-                                     "effort": getattr(a.call, "effort", None), "status": a.word,
-                                     "stop_reason": a.why or None, "cost_usd": a.res.cost_usd,
-                                     "num_turns": a.res.turns, "started": a.started, "finished": a.finished,
-                                     "kind": "review"}, rev)
+            history.attempt(project, rev, unit=b.unit, to=to, model=a.model, effort=getattr(a.call, "effort", None), res=a.res, started=a.started,
+                            finished=a.finished, status=a.word, kind="review", cfg=cfg, stop_reason=a.why or None)
         except OSError as exc:
             log.log("hooks", f"pre-review: {b.unit}: history line not written: {exc}")
 
     ctx = Ctx(cfg=cfg, project=project, unit=b.unit, rev=rev, unit_dir=b.folder, worktree=Path(worktree),
-              base=publish.base(root, cfg, worktree) or "main", writer=to, writer_model=vendors.of(reg, member), fields=dict(b.fields),
+              base=publish.base(root, cfg, worktree), writer=to, writer_model=vendors.of(reg, member), fields=dict(b.fields),
               tag=procs.run_id(f"{b.unit}-review", time.time_ns()), deadline=time.monotonic() + PANE_BUDGET_S,
               record=record)
     pr = published.record()
     done = Done("done", summary, None, pr, report_text, published.head)
-    if mode_of(cfg) == "off" or not has_diff(ctx.worktree, base_ref(ctx.worktree, ctx.base)):
+    if mode_of(cfg) == "off" or not ctx.base or not has_diff(ctx.worktree, publish.base_ref(ctx.worktree, ctx.base)):
         return Pane(False, "", summary, None)
     rounds = rounds_of(cfg)
     reused = _reused(ctx, pr["number"], published.head)

@@ -1,4 +1,5 @@
-"""0.9.0 resume card: `orche resume` and the SessionStart card for a cleared or restarted Main."""
+"""The card (0.9.0 resume card): `orche status <project>` and the SessionStart card for a cleared or
+restarted Main."""
 import json
 from unittest import mock
 
@@ -11,7 +12,7 @@ from test_flow import FlowCase, header
 CANARY = "AKIA" + "ABCDEFGHIJKLMNOP"
 
 
-class ResumeTest(FlowCase):
+class CardTest(FlowCase):
     def unit(self, label):
         f = self.first(BODY.replace("Add coupon field", f"Add field {label}"))
         header(f, f.name, "-")
@@ -37,7 +38,7 @@ class ResumeTest(FlowCase):
 
     def test_card_names_open_lineages_what_they_wait_on_and_the_closed_one(self):
         a, b, c = self.three()
-        res = self.orche("resume", "acme")
+        res = self.orche("status", "acme")
         self.assertEqual(res.returncode, 0, res.stdout + res.stderr)
         out = res.stdout
         self.assertTrue(out.startswith("[orche] resume acme\n"), out)
@@ -55,19 +56,22 @@ class ResumeTest(FlowCase):
         self.assertLessEqual(len(out.splitlines()), 40)
 
     def test_json_shape_and_nothing_in_flight(self):
-        res = self.orche("resume", "acme")
+        res = self.orche("status", "acme")
         self.assertEqual(res.returncode, 0, res.stdout + res.stderr)
         self.assertIn("nothing in flight", res.stdout)
         self.three()
-        d = json.loads(self.orche("--json", "resume", "acme").stdout)
-        for k in ("open", "closed", "queue", "text"):
+        d = json.loads(self.orche("--json", "status", "acme").stdout)
+        for k in ("open", "open_total", "owner", "unread", "blocked", "closed", "queue", "text"):
             self.assertIn(k, d)
         self.assertEqual(len(d["open"]), 2)
         self.assertNotIn(CANARY, json.dumps(d))
 
-    def test_project_from_cwd_and_unknown_project(self):
-        self.assertIn("[orche] resume acme", self.orche("resume").stdout)
-        self.assertNotEqual(self.orche("resume", "nope").returncode, 0)
+    def test_no_project_prints_the_rows_and_an_unknown_project_fails(self):
+        self.three()
+        out = self.orche("status").stdout
+        self.assertTrue(out.startswith("acme stage="), out)
+        self.assertNotIn("[orche] resume", out)
+        self.assertEqual(self.orche("status", "nope").returncode, 2)
 
     def test_session_start_appends_the_card_for_main(self):
         startup = self.session("startup").stdout
@@ -90,11 +94,13 @@ class ResumeTest(FlowCase):
         self.assertNotIn("[orche] resume", out)
 
 
-class ResumeDocsTest(FlowCase):
-    def test_rulebook_and_readme_name_orche_resume(self):
+class CardDocsTest(FlowCase):
+    def test_rulebook_and_readme_name_the_card(self):
         skill = (support.ROOT / "skills" / "orche-main" / "SKILL.md").read_text()
         self.assertIn("하던 일 이어서 해줘", skill)
-        self.assertIn("orche resume", skill)
+        self.assertIn("`orche status <project>` (its card)", skill)
+        self.assertNotIn("orche resume", skill)
         readme = (support.ROOT / "README.md").read_text()
-        self.assertIn("orche resume", readme)
+        self.assertIn("'orche status <project>'", readme)
+        self.assertNotIn("orche resume", readme)
         self.assertLessEqual(len(readme.splitlines()), 100)

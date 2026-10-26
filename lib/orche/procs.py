@@ -383,6 +383,17 @@ def spawn_detached(argv, log, **extra_env) -> None:
                          start_new_session=True, close_fds=True, env=env)
 
 
+def orche_argv(*args) -> list:
+    """`orche <args>` under this very interpreter (the plugin's bin/orche.py): no launcher has to find
+    Python again after a spawn, so a spawned run never dies there without a pointer."""
+    return [sys.executable, str(paths.PLUGIN_ROOT / "bin" / "orche.py"), *args]
+
+
+def spawn_orche(args, log, **extra_env) -> None:
+    """spawn_detached of `orche <args>` (orche_argv): every detached self-spawn."""
+    spawn_detached(orche_argv(*args), log, **extra_env)
+
+
 def mem_total_mb():
     """The machine's RAM in MB (macOS `sysctl -n hw.memsize`, Linux /proc/meminfo), or None."""
     try:

@@ -41,7 +41,7 @@ orche dispatch <<'EOF'
 TO        div-<project>-build
 GOAL      One-sentence outcome a stranger could execute without chat history
 SCOPE     Writable paths / forbidden paths / worktree + branch
-CONTEXT   File and PR pointers; paste an upstream report in full if needed
+CONTEXT   Pointers (files, PRs, an upstream report in full) + the plan: the shape of the change, the order when it matters, decisions already fixed, constraints
 ACCEPT    Checkable criteria, one per line
   continuation lines are indented two or more spaces
 VERIFY    Exact command or committed verify-skill path + known pitfalls
@@ -75,8 +75,10 @@ EOF
 - `TO` must be a session of your own project. `TO <other project>` (key, alias, or its Main's session
   such as `main-beta`) files an external-request pointer with the brief body to that project's Main
   instead of a brief. A name that is also one of your divisions means the division.
-- TIER: `mechanical` (rename, bump, copy edit) → exec; `standard` (feature, fix, tests) → feature
-  agent; `hard` (cross-cutting design, concurrency, root cause, migrations) → deep-reasoner at max.
+- Main briefs heads, never workers: each division's head slices the brief and staffs its own workers.
+- TIER: `mechanical` (rename, bump, copy edit) → exec; `standard` (feature, fix, tests) → a
+  head, which staffs workers; `hard` (cross-cutting design, concurrency, root cause, migrations) → deep-reasoner at max.
+  A brief that needs workers is standard or hard, never mechanical (a mechanical run has no `orche`).
 - Budget every unit with a realistic TIMEBOX: the runner's turn cap is 3 turns per TIMEBOX minute (30–400).
 - Corrections are new revisions, never chat: `AMEND <unit> rev N` on the first line, then
   `SUPERSEDES rev N-1: <what>`, then the changed fields. A permanent correction also goes into
@@ -140,7 +142,7 @@ approves the newer rev. Notes (`info` from ORCHE) wait for `[drain]` or a status
 Prompts tagged `[main]` always reach you; untagged simple prompts may be routed directly (triage) and show up as
 pointers.
 
-- Work has landed only when the merge queue merged it. Build reports its unit after every PR of it merged; a
+- Work has landed only when the merge queue merged it. A head reports its unit after every PR of it merged; a
   lineage report lists the merged PRs. A queue that is closed or paused is an owner item only when its line says
   OWNER.
 
@@ -179,9 +181,10 @@ language with a short plain summary — never ask the owner to type an orche com
 
 - "상태", "뭐 하고 있어?", "진행 어때?": `orche status` plus the reports already in your prompt; at most five
   plain lines (what runs, what finished, what waits on them).
-- "하던 일 이어서 해줘", "어디까지 했어": `orche resume`, then act on its open lineages (answer what waits on the
-  owner, wait on or re-dispatch the rest) — never ask the owner to repeat the request. The work lives in files: a
-  closed Main pane reopens with its conversation (`orche wake main-<p>`), and only `/clear` drops the conversation.
+- "하던 일 이어서 해줘", "어디까지 했어": `orche status <project>` (its card), then act on its open lineages
+  (answer what waits on the owner, wait on or re-dispatch the rest) — never ask the owner to repeat the request.
+  The work lives in files: a closed Main pane reopens with its conversation (`orche wake main-<p>`), and only
+  `/clear` drops the conversation.
 - "점검해줘", "뭔가 이상해", "안 돼": `orche doctor`; each WARN or FAIL row in plain words with the one step that
   fixes it (you take the step when it is yours to take).
 - "업데이트해줘", "최신으로": `orche update`, allowing it up to 10 minutes (Bash timeout 600000 ms); report its
@@ -192,6 +195,12 @@ language with a short plain summary — never ask the owner to type an orche com
 - "에이전트 20개까지", "30개까지", "더 많이 돌려": `orche hr choices <p> --json`, ask the scale question with its
   choices, then `orche hr scale <preset>` (default, 20 or 30). On a Claude subscription many agents reach the usage
   window sooner; say so once.
+- "에이전트 늘려줘", "여러 명이 하게", "팀 꾸려줘": the heads already staff each job themselves; if the point is more
+  at once, ask the scale question (`ask.scale`).
+- "팀 보여줘", "누가 뭐 해?": `orche depts <p>`; at most five plain lines (each head and its workers).
+- "인프라 담당 상시로": a brief to Build.
+- "프론트·백엔드·인프라로 고정해줘": say once why per-job staffing is faster here (one worker per job, no hand-offs),
+  then brief the head to keep three standing workers with those scopes.
 - "대기열", "뭐가 합쳐지고 있어?": `orche queue <p>`; at most five plain lines (what lands next, what was returned, what
   waits).
 - "사용량 한도", "왜 멈췄어?": a `paused … usage limit until …` line: say when it resumes and the two ways to keep going
