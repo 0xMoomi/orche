@@ -868,7 +868,7 @@ class BareInitTest(SetupCase):
         self.assertEqual((proj["repo_id"], proj["path"]), ("repo-cwd", os.path.realpath(self.here)))
         self.assertEqual(self.created(), ["div-build"])
         self.assertEqual(self.orca_calls("repo add"), [])
-        self.assertEqual(out.splitlines()[-2], "Main is open in the main-cwd-app tab with the setup summary; from here on, talk to Main there.")
+        self.assertEqual(out.splitlines()[-3], "Main is open in the main-cwd-app tab with the setup summary; from here on, talk to Main there.")
 
     def test_bare_init_outside_any_repo_asks_for_the_path(self):
         plain = self.home / "plain"
@@ -907,14 +907,14 @@ class LandOnMainTest(SetupCase):
         code, out, err = self.orche("init", "Acme Shop", "--divisions", "build", "--no-intake")
         self.assertEqual(code, 0, err)
         self.assertNotIn("warning", err)
-        self.assertEqual(out.splitlines()[-2], "Main is open in the main-acme-shop tab with the setup summary; from here on, talk to Main there.")
+        self.assertEqual(out.splitlines()[-3], "Main is open in the main-acme-shop tab with the setup summary; from here on, talk to Main there.")
         self.assertEqual(self.orca_calls("terminal switch"),
                          [["orca", "terminal", "switch", "--terminal", "t-main-acme-shop", "--json"]])
         writes = [" ".join(c[1:3]) for c in self.calls if c[1] in ("terminal", "automations", "worktree")
                   and c[2] not in ("list",)]
         self.assertEqual(writes[-1], "terminal switch")   # after both panes were created
         [main] = [c for c in self.orca_calls("terminal create") if c[c.index("--title") + 1] == "main-acme-shop"]
-        self.assertIn("--permission-mode bypassPermissions --autocompact 200000 --name main-acme-shop", main[main.index("--command") + 1])
+        self.assertIn("--permission-mode bypassPermissions --name main-acme-shop", main[main.index("--command") + 1])
 
     def test_open_panes_are_not_switched_to_before_the_end(self):
         self.terminals = [{"handle": "t1", "title": "main-acme-shop"}]
@@ -1032,10 +1032,11 @@ class SetupFileModelTest(support.TempHomeCase):
         self.assertEqual(setup["custom"]["design"]["model"], "claude-sonnet-5-5")
         self.assertEqual(setup_flow.models(setup)["design"], "claude-sonnet-5-5")
 
-    def test_the_readme_setup_json_with_a_picked_design_parses(self):
-        readme = (support.ROOT / "README.md").read_text()
-        self.assertIn('{"divisions": [...], "custom": {"<kind>": {}}, "models": {"<division>": "<model>"}}', readme)
-        self.assertNotIn("--lang", readme)
+    def test_the_apply_skill_setup_json_with_a_picked_design_parses(self):
+        skill = " ".join((support.ROOT / "skills" / "orche-apply" / "SKILL.md").read_text().split())
+        self.assertIn("write the setup file with `divisions`, `custom` (a picked `design`/`content` as `{}`) and "
+                      "`models`", skill)
+        self.assertNotIn("--lang", (support.ROOT / "README.md").read_text())
         data = {"divisions": ["rnd"], "custom": {"design": {}}, "models": {"rnd": "claude-sonnet-5-5"}}
         setup = setup_flow.from_data(data, setup_flow.defaults())
         self.assertIn("design", setup["custom"])

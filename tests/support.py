@@ -14,12 +14,16 @@ if str(ROOT / "lib") not in sys.path:
 # Process-wide default for every test module (TempHomeCase re-applies it per test): the Jev key
 # store never touches the real keychain and no real dialog opens.
 from orche import headless, jev_setup as _jev_setup, jevkey as _jevkey, reconcile as _reconcile  # noqa: E402
+from orche import notify as _notify  # noqa: E402
 
 _jevkey.PLATFORM = "linux"
 _jevkey.SECURITY = "/nonexistent/orche-test/security"
 _jev_setup.OSASCRIPT = "/nonexistent/orche-test/osascript"
 # No in-process pass arms the watchdog (SIGALRM, its exit thread) unless the test asks: run_pass(watchdog_s=…).
 _reconcile.WATCHDOG_S = 0
+# In-process notifications take the osascript path unless a test patches notify.WHICH (child processes
+# find the recording `terminal-notifier` stub of no_claude_dir instead, never the real one).
+_notify.WHICH = lambda name: None
 
 
 _NO_CLAUDE_DIR = None
@@ -50,13 +54,14 @@ RECORDING = ("#!/bin/sh\n"
              "[ -n \"$ORCHE_HOME\" ] && printf '%s\\n' \"$*\" >> \"$ORCHE_HOME/{name}-calls.log\" 2>/dev/null\n"
              "exit {code}\n")
 OSASCRIPT_CALLS = "osascript-calls.log"
+NOTIFIER_CALLS = "terminal-notifier-calls.log"
 LAUNCHCTL_CALLS = "launchctl-calls.log"
 OPEN_CALLS = "open-calls.log"
 
 
 def no_claude_dir() -> str:
-    """A directory whose `claude`, `codex`, `orca`, `security` and `launchctl` always fail and whose `osascript`
-    and `open` only record their call (no test shows a notification, a Finder window or System
+    """A directory whose `claude`, `codex`, `orca`, `security` and `launchctl` always fail and whose `osascript`,
+    `terminal-notifier` and `open` only record their call (no test shows a notification, a Finder window or System
     Settings). It goes first on PATH for the
     whole test process (below), so code that falls back to the default `claude_bin` (e.g. the intake
     at the end of `orche init`) or `orca_bin` (a nudger) can never start the developer's real Claude
@@ -72,6 +77,7 @@ def no_claude_dir() -> str:
         for name, text in (("claude", NO_CLAUDE), ("codex", NO_CODEX), ("orca", NO_ORCA), ("security", NO_SECURITY),
                            ("gh", NO_GH),
                            ("osascript", RECORDING.format(name="osascript", code=0)),
+                           ("terminal-notifier", RECORDING.format(name="terminal-notifier", code=0)),
                            ("open", RECORDING.format(name="open", code=0)),
                            ("launchctl", RECORDING.format(name="launchctl", code=113))):
             stub = Path(_NO_CLAUDE_DIR) / name

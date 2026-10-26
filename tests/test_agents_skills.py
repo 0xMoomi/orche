@@ -163,7 +163,7 @@ class PersonaTemplatesTest(unittest.TestCase):
         self.assertEqual((fm["name"], fm["model"], fm["effort"], fm["memory"]),
                          ("div-acme-design", "claude-opus-5-5", "max", "project"))
         self.assertEqual(fm["description"], "design division of acme (custom; its charter is in the body).")
-        self.assertIn("# Design division (design) — acme", text)
+        self.assertIn("# Design division (design): acme", text)
         self.assertIn(f"## Charter\n{charter}\n", text)
         self.assertIn("## Guards\n- Stay inside the charter", text)
         self.assertIn("Under the runner (`ORCHE_RUNNER=1`) do not run `orche report`; the runner files your pointer.",
@@ -181,7 +181,7 @@ class PersonaTemplatesTest(unittest.TestCase):
                                                       effort="high")
         self.assertTrue(from_template)
         self.assertTrue(text.startswith("---\nname: div-acme-build\n"))
-        self.assertIn("# Build division (build) — acme", text)
+        self.assertIn("# Build division (build): acme", text)
 
 
 class SkillsTest(unittest.TestCase):
@@ -315,6 +315,32 @@ class SkillsTest(unittest.TestCase):
         self.assertLessEqual(len(readme.splitlines()), 100)
         self.assertIn("merge queue", readme)
         self.assertIn("## Landing your work", (PERSONAS / "feature.md").read_text())
+
+    def test_readme_quick_start_is_one_short_paste_and_lists_what_to_say_any_time(self):
+        """c61: the quick start paste is at most four lines; the "Any time" table has one row per guide feature."""
+        readme = (support.ROOT / "README.md").read_text()
+        paste = re.search(r"## Quick start\n.*?```text\n(.*?)\n```", readme, re.S).group(1).splitlines()
+        self.assertLessEqual(len(paste), 4)
+        self.assertIn("install.sh | bash -s -- --yes", paste[0])
+        self.assertIn('follow the "Next" lines it prints', paste[1])
+        table = readme[readme.index("## Any time"):]
+        for say in ("turn on Jev", "cross-check PRs with Codex", "set the token for background runs",
+                    "let the janitor clean up", "set up the merge queue for <project>", "run up to 30 agents",
+                    "make notification clicks open the tab",
+                    "set up again", "update", "what changed in <project>?", "how much did this cost?",
+                    "check the setup", "what else can ORCHE do?"):
+            self.assertIn(f'"{say}"', table)
+        self.assertIn("## What you get", readme)
+        main = " ".join((SKILLS / "orche-main" / "SKILL.md").read_text().split())
+        self.assertIn('| What else can ORCHE do, what do you recommend | `orche doctor` (its "Next steps" block) |', main)
+        self.assertIn("| Set up a project, set up again, add a division, change a model |", main)
+        self.assertIn("| Make notification clicks open the tab | Main runs `brew install terminal-notifier`, then the "
+                      "owner allows its notifications once; without it a click opens Orca (enough for most; the "
+                      "exact tab needs terminal-notifier) | one line |", main)
+        self.assertIn("`orche focus <proj\\|session>`", (SKILLS / "orche" / "SKILL.md").read_text())
+        apply_text = " ".join((SKILLS / "orche-apply" / "SKILL.md").read_text().split())
+        self.assertIn("init writes `.orche/SETUP.md` (the setup report) and Main reports it", apply_text)
+        self.assertIn("the `setup report:` path it printed", apply_text)
 
     def test_rulebooks_cover_their_topics(self):
         main = (SKILLS / "orche-main" / "SKILL.md").read_text()
@@ -498,7 +524,7 @@ class FileTemplatesTest(unittest.TestCase):
         night = (support.ROOT / "templates" / "night.md").read_text()
         self.assertEqual(re.findall(r"^## (.+)$", night, re.M), ["GOAL", "FINISH-PREDICATE", "PERMISSIONS", "ESCAPE"])
         standing = (support.ROOT / "templates" / "project" / ".orche" / "STANDING.md").read_text()
-        self.assertTrue(standing.startswith("# STANDING ORDERS — {{PROJECT}}"))
+        self.assertTrue(standing.startswith("# STANDING ORDERS: {{PROJECT}}"))
         self.assertEqual([int(n) for n in re.findall(r"^(\d+)\. ", standing, re.M)], [1, 2, 3, 4, 5, 6])
         principles = (support.ROOT / "docs" / "principles.md").read_text()
         self.assertEqual(len(re.findall(r"^### \d+\. ", principles, re.M)), 10)

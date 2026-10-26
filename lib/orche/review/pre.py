@@ -51,7 +51,7 @@ EFFORT = "medium"
 MAX_DIFF_LINES = 3000   # the package's diff, then it says so
 OPUS, SONNET = "claude-opus-5-5", "claude-sonnet-5-5"
 _WHY = {"codex not installed": "codex is not installed"}
-_HEADER = re.compile(r"^# pre-review r(\d+) — (\S+) rev (\d+) ")
+_HEADER = re.compile(r"^# pre-review r(\d+): (\S+) rev (\d+) ")
 
 
 def mode_of(cfg) -> str:
@@ -222,7 +222,7 @@ def review_path(unit_dir, k) -> Path:
 
 
 def _write(ctx, rnd, rounds, pr, answers) -> Path:
-    lines = [f"# pre-review r{rnd.k} — {ctx.unit} rev {ctx.rev} · PR #{pr} @ {rnd.head[:7]}",
+    lines = [f"# pre-review r{rnd.k}: {ctx.unit} rev {ctx.rev} · PR #{pr} @ {rnd.head[:7]}",
              f"verdict: {rnd.word}", f"reviewer: review:pre:{rnd.model}", f"writer: {ctx.writer} ({ctx.writer_model})",
              f"round: {rnd.k} of {rounds}", f"note: {rnd.note or '-'}", f"at: {util.now_iso()}", "",
              "## Findings", *([f"- {f}" for f in rnd.findings] or [f"(none{': ' + rnd.why if rnd.why else ''})"]), "",

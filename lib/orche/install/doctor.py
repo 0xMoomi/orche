@@ -1,7 +1,8 @@
 """`orche doctor`: one OK/WARN/FAIL line per check. FAIL only for python < 3.11 (this interpreter,
 or no 3.11+ the launchers' finder can pick in a login shell), an invalid registry or an unwritable
 ORCHE_HOME. Jev is optional and fails open, so its row is WARN at worst (not configured, disabled,
-or a failed last probe)."""
+or a failed last probe). The human output ends with "Next steps (optional, any time)": `guide.lines`, which
+never changes the exit code."""
 import os
 import re
 import shlex
@@ -13,7 +14,12 @@ from .. import (__version__, config, github, headless, jev_setup, ladder, mask, 
                 runs, shell, units, vendors)
 from . import settings, statusline
 
-TOOLS = ("gcloud", "gh", "vercel", "age", "zstd")
+TOOLS = ("gcloud", "gh", "vercel", "age", "zstd", "terminal-notifier")
+OPTIONAL = ("terminal-notifier",)              # never a WARN: Orca's own notification is enough
+MISSING = {"terminal-notifier": "not installed (optional: brew install terminal-notifier makes a notification click "
+                                "open the project's Main tab; allow its notifications once when macOS asks)"}
+FOUND = {"terminal-notifier": "found (allow its notifications once under System Settings > Notifications when "
+                              "macOS asks; a refused permission falls back to Orca's own notification)"}
 WRITE_PERMS = ("ADMIN", "MAINTAIN", "WRITE")     # gh viewerPermission the merge queue can merge with
 DEPLOY_FILES = ("vercel.json", "netlify.toml")
 
@@ -233,9 +239,7 @@ def gate_rows(reg, cfg) -> list:
     for key, root in _roots(reg):
         if not (root / ".git").exists():
             continue
-        base = publish.base(root, cfg)
-        ok = bool(base) and shell.run(["git", "-C", str(root), "cat-file", "-e", f"origin/{base}:scripts/verify/ci.sh"],
-                                      timeout=10).ok
+        base, ok = publish.gate(root, cfg)
         rows.append(("WARN", "queue gate", f"{key}: {publish.no_base(root)}") if not base else
                     ("OK", "queue gate", f"{key}: scripts/verify/ci.sh on origin/{base}") if ok else
                     ("WARN", "queue gate", f"{key}: no scripts/verify/ci.sh on origin/{base} — queue add refuses units "
@@ -461,7 +465,8 @@ def checks(ctx) -> list:
         add(*row)
     for tool in TOOLS:
         found = shutil.which(tool)
-        add("OK" if found else "WARN", f"tool {tool}", found or "not found on PATH")
+        add("OK" if found or tool in OPTIONAL else "WARN", f"tool {tool}",
+            FOUND.get(tool, found) if found else MISSING.get(tool, "not found on PATH"))
     add(*jev_setup.doctor_row())
     add(*oauth.doctor_row())
     level, detail = _orche_home()
@@ -527,3 +532,13 @@ def checks(ctx) -> list:
         add("WARN", "careful hook", "careful hook registered in settings.json — its approval dialogs stall "
                                     "unattended ORCHE panes; remove it or keep it only for your own sessions")
     return out
+
+
+def next_steps(ctx) -> list:
+    """`guide.lines` for the closing block; an invalid registry (its own FAIL row) lists no project gates."""
+    from .. import guide
+    try:
+        reg = registry.load()
+    except registry.RegistryError:
+        reg = registry.empty()
+    return guide.lines(config.load(), reg, ctx.home)

@@ -19,7 +19,7 @@ H1, H2 = "a" * 40, "b" * 40
 TEMPLATE = templates.render(intake.CARD_TEMPLATE.read_text(encoding="utf-8"), PROJECT="acme")
 INTAKE_CARD = {"what": "A shop for widgets.", "stack": "Python", "layout": "`src/`", "build_test_run": "make test",
                "conventions": "ruff", "risks": "billing untested"}
-OLD_CARD = ("# acme — project card\n\n## One-line description\n\nA shop.\n\n## Last 5 changes\n\n- a\n\n"
+OLD_CARD = ("# acme: project card\n\n## One-line description\n\nA shop.\n\n## Last 5 changes\n\n- a\n\n"
             "## Owning sessions\n\nmain-acme\n\n## Base commit\n\nBase commit: 1a2b3c4\n")
 
 
@@ -65,7 +65,7 @@ class AskTest(LiaisonCase):
         self.assertEqual(self.orche("ask", "acme", "what?")[0], 0)
         stdin = self.stdin()
         self.assertIn("````text\nwhat?\n````", stdin)
-        self.assertIn("````markdown\n# acme — project card", stdin)
+        self.assertIn("````markdown\n# acme: project card", stdin)
         self.assertIn(f"HEAD: {head(self.repo)}", stdin)
         self.assertIn(" init", stdin)                                  # the git history
 

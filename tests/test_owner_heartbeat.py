@@ -40,7 +40,8 @@ def hm(t):
 
 
 class BeatCase(support.TempHomeCase):
-    """The sample registry, quiet hours off, notifications on macOS: every osascript argv is recorded."""
+    """The sample registry, quiet hours off, notifications on macOS, Orca running (the fake runner answers
+    `pgrep` with 0): every osascript argv is recorded."""
 
     def setUp(self):
         super().setUp()
@@ -161,10 +162,10 @@ class QuietHoursTest(BeatCase):
         self.config(quiet="23:00-08:00")
         owner.closing(P, "OWNER: approve the deploy", now=NIGHT)
         [first] = self.notes()
-        self.assertEqual(first[4], notify.SCRIPT[1])                          # no sound
+        self.assertEqual(first[4:7], [notify.TELL[0], "-e", notify.SCRIPT[1]])  # Orca runs (pgrep 0); no sound
         got = self.shown_at(range(5, 12 * 60 + 1, 5), base=NIGHT)            # every 5 min until 11:10
         self.assertEqual([hm(at(m, NIGHT)) for m in got], ["08:00"])
-        self.assertIn('sound name "Glass"', self.notes()[-1][4])
+        self.assertIn('sound name "Glass"', self.notes()[-1][6])
         self.assertEqual(self.bodies()[-1], "OWNER (asked 23:10): approve the deploy")
 
 

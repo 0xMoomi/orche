@@ -1,4 +1,4 @@
-# RUBRIC — {{PROJECT}}
+# RUBRIC: {{PROJECT}}
 
 Criteria the separate-context grader checks against the diff, ACCEPT and VERIFY output.
 Each line must be checkable as pass/fail from those inputs alone; no taste calls.

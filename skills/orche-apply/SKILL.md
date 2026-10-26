@@ -13,8 +13,8 @@ user names it. `orche apply-all` is never used: some repos are dormant and some 
 `orche init <project>` makes, for that project only:
 
 1. Files in the project's main checkout: `.orche/project`, `PROJECT_CARD.md`, `AGENTS.md`, `.agents/`,
-   `.claude/agents/div-<proj>-*.md` (untracked; `.orche/units/` and `.claude/settings.local.json` go into
-   `.git/info/exclude`). Nothing is committed.
+   `.claude/agents/div-<proj>-*.md` (untracked; `.orche/units/`, `.orche/SETUP.md` (the setup report) and
+   `.claude/settings.local.json` go into `.git/info/exclude`). Nothing is committed.
 2. One Orca worktree per chosen division (`div-<division>`) with its charter/status/handoff files. The
    defaults are `rnd`, `research`, `build` and `gtm`; `ops` is opt-in and stays dormant while the stage is
    `building`. A custom division (the user's own, e.g. `design`) gets a worktree `div-<name>`, a session
@@ -41,8 +41,9 @@ When the user says just `orche init` (or `/orche-apply`) and names no project, t
 repository holding the current directory, with the defaults. Run `orche init` at once, with no argument:
 no checklist, no dry-run, no question. Pass timeout 600000 (the intake runs last). It prints
 `Main is open in the main-<proj> tab with the setup summary; from here on, talk to Main there.`
-and closes this window, as in step 6 below; only when it printed `could not close the window that ran init`
-or `could not switch`, hand over as step 6 says and stop. If it fails with `not inside a git repository`, ask for the project path.
+and closes this window, as in step 6 below; init writes `.orche/SETUP.md` (the setup report) and Main reports it.
+Only when it printed `could not close the window that ran init` or `could not switch`, hand over as step 6 says
+and stop. If it fails with `not inside a git repository`, ask for the project path.
 A path or a project name means that project.
 
 ## In plain words (choices)
@@ -130,11 +131,12 @@ customise. In chat there is no terminal, so the setup goes through a JSON file. 
    re-runs it). `orche status --project <proj>` (the project with its division names, custom ones included,
    `○` = dormant) and `orche depts <proj>` (one row per division) show the result later.
    Only the status-line cell uses the label (`Design` → `DES○`).
-6. `orche init` ends by switching Orca to the `main-<proj>` tab, sending Main the setup result (Main reports
-   it to the owner and asks for the first request) and closing this window: you do not get to answer, and
-   nothing is lost. Only when init printed `could not close the window that ran init` or `could not switch`:
-   hand over in at most four lines (registered, the intake line, `orche wake main-<proj>` if needed, close this
-   window and talk to Main there) and stop.
+6. `orche init` ends by writing the setup report `.orche/SETUP.md` ("ORCHE is set up": what was made and what
+   to switch on any time), switching Orca to the `main-<proj>` tab, sending Main the setup result with the
+   report (Main reports it to the owner and asks for the first request)
+   and closing this window: you do not get to answer, and nothing is lost. Only when init printed `could not close the window that ran init` or `could not
+   switch`: hand over in at most four lines (registered, the intake line, the `setup report:` path it printed,
+   `orche wake main-<proj>` if needed, close this window and talk to Main there) and stop.
 
 ## Later changes
 

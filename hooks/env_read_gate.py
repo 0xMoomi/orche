@@ -6,11 +6,17 @@ flags; `lib/orche/jevgate.py`). Both rule sets look at command words and tool pa
 that merely mentions a secret (a Markdown file about `.env`, a commit message, a search pattern),
 except the Jev key file's full ORCHE_HOME path, which is refused anywhere in a command.
 
+A third rule keeps context small: a Read or Grep path, or a Bash command word, naming a Claude Code
+transcript (a path through `/.claude/projects/` or `/claude-profiles/` ending in `.jsonl`) is
+refused, because one transcript refills the context and forces a compaction. `orche metrics` reads
+transcripts as a CLI, outside the model, and is not affected.
+
 Denies only on a positive match; prints nothing otherwise (no auto-allow). Internal error -> allow +
 log, except that both rule sets refuse a command they cannot finish checking ("too complex").
 """
 import json
 import os
+import re
 import sys
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "lib"))
@@ -25,6 +31,9 @@ from orche import envgate, jevgate  # noqa: E402  (stdlib only, old-interpreter 
 
 REASON = envgate.REASON
 JEV_REASON = jevgate.REASON
+TRANSCRIPT_REASON = ("[orche] transcripts are never read into a session: one refills the context and forces a "
+                     "compaction. orche metrics summarizes them; orche status carries the state.")
+TRANSCRIPT = re.compile(r"/(?:\.claude/projects|claude-profiles)/\S*\.jsonl")
 
 
 def jev_denied(tool, tool_input):
@@ -35,6 +44,19 @@ def jev_denied(tool, tool_input):
 def denied(tool, tool_input):
     """True when the call would read a secret file or the environment (or cannot be checked)."""
     return envgate.reason(tool, tool_input) is not None
+
+
+def transcript_reason(tool, tool_input):
+    """TRANSCRIPT_REASON when a Read or Grep path, or a Bash command word, names a transcript; None."""
+    if tool == "Read":
+        target = tool_input.get("file_path")
+    elif tool == "Grep":
+        target = tool_input.get("path")
+    elif tool == "Bash":
+        target = tool_input.get("command")
+    else:
+        return None
+    return TRANSCRIPT_REASON if TRANSCRIPT.search(str(target or "")) else None
 
 
 def _log_denial(tool, reason):
@@ -55,7 +77,8 @@ def main():
         if not isinstance(payload, dict) or os.environ.get("ORCHE_KEYMASTER") == "1":
             return 0
         tool, tool_input = payload.get("tool_name"), payload.get("tool_input") or {}
-        reason = jevgate.reason(tool, tool_input) or envgate.reason(tool, tool_input)
+        reason = (jevgate.reason(tool, tool_input) or envgate.reason(tool, tool_input)
+                  or transcript_reason(tool, tool_input))
         if reason is None:
             return 0
     except Exception as exc:  # noqa: BLE001 - gates allow on internal error

@@ -106,6 +106,8 @@ exit 0
 # Everything ORCHE or install.sh may run that acts on this machine: each must be a fake in fakebin
 # (or nowhere on PATH) before any child starts.
 MACHINE_TOOLS = ("claude", "orca", "osascript", "security", "launchctl", "open", "pbcopy", "pbpaste")
+# terminal-notifier (c62): absent unless a test puts a fake in fakebin; never the real one.
+OPTIONAL_TOOLS = ("terminal-notifier",)
 OLD_PYTHON = """#!/bin/sh
 case "$1" in --version) echo "Python 3.9.6"; exit 0 ;; esac
 exit 1
@@ -191,7 +193,7 @@ class InstallShTest(unittest.TestCase):
         """`env`, after checking that none of MACHINE_TOOLS on its PATH is outside fakebin: a test
         whose PATH lets the real launchctl, open, osascript, security, claude or orca through fails
         here, before anything runs."""
-        for name in MACHINE_TOOLS:
+        for name in MACHINE_TOOLS + OPTIONAL_TOOLS:
             found = shutil.which(name, path=env["PATH"])
             if found is not None and Path(found).parent != self.fake:
                 self.fail(f"{name} would run {found}: put a fake in fakebin first")
@@ -295,10 +297,16 @@ class InstallShTest(unittest.TestCase):
         self.assertNotIn("Jev API key", res.all)
         self.assertFalse((self.fake / "osascript-called").exists())
         lines = res.stdout.splitlines()
-        self.assertTrue(any(ln.startswith("orche ") and f"installed in {self.dir} (plugin mode)" in ln
-                            for ln in lines), res.stdout)
-        self.assertIn(f"Open a new terminal (or run: source {self.home / '.profile'})", res.stdout)
-        self.assertIn("Next: orche init <project>", res.stdout)
+        from orche import __version__
+        at = lines.index(f"ORCHE {__version__} is installed on this Mac (plugin mode).")
+        self.assertEqual(lines[at - 1], "")
+        self.assertEqual(lines[at + 1:at + 5], [
+            f"Open a new terminal (or run: source {self.home / '.profile'}) so `orche` is on your PATH.",
+            "Next: set up a project.",
+            '  In Claude Code, inside the project, say "orche init" (or, in any language, "set up ORCHE here").',
+            f"  In this session: read {self.dir}/skills/orche-apply/SKILL.md, section \"In plain words (choices)\", "
+            "and set up the owner's project with the choice dialog."])
+        self.assertTrue((self.dir / "skills" / "orche-apply" / "SKILL.md").is_file())
         self.assertIn("doctor:", res.stdout)
         if sys.platform == "darwin":   # the heartbeat job went to the fake launchctl, nothing was kicked
             plist = self.home / "Library" / "LaunchAgents" / "com.orche.reconcile.plist"
@@ -323,6 +331,8 @@ class InstallShTest(unittest.TestCase):
         # on this PATH replaced the developer's heartbeat job with the temp clone's).
         for name in MACHINE_TOOLS:
             self.assertEqual(shutil.which(name, path=self.env["PATH"]), str(self.fake / name), name)
+        for name in OPTIONAL_TOOLS:
+            self.assertIsNone(shutil.which(name, path=self.env["PATH"]), name)
         real = _write(self.tmp / "elsewhere" / "launchctl", "#!/bin/sh\nexit 0\n")
         with self.assertRaises(AssertionError) as caught:   # the fence refuses before any spawn
             self.fenced({**self.env, "PATH": f"{real.parent}:{self.env['PATH']}"})
@@ -350,7 +360,7 @@ class InstallShTest(unittest.TestCase):
             path = self.fake / name
             self.assertNotIn("add-generic-password", path.read_text() if path.exists() else "")
         self.assertFalse((self.orche_home / "secrets" / "jev.key").exists())
-        self.assertIn("Next: orche init <project>", out)
+        self.assertIn("Next: set up a project.", out)
 
     def test_jev_hidden_prompt_on_the_tty(self):
         # No dialog (an SSH session, or Linux): the hidden terminal prompt reads the tty; Enter skips.
@@ -565,7 +575,7 @@ class InstallShTest(unittest.TestCase):
         self.assertNotIn("error:", res.stderr)
         self.assertNotIn("using this clone", res.stdout)
         self.assertIn("orche install --mode plugin --no-jev", res.stdout)
-        self.assertIn("Next: orche init <project>", res.stdout)
+        self.assertIn("Next: set up a project.", res.stdout)
         self.assertTrue((self.dir / ".git").is_dir())
 
     def test_run_from_a_clone_uses_that_clone(self):

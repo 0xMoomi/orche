@@ -250,7 +250,7 @@ class RequestTest(SecretCase):
         self.assertEqual((req["envs"], req["status"], req["project"]), (["dev", "prod"], "pending", "acme-shop"))
         notes = self.cloud.argvs(["osascript", "-e"])
         self.assertEqual(len(notes), 1)
-        self.assertEqual(notes[0][:-2], notify.argv("", "")[:-2])         # notify.send: a fixed script
+        self.assertEqual(notes[0][:-2], notify.argv("", "", orca=True)[:-2])   # a fixed script; Orca runs (pgrep 0)
         self.assertTrue(notes[0][-2].startswith("STRIPE_SECRET_KEY needed for acme-shop"))
         self.assertEqual(notes[0][-1], "ORCHE Keymaster")
         self.assertEqual(self.spawned, [1])

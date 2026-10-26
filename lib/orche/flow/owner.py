@@ -352,7 +352,7 @@ def _show(project, sent, body, kind, now, ask_at=None, notice_id=None) -> bool:
     """Under the lock: show one notification, then write notified.json (_note: a failed show is a try too).
     False when osascript failed (or timed out)."""
     quiet = _quiet(now)
-    ok = notice.send(f"ORCHE {project}", body, sound=not quiet, kind=kind)
+    ok = notice.send(f"ORCHE {project}", body, sound=not quiet, kind=kind, project=project)
     n = _note(project, sent, kind, now, ask_at, notice_id, "shown" if ok else "failed")
     if ok:
         log.log("events", f"owner notify project={project} kind={kind} n={n} quiet={int(quiet)}")

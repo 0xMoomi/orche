@@ -1,4 +1,4 @@
-# HANDOFF — {{UNIT}}
+# HANDOFF: {{UNIT}}
 
 <!-- Fixed sections. Update in place; do not regenerate free-form. A resumed session treats this as authoritative. -->
 

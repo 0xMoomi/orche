@@ -32,10 +32,10 @@ def log(text: str) -> None:
         fh.write(f"- {util.now_iso()} {text}\n")
 
 
-def notify(text: str) -> None:
+def notify(text: str, project=None) -> None:
     """A macOS notification titled ORCHE (notify.send: masked, an argument to a fixed script; no-op
-    when config `notify` is off or not on macOS)."""
-    notice.send("ORCHE", text, kind="hr")
+    when config `notify` is off or not on macOS); a `project` key makes a click open its Main tab."""
+    notice.send("ORCHE", text, kind="hr", project=project)
 
 
 def record(reg, line, *, event=None, project=None, note=None, save=True) -> None:
@@ -52,7 +52,7 @@ def record(reg, line, *, event=None, project=None, note=None, save=True) -> None
     if key and key != "*":
         statusline.refresh(reg, key)
     if note:
-        notify(note)
+        notify(note, key if key and key != "*" else None)
 
 
 def next_order(text: str) -> int:

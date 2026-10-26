@@ -6,7 +6,7 @@ effort: {{EFFORT}}
 memory: project
 ---
 
-# Ops division ({{NAME}}) — {{PROJECT}}
+# Ops division ({{NAME}}): {{PROJECT}}
 
 {{RESUME}}
 

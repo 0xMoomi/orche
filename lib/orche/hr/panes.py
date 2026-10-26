@@ -1,7 +1,10 @@
 """Orca panes of units and projects: the pane command, a unit's create argv, project panes.
 
 Every ORCHE pane (Main, divisions, features) runs `claude --permission-mode bypassPermissions`:
-a woken pane runs with nobody watching and must not stop at a permission prompt.
+a woken pane runs with nobody watching and must not stop at a permission prompt. A pane carries no
+autocompact window of its own: the installer's `CLAUDE_AUTOCOMPACT_PCT_OVERRIDE` applies to the
+model's window (with a 200K window it compacted at about 100K, under the fixed prefix of a session
+with many plugins, so Main compacted every turn).
 
 A woken unit resumes its conversation by session id, never by name: units re-started under the
 same name leave several sessions with that name, and `claude --resume <name>` then opens the
@@ -17,9 +20,6 @@ from pathlib import Path
 from .. import config, orca, paths
 from ..janitor import discover
 
-# Every pane session compacts at this many tokens: bounded per-turn cost and latency; the state lives
-# in files and the project card, which the SessionStart hook re-injects after a compaction.
-AUTOCOMPACT_TOKENS = 200_000
 RESUMED = "resumed: say in five lines what was done last, what runs now and what waits on the owner"
 
 
@@ -79,14 +79,13 @@ def resume_flag(session, cwd) -> str:
 
 
 def pane_command(session, *, resume, cwd=None) -> str:
-    """`claude --permission-mode bypassPermissions --autocompact <AUTOCOMPACT_TOKENS>` +
-    `resume_flag(session, cwd)` for a reopened pane (Main included), `--name <session>` for a fresh
+    """`claude --permission-mode bypassPermissions` + `resume_flag(session, cwd)` for a reopened pane (Main included), `--name <session>` for a fresh
     start: no ORCHE pane ever stops at a permission prompt.
 
     Prefixed with `session_env(session)`. The one builder for every ORCHE pane, Main included."""
     flag = resume_flag(session, cwd) if resume else f"--name {session}"
     return (f"{session_env(session)}{config.load().get('claude_bin', 'claude')} "
-            f"--permission-mode bypassPermissions --autocompact {AUTOCOMPACT_TOKENS} {flag}")
+            f"--permission-mode bypassPermissions {flag}")
 
 
 def open_pane(worktree_id, session, command, *, dry_run=False):

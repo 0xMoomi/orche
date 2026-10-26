@@ -1,4 +1,4 @@
-# CHARTER — {{UNIT}} ({{KIND}})
+# CHARTER: {{UNIT}} ({{KIND}})
 
 ## Scope (globs)
 

@@ -94,7 +94,10 @@ Target one API response per brief. Write it from what you already hold — the u
 PROJECT_CARD.md, the units' STATUS files and inbox pointers — and send it. Do not inspect the repo
 (git status, grep, tail, cat), search docs for dispatch examples, look for the `orche` binary, or
 run VERIFY yourself: the worker does all of that inside its own worktree. If a fact is missing, put
-the question into CONTEXT for the worker, or ask the user one line with a default.
+the question into CONTEXT for the worker, or ask the user one line with a default. Tool output
+stays small: counts and head or tail lines, never a whole file, log or transcript; a result over a
+few thousand characters forces a compaction. After a compaction do not re-read files to recover:
+the status card and `orche status` carry the state.
 
 ## Confirm loop
 
@@ -187,8 +190,9 @@ When an `orche` command refuses or fails, relay its line and stop; never redo it
 | The team, who does what | `orche depts <p>` | at most five plain lines: each head and its workers |
 | The queue, what's merging | `orche queue <p>` | at most five plain lines: what lands next, what was returned, what waits |
 | Something's wrong, check the setup | `orche doctor` | each WARN or FAIL row in plain words with the one step that fixes it; take the step when it is yours |
+| What else can ORCHE do, what do you recommend | `orche doctor` (its "Next steps" block) | each line in plain words: the feature, on or off, what to say to switch it on |
 | Update | `orche update` with Bash timeout 600000 ms (up to 10 minutes); a failed step: run it once more, it resumes | its version line (`ORCHE <old> → <new>` or `already up to date`) and the project lines; never pull, reinstall or refresh by hand, never ask the owner to close or reopen a pane |
-| Set up a project, add a division, change a model | skill orche-apply, section "In plain words (choices)" | the choice dialog, then one result line |
+| Set up a project, set up again, add a division, change a model | skill orche-apply, section "In plain words (choices)" (set up again: `orche init <p> --refresh`) | the choice dialog, then one result line |
 | Stop or pause everything; stop one job; resume | `orche flow pause <p>`; `STOP <unit>` through `orche dispatch`; `orche flow resume <p>` only after the owner asked | one line: what is paused or running again |
 | More agents at once (20, 30, "more") | the `ask.scale` question from `orche hr choices <p> --json`, then `orche hr scale <preset>` (default, 20 or 30) | on a Claude subscription many agents reach the usage window sooner: say so once |
 | Staff a team, several people on it | nothing new: the heads already staff each job; if the point is more at once, the `ask.scale` question | one line |
@@ -207,6 +211,7 @@ When an `orche` command refuses or fails, relay its line and stop; never redo it
 | A secret or key to hand over | `orche secret fill --project <p>` (the dialog) | the value never goes into chat |
 | Turn on or connect Jev | `orche jev setup` (its dialog asks for the key) | the probe result in one line |
 | Automatic routing of simple requests on or off | `orche triage enable` / `orche triage disable` | one line |
+| Make notification clicks open the tab | Main runs `brew install terminal-notifier`, then the owner allows its notifications once; without it a click opens Orca (enough for most; the exact tab needs terminal-notifier) | one line |
 | Let the janitor clean up, or back to report-only | `orche janitor enable` / `orche janitor disable` | one line |
 | Usage limit, why did it stop | read the `paused … usage limit until …` line | when it resumes and the two ways to keep going (an API key, or Codex); never re-send briefs during a hold |
 | Remove ORCHE | `orche uninstall`, after one confirmation | what was removed |

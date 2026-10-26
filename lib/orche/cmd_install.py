@@ -407,5 +407,8 @@ def cmd_uninstall(args):
 def cmd_doctor(args):
     ctx = _ctx(args)
     results = doctor.checks(ctx)
-    out(args, results, [f"{r['level']}\t{r['check']}\t{r['detail']}" for r in results])
+    steps = doctor.next_steps(ctx)
+    out(args, {"checks": results, "next_steps": steps},
+        [f"{r['level']}\t{r['check']}\t{r['detail']}" for r in results]
+        + ["", "Next steps (optional, any time):"] + steps)
     return EXIT_USER if any(r["level"] == "FAIL" for r in results) else EXIT_OK

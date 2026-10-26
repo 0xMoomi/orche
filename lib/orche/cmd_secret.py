@@ -140,7 +140,7 @@ def cmd_request(args):
     ex = store.Exec(args.dry_run)
     rid, req, created = store.new_request(key, name, envs, args.why, args.how, roster.actor(),
                                           dry_run=args.dry_run)
-    store.notify(ex, f"{name} needed for {key} ({','.join(req['envs'])}): {req['why']}")
+    store.notify(ex, f"{name} needed for {key} ({','.join(req['envs'])}): {req['why']}", key)
     spawned = False
     if not args.dry_run:
         store.audit("request", key, name, ",".join(req["envs"]), "-", req["requested_by"], rid)

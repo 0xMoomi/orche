@@ -12,8 +12,8 @@ worktree settings, the card link; an overwritten persona is first copied to
 (saved only when it changes) and ends by naming the panes to restart. `--print-setup` prints the setup
 JSON and exits. `--refresh` (a registered project only; what `orche update` runs per project) does just
 that re-render — the card link, personas, worktree settings, the stamp (never a project template
-file: one the user deleted stays deleted) — and stops: no Orca, panes, automations or intake; setup flags are refused; a folder it may not
-read is `unreadable (privacy): <path>` (exit 3).
+file: one the user deleted stays deleted) and the setup report — and stops: no Orca, panes, automations or intake; setup flags are
+refused; a folder it may not read is `unreadable (privacy): <path>` (exit 3).
 
 Order: resolve the repo (`orca repo list`, read-only even under --dry-run) -> setup -> project templates +
 card symlink -> registry entry -> `.orche/project` marker (the project key, read by the status
@@ -23,8 +23,10 @@ pane in the main checkout when missing -> the two weekly Orca automations
 (printed as dry-run lines unless `--automations`) -> the project intake (`orche intake`, unless
 `--no-intake`; a failure is one "intake skipped: …" line and Ctrl-C one "intake interrupted; …"
 line, never a failed init) -> a switch to the `main-<proj>` tab (live only; a failure is a warning) -> on a
-first registration, the setup note to Main (`_setup_note`, five lines) and, as the very last action, closing
-the one pane that ran init (`_init_window`; never inside `orche setup` or apply-all).
+live run, the setup report `.orche/SETUP.md` (`write_report`: what was made and the "Any time" list of
+`guide.lines`; in `info/exclude`) -> on a first registration, the setup note to Main (`_setup_note`, at most
+`inbox.MAX_LINES` lines, pointing at the report) and, as the very last action, closing the one pane that ran
+init (`_init_window`; never inside `orche setup` or apply-all).
 A path that is a git repository but not in `orca repo list` is added with `orca repo add` once the
 setup is confirmed, right before the first write (an abort leaves Orca untouched; --dry-run never adds:
 a placeholder repo id `pending` stands in). A linked git worktree is refused. The main checkout's
@@ -43,7 +45,9 @@ from .hr import onboarding
 EXIT_INTERRUPTED = 130   # a setup given wrongly exits EXIT_USER (1), like argparse usage errors here
 PERSONAS_UPDATED = "personas updated for {names}: read at their next session start"
 SETUP_FLAGS = ("--divisions", "--custom", "--setup-file", "--stage", "--aliases", "--wake")
-SETUP_ASK = "tell the owner these in their language, in five lines, and ask for the first request"
+SETUP_ASK = ('read the report at report: and tell the owner, in their language, what was set up and the "Any time" '
+             "list as short lines; then ask for the first request")
+SETUP_REPORT = "SETUP.md"
 CLOSED = "the window that ran init was closed"
 NOT_CLOSED = "could not close the window that ran init: {why}"
 ORCHE_PANES = ("main-", "div-", "feat-")
@@ -124,10 +128,12 @@ def _refresh(args, reg) -> int:
     except (OSError, util.JsonError) as exc:
         return fail(EXIT_USER, f"refresh {key} stopped: {exc}")
     stamped = not dry_run and hr.stamp_version(reg, key, __version__)
+    report = None if dry_run else _report(reg, key, root)
     refreshed = list(ref.changed) + ([link] if linked in ("created", "relinked") else [])
     restart = [] if dry_run else ([proj["main_session"]] if stamped and proj.get("main_session") else []) + ref.restart
     data = {"project": key, "path": root, "dry_run": dry_run, "refreshed": [str(p) for p in refreshed],
-            "kept": [{"path": str(p), "why": w} for p, w in ref.kept], "restart": restart}
+            "kept": [{"path": str(p), "why": w} for p, w in ref.kept], "restart": restart,
+            "setup_report": str(report) if report else None}
     lines = [f"{'would refresh' if dry_run else 'refreshed'} {key}: "
              + (f"{len(refreshed)} file(s)" if refreshed else "already current")]
     lines += [f"kept {_tilde(Path(p))}: {why}" for p, why in ref.kept]
@@ -135,6 +141,15 @@ def _refresh(args, reg) -> int:
         lines.append(PERSONAS_UPDATED.format(names=", ".join(restart)))
     out(args, data, lines)
     return EXIT_OK
+
+
+def _report(reg, key, root, intake_line=None):
+    """write_report, best effort: a failure is one warning, never a failed init."""
+    try:
+        return write_report(reg, key, root, intake_line)
+    except (OSError, util.JsonError) as exc:
+        warn(f"setup report not written: {exc}")
+        return None
 
 
 def _unreadable(path) -> str:
@@ -275,19 +290,53 @@ def _init_window(root):
 
 
 def _setup_note(proj, key, intake_line, window_line) -> str:
-    """The setup result Main reports to the owner: at most five lines (`inbox.MAX_LINES`)."""
-    groups = {}
-    for name in registry.divisions_of(proj):
-        groups.setdefault((proj["divisions"].get(name) or {}).get("model") or "default", []).append(name)
-    names = "; ".join(f"{', '.join(sorted(n))} ({m})" for m, n in groups.items())
-    count = sum(len(n) for n in groups.values())
-    trees = [units.worktree_path(d["worktree"]) for d in proj["divisions"].values() if d.get("worktree")]
-    where = f"{_tilde(Path(trees[0]).parent)}/div-<division>" if trees else "none"
+    """The setup result Main reports to the owner: at most five lines (`inbox.MAX_LINES`); the pointer's
+    `report_path` is the setup report."""
+    count, names, where = _divisions_text(proj)
     lines = [f"setup done: {key} registered with {count} divisions: {names}",
              intake_line or "intake: off",
              f"workspaces: {where}; nothing is committed to the repository",
              window_line, SETUP_ASK]
     return "\n".join(line for line in lines if line)
+
+
+def _divisions_text(proj):
+    """(count, `names (model); …` grouped by model, the workspaces folder or "none")."""
+    groups = {}
+    for name in registry.divisions_of(proj):
+        groups.setdefault((proj["divisions"].get(name) or {}).get("model") or "default", []).append(name)
+    names = "; ".join(f"{', '.join(sorted(n))} ({m})" for m, n in groups.items())
+    trees = [units.worktree_path(d["worktree"]) for d in proj["divisions"].values() if d.get("worktree")]
+    where = f"{_tilde(Path(trees[0]).parent)}/div-<division>" if trees else "none"
+    return sum(len(n) for n in groups.values()), names, where
+
+
+def _intake_text(key, root, intake_line):
+    """The intake line of this run, else the stamp's summary, else "off"."""
+    if intake_line and intake_line != "intake: covered":
+        return intake_line
+    stamp = intake.read_stamp(root)
+    return intake.summary_line({**stamp, "project": key}) if stamp else intake_line or "off"
+
+
+def write_report(reg, key, root, intake_line=None) -> Path:
+    """`<root>/.orche/SETUP.md`, the setup report Main gives the owner (untracked: `info/exclude`)."""
+    from . import guide
+    proj = reg["projects"][key]
+    _count, names, where = _divisions_text(proj)
+    path = paths.project_local(root) / SETUP_REPORT
+    text = "\n".join([f"# ORCHE is set up: {key}", "",
+                      f"- Divisions: {names or 'none'}",
+                      f"- Workspaces: {where}; nothing is committed to the repository",
+                      f"- Intake: {_intake_text(key, root, intake_line)}",
+                      f"- Talk to Main in the {proj.get('main_session') or 'main-' + key} tab, in any language. "
+                      "Main plans and decides; divisions do the work; you only get decisions.",
+                      "", "## Any time", "",
+                      *guide.lines(config.load(), reg, Path.home()), "",
+                      'Say "what else can ORCHE do?" to see this list again (Main runs `orche doctor`).', ""])
+    util.atomic_write(path, text)
+    onboarding.exclude_lines(root, (f".orche/{SETUP_REPORT}",))
+    return path
 
 
 def _tilde(path: Path) -> str:
@@ -639,6 +688,8 @@ def cmd_init(args):
     first = existing is None
     closing = first and getattr(args, "close_window", True)   # off when init runs inside setup/apply-all
     data["closed_window"], data["setup_note"], handle = None, False, None
+    report = None if dry_run or key not in reg["projects"] else _report(reg, key, root, intake_line)
+    data["setup_report"] = str(report) if report else None
     if dry_run:
         data["switched"] = False
         lines.append(f"would switch to {proj['main_session']}")
@@ -655,7 +706,7 @@ def cmd_init(args):
             from . import inbox
             title = proj["main_session"]
             try:
-                inbox.post(inbox.make(title, "orche", title, "info", urgent=True,
+                inbox.post(inbox.make(title, "orche", title, "info", urgent=True, report_path=str(report or ""),
                                       summary=_setup_note(proj, key, intake_line, window_line)))
                 data["setup_note"] = True
             except OSError as exc:   # Main still has the card
@@ -664,6 +715,8 @@ def cmd_init(args):
             lines.append(f"Main is open in the {proj['main_session']} tab with the setup summary; from here on, talk to Main there.")
         if closing:
             lines.append("closing the window that ran init" if handle else window_line)
+            if not handle and report:
+                lines.append(f"setup report: {report}")
             data["closed_window"] = handle
     if restart:
         lines.append(PERSONAS_UPDATED.format(names=", ".join(restart)))

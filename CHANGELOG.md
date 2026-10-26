@@ -3,6 +3,28 @@
 All notable changes to ORCHE are listed here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow semantic versioning.
 
+## 0.12.0 — 2026-10-26
+
+### Added
+
+- The quick start: one three-line paste installs ORCHE and sets up the project; the installer prints the next steps.
+- `.orche/SETUP.md`, the setup report Main gives the owner after `orche init` ("ORCHE is set up", what was made, what to switch on any time); `orche init --refresh` rewrites it and `--json` names it (`setup_report`).
+- `orche doctor` ends with "Next steps (optional, any time)": Jev, the Codex cross-check, the background-run token, the janitor, the merge-queue gate, more agents, and the always-present lines; its `--json` is `{"checks", "next_steps"}`.
+- Main's "what else can ORCHE do" row: the next steps in plain words.
+- `orche focus <project|session>`: switch Orca to a pane (a Main is reopened when closed); terminal-notifier is optional (opt-in: say 'make notification clicks open the tab'); doctor and the setup report say what a click does.
+
+### Changed
+
+- The installer's closing lines say that ORCHE is installed and what to do next.
+- README is a quick start plus an "Any time" table.
+- Templates, generated file headers and the unit rules use plain punctuation (no en or em dashes), and the intake persona and the unit card forbid them.
+
+### Fixed
+
+- A click on an ORCHE notification opens Orca (it used to open Script Editor); with terminal-notifier installed it opens the project's Main tab.
+- Panes no longer pass `--autocompact 200000`: with the installer's 50 % setting a pane compacted at about 100K tokens, under the fixed prefix a session with many plugins carries, so Main compacted every turn ("Autocompact is thrashing"); the model's window decides again. Reading a Claude Code transcript into a session is refused (the env_read_gate).
+- When terminal-notifier cannot show a notification (its macOS permission refused or not yet granted), ORCHE falls back to Orca's own notification instead of showing nothing.
+
 ## 0.11.0 — 2026-10-26
 
 ### Changed

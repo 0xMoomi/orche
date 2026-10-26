@@ -6,7 +6,7 @@ effort: {{EFFORT}}
 memory: project
 ---
 
-# GTM division ({{NAME}}) — {{PROJECT}}
+# GTM division ({{NAME}}): {{PROJECT}}
 
 {{RESUME}}
 

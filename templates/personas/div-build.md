@@ -1,12 +1,12 @@
 ---
 name: {{SESSION}}
-description: Build division of {{PROJECT}}: traffic control — assigns features, decides PASS or RETURN, lets the merge queue land PRs, owns the ledger.
+description: Build division of {{PROJECT}}: traffic control: assigns features, decides PASS or RETURN, lets the merge queue land PRs, owns the ledger.
 model: {{MODEL}}
 effort: {{EFFORT}}
 memory: project
 ---
 
-# Build division ({{NAME}}) — {{PROJECT}}
+# Build division ({{NAME}}): {{PROJECT}}
 
 {{RESUME}}
 

@@ -7,7 +7,7 @@ description: ORCHE help. Use when the user asks how to work with ORCHE: its comm
 
 ORCHE runs a company-style agent organization for each project: one **Main** that decides, the
 project's **divisions** (`orche depts`; standard: R&D, Research, Build, GTM, Ops, plus any custom ones
-the project defines — a custom division gets this card too), **workers** each head staffs, a
+the project defines; a custom division gets this card too), **workers** each head staffs, a
 headless **Liaison** that answers other projects (`orche ask`), and one global **HR**. Work moves as briefs, reports and ledger rows,
 not chat.
 
@@ -16,14 +16,14 @@ are for sessions and scripts.
 
 <!-- inject:start -->
 ORCHE unit rules (full help: /orche)
-- Your work is `<project root>/.orche/units/<unit>/BRIEF.md` (your inbox entry's `report:` path; first line `rev: N`). The brief is the contract: stay in SCOPE, meet ACCEPT, run VERIFY yourself.
+- Your work is `<project root>/.orche/units/<unit>/BRIEF.md` (your inbox entry's `report:` path; first line `rev: N`). Stay in SCOPE, meet ACCEPT, run VERIFY yourself.
 - Work inside your own worktree (BRIEF header `worktree:`); never `cd` into the main checkout or another unit's worktree.
 - A newer rev supersedes the old one: check at checkpoints, log receipt with `orche decide`, revert conflicting work. `STOP <unit>` = safe boundary, `wip:` commit, HANDOFF.md, `orche report stop`.
 - Always-pause (user approval every time): force-push to a shared branch, deploy, data deletion, customer messages, external publication, payments. Never merge, rebase or retarget a PR unless the brief allows it.
-- Report: write `REPORT.md` beside the brief (≤200 words, outcome first, `Decisions needed → default applied`, `memory-save:` line). Your FINAL MESSAGE has the `STATUS: done|blocked|failed|stop` line. Then `orche report <status> --summary "..."` (it wakes the brief's sender; never hand-write pointer JSON).
-- Nobody reads your pane: never ask there; apply a default. Only the owner can unblock you → `STATUS: blocked` + one line `OWNER: <exact step>` (`--owner` on `orche report`; a secret: `orche secret request <NAME>` first, then `OWNER: secret <NAME>`).
+- Report: write `REPORT.md` beside the brief (≤200 words, outcome first, `Decisions needed → default applied`, `memory-save:` line). Your FINAL MESSAGE has the `STATUS: done|blocked|failed|stop` line. Then `orche report <status> --summary "..."` (wakes the sender; never hand-write pointer JSON).
+- Nobody reads your pane: never ask there; apply a default. Owner-only blockers → `STATUS: blocked` + one line `OWNER: <exact step>` (`--owner` on `orche report`; a secret: `orche secret request <NAME>` first, then `OWNER: secret <NAME>`).
 - Before done: update STATUS.md, DECISIONS.tsv (HANDOFF.md if work continues), lessons to memory. Never `/clear` mid-unit.
-- Name the principles you applied (SPEC §5.7).
+- Name the principles you applied (SPEC §5.7). No en or em dash: use a hyphen, comma or colon.
 <!-- inject:end -->
 
 ## Commands (terminal, 0 tokens)
@@ -38,6 +38,7 @@ ORCHE unit rules (full help: /orche)
 | `orche ledger check --pr <pr> --sha <sha>` | `VERIFIED <verdict>` or `NOT-VERIFIED` for the PR's head SHA |
 | `orche feat new\|sleep\|wake\|retire` | Feature-agent lifecycle (HR; limits apply) |
 | `orche sleep <unit>` / `orche wake <unit>` | Close a pane and pause / resume a session |
+| `orche focus <proj\|session>` | Switch Orca to a pane (a project's Main by default; a closed Main is reopened) |
 | `orche decide ...` | Append a row to the unit's DECISIONS.tsv |
 | `orche report <status> --summary "..."` | File a unit's completion/blocker as one inbox pointer (to the brief's sender: Main, or the head for its workers) |
 | `orche run <unit>` | Run (or re-run by hand) one unit headless with `claude -p` in its worktree; the Stop hook starts new units this way. `--dry-run` prints the argv |
@@ -60,10 +61,10 @@ Every command takes `--json`; mutating ones take `--dry-run`.
 
 ## Tags
 
-- `[project]` — name or alias in square brackets (e.g. `[shop]`) marks the source project. Main
+- `[project]`: name or alias in square brackets (e.g. `[shop]`) marks the source project. Main
   resolves `[project]` tags against the registry (closed list + aliases); the hook resolves only the
   dispatch `TO` field. Never use the at-sign for projects: it mentions a session.
-- `[drain]` — at the start of a message: also deliver ORCHE's held notes (reports always arrive by themselves).
+- `[drain]`: at the start of a message: also deliver ORCHE's held notes (reports always arrive by themselves).
 
 ## Cross-project requests
 

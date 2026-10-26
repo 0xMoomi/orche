@@ -216,7 +216,7 @@ def _cell(text) -> str:
 
 
 def render_report(mode, now, cands) -> str:
-    lines = [f"# Janitor report — {now.isoformat(timespec='seconds')} ({mode})", ""]
+    lines = [f"# Janitor report: {now.isoformat(timespec='seconds')} ({mode})", ""]
     if mode == "dry-run":
         lines += ["Nothing was changed. Enable with `orche janitor enable`; review this list first.", ""]
     if not cands:

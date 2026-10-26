@@ -1,4 +1,4 @@
-# STANDING ORDERS — {{PROJECT}}
+# STANDING ORDERS: {{PROJECT}}
 
 <!--
 R-STANDING-1: an instruction written twice becomes a numbered line here.
@@ -14,4 +14,4 @@ enforcement (a hook, a gate, a test) instead of another order.
 3. One push per unit, after local verification.
 4. Docs-only commits include `[skip ci]`.
 5. Tags, releases and deploys require user approval.
-6. Externals auto-accept list: (empty) — every external request needs confirmation.
+6. Externals auto-accept list: (empty), every external request needs confirmation.

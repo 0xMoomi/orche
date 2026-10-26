@@ -28,7 +28,7 @@ class BookTest(test_hr.HrCase):
                 mock.patch.object(registry, "save", lambda r: calls.append(("save",))), \
                 mock.patch.object(book, "log", lambda text: calls.append(("log", text))), \
                 mock.patch.object(statusline, "refresh", lambda r, key: calls.append(("refresh", key))), \
-                mock.patch.object(book, "notify", lambda text: calls.append(("notify", text))):
+                mock.patch.object(book, "notify", lambda text, project=None: calls.append(("notify", text))):
             book.record(reg, line, **kw)
         return calls
 
@@ -68,7 +68,8 @@ class BookTest(test_hr.HrCase):
         for on in (False, True):
             (self.home / "config.json").write_text(json.dumps({"notify": on}))
             for platform in ("linux", "darwin"):
-                with mock.patch.object(notify, "PLATFORM", platform):
+                with mock.patch.object(notify, "PLATFORM", platform), \
+                        mock.patch.object(notify, "orca_running", lambda: False):
                     book.notify(secret)
         self.assertEqual(len(posted), 1)
         self.assertEqual(posted[0][:-2], notify.argv("", "")[:-2])         # the fixed script, no sound
@@ -139,7 +140,7 @@ class TransitionsCase(test_hr.FeatCase):
         super().setUp()
         self.notes = []
         patches = (mock.patch.object(statusline, "refresh", wraps=statusline.refresh),
-                   mock.patch.object(book, "notify", self.notes.append))
+                   mock.patch.object(book, "notify", lambda text, project=None: self.notes.append(text)))
         self.refresh = patches[0].start()
         patches[1].start()
         for p in patches:
@@ -181,7 +182,7 @@ class WakeTest(TransitionsCase):
         argv = self.create_argv()
         self.assertEqual(argv[argv.index("--worktree") + 1], "id:repo-acme::/srv/orca/acme-shop-search")
         self.assertTrue(argv[argv.index("--command") + 1].endswith(
-            "--permission-mode bypassPermissions --autocompact 200000 --name feat-acme-shop-search"))
+            "--permission-mode bypassPermissions --name feat-acme-shop-search"))
         entry = self.entry("feat-acme-shop-search")
         self.assertEqual(entry["status"], "active")
         self.assertNotEqual(entry["last_activity"], self.reg["projects"]["acme-shop"]["divisions"]["build"]["features"][1]["last_activity"])
@@ -195,7 +196,7 @@ class WakeTest(TransitionsCase):
     def test_wake_dormant_division_starts_fresh(self):  # W2
         self.run_verb(transitions.wake, "div-acme-shop-rnd")
         command = self.create_argv()[self.create_argv().index("--command") + 1]
-        self.assertTrue(command.endswith("--permission-mode bypassPermissions --autocompact 200000 --name div-acme-shop-rnd"))
+        self.assertTrue(command.endswith("--permission-mode bypassPermissions --name div-acme-shop-rnd"))
         self.assertEqual(registry.load()["events"][-1]["unit"], "rnd")
         self.assertEqual(self.entry("div-acme-shop-rnd")["status"], "active")
 
@@ -417,7 +418,7 @@ class CreateFeatureTest(TransitionsCase):
         shell.RUNNER = runner
         self.refresh.side_effect = lambda reg, key: order.append("refresh")
         with mock.patch.object(registry, "save", lambda reg: (order.append("save"), save(reg))), \
-                mock.patch.object(book, "notify", lambda text: order.append(("notify", text))):
+                mock.patch.object(book, "notify", lambda text, project=None: order.append(("notify", text))):
             data, line = self.create(by="div-acme-shop-build", batch="b1")
         self.assertEqual(line, "feat-acme-shop-pay active (feat/pay)")
         self.assertEqual(data["feature"]["session"], "feat-acme-shop-pay")
@@ -552,7 +553,7 @@ class DivisionsTest(test_hr.HrCase):
         super().setUp()
         self.notes = []
         patches = (mock.patch.object(statusline, "refresh", wraps=statusline.refresh),
-                   mock.patch.object(book, "notify", self.notes.append))
+                   mock.patch.object(book, "notify", lambda text, project=None: self.notes.append(text)))
         self.refresh = patches[0].start()
         patches[1].start()
         for p in patches:

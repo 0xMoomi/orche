@@ -11,44 +11,50 @@ A small company of Claude Code sessions for each of your projects, run inside Or
 - Nothing waits on you except decisions, and Main asks those with a choice dialog.
 - Done means a ledger row, not a claim.
 
-## Install
+## Quick start
 
-Needs macOS, Claude Code, Orca, git and Python 3.11+ (the installer checks them and stops with a hint when one is missing). Open Claude Code on your Mac (any folder) and paste the whole block as one message:
+Needs macOS, Claude Code, Orca, git and Python 3.11+ (the installer checks them and stops with a hint when one is missing). Open Claude Code on your Mac, inside the project you want to set up, and paste:
 
 ```text
-Install ORCHE on this Mac and set it up on one of my projects. Do exactly these steps in order. Stop at the first failure and show me the error text; do not try workarounds, do not use sudo, do not store or print any API key, and do not change settings beyond what these commands change.
-
-1. Run: curl -fsSL https://raw.githubusercontent.com/0xMoomi/orche/main/install.sh | bash -s -- --yes
-2. Run: export PATH="$HOME/orche/bin:$PATH" && orche doctor
-   Every line must be OK or WARN. If any line says FAIL, show it to me and stop.
-3. Ask me how to start the project, with choices, in the language I write in. Run: export PATH="$HOME/orche/bin:$PATH" && orche hr choices --json
-   Ask the `ask.setup` questions with the choice dialog (AskUserQuestion): each entry's `tool` is one question, written in my language with its options in the given order, so "The default 4 (recommended)" stays first; map each picked label through the entry's `values` ("Pick them" → also ask `ask.pick`; "Per division" → also ask `ask.model.<division>` for each division).
-   Write my answers to a temp file outside the project as JSON: {"divisions": [...], "custom": {"<kind>": {}}, "models": {"<division>": "<model>"}} (a picked design or content goes in "custom" as {}, not in "divisions"; no "custom" when neither was picked; no "models" for "Fitted to each"; "All …" puts that model on every division), then confirm in one line what will be made.
-   Without a choice dialog, or with no answer, take the defaults: no file, no question.
-4. If this Claude Code session is already inside the project to set up (a git repository), run: export PATH="$HOME/orche/bin:$PATH" && orche init --setup-file <that file>
-   Otherwise ask me for the project's folder, then run: export PATH="$HOME/orche/bin:$PATH" && orche init <that folder> --setup-file <that file>
-   (No file from step 3: the same command without --setup-file.)
-   Allow it up to 10 minutes (set the command timeout to 600000 ms): it reads the codebase once at the end.
-   If Orca does not list the repository yet, init adds it to Orca first; at the end it switches Orca to the main-<project> tab.
-5. Run: export PATH="$HOME/orche/bin:$PATH" && orche status
-6. Report in five lines: the version (orche version); whether the Claude Code plugin was installed or the hooks went into settings.json; the Orca pane that was created (main-<project>); that I should restart Claude Code once so the plugin loads; and the one next step: talk in plain words in the main-<project> tab that Orca now shows.
+Install ORCHE on this Mac and set it up on my project. Run: curl -fsSL https://raw.githubusercontent.com/0xMoomi/orche/main/install.sh | bash -s -- --yes
+Then follow the "Next" lines it prints: ask me the setup questions with the choice dialog, in my language, and run the commands yourself.
+Stop at the first failure and show me its text; no sudo, no workarounds, never print a key.
 ```
 
 Then restart Claude Code once so the plugin loads.
 
 **One-time macOS step.** The heartbeat job runs in the background and needs Full Disk Access for the Python app to read projects in Documents, Desktop, Downloads, iCloud Drive, cloud storage or `/Volumes`. When that is needed, the installer opens System Settings and shows the Python app in Finder: drag it into Privacy & Security › Full Disk Access, switch it on, then run `orche install --grant`. Once per Mac.
 
-## Set up a project
+Already installed? Inside a project, say "orche init" to Claude Code, or "set up ORCHE here" in any language.
 
-The install prompt asks two or three choice questions, the recommendation first: which divisions (the default four, recommended — rnd, research, build, gtm), and which models (fitted to each division, or one for all). Then `orche init <folder>` creates:
+## What you get
 
-- the divisions, each a unit in its own worktree (`div-<division>`), dormant until work arrives (no pane, no cost);
-- the project's ORCHE files (`.orche/`, `PROJECT_CARD.md`, `AGENTS.md`), left untracked;
-- a `main-<project>` tab in Orca, where you talk.
+- A `main-<project>` tab in Orca where you talk to Main, in any language. Main plans and decides; divisions do the work, each in its own worktree (`div-<division>`), dormant until work arrives (no pane, no cost).
+- A report from Main: "ORCHE is set up", what was made and what you can switch on any time (also in `<project>/.orche/SETUP.md`).
+- Nothing committed to your repository: the project's ORCHE files (`.orche/`, `PROJECT_CARD.md`, `AGENTS.md`) stay untracked.
+- A worker's PR is pre-reviewed by a second model, then its head reviews it and the merge queue tests it on top of `main` with `scripts/verify/ci.sh` and merges it when green. Main ends every reply with `RUNNING`, `OWNER` or `DONE`; only `OWNER` (a decision for you) and `DONE` notify you.
 
-Already installed? Inside a project, say `orche init` to Claude Code (or `orche init ~/path/to/repo` for another folder).
+## Any time
 
-**Change it later** by telling Main in your language ("add a design division", "switch research to Sonnet"): Main asks what is open with a choice dialog and runs the command (`orche hr add`, `orche hr model`).
+Say it to Main in your own words; Main runs the command.
+
+| Say | What happens |
+|---|---|
+| "turn on Jev" | faster routing of simple requests: `orche jev setup` asks for the key |
+| "cross-check PRs with Codex" | you install Codex once (`npm install -g @openai/codex`, `codex login`); a second vendor then pre-reviews every PR, and Codex can be a division's model (headless only) |
+| "set the token for background runs" | you run `claude setup-token`; Main stores it with `orche auth set` |
+| "let the janitor clean up" | `orche janitor enable` and `orche janitor install-schedule` (daily) |
+| "set up the merge queue for <project>" | Build's first unit adds `scripts/verify/ci.sh` from `templates/verify/ci.sh` |
+| "make notification clicks open the tab" | Main runs `brew install terminal-notifier`, then you allow its notifications once; without it a click on an ORCHE notification opens Orca (enough for most; the exact tab needs terminal-notifier) |
+| "run up to 30 agents" | `orche hr scale 30`; on a Claude subscription many agents reach the usage window and ORCHE waits for its reset |
+| "add a design division", "switch research to Sonnet", "set up again" | a choice dialog, then `orche hr add`, `orche hr model` or `orche init --refresh` |
+| "update" | `orche update`: the newest ORCHE, reinstalled, every project's ORCHE files refreshed (never yours) |
+| "what changed in <project>?" | `orche card <project>`, then `orche ask <project> "…"` |
+| "how much did this cost?" | `orche metrics` |
+| "check the setup", "what else can ORCHE do?" | `orche doctor`, ending with the next steps |
+| "continue" | after a cut-off or /clear, Main picks the work up from `orche status <project>` |
+
+Every action is also an `orche` command, for scripts (`orche --help`).
 
 Division kinds and their recommended models:
 
@@ -62,23 +68,6 @@ Division kinds and their recommended models:
 | `design` | Opus 5.5 | UI, UX and design calls |
 | `content` | Sonnet 5.5 | blog posts, docs and social copy |
 | your own | Opus 5.5 | an unknown charter: the strongest model |
-
-**Codex.** Enable it once with `npm install -g @openai/codex@latest` and `codex login`; then pick `codex` as a division's model. Codex divisions run headless only.
-
-**Jev (optional).** Faster routing of simple requests: tell Main to connect Jev (it runs `orche jev setup`).
-
-## Use it
-
-- Talk in the `main-<project>` tab, in any language: the work you want done, or a question ("what's happening", "check the setup", "update", "merge the waiting PRs", "pause everything").
-- Main ends every reply with one line: `RUNNING`, `OWNER` or `DONE`. Only `OWNER` (a decision for you) and `DONE` notify you.
-- If Main is cut off, the work stays in files: even after /clear, say "continue" and Main picks it up from 'orche status <project>'.
-- A worker's PR is pre-reviewed by a second model (another vendor's when Codex is installed), then its head reviews and queues it; the merge queue tests it on top of `main` with `scripts/verify/ci.sh` and merges it when green; a merge deploys if your host deploys `main`.
-- Tell Main "run up to 30 agents" to run more at once; on a Claude subscription many agents reach the usage window and ORCHE waits for its reset.
-- Every action is also an `orche` command, for scripts (`orche --help`).
-
-## Update
-
-Tell Main to update (any language), or re-run the install prompt. `orche update` pulls the newest ORCHE, reinstalls it, refreshes every project's ORCHE files (never yours) and reports the version change; a development checkout (another branch or local changes) is not pulled, the install is aligned with it instead.
 
 ## Files
 

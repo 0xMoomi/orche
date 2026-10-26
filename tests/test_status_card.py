@@ -100,6 +100,6 @@ class CardDocsTest(FlowCase):
         self.assertIn("`orche status <project>` (its card)", skill)
         self.assertNotIn("orche resume", skill)
         readme = (support.ROOT / "README.md").read_text()
-        self.assertIn("'orche status <project>'", readme)
+        self.assertIn("`orche status <project>`", readme)
         self.assertNotIn("orche resume", readme)
         self.assertLessEqual(len(readme.splitlines()), 100)

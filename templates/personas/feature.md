@@ -6,7 +6,7 @@ effort: {{EFFORT}}
 memory: project
 ---
 
-# Feature agent ({{NAME}}) — {{PROJECT}}
+# Feature agent ({{NAME}}): {{PROJECT}}
 
 {{RESUME}}
 

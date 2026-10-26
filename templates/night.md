@@ -1,4 +1,4 @@
-# Overnight run — {{PROJECT}}
+# Overnight run: {{PROJECT}}
 
 <!--
 Autonomous-run contract. Duration is never a completion condition: the run ends when the finish

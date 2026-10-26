@@ -707,7 +707,8 @@ class DoctorTest(InstallCase):
             return inner(argv, timeout=timeout, input=input)
         with mock.patch.object(doctor.shutil, "which", which), mock.patch.dict(os.environ, {"SHELL": LOGIN_SH}), \
                 mock.patch.object(shell, "RUNNER", runner):
-            return self.orche("doctor", "--home", str(self.h))
+            return self.orche(*(["--json"] if getattr(self, "json_doctor", False) else []), "doctor", "--home",
+                              str(self.h))
 
     OLD_PY = ("/usr/bin/python3 is 3.9.6 (needs 3.11+): brew install python; "
               "put /opt/homebrew/bin before /usr/bin in PATH")
@@ -733,6 +734,23 @@ class DoctorTest(InstallCase):
         _, out, _ = self.doctor()
         self.assertIn(f"FAIL\tpython3 (login shell)\t{LOGIN_SH} -lc finds no python3 (needs 3.11+): brew install "
                       "python; put /opt/homebrew/bin before /usr/bin in PATH", out.splitlines())
+
+    def test_doctor_ends_with_the_next_steps_and_its_json_lists_them(self):
+        registry.save(registry.empty())
+        code, out, _ = self.doctor()
+        self.assertEqual(code, 0, out)
+        lines = out.splitlines()
+        at = lines.index("Next steps (optional, any time):")
+        self.assertEqual(lines[at - 1], "")
+        steps = lines[at + 1:]
+        self.assertTrue(steps and all(ln.startswith("- ") for ln in steps), steps)
+        self.assertEqual(steps[-1], '- Something wrong: any time. Say "check the setup"; Main runs `orche doctor`.')
+        self.assertFalse(any(ln.startswith(("WARN", "FAIL")) for ln in steps))   # install.sh greps those only
+        self.json_doctor = True
+        code, out, _ = self.doctor()
+        data = json.loads(out)
+        self.assertEqual(data["next_steps"], steps)
+        self.assertTrue(all({"check", "level", "detail"} <= set(row) for row in data["checks"]))
 
     def test_finder_command_runs_the_shared_finder(self):
         res = subprocess.run(["/bin/sh", "-c", doctor.finder_command()], capture_output=True, text=True,
@@ -779,23 +797,35 @@ class DoctorTest(InstallCase):
         self.assertIn(f"WARN\torche on PATH\t{LOGIN_SH} -lc cannot find orche; add to your shell profile: "
                       f"export PATH=\"{support.ROOT / 'bin'}:$PATH\"", out.splitlines())
 
+    def test_without_terminal_notifier_the_row_says_what_a_click_does(self):
+        """c62, c65: terminal-notifier is optional, never a WARN; the row and the next steps say what a click opens."""
+        registry.save(registry.empty())
+        code, out, _ = self.doctor(missing=("terminal-notifier",))
+        self.assertEqual(code, 0, out)
+        self.assertIn("OK\ttool terminal-notifier\tnot installed (optional: brew install terminal-notifier makes a "
+                      "notification click open the project's Main tab; allow its notifications once when macOS "
+                      "asks)", out.splitlines())
+        self.assertIn('- Notification click: opens Orca (enough for most; the exact tab needs terminal-notifier). '
+                      'Say "make notification clicks open the tab"', out)
+
     def test_warn_for_missing_age_ok_for_valid_registry(self):
         registry.save(registry.empty())
         code, out, _ = self.doctor()
         self.assertEqual(code, 0, out)
         lines = out.splitlines()
         self.assertIn("WARN\ttool age\tnot found on PATH", lines)
+        self.assertTrue(any(l.startswith("OK\ttool terminal-notifier\t") for l in lines))
         self.assertIn("OK\tregistry\tvalid (0 project(s))", lines)
         self.assertTrue(any(l.startswith("OK\torca\t") for l in lines))
         self.assertTrue(any(l.startswith("WARN\tstatusline\t") for l in lines))
         self.assertTrue(any(l.startswith("WARN\thooks\t") for l in lines))
         self.assertTrue(any(l.startswith("WARN\tcleanupPeriodDays\t") for l in lines))
-        self.assertTrue(all(l.split("\t")[0] in ("OK", "WARN", "FAIL") for l in lines))
+        self.assertTrue(all(l.split("\t")[0] in ("OK", "WARN", "FAIL") for l in lines[:lines.index("")]))
         self.assertIn("WARN\tjev\tnot configured (Haiku fallback)", lines)  # Jev is optional
         self.assertFalse([l for l in lines if "\tupgrade\t" in l])
         self.install("--mode", "settings", "--yes")
         code, out, _ = self.doctor(missing=())
-        self.assertEqual([l for l in out.splitlines() if not l.startswith("OK\t")],
+        self.assertEqual([l for l in out.split("\n\n")[0].splitlines() if not l.startswith("OK\t")],
                          ["WARN\tjev\tnot configured (Haiku fallback)", f"WARN\toauth token\t{oauth.UNSET_LINE}",
                           "WARN\theartbeat\tno pass on file — install the job with orche install, "
                           "or run orche reconcile"]

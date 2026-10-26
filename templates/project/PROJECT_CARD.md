@@ -1,4 +1,4 @@
-# {{PROJECT}} — project card
+# {{PROJECT}}: project card
 
 <!-- Keep under 2K tokens. `orche card refresh {{PROJECT}}` updates it weekly from git history; other projects read it (`orche card {{PROJECT}}`) before asking. -->
 

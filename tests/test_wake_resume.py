@@ -72,9 +72,9 @@ class WakeResumeTest(support.TempHomeCase):
         self.transcript(ID_NEW, {"type": "custom-title", "customTitle": "u-1"})
         cmd = panes.pane_command("u-1", resume=True, cwd=self.cwd)
         self.assertTrue(cmd.startswith(panes.session_env("u-1")), cmd)
-        self.assertTrue(cmd.endswith(f"--permission-mode bypassPermissions --autocompact 200000 --resume {ID_NEW}"), cmd)
+        self.assertTrue(cmd.endswith(f"--permission-mode bypassPermissions --resume {ID_NEW}"), cmd)
         fresh = panes.pane_command("u-1", resume=False, cwd=self.cwd)
-        self.assertTrue(fresh.endswith("--permission-mode bypassPermissions --autocompact 200000 --name u-1"), fresh)
+        self.assertTrue(fresh.endswith("--permission-mode bypassPermissions --name u-1"), fresh)
 
 
 class MainResumesTest(support.TempHomeCase):
@@ -98,17 +98,18 @@ class MainResumesTest(support.TempHomeCase):
         p.start()
         self.addCleanup(p.stop)
 
-    def test_pane_command_compacts_at_200k(self):
-        self.assertEqual(panes.AUTOCOMPACT_TOKENS, 200_000)
+    def test_pane_command_carries_no_autocompact_window(self):
+        """c63: `--autocompact 200000` with the installer's 50 % compacted every pane at about 100K."""
         for resume in (True, False):
             with contextlib.redirect_stderr(io.StringIO()):
-                self.assertIn(" --permission-mode bypassPermissions --autocompact 200000 --",
-                              panes.pane_command("u-1", resume=resume))
+                command = panes.pane_command("u-1", resume=resume)
+            self.assertIn(" claude --permission-mode bypassPermissions --", command)
+            self.assertNotIn("--autocompact", command)
 
     def test_project_pane_resumes_by_default_and_posts_the_resumed_note(self):
         data, _ = panes.project_pane(self.proj, dry_run=False, switch=False)
         self.assertEqual(data["pane"], "opened")
-        self.assertTrue(self.opened[0].endswith(f"--autocompact 200000 --resume {ID_NEW}"), self.opened[0])
+        self.assertTrue(self.opened[0].endswith(f"bypassPermissions --resume {ID_NEW}"), self.opened[0])
         got = [(p["from"], p["to"], p["status"], p["urgent"], p["summary"]) for _f, p in inbox.pending("main-acme")]
         self.assertEqual(got, [("orche", "main-acme", "info", True, panes.RESUMED)])
         self.assertTrue(panes.RESUMED.startswith("resumed: "))

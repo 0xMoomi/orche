@@ -17,7 +17,7 @@ class TemplatesTest(support.TempHomeCase):
         self.assertEqual(sorted(p.name for p in created),
                          ["CHARTER.md", "DECISIONS.tsv", "HANDOFF.md", "STATUS.md"])
         charter = (dest / "CHARTER.md").read_text()
-        self.assertIn("# CHARTER — checkout (feature)", charter)
+        self.assertIn("# CHARTER: checkout (feature)", charter)
         self.assertIn("feat-acme-checkout", charter)
         for section in ("## Scope (globs)", "## Interfaces", "## Forbidden", "## Owner session"):
             self.assertIn(section, charter)
@@ -47,7 +47,7 @@ class TemplatesTest(support.TempHomeCase):
         self.assertEqual((repo / "docs" / "RUBRIC.md").read_text(), "mine\n")
         self.assertEqual((repo / "docs" / "LEDGER.tsv").read_text(), "pr\tsha\tverdict\tevidence\tverifier\tts\n")
         graveyard = (repo / "docs" / "GRAVEYARD.md").read_text()
-        self.assertIn("# GRAVEYARD — acme", graveyard)
+        self.assertIn("# GRAVEYARD: acme", graveyard)
         self.assertIn("| date | what | why | recovery | actor |", graveyard)
         self.assertEqual(templates.copy_project(repo), [])
 

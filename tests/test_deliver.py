@@ -856,6 +856,7 @@ class NudgeNotifiesNothingTest(NudgeCase):
                 self.marker().unlink(missing_ok=True)
                 self.assertEqual(self.nudge()[0], 0)
         self.assertFalse((self.home / support.OSASCRIPT_CALLS).exists())
+        self.assertFalse((self.home / support.NOTIFIER_CALLS).exists())
         self.assertFalse((inbox.box("main-acme") / ".notified").exists())
         self.assertNotIn("owner notify", (self.home / "logs" / "events.log").read_text())
 

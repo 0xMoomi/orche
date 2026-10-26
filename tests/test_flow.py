@@ -687,7 +687,7 @@ class LineageCloseTest(FlowCase):
             self.assertEqual([x.args[0] for x in wake.call_args_list], ["main-acme"])   # the close wakes Main
         [close] = self.closes()
         self.assertEqual((close["from"], close["status"], close["unit"]), ("orche", "done", lin))
-        self.assertEqual(close["summary"].splitlines()[0], f"lineage {lin} closed: 3 units — 3 done, 0 failed, 0 stopped")
+        self.assertEqual(close["summary"].splitlines()[0], f"lineage {lin} closed: 3 units: 3 done, 0 failed, 0 stopped")
         md = self.units_dir() / lin / "LINEAGE.md"
         self.assertEqual(close["report_path"], str(md))
         text = md.read_text()

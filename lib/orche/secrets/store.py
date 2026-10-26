@@ -318,11 +318,12 @@ def get(ex, cfg, name, env) -> str:
 KEYMASTER = "ORCHE Keymaster"
 
 
-def notify(ex, text: str) -> None:
+def notify(ex, text: str, project=None) -> None:
     """A Keymaster notification through notify.send (masked, an argument to a fixed script; config
-    `notify`, macOS only); a dry run only plans its osascript line."""
+    `notify`, macOS only; a `project` key makes a click open its Main tab); a dry run only plans its
+    osascript line."""
     if not ex.dry_run:
-        notice.send(KEYMASTER, text, kind="keymaster")
+        notice.send(KEYMASTER, text, kind="keymaster", project=project)
     elif notice.enabled():
         ex.run(notice.argv(KEYMASTER, text))
 

@@ -239,7 +239,7 @@ class InRunTest(PreReviewCase):
         self.assertEqual(ptr["status"], "done")
         self.assertIn("pre-review PASS by codex (round 2 of 2)", ptr["summary"])
         rework = self.claude_stdin(2)
-        self.assertIn("## Cross-vendor review — RETURN (round 1 of 2)", rework)
+        self.assertIn("## Cross-vendor review: RETURN (round 1 of 2)", rework)
         self.assertIn("[act] work.txt:1 — the coupon is never applied", rework)
         rows = self.rows()
         self.assertEqual([(r["verdict"], r["round"]) for r in rows], [("return", "1"), ("pass", "2")])

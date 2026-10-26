@@ -380,11 +380,11 @@ def close(reg, project, lineage, ms, reads=None):
     for b, found, s in ms:
         report = (found[1].get("report_path") if found else "") or "-"
         rows.append(f"| {b.unit} | {_ends(b)[0] or '-'} | {b.rev} | {s} | {report} |")
-    util.atomic_write(md, f"# Lineage {lineage}\n\nclosed: {util.now_iso()}   units: {len(ms)} — {c['done']} done, "
+    util.atomic_write(md, f"# Lineage {lineage}\n\nclosed: {util.now_iso()}   units: {len(ms)}, {c['done']} done, "
                           f"{c['failed']} failed, {c['stopped']} stopped\n\n" + "\n".join(rows) + "\n")
     ptr = None
     if main is not None:
-        summary = "\n".join([f"lineage {lineage} closed: {len(ms)} units — {c['done']} done, {c['failed']} failed, "
+        summary = "\n".join([f"lineage {lineage} closed: {len(ms)} units: {c['done']} done, {c['failed']} failed, "
                              f"{c['stopped']} stopped"] + [f"{b.unit} {s}" for b, _f, s in ms[:4]])
         ptr = inbox.make(lineage, "orche", main.session, "done", report_path=str(md), brief_rev=head.rev,
                          summary=summary, lineage=lineage, lineage_closed=True)

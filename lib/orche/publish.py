@@ -125,6 +125,14 @@ def branch(member, worktree):
     return recorded, None
 
 
+def gate(root, cfg=None):
+    """(base or None, whether `scripts/verify/ci.sh` is committed on origin/<base>): the merge queue's gate."""
+    name = base(root, cfg)
+    ok = bool(name) and shell.run(["git", "-C", str(root), "cat-file", "-e", f"origin/{name}:scripts/verify/ci.sh"],
+                                  timeout=10).ok
+    return name, ok
+
+
 def no_base(root) -> str:
     """R12's refusal (the queue, the Build review) when nothing names the base: the gap and the OWNER step."""
     return (f"no base branch: publish.base is unset and origin/HEAD is not set in {root}; OWNER: git -C {root} "

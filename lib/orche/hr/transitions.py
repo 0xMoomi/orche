@@ -197,7 +197,7 @@ def set_stage(reg, key, stage, *, wake_ops=True, dry_run=False) -> tuple:
             woke, note = _wake_ops(reg, proj, dry_run=dry_run)
             notes.append(note)
         if changed and not dry_run:
-            book.notify(f"{key} is public" + (" — ops woken" if woke else ""))
+            book.notify(f"{key} is public" + (" — ops woken" if woke else ""), key)
     else:
         note = _sleep_ops(reg, proj, dry_run=dry_run)
         if note:

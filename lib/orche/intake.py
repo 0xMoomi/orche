@@ -17,7 +17,7 @@ dist, build, .orche, .venv, __pycache__ and caches (<= 300 entries, then "… n 
 The worker's answer the CLI (never the worker) masks (mask.redact) and writes, untracked, into
 the main checkout:
 
-- `.orche/div/<division>/CONTEXT.md` per division: `# Context for <label> — intake at <sha7>,
+- `.orche/div/<division>/CONTEXT.md` per division: `# Context for <label>: intake at <sha7>,
   <YYYY-MM-DD>`, then the text capped at `intake.max_chars` (cut at a paragraph boundary,
   "… (truncated)"). The runner appends it to every brief of that division (a feature agent: Build).
 - `PROJECT_CARD.md`: a section nobody has filled yet (Purpose / Stack / Entry points still
@@ -96,7 +96,7 @@ CARD_FIELDS = ("what", "stack", "layout", "build_test_run", "conventions", "risk
 CARD_CHARS = 600         # per card field: the card stays near its 2K-token budget
 MAX_NOTES = 5
 TRUNCATED = "… (truncated)"
-BEGIN = ("<!-- orche-intake:begin — written by `orche intake` and replaced whole by the next one; "
+BEGIN = ("<!-- orche-intake:begin: written by `orche intake` and replaced whole by the next one; "
          "edit the sections above instead -->")
 END = "<!-- orche-intake:end -->"
 _BLOCK = re.compile(r"<!-- orche-intake:begin.*?<!-- orche-intake:end -->\n?", re.DOTALL)
@@ -174,7 +174,7 @@ def context_path(root, name) -> Path:
     return paths.project_local(root) / "div" / name / "CONTEXT.md"
 
 
-_CONTEXT_HEAD = re.compile(r"^# Context for .*? — intake at (\S+), (\S+)\s*$")
+_CONTEXT_HEAD = re.compile(r"^# Context for .*?: intake at (\S+), (\S+)\s*$")
 CONTEXT_SLACK = 200        # a CONTEXT.md body is read up to max_chars + this (a hand-edited file)
 
 
@@ -529,7 +529,7 @@ def write_files(plan_, result, cfg, date) -> list:
         body = result["divisions"].get(name) or "(the intake found nothing specific for this division)"
         path = context_path(plan_.root, name)
         path.parent.mkdir(parents=True, exist_ok=True)
-        util.atomic_write(path, f"# Context for {label} — intake at {sha7}, {date}\n\n{cap(body, max_chars)}\n")
+        util.atomic_write(path, f"# Context for {label}: intake at {sha7}, {date}\n\n{cap(body, max_chars)}\n")
         written.append(str(path))
     card_path = plan_.root / "PROJECT_CARD.md"
     try:

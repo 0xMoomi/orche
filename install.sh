@@ -5,8 +5,8 @@
 #   bash install.sh [options]          # from a clone: that clone is used as is
 #
 # Steps, in order: OS gate, requirements (git, Python 3.11+, claude, orca), clone or update
-# ORCHE_DIR, PATH line in the login profile, `orche install`, the Claude Code plugin (or the
-# settings.json hooks), optionally `orche apply-all`, then `orche doctor` and a short summary.
+# ORCHE_DIR, PATH line in the login profile, `orche install`, the Claude Code plugin (or the settings.json hooks), optionally
+# `orche apply-all`, then `orche doctor` and a short summary.
 # Safe to re-run: a second run updates the clone and changes nothing else that is already in place.
 # No sudo, no eval. Exit codes: 0 done, 1 user/environment problem, 2 unexpected failure.
 #
@@ -375,14 +375,16 @@ summary() {
   fi
   local version
   version=$("$ORCHE_DIR/bin/orche" version </dev/null)
-  say "$version installed in $ORCHE_DIR ($MODE mode${PLUGIN_UPDATED:+; plugin updated, restart Claude Code to load it})"
+  say "ORCHE ${version#orche } is installed on this Mac ($MODE mode${PLUGIN_UPDATED:+; plugin updated, restart Claude Code to load it})."
   if [ -n "$PLUGIN_NOTE" ]; then say "note: $PLUGIN_NOTE"; fi
   if [ -n "$PROFILE" ]; then
     say "Open a new terminal (or run: source $PROFILE) so \`orche\` is on your PATH."
   else
     say "Add the PATH line above to your login profile, then open a new terminal."
   fi
-  say "Next: orche init <project>   (or /orche-apply <project> inside Claude Code)"
+  say "Next: set up a project."
+  say "  In Claude Code, inside the project, say \"orche init\" (or, in any language, \"set up ORCHE here\")."
+  say "  In this session: read $ORCHE_DIR/skills/orche-apply/SKILL.md, section \"In plain words (choices)\", and set up the owner's project with the choice dialog."
   if [ "${DOCTOR_FAILED:-0}" = 1 ]; then
     die "orche doctor reported a FAIL line (above): fix it, then run \`orche doctor\` again"
   fi

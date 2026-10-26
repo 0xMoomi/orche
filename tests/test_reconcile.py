@@ -440,12 +440,13 @@ class OwnerNoticeTest(ReconcileCase):
                 mock.patch.object(shell, "run",
                                   lambda argv, **kw: calls.append(argv) or shell.Result(0, "", "", argv)):
             reconcile._tell_owner("acme-shop", 'a "quoted" text; do shell script', self.now)
-        return calls
+        return [c for c in calls if c[0] == "osascript"]          # Orca runs: the fake answers pgrep with 0
 
     def test_gates_and_quiet_hours(self):
         [loud] = self.notes()
         self.assertEqual(loud[-2:], ['a "quoted" text; do shell script', "ORCHE acme-shop"])
-        self.assertIn('sound name "Glass"', loud[4])
+        self.assertEqual(loud[4], notify.TELL[0])
+        self.assertIn('sound name "Glass"', loud[6])
         [hushed] = self.notes(quiet=True)
         self.assertNotIn("sound", " ".join(hushed[:-2]))
         self.assertEqual(self.notes({"notify": False}), [])

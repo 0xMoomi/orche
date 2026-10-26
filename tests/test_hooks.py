@@ -954,7 +954,7 @@ class OwnerVoiceHookTest(HookCase):
                              ORCHE_SESSION=session)
 
     def notes(self):
-        path = self.home / support.OSASCRIPT_CALLS
+        path = self.home / support.NOTIFIER_CALLS     # the child finds support's recording terminal-notifier
         return path.read_text().splitlines() if path.exists() else []
 
     def ask(self):
@@ -969,8 +969,10 @@ class OwnerVoiceHookTest(HookCase):
         ask = self.ask()
         self.assertEqual((ask["text"], ask["kind"], ask["source"]), (line[len("OWNER: "):], "owner", "main"))
         [note] = self.notes()                       # the stub joins its argv: the body arrives verbatim
-        self.assertTrue(note.startswith("-e on run argv -e display notification (item 1 of argv)"), note)
-        self.assertIn(f"-e end run {line} ORCHE acme", note)
+        self.assertTrue(note.startswith(f"-title ORCHE acme -message {line} "), note)
+        self.assertTrue(note.endswith(f"-activate com.stablyai.orca -execute {support.ROOT / 'bin' / 'orche'} focus acme"),
+                        note)
+        self.assertFalse((self.home / support.OSASCRIPT_CALLS).exists())
         self.assertNotIn("決済", self.events())
 
     def test_a_tag_stamps_the_turns_start_from_the_prompt_hooks_record(self):
@@ -1232,6 +1234,29 @@ class EnvReadGateTest(HookCase):
         [line] = [x for x in events.read_text().splitlines() if "gate=" in x]
         self.assertIn("gate=env_read session=div-acme-build tool=Read what=", line)
         self.assertLessEqual(len(line.split("what=", 1)[1]), 80)
+
+    def test_transcripts_are_never_read_into_a_session(self):
+        """c63: a Claude Code transcript refills the context; Read, Grep and Bash on one are refused
+        (logged like the other denials), while `orche metrics` and other paths pass."""
+        def decide(tool, tool_input):
+            res = self.run_hook("env_read_gate.py", self.payload("pretool_read.json", tool_name=tool,
+                                                                 tool_input=tool_input), ORCHE_SESSION="main-acme")
+            self.assertEqual(res.returncode, 0, res.stderr)
+            if not res.stdout:
+                return "silent"
+            out = json.loads(res.stdout)["hookSpecificOutput"]
+            self.assertIn("transcripts are never read into a session", out["permissionDecisionReason"])
+            return out["permissionDecision"]
+        self.assertEqual(decide("Read", {"file_path": "~/.claude/projects/x/y.jsonl"}), "deny")
+        self.assertEqual(decide("Bash", {"command": "tail -n 5 ~/.claude/projects/x/y.jsonl"}), "deny")
+        self.assertEqual(decide("Grep", {"pattern": "x", "path": "/h/claude-profiles/p/home/projects/x/y.jsonl"}),
+                         "deny")
+        self.assertEqual(decide("Bash", {"command": "orche metrics --days 7"}), "silent")
+        self.assertEqual(decide("Read", {"file_path": ".orche/units/u/REPORT.md"}), "silent")
+        self.assertEqual(decide("Read", {"file_path": "data/rows.jsonl"}), "silent")
+        [line] = [x for x in (self.home / "logs" / "events.log").read_text().splitlines()
+                  if "gate=env_read" in x and "tool=Read" in x]
+        self.assertNotIn("y.jsonl", line)
 
     def test_fixture_payloads(self):
         for name in ("pretool_read.json", "pretool_bash.json"):

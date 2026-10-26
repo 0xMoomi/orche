@@ -10,7 +10,7 @@ from pathlib import Path
 from .. import paths, templates, util
 
 TEMPLATE_REL = Path("docs") / "GRAVEYARD.md"
-GLOBAL_HEADER = ("# GRAVEYARD — all projects\n\n"
+GLOBAL_HEADER = ("# GRAVEYARD: all projects\n\n"
                  "One line per removed thing, appended before anything is deleted (R-JAN-3). "
                  "Never edit old lines.\n\n"
                  "| date | what | why | recovery | actor |\n|---|---|---|---|---|\n")

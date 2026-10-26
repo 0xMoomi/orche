@@ -175,7 +175,7 @@ def report_path(now) -> Path:
 
 
 def render(data) -> str:
-    lines = [f"# HR report — {data['date']}", "", f"Awake: {data['awake']}/{data['limit']}", "",
+    lines = [f"# HR report: {data['date']}", "", f"Awake: {data['awake']}/{data['limit']}", "",
              data["metrics"], "", "## Proposals", ""]
     lines += [f"- sleep {p['unit']}: {p['why']}" for p in data["proposals"]] or ["- none"]
     lines += ["", "## Scope overlaps", ""]
