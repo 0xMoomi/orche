@@ -455,8 +455,8 @@ class SpendAndHolds(BuildReviewCase):
         self.assertIsNone(self.build_row())
         (ptr,) = self.pointers()
         self.assertTrue(ptr["quiet"])
-        self.assertRegex(ptr["summary"], r"^held: claude usage limit until \d\d:\d\d; this unit runs then "
-                                         r"\(stage build-review\)$")
+        self.assertRegex(ptr["summary"], r"^held: claude usage limit until (\d\d-\d\d )?\d\d:\d\d; "   # dated past midnight
+                                         r"this unit runs then \(stage build-review\)$")
 
     def test_a_usage_limit_in_the_call_holds_the_vendor_and_defers(self):
         self.pre("pass")

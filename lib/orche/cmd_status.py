@@ -75,6 +75,10 @@ def status_row(reg, key, now=None, cfg=None) -> dict:
              for cell, m in zip(statusline.division_cells(proj, c["active_features"]), models.values())]
     line = (f"{key} stage={proj['stage']} awake={c['awake']}/{limit} divisions: {' '.join(cells) or '-'}{qcell}"
             f" · new:{c['new']} · keys:{c['keys']} · unverified:{c['unverified']} · runs {c['running']}/{cap}")
+    from . import reconcile
+    revived = reconcile.main_reopened(reg, key)
+    if revived is not None and ((now or units.now()) - revived).total_seconds() < 86400:
+        line += f" · main pane reopened {revived.astimezone().strftime('%H:%M')}"   # the heartbeat revived Main
     divisions = {name: proj.get("divisions", {}).get(name, {}).get("status", "dormant")
                  for name in registry.divisions_of(proj)}
     undelivered, unread = inbox.overdue(roster.Roster(reg), key, now)

@@ -8,7 +8,9 @@ reconcile/heartbeat.json last. Classes (design §2.2):
 - unread <session>: a waking pointer pending >= inbox.LATE, the pane present and quiet (no output
   for QUIET_MS), not nudged within inbox.NUDGED_TTL, its `.deliver.lock` free -> `orche nudge`;
 - closed <session> (never a headless feature, `pane: false`): waking pointers pending >= inbox.LATE and
-  no pane, outside flow.quiet_hours: Main's pane is reopened in place (`hr.project_pane(switch=False)`),
+  no pane, or a Main pane Orca lists disconnected (with or without reports waiting), outside
+  flow.quiet_hours: Main's pane is reopened in place (`hr.project_pane(switch=False)`; a disconnected
+  one closed first, deliver.reopen_pane; no nudge when nothing waits),
   an active division/feature woken (`hr.wake`), then `orche nudge`, REOPEN_CAP a day (`reopens:<session>`, STALL_S apart);
   past the cap one escalation; a dormant or paused unit is never woken: one urgent `info` to Main;
 - undelivered <unit>: a `via: dispatch` pointer pending >= inbox.LATE -> `orche deliver --retry`; a
@@ -161,8 +163,8 @@ class Action:
             return f"re-run {c.target} (rev {c.rev}, its {c.info.get('vendor')} usage hold is over; try 1/1)"
         if self.kind == "reopen":
             verb = "reopen" if c.kind == "main" else "wake"
-            return (f"{verb} {c.target} pane ({c.count} report(s) waiting, {mins} min; "
-                    f"{verb} {self.attempt}/{self.cap} today)")
+            why = f"{c.count} report(s) waiting, {mins} min" if c.count else "disconnected"
+            return f"{verb} {c.target} pane ({why}; {verb} {self.attempt}/{self.cap} today)"
         if self.kind == "remind":
             return f"remind {c.target} in {c.to} (rev {c.rev}, {c.info.get('reason')}; try 1/1)"
         if self.kind == "notify":
@@ -533,19 +535,25 @@ def observe(reg, now, keys=None, wake=True, terms=None, cfg_all=None, hush=False
                 if t is not None and (now - t >= inbox.LATE or p.get("deferred"))]
         out += _dispatches(reg, m, session, late, now)
         waking = [(t, path, p) for t, path, p in late if inbox.wakes(p)]
-        if not wake or not waking or terms is None or (m.entry or {}).get("pane") is False:
+        if not wake or terms is None or (m.entry or {}).get("pane") is False:
             continue   # a headless feature (`pane: false`) has no pane to reopen: its runs read the inbox
-        t0, path0, p0 = min(waking, key=lambda x: (x[0], x[1].name))
-        age, first = (now - t0).total_seconds(), str(p0.get("unit") or "")
-        if session in terms:
-            out.append(Condition("unread", f"unread:{session}:{path0.name}", m.project, session, age,
+        dead = m.kind == "main" and session in terms and orca.disconnected(terms[session])
+        if not waking and not dead:
+            continue
+        if waking:
+            t0, path0, p0 = min(waking, key=lambda x: (x[0], x[1].name))
+            age, first, episode = (now - t0).total_seconds(), str(p0.get("unit") or ""), path0.name
+        else:
+            age, first, episode = 0.0, "", "pane"    # a dead Main pane, nothing waiting: its own episode
+        if session in terms and not dead:
+            out.append(Condition("unread", f"unread:{session}:{episode}", m.project, session, age,
                                  ready=_quiet(terms[session]) and not inbox.nudged(session)
                                  and deliver.lock_free(session),
                                  count=len(waking), sender=first, kind=m.kind))
         else:
-            out.append(Condition("closed", f"closed:{session}:{path0.name}", m.project, session, age,
+            out.append(Condition("closed", f"closed:{session}:{episode}", m.project, session, age,
                                  ready=not hush, count=len(waking), sender=first, kind=m.kind,
-                                 status=m.status))
+                                 status=m.status, info={"handle": terms[session].get("handle")} if dead else {}))
     out += _busy(reg, now, keys, cfg_all)
     if terms is not None:
         out += _silent(reg, r, now, keys, terms, cfg_all)
@@ -739,7 +747,10 @@ def _post(unit, to, summary, rev=1) -> None:
 def _escalate(reg, action, now) -> None:
     c, cap = action.cond, action.cap
     minutes, main = int(c.age_s // 60), f"main-{c.project}"
-    if c.cls == "closed" and c.kind == "main":
+    if c.cls == "closed" and c.kind == "main" and not c.count:
+        _tell_owner(c.project, f"{c.target}'s pane is disconnected after {cap} reopens today — decide: "
+                               f"`orche wake {c.target}` now, or leave it (default: ORCHE reopens it tomorrow)", now)
+    elif c.cls == "closed" and c.kind == "main":
         _tell_owner(c.project, f"{c.target} is closed with {c.count} report(s) waiting ({minutes} min) after "
                                f"{cap} reopens today — decide: `orche wake {c.target}` now, or leave it "
                                f"(default: ORCHE reopens it tomorrow)", now)
@@ -777,14 +788,21 @@ def _remind(unit, reason) -> None:
 
 
 def _reopen(reg, c) -> None:
-    """A Main's pane opened in place (no `terminal switch`), or an active division/feature woken
-    (hr.wake reopens its missing pane); then its nudge."""
-    from . import hr
+    """A Main's pane opened in place (no `terminal switch`; a disconnected one closed and reopened,
+    deliver.reopen_pane) and stamped MAIN_REOPENED, or an active division/feature woken (hr.wake
+    reopens its missing pane); then its nudge when reports wait (a bare reopen types nothing)."""
+    from . import deliver, hr
     if c.kind == "main":
-        hr.project_pane(reg["projects"][c.project], dry_run=False, switch=False)
+        if c.info.get("handle"):
+            if deliver.reopen_pane(reg, c.target, c.info["handle"]) is None:
+                raise orca.OrcaError(f"{c.target} not listed connected after the reopen", code="not_reopened")
+        else:
+            hr.project_pane(reg["projects"][c.project], dry_run=False, switch=False)
+        util.write_json(inbox.box(c.target) / MAIN_REOPENED, {"at": units.now().isoformat()})
     else:
         hr.wake(reg, roster.Roster(reg).member(c.target))
-    _nudge(c.target)
+    if c.count:
+        _nudge(c.target)
 
 
 def _last_nudge(session) -> str:
@@ -1320,6 +1338,19 @@ def _pass(cfg_all, cfg, now, started, dry_run, out, keys=None, as_json=False) ->
     return done_json()
 
 
+MAIN_REOPENED = ".main-reopened"   # in inbox/<main-p>/: {at} of the heartbeat's last reopen of Main's pane
+
+
+def main_reopened(reg, key):
+    """When the heartbeat last reopened the project's Main pane (an aware datetime), or None."""
+    main = (reg["projects"].get(key) or {}).get("main_session")
+    try:
+        rec = util.read_json(inbox.box(main) / MAIN_REOPENED, default=None) if main else None
+    except (OSError, ValueError, util.JsonError):
+        return None
+    return units.parse_iso(rec.get("at")) if isinstance(rec, dict) else None
+
+
 def _row(a, failed) -> dict:
     c = a.cond
     return {"action": EVENT.get(a.kind, a.kind), "class": c.cls, "project": c.project or None, "target": c.target,
@@ -1340,6 +1371,7 @@ def stalled(project) -> list:
         state = util.read_json(state_path(), default={})
     except util.JsonError:
         return []
+    from . import deliver
     out = []
     for key in sorted(state if isinstance(state, dict) else {}):
         e = state[key]
@@ -1349,7 +1381,9 @@ def stalled(project) -> list:
         if attempts or e.get("escalated"):
             cls = e.get("cls")
             cap = (REOPEN_CAP if cls == "closed" else timing(cls)[1]) if cls else None
+            last = deliver.last_delivery(e.get("to"), e.get("target")) if cls == "undelivered" and e.get("to") else None
             out.append({"cls": cls, "target": e.get("target"), "rev": e.get("rev"), "to": e.get("to") or None,
+                        "reopened": (last or {}).get("reopened"),
                         "tries": len(attempts), "cap": cap, "escalated": bool(e.get("escalated")),
                         "escalated_at": e.get("escalated_at"), "next": e.get("next"),
                         "last": attempts[-1] if attempts else None, "detail": e.get("detail")})
@@ -1369,7 +1403,8 @@ def stalled_line(s) -> str:
         return (f"  stalled: silent {s['target']}{rev} in {s.get('to') or '?'} ({s.get('detail') or '?'}) — "
                 f"reminded {_hhmm(units.parse_iso(s.get('last')))}")
     nxt = units.parse_iso(s.get("next"))
-    return (f"  stalled: {s['cls']} {s['target']}{rev} — ORCHE retrying ({s['tries']}/{s['cap']}"
+    how = "pane reopened" if s.get("reopened") else "retrying"    # the deliverer found the pane dead
+    return (f"  stalled: {s['cls']} {s['target']}{rev} — ORCHE {how} ({s['tries']}/{s['cap']}"
             + (f", next {_hhmm(nxt)})" if nxt is not None else ")"))
 
 
@@ -1403,7 +1438,10 @@ def overdue_hint(kind, target, reps, fresh) -> str:
     tries = len((e or {}).get("attempts") or [])
     if fresh and e is not None and not e.get("escalated") and tries < CAP:
         nxt = units.parse_iso(e.get("next"))
-        return f"ORCHE retrying ({tries}/{CAP}" + (f", next {_hhmm(nxt)})" if nxt is not None else ")")
+        from . import deliver
+        last = deliver.last_delivery(e.get("to"), target) if kind == "undelivered" and e.get("to") else None
+        how = "pane reopened" if (last or {}).get("reopened") else "retrying"
+        return f"ORCHE {how} ({tries}/{CAP}" + (f", next {_hhmm(nxt)})" if nxt is not None else ")")
     return f"run `orche {'nudge' if kind == 'unread' else 'deliver'} {target}`"
 
 

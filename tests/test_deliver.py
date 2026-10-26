@@ -33,6 +33,42 @@ SEND_ARGV = ["orca", "terminal", "send", "--terminal", "t-main", "--text", inbox
 REAL_TERMINAL = orca.terminal
 
 
+class DeadPane:
+    """A stateful stand-in for orca.terminal: `title`'s pane is listed `connected: false` (Orca kept the
+    terminal, its agent is gone) until it is closed; a `create` then lists a new connected pane.
+    `others` are listed connected; busy=True makes every tui-idle wait unsatisfied. Calls in `calls`."""
+
+    def __init__(self, title, handle, others=(), *, connected=False, busy=False):
+        self.terms = {t: {"handle": h, "title": t, "connected": True} for t, h in others}
+        self.terms[title] = {"handle": handle, "title": title, "connected": connected}
+        self.busy, self.calls = busy, []
+
+    def subs(self):
+        return [c[0] for c in self.calls]
+
+    def __call__(self, sub, *args, **kw):
+        self.calls.append((sub, *args))
+        if sub == "list":
+            return {"terminals": [dict(t) for t in self.terms.values()]}
+        if sub == "create":
+            title = args[args.index("--title") + 1]
+            self.terms[title] = {"handle": f"{title}-new", "title": title, "connected": True}
+            return {}
+        handle = args[args.index("--terminal") + 1] if "--terminal" in args else None
+        live = any(t["handle"] == handle and t["connected"] for t in self.terms.values())
+        if sub == "close":
+            self.terms = {k: t for k, t in self.terms.items() if t["handle"] != handle}
+            return {}
+        if sub == "wait":
+            return {"wait": {"handle": handle, "satisfied": not self.busy, "status": "running" if live else "exited"}}
+        if sub == "read":
+            return {"terminal": {"handle": handle, "status": "running" if live else "exited", "tail": []}}
+        if sub == "send":
+            return {"send": {"accepted": True, "handle": handle,
+                             "prompt": {"provider": "claude", "stages": ["input_accepted", "turn_started"]}}}
+        return {}
+
+
 class NudgeCase(HookCase):
     """The hooks' registry (main-acme, div-acme-build, …), wake off, fake Orca on, short lock waits."""
 
@@ -40,7 +76,7 @@ class NudgeCase(HookCase):
         super().setUp()
         os.environ["ORCHE_FAKE_ORCA"] = "1"
         self.canned()
-        for name, value in (("LOCK_WAIT_S", 0.3), ("WAKE_HOLD_S", 0.3), ("POLL_S", 0.05)):
+        for name, value in (("LOCK_WAIT_S", 0.3), ("WAKE_HOLD_S", 0.3), ("POLL_S", 0.05), ("REOPEN_WAIT_S", 0.3)):
             patcher = mock.patch.object(deliver, name, value)
             patcher.start()
             self.addCleanup(patcher.stop)
@@ -268,7 +304,7 @@ class NudgeTest(NudgeCase):
                 (self.home / "logs" / "fake-orca.jsonl").unlink(missing_ok=True)
                 self.canned(terminal_send={"send": send})
                 self.assertEqual(self.nudge(), (0 if state == "nudged" else 1, state))
-                self.assertEqual(self.orca_calls()[-1], SEND_ARGV)
+                self.assertEqual([c for c in self.orca_calls() if c[1:3] == ["terminal", "send"]][-1], SEND_ARGV)
                 self.assertEqual(self.marker().exists(), state == "nudged")
         self.assertIn("not submitted", (self.home / "logs" / "hooks.log").read_text())
 
@@ -429,6 +465,70 @@ class DeliverTest(NudgeCase):
                 want = f"not delivered: {b.unit} → {to} rev 1 ({state})"
                 self.assertEqual(ptr["summary"], want + (" — " + hint.format(u=b.unit) if hint else ""))
                 self.assertIn(f"deliver unit={b.unit} rev=1 to={to} state={state}", self.events())
+
+    # -- a dead pane is reopened before the brief is typed (C38) ---------------------------------
+    def test_a_disconnected_pane_is_closed_reopened_and_delivered_to(self):
+        b = self.dispatched()
+        fake = DeadPane("div-acme-build", "t-build", [("✳ main-acme", "t-main")])
+        with mock.patch.object(orca, "terminal", fake):
+            self.assertEqual(self.deliver(b.unit), (0, "nudged"))
+        self.assertIn(("close", "--terminal", "t-build"), fake.calls)
+        self.assertEqual(fake.subs().count("create"), 1)                  # one reopen, through hr.wake
+        create = next(c for c in fake.calls if c[0] == "create")
+        self.assertIn("div-acme-build", create)
+        sends = [c for c in fake.calls if c[0] == "send"]
+        self.assertEqual(len(sends), 1)                                   # the normal nudge, nothing extra
+        self.assertEqual(sends[0][1:3], ("--terminal", "div-acme-build-new"))
+        self.assertIn("reopen session=div-acme-build state=reopened", self.events())
+        self.assertIn(f"deliver unit={b.unit} rev=1 to=div-acme-build state=reopened",
+                      (self.home / "logs" / "deliver.log").read_text())
+        self.assertTrue(deliver.last_delivery("div-acme-build", b.unit).get("reopened"))
+
+    def test_a_failed_send_on_a_pane_listed_disconnected_afterwards_is_reopened_once(self):
+        b = self.dispatched()
+        fake = DeadPane("div-acme-build", "t-build", [("✳ main-acme", "t-main")], connected=True)
+        real_call = fake.__call__
+
+        def dies_on_send(sub, *args, **kw):
+            if sub == "send" and "t-build" in args:
+                fake.calls.append((sub, *args))
+                fake.terms["div-acme-build"]["connected"] = False
+                return {"send": {"accepted": True, "prompt": {"provider": "claude", "stages": ["input_accepted"]}}}
+            return real_call(sub, *args, **kw)
+        with mock.patch.object(orca, "terminal", dies_on_send):
+            self.assertEqual(self.deliver(b.unit), (0, "nudged"))
+        self.assertEqual(fake.subs().count("create"), 1)
+        self.assertEqual([c[2] for c in fake.calls if c[0] == "send"], ["t-build", "div-acme-build-new"])
+
+    def test_the_heartbeats_first_retry_reopens_a_dead_pane_and_delivers(self):
+        b = self.dispatched()
+        fake = DeadPane("div-acme-build", "t-build", [("✳ main-acme", "t-main")])
+        with mock.patch.object(orca, "terminal", fake):            # what `orche deliver --retry` runs
+            self.assertEqual(deliver.deliver_unit(registry.load(), b.unit, retry=True), (0, "nudged"))
+        self.assertEqual(fake.subs().count("create"), 1)
+        self.assertEqual([c[2] for c in fake.calls if c[0] == "send"], ["div-acme-build-new"])
+        self.assertEqual(self.failures(), [])                      # attempt 1 repaired: nothing to escalate
+
+    def test_a_connected_busy_pane_is_not_reopened(self):
+        b = self.dispatched()
+        fake = DeadPane("div-acme-build", "t-build", [("✳ main-acme", "t-main")], connected=True, busy=True)
+        with mock.patch.object(orca, "terminal", fake):
+            _code, state = self.deliver(b.unit)
+        self.assertNotEqual(state, "no-agent")
+        self.assertNotIn("close", fake.subs())
+        self.assertNotIn("create", fake.subs())
+        self.assertNotIn("state=reopened", self.events())
+        self.assertNotIn("reopened", deliver.last_delivery("div-acme-build", b.unit))
+
+    def test_a_nudge_to_a_disconnected_main_reopens_it_without_a_resume(self):
+        self.report()
+        fake = DeadPane("main-acme", "t-main", [("div-acme-build", "t-build")])
+        with mock.patch.object(orca, "terminal", fake):
+            self.assertEqual(self.nudge(), (0, "nudged"))
+        self.assertIn(("close", "--terminal", "t-main"), fake.calls)
+        self.assertEqual(fake.subs().count("create"), 1)                  # hr.project_pane, as `orche wake` opens it
+        self.assertNotIn("switch", fake.subs())
+        self.assertEqual([c[2] for c in fake.calls if c[0] == "send"], ["main-acme-new"])
 
     def test_an_orca_error_on_send_is_nudge_failed(self):
         b = self.dispatched()

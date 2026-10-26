@@ -15,8 +15,9 @@ from contextlib import redirect_stderr, redirect_stdout
 import support
 from unittest import mock
 
-from orche import brief, deliver, hr, inbox, notify, orca, procs, reconcile, registry, roster, runs, shell, units, util
+from orche import brief, cmd_status, deliver, hr, inbox, notify, orca, procs, reconcile, registry, roster, runs, shell, units, util
 from test_registry import load_cli
+from test_deliver import DeadPane
 
 SAMPLE = json.loads((support.FIXTURES / "registry.sample.json").read_text())
 T0 = dt.datetime(2026, 10, 16, 9, 0, tzinfo=dt.timezone(dt.timedelta(hours=9)))
@@ -1041,3 +1042,104 @@ class ScaleHeartbeatTest(RepairCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class DeadMainTest(ReconcileCase):
+    """C38: a `main-<p>` that Orca lists disconnected goes through the closed-Main repair (REOPEN_CAP a
+    day, quiet hours, one owner escalation) with or without work waiting; closed and reopened through
+    `orche wake`'s path, it types nothing when nothing waits (a reopen spends no tokens)."""
+
+    def setUp(self):
+        super().setUp()
+        for name, val in (("REOPEN_WAIT_S", 0.3), ("POLL_S", 0.01)):
+            patcher = mock.patch.object(deliver, name, val)
+            patcher.start()
+            self.addCleanup(patcher.stop)
+
+    def run_with(self, fake, minutes=0):
+        with mock.patch.object(orca, "terminal", fake), redirect_stderr(io.StringIO()):
+            return self.run_at(minutes)
+
+    def test_a_disconnected_main_with_nothing_to_deliver_is_reopened_and_sent_nothing(self):
+        fake = DeadPane("main-acme-shop", "t-main", [("div-acme-shop-build", "t-b"), ("main-docs-site", "t-d")])
+        code, lines = self.run_with(fake)
+        self.assertEqual(code, 0)
+        self.assertEqual(lines, ["reopen main-acme-shop pane (disconnected; reopen 1/2 today)"])
+        self.assertEqual(util.read_json(reconcile.state_path())["reopens:main-acme-shop"]["n"], 1)
+        self.assertIn(("close", "--terminal", "t-main"), fake.calls)
+        self.assertEqual(fake.subs().count("create"), 1)
+        self.assertNotIn("send", fake.subs())                  # no prompt, nudge or "restarted" line
+        self.assertEqual([s for s in self.spawned if s[0] == "nudge"], [])
+        self.assertIsNotNone(reconcile.main_reopened(registry.load(), "acme-shop"))
+        self.assertTrue(any("reopen session=main-acme-shop state=reopened" in l
+                            for l in (self.home / "logs" / "events.log").read_text().splitlines()))
+        self.assertIn(f"main pane reopened {T0.astimezone().strftime('%H:%M')}",
+                      cmd_status.status_row(registry.load(), "acme-shop", now=T0)["line"])
+        self.assertNotIn("main pane reopened", cmd_status.status_row(registry.load(), "docs-site", now=T0)["line"])
+        _code, lines = self.run_with(fake, 5)                   # reopened and connected: left alone
+        self.assertEqual(fake.subs().count("create"), 1)
+
+    def test_a_disconnected_main_that_stays_dead_is_capped_then_escalated_once(self):
+        fake = DeadPane("main-acme-shop", "t-main", [("div-acme-shop-build", "t-b"), ("main-docs-site", "t-d")])
+        notes = []
+        with mock.patch.object(deliver, "reopen_pane", lambda *a, **k: None), \
+                mock.patch.object(reconcile, "_tell_owner", lambda p, t, now: notes.append(t)):
+            got = [self.run_with(fake, m)[1] for m in (0, 15, 30, 45, 60)]
+        self.assertEqual(sum(1 for g in got for l in g if l.startswith("reopen ")), 2)
+        self.assertEqual(sum("action=reopen" in e and "failed=OrcaError" in e for e in self.events()), 2)
+        self.assertEqual(len(notes), 1)
+        self.assertIn("main-acme-shop's pane is disconnected after 2 reopens today", notes[0])
+        self.assertEqual([s for s in self.spawned if s[0] == "nudge"], [])
+
+    def test_quiet_hours_hold_a_disconnected_main(self):
+        (self.home / "config.json").write_text(json.dumps({**WAKE, "flow": {"quiet_hours": "08:00-10:00"}}))
+        fake = DeadPane("main-acme-shop", "t-main", [("div-acme-shop-build", "t-b"), ("main-docs-site", "t-d")])
+        self.assertEqual(self.run_with(fake)[1], [])
+        self.assertNotIn("create", fake.subs())
+
+    def test_a_disconnected_main_with_reports_waiting_is_reopened_and_nudged(self):
+        self.pointer("main-acme-shop", 12)
+        fake = DeadPane("main-acme-shop", "t-main", [("div-acme-shop-build", "t-b"), ("main-docs-site", "t-d")])
+        _code, lines = self.run_with(fake)
+        self.assertEqual(lines, ["reopen main-acme-shop pane (1 report(s) waiting, 12 min; reopen 1/2 today)"])
+        self.assertIn(("close", "--terminal", "t-main"), fake.calls)
+        self.assertEqual([s for s in self.spawned if s[0] == "nudge"], [("nudge", "main-acme-shop")])
+
+    def test_a_missing_main_with_a_report_waiting_takes_the_same_repair(self):
+        self.pointer("main-acme-shop", 12)
+        fake = DeadPane("main-other", "t-x", [("div-acme-shop-build", "t-b"), ("main-docs-site", "t-d")])
+        _code, lines = self.run_with(fake)
+        self.assertEqual(lines, ["reopen main-acme-shop pane (1 report(s) waiting, 12 min; reopen 1/2 today)"])
+        self.assertNotIn("close", fake.subs())                  # nothing to close: opened fresh
+        self.assertEqual([s for s in self.spawned if s[0] == "nudge"], [("nudge", "main-acme-shop")])
+
+    def test_a_connected_main_is_untouched(self):
+        fake = DeadPane("main-acme-shop", "t-main", [("div-acme-shop-build", "t-b")], connected=True)
+        _code, lines = self.run_with(fake)
+        self.assertFalse(any("reopen" in l for l in lines), lines)
+        self.assertNotIn("close", fake.subs())
+        self.assertNotIn("create", fake.subs())
+        self.assertNotIn("main pane reopened", cmd_status.status_row(registry.load(), "acme-shop", now=T0)["line"])
+
+    def test_a_sleeping_main_without_a_pane_is_not_opened(self):
+        fake = DeadPane("div-acme-shop-build", "t-b", connected=True)
+        fake.terms.pop("main-acme-shop", None)
+        _code, lines = self.run_with(fake)
+        self.assertFalse(any("reopen" in l for l in lines), lines)
+        self.assertNotIn("create", fake.subs())
+
+
+class ReopenedWordingTest(ReconcileCase):
+    def test_stall_and_undelivered_lines_say_pane_reopened(self):
+        base = {"cls": "undelivered", "target": "u7", "rev": 1, "to": "div-acme-shop-build", "tries": 1, "cap": 3,
+                "escalated": False, "next": None}
+        self.assertIn("ORCHE retrying (1/3)", reconcile.stalled_line({**base, "reopened": None}))
+        self.assertIn("ORCHE pane reopened (1/3)", reconcile.stalled_line({**base, "reopened": "2026-10-16T09:00:00+09:00"}))
+        self.pointer("div-acme-shop-build", 12, unit="u7", via="dispatch", brief_rev=1, status="info",
+                     **{"from": "main-acme-shop"})
+        self.run_at(0)
+        reps = reconcile.repairs()
+        self.assertTrue(reconcile.overdue_hint("undelivered", "u7", reps, True).startswith("ORCHE retrying"))
+        util.write_json(inbox.box("div-acme-shop-build") / f"{deliver.LAST_DELIVER}u7",
+                        {"state": "nudged", "rev": 1, "at": T0.isoformat(), "reopened": T0.isoformat()})
+        self.assertTrue(reconcile.overdue_hint("undelivered", "u7", reps, True).startswith("ORCHE pane reopened (1/3"))

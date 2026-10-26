@@ -125,6 +125,15 @@ def match_title(terminals, title):
     return next((t for t in terminals if normalize_title(t.get("title")) == want), None)
 
 
+def disconnected(term) -> bool:
+    """A listed terminal whose agent is gone: `orca terminal list` keeps it, title and all, as
+    `disconnected` (after claude exited). A terminal that names no connection state is connected."""
+    if not isinstance(term, dict):
+        return False
+    return term.get("connected") is False or any(
+        str(term.get(k) or "").lower() == "disconnected" for k in ("status", "state", "connection"))
+
+
 def find_terminal_by_title(title, *, timeout=20):
     """First terminal whose title matches `title` (leading glyphs ignored), or None."""
     return match_title(terminals_of(terminal("list", timeout=timeout)), title)

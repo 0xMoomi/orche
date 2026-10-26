@@ -247,7 +247,7 @@ class CliTest(support.TempHomeCase):
         return cp.returncode, cp.stdout, cp.stderr
 
     def test_version(self):
-        self.assertEqual(self.orche("version"), (0, "orche 0.9.0\n", ""))
+        self.assertEqual(self.orche("version"), (0, "orche 0.9.1\n", ""))
 
     def test_projects_json_empty_home(self):
         self.assertEqual(self.orche("projects", "--json"), (0, "[]\n", ""))

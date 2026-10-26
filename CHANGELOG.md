@@ -3,6 +3,16 @@
 All notable changes to ORCHE are listed here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow semantic versioning.
 
+## 0.9.1 — 2026-10-25
+
+### Fixed
+- A pane whose Orca terminal is disconnected (the agent inside exited) is closed and reopened through the
+  wake path before a brief or report is delivered to it; the heartbeat's first retry does the same, and the
+  stall line says `pane reopened` instead of `retrying`. A reopen types nothing and costs no model call.
+- A disconnected Main pane goes through the closed-Main repair even with nothing to deliver, and a missing
+  one as soon as a report waits (same daily cap, quiet hours and one escalation as before).
+- The held-reviewer test no longer depends on the time of day.
+
 ## 0.9.0 — 2026-10-25
 
 ### Added

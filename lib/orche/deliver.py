@@ -84,7 +84,7 @@ def _result(res, key) -> dict:
     return inner if isinstance(inner, dict) else res
 
 
-def _type(session, text, *, strict, wait_s, still_needed, before_send=None, on_fail=None, settle=None):
+def _type(session, text, *, strict, wait_s, still_needed, before_send=None, on_fail=None, settle=None, reopen=None):
     """Type `text` + Enter into `session`'s pane (design §4.4 steps 3-7). (state, waited seconds).
 
     The pane title is the session name. strict: not idle after `wait_s` → `busy` (else send anyway: Claude Code queues typed input,
@@ -93,6 +93,9 @@ def _type(session, text, *, strict, wait_s, still_needed, before_send=None, on_f
     before the send; on_fail() after a send that failed (`refused`, `dialog`, `nudge-failed`).
     settle(): runs once, after the first empty-draft read; when it waited (returns > 0 seconds) the
     idle wait, still_needed() and the draft read run again, since the pane may have changed.
+    reopen(handle): a dead pane (listed `disconnected`, `no-agent`, or a failed send whose terminal
+    is then listed `disconnected`) is closed and reopened once (`reopen_pane`); the new handle, or
+    None (the attempt then ends `no-agent`).
     """
     started = time.monotonic()
 
@@ -107,6 +110,15 @@ def _type(session, text, *, strict, wait_s, still_needed, before_send=None, on_f
     if term is None or not term.get("handle"):
         return done("no-pane")
     handle = str(term["handle"])
+
+    def repair(old):
+        nonlocal reopen
+        fix, reopen = reopen, None
+        return fix(old) if fix is not None else None
+    if reopen is not None and orca.disconnected(term):
+        handle = repair(handle)
+        if handle is None:
+            return done("no-agent")
     while True:
         try:
             wait = _result(orca.terminal("wait", "--terminal", handle, "--for", "tui-idle", "--timeout-ms",
@@ -119,6 +131,9 @@ def _type(session, text, *, strict, wait_s, still_needed, before_send=None, on_f
         if wait.get("blockedReason"):
             return done("dialog")
         if wait.get("status") is not None and wait.get("status") != "running":
+            handle = repair(handle) if reopen is not None else None
+            if handle is not None:
+                continue
             return done("no-agent")
         busy = not wait.get("satisfied")
         if strict and busy:
@@ -137,28 +152,91 @@ def _type(session, text, *, strict, wait_s, still_needed, before_send=None, on_f
             return done("nudge-failed")
         if draft:
             return done("user-typing")
-        if settle is None:
-            break
-        settled, settle = settle(), None
-        if not settled:
-            break
-    if before_send is not None:
-        before_send()
-    try:
-        send = _result(orca.terminal("send", "--terminal", handle, "--text", text, *SEND,
-                                          timeout=SUBMIT_WAIT_S + WAIT_SLACK_S), "send")
-    except Exception as exc:  # noqa: BLE001 - never resend on silence
-        log.log("hooks", f"deliver: terminal send to {session}: {exc}")
-        state = "nudge-failed"
-    else:
-        state = _receipt(send)
-        if state == "nudge-failed" and busy and _queued(send):
-            state = "queued"    # typed into a working pane: Claude Code holds it for the next turn
-        elif state == "nudge-failed":
-            log.log("hooks", f"deliver: send to {session} not submitted: {send.get('prompt')}")
+        if settle is not None:
+            settled, settle = settle(), None
+            if settled:
+                continue
+        if before_send is not None:
+            before_send()
+        try:
+            send = _result(orca.terminal("send", "--terminal", handle, "--text", text, *SEND,
+                                              timeout=SUBMIT_WAIT_S + WAIT_SLACK_S), "send")
+        except Exception as exc:  # noqa: BLE001 - never resend on silence
+            log.log("hooks", f"deliver: terminal send to {session}: {exc}")
+            state = "nudge-failed"
+        else:
+            state = _receipt(send)
+            if state == "nudge-failed" and busy and _queued(send):
+                state = "queued"    # typed into a working pane: Claude Code holds it for the next turn
+            elif state == "nudge-failed":
+                log.log("hooks", f"deliver: send to {session} not submitted: {send.get('prompt')}")
+        if state == "nudge-failed" and reopen is not None and _dead(session, handle):
+            handle = repair(handle)
+            if handle is not None:
+                continue
+        break
     if state not in ("nudged", "queued") and on_fail is not None:
         on_fail()
     return done(state)
+
+
+REOPEN_LOCK = ".reopen.lock"    # one reopen per pane at a time (a deliverer, a nudger, the heartbeat)
+REOPEN_WAIT_S = 30              # for the reopened pane to be listed; the tui-idle wait covers its boot
+
+
+def _listed(session):
+    """`session`'s pane as `terminal list` shows it now, or None (also when Orca cannot list)."""
+    try:
+        return orca.match_title(orca.terminals_of(orca.terminal("list", timeout=CALL_S)), session)
+    except Exception:  # noqa: BLE001 - an unlisted pane is no pane
+        return None
+
+
+def _dead(session, handle) -> bool:
+    term = _listed(session)
+    return term is not None and str(term.get("handle")) == str(handle) and orca.disconnected(term)
+
+
+def reopen_pane(reg, session, handle, done=None):
+    """Close `session`'s dead pane `handle` and reopen it through the wake path (Main: `hr.project_pane`;
+    a division or feature: `hr.wake`, which reopens an active unit's pane), then wait for the new pane to
+    be listed connected. The new handle, or None. Logs `reopen session=… state=reopened` and appends
+    the time to `done`. A connected pane another process already reopened is taken as it is."""
+    from . import hr
+    m = roster.Roster(reg).member(session)
+    if m is None:
+        return None
+    with _lock(session, REOPEN_LOCK, REOPEN_WAIT_S + CALL_S) as ok:
+        now = _listed(session)
+        if now is not None and now.get("handle") and str(now["handle"]) != str(handle) \
+                and not orca.disconnected(now):
+            return str(now["handle"])
+        if not ok:
+            return None
+        try:
+            orca.terminal("close", "--terminal", str(handle), timeout=CALL_S)
+        except Exception as exc:  # noqa: BLE001 - a pane Orca already dropped is closed
+            log.log("hooks", f"deliver: close {session} pane {handle}: {exc}")
+        try:
+            if m.kind == "main":
+                hr.project_pane(reg["projects"][m.project], dry_run=False, switch=False)
+            else:
+                hr.wake(reg, m)
+        except Exception as exc:  # noqa: BLE001 - the attempt ends no-agent; the heartbeat retries
+            log.log("hooks", f"deliver: reopen {session}: {type(exc).__name__}: {exc}")
+            return None
+        log.log("events", f"reopen session={session} state=reopened")
+        if done is not None:
+            done.append(units.now().isoformat())
+        end = time.monotonic() + REOPEN_WAIT_S
+        while True:
+            now = _listed(session)
+            if now is not None and now.get("handle") and str(now["handle"]) != str(handle) \
+                    and not orca.disconnected(now):
+                return str(now["handle"])
+            if time.monotonic() >= end:
+                return None
+            time.sleep(POLL_S)
 
 
 REMIND_RE = re.compile(r"^\s*\[orche\] report due:")
@@ -258,6 +336,14 @@ def _quiet(session, cfg) -> int:
     return int(time.monotonic() - started)
 
 
+def _reopener(session):
+    """nudge's reopen callback (reopen_pane with the registry read when a pane is found dead)."""
+    def fix(handle):
+        from . import registry
+        return reopen_pane(registry.load(), session, handle)
+    return fix
+
+
 def nudge(session) -> tuple:
     """`orche nudge <session>` (design §4.4): (exit code, state). Raises ValueError for an unsafe
     session name (before anything is touched); every other failure is a state."""
@@ -281,7 +367,7 @@ def nudge(session) -> tuple:
                         state, waited = _type(session, inbox.WAKE_TEXT, strict=True,
                                               wait_s=IDLE_WAIT_S, still_needed=lambda: _waking(session) > 0,
                                               before_send=lambda: _mark(session), on_fail=lambda: _unmark(session),
-                                              settle=settle)
+                                              settle=settle, reopen=_reopener(session))
                 except Exception as exc:  # noqa: BLE001 - recorded below, under the lock
                     log.log("hooks", f"deliver: nudge {session}: {type(exc).__name__}: {exc}")
                     state, waited = "nudge-failed", int(time.monotonic() - started)
@@ -493,7 +579,7 @@ def _stop_run(r, b, to, locked) -> str:
     return "stopped"
 
 
-def _pane(r, b, to, sent):
+def _pane(r, b, to, sent, reopened=None):
     """Steps 3-7: (state, waited). `sent` receives the pending pointer once found.
 
     A STOP pointer stops a live run of the unit (`stopped`), is drained when the target has no pane
@@ -522,7 +608,7 @@ def _pane(r, b, to, sent):
             drain_dispatch(to, b.unit, b.rev)
             return "already-ran", int(time.monotonic() - started)
         state, waited = _type(to, f"[orche] inbox: {b.unit} rev {b.rev}", strict=False, wait_s=DELIVER_WAIT_S,
-                              still_needed=path.exists)
+                              still_needed=path.exists, reopen=lambda h: reopen_pane(r.reg, to, h, reopened))
         if stop and state == "no-pane":
             drain_dispatch(to, b.unit, b.rev)
             return "stop-idle", waited
@@ -572,14 +658,14 @@ def deliver_unit(reg, unit, cfg=None, retry=False) -> tuple:
         return 2, "unknown-target"
     if t.status == "retired":
         return 2, "retired-target"
-    to, state, waited, sent = t.session, "nudge-failed", 0, []
+    to, state, waited, sent, reopened = t.session, "nudge-failed", 0, [], []
     started = time.monotonic()
     try:
         try:
             if runner_wanted(r, to, config.load() if cfg is None else cfg):
                 state = _runner(r, b, to)
             else:
-                state, waited = _pane(r, b, to, sent)
+                state, waited = _pane(r, b, to, sent, reopened)
                 state = _fallback(r, b, to, state)
         except Exception as exc:  # noqa: BLE001 - the events line is always written
             log.log("hooks", f"deliver: {unit}: {type(exc).__name__}: {exc}")
@@ -588,17 +674,20 @@ def deliver_unit(reg, unit, cfg=None, retry=False) -> tuple:
             _not_delivered(r, unit, to, b.rev, state, str(sent[0].get("from") or ""))
     finally:        # last: once it is written, this deliverer touches nothing more
         if state != "locked":
-            _record_delivery(to, unit, b.rev, state)
+            _record_delivery(to, unit, b.rev, state, reopened[-1] if reopened else None)
+        if reopened:            # deliver.log: the pane was dead and was reopened before the brief was typed
+            log.log("deliver", f"deliver unit={unit} rev={b.rev} to={to} state=reopened")
         log.log("events", f"deliver unit={unit} rev={b.rev} to={to} state={state} waited={waited}s")
     return (1 if state in FAILED or state == "runner-failed" else 0), state
 
 
-LAST_DELIVER = ".last-deliver-"   # + unit: {state, rev, at} of the unit's newest deliverer (reconcile's escalation)
+LAST_DELIVER = ".last-deliver-"   # + unit: {state, rev, at[, reopened]} of the unit's newest deliverer (reconcile's escalation)
 
 
-def _record_delivery(to, unit, rev, state) -> None:
+def _record_delivery(to, unit, rev, state, reopened=None) -> None:
+    rec = {"state": state, "rev": rev, "at": util.now_iso()} | ({"reopened": reopened} if reopened else {})
     try:
-        util.write_json(inbox.box(to) / f"{LAST_DELIVER}{unit}", {"state": state, "rev": rev, "at": util.now_iso()})
+        util.write_json(inbox.box(to) / f"{LAST_DELIVER}{unit}", rec)
     except (OSError, ValueError) as exc:
         log.log("hooks", f"deliver: cannot record {unit}'s last delivery: {exc}")
 
