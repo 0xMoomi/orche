@@ -290,7 +290,7 @@ def create_feature(reg, key, name, *, scope, reason, by=None, batch=None, strict
     except (orca.OrcaError, OSError, util.JsonError) as exc:
         raise book.Refused(cli.EXIT_USER, f"feat new {name} stopped: {exc}") from None
     from .. import publish   # here, not at the top: hr stays free of the git/gh publish layer at import
-    publish.guard_base(units.worktree_path(entry["worktree"]), publish.base(proj["path"]))   # R29
+    publish.guard_base(units.worktree_path(entry["worktree"]), publish.base(proj["path"], project=key))   # R29
     status = "paused" if codex else "active"
     feature.update(worktree=entry["worktree"], branch=entry["branch"], status=status)
     if headless and not codex:

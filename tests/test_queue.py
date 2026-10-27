@@ -161,6 +161,11 @@ class QueueCmdTest(support.TempHomeCase):
     def queued(self):
         return store.read("acme")["entries"]
 
+    def require_review(self):
+        """review.cross_vendor required (the default is off): the queue then needs a pre-review row."""
+        (self.home / "config.json").write_text(json.dumps({**support.NO_WAKE, "review": {**support.NO_WAKE["review"],
+                                                                                 "cross_vendor": "required"}}))
+
     # ---- refusals (§4.3) -----------------------------------------------------------------
 
     def test_feature_session_cannot_add(self):
@@ -225,6 +230,7 @@ class QueueCmdTest(support.TempHomeCase):
         self.assertIn(f"no ledger row for {self.head[:7]}", err)
 
     def test_no_pre_review(self):
+        self.require_review()
         self.ready(review=None)
         code, _, err = self.orche("queue", "add", self.unit)
         self.assertEqual(code, 3)
@@ -232,6 +238,7 @@ class QueueCmdTest(support.TempHomeCase):
         self.assertNotIn("--unit", err)
 
     def test_held_review_needs_accept(self):
+        self.require_review()
         self.ready(review="held")
         code, _, err = self.orche("queue", "add", self.unit)
         self.assertEqual(code, 3)

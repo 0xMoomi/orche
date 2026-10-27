@@ -13,8 +13,8 @@ user names it. `orche apply-all` is never used: some repos are dormant and some 
 `orche init <project>` makes, for that project only:
 
 1. Files in the project's main checkout: `.orche/project`, `PROJECT_CARD.md`, `AGENTS.md`, `.agents/`,
-   `.claude/agents/div-<proj>-*.md` (untracked; `.orche/units/`, `.orche/SETUP.md` (the setup report) and
-   `.claude/settings.local.json` go into `.git/info/exclude`). Nothing is committed.
+   `.claude/agents/div-<proj>-*.md` (untracked: every ORCHE file, `.orche/` included, goes into
+   `.git/info/exclude`). Nothing is committed.
 2. One Orca worktree per chosen division (`div-<division>`) with its charter/status/handoff files. The
    defaults are `rnd`, `research`, `build` and `gtm`; `ops` is opt-in and stays dormant while the stage is
    `building`. A custom division (the user's own, e.g. `design`) gets a worktree `div-<name>`, a session
@@ -77,6 +77,9 @@ Never hand it to the `hr` agent: a subagent cannot ask.
   <model>` (a `null` value, the keep option, changes nothing). Say in plain words when a pane must restart to use it; restart one
   (`orche sleep`, then `orche wake`) only when the user asks and nothing runs there. A feature agent runs on its
   division's model: offer the division.
+- Pull requests and branches: the user names the branch PRs go to (`develop`) or the word branches start with
+  (`dev`) → `orche init --refresh <proj> --base <branch> --branch-prefix <prefix>` (either flag alone); no question
+  unless the branch or the word is missing. The setup report then names them.
 - Which divisions: from the same JSON, one line per existing division (`<label> (<key>) — <desc> · <model label>
   · <status_text>`) and one line naming the kinds that can be added; no question.
 - First setup: step 1 below and `orche hr choices --json`; ask `ask.setup`; a divisions value

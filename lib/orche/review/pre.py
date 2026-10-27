@@ -472,7 +472,7 @@ def pane_round(reg, member, worktree, project, b, report_text, summary, publishe
             log.log("hooks", f"pre-review: {b.unit}: history line not written: {exc}")
 
     ctx = Ctx(cfg=cfg, project=project, unit=b.unit, rev=rev, unit_dir=b.folder, worktree=Path(worktree),
-              base=publish.base(root, cfg, worktree), writer=to, writer_model=vendors.of(reg, member), fields=dict(b.fields),
+              base=publish.base(root, cfg, worktree, project), writer=to, writer_model=vendors.of(reg, member), fields=dict(b.fields),
               tag=procs.run_id(f"{b.unit}-review", time.time_ns()), deadline=time.monotonic() + PANE_BUDGET_S,
               record=record)
     pr = published.record()

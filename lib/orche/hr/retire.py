@@ -72,7 +72,7 @@ def _landed(wt, branch, proj, project) -> bool:
     """The worker's branch head is already in origin/<base> (fetched first; a failed fetch uses what is
     there), or the merge queue logged it `merged` (a squash merge leaves no ancestor: id `pr<N>-<head7>`)."""
     from .. import publish, queue   # here, not at the top: hr stays free of the git/gh publish layer at import
-    base = publish.base(proj["path"], worktree=wt)
+    base = publish.base(proj["path"], worktree=wt, project=project)
     if not base or not branch:
         return False
     shell.git(wt, "fetch", "origin", base, timeout=publish.FETCH_TIMEOUT)

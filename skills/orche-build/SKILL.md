@@ -105,7 +105,7 @@ The headless head review and you use the same eight lines; RETURN on any failure
 - Only Build or an independent verifier writes accepted verdicts; feature agents may self-report.
   The `verifier` column never names the session that wrote the code.
 - Each release-ladder step (dev → staging → canary → prod) needs a row for the deployed SHA.
-- After a green merge the queue writes (PR, head) and (none, merge commit) rows with verifier
+- After a green merge the queue writes (PR, head) and (none, squash commit) rows with verifier
   queue; review verdicts live in ledger/<proj>.review.tsv (kinds pre and build), never in the verification ledger.
 
 ## Review in a fresh session

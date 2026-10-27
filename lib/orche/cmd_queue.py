@@ -86,7 +86,7 @@ def cmd_add(args, words):
         if not _caller(reg, project):
             raise queue.Refused(cli.EXIT_BLOCKED, "only Build or Main may queue")
         root = units.project_root(reg, project)
-        base = publish.base(root, cfg)
+        base = publish.base(root, cfg, project=project)
         if not base:
             raise queue.Refused(cli.EXIT_BLOCKED, publish.no_base(root))
         try:
@@ -121,7 +121,7 @@ def cmd_add(args, words):
         if not head:
             raise queue.Refused(cli.EXIT_NOT_FOUND, f"{unit}: cannot read HEAD of {where}")
         root = units.project_root(reg, project)
-        base = publish.base(root, cfg, where)
+        base = publish.base(root, cfg, where, project)
         if not base:
             raise queue.Refused(cli.EXIT_BLOCKED, publish.no_base(root or where))
         prs = [p for p in github.pr_for_branch(where, branch) if p.get("baseRefName") == base]

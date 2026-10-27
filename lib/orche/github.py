@@ -1,12 +1,13 @@
 """Every GitHub step ORCHE takes (design §3.2, §5.3, §5.5): `gh` run in a checkout (gh finds the repository
 from it) and the remote git steps of a PR (push its branch, fetch its head). One runner on shell.run, one
-timeout (TIMEOUT; NET_S for a push or fetch) and one error, GhError. Tests put a fake `gh` on PATH and use a
-bare repository as origin (tests/support.fake_gh).
+timeout (TIMEOUT; NET_S for a fetch; PUSH_S for a push: a repository's pre-push hook may run its whole
+verification) and one error, GhError. Tests put a fake `gh` on PATH and use a bare repository as origin
+(tests/support.fake_gh).
 
   pr_for_branch(where, branch)   the open PRs whose head is `branch` (publish, orche queue add)
   view(where, pr)                one PR (the queue, the head review)
   create / ready                 open a ready PR (publish)
-  merge(where, pr, head, method) GitHub's merge pinned to the tested head (the integrator)
+  merge(where, pr, head)         GitHub's squash merge pinned to the tested head (the integrator)
   push(where, branch)            the unit's branch, never forced (publish)
   fetch_pr_head(where, pr, head) the PR's head commit into a clone (orche queue add --pr, the head review)
 """
@@ -19,6 +20,7 @@ from . import shell
 
 TIMEOUT = 60
 NET_S = 120
+PUSH_S = 1800
 PR_FIELDS = "number,url,state,baseRefName,headRefName,headRefOid,isDraft,title,reviewDecision"
 AUTH = re.compile(r"gh auth login|not logged in|authentication|auth token|HTTP 401", re.IGNORECASE)
 PERMISSION = re.compile(r"permission|denied|HTTP 403|protected branch|GH006", re.IGNORECASE)
@@ -89,12 +91,11 @@ def ready(where, pr) -> None:
     run(where, "pr", "ready", str(pr))
 
 
-def merge(where, pr, head, method="merge") -> tuple:
-    """`gh pr merge N --merge|--squash --match-head-commit <head>`: (True, "") or (False, the first line
-    GitHub answered). `--rebase` is never offered (design §5.5)."""
-    flag = "--squash" if method == "squash" else "--merge"
+def merge(where, pr, head) -> tuple:
+    """`gh pr merge N --squash --match-head-commit <head>`: (True, "") or (False, the first line GitHub
+    answered). Always a squash (design §5.5)."""
     try:
-        run(where, "pr", "merge", str(pr), flag, "--match-head-commit", str(head))
+        run(where, "pr", "merge", str(pr), "--squash", "--match-head-commit", str(head))
     except GhError as exc:
         return False, str(exc).removeprefix("gh: ")
     return True, ""
@@ -102,7 +103,7 @@ def merge(where, pr, head, method="merge") -> tuple:
 
 def push(where, branch):
     """`git push -u origin HEAD:refs/heads/<branch>`, never forced: its shell.Result (publish reads the refusal)."""
-    return shell.git(where, "push", "-u", "origin", f"HEAD:refs/heads/{branch}", timeout=NET_S)
+    return shell.git(where, "push", "-u", "origin", f"HEAD:refs/heads/{branch}", timeout=PUSH_S)
 
 
 def fetch_pr_head(where, pr, head, base="") -> None:

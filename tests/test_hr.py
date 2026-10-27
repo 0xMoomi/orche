@@ -69,11 +69,15 @@ class HrCase(support.TempHomeCase):
         self.feature_branch = True
         self.nest = False
         self.worktree_list = []
+        self.orca_branch = None    # a branch Orca names itself (`someone/feat-x`): a real git worktree on it
+        self.git_calls = []
         shell.RUNNER = self.fake_runner
         self.addCleanup(setattr, shell, "RUNNER", REAL_RUNNER)
 
     def fake_runner(self, argv, *, timeout, input, env=None):
         if argv[0] != "orca":
+            if argv[0] == "git":
+                self.git_calls.append(argv)
             return REAL_RUNNER(argv, timeout=timeout, input=input)
         self.calls.append(argv)
         key = " ".join(argv[1:3])
@@ -92,9 +96,13 @@ class HrCase(support.TempHomeCase):
         elif key == "worktree create":
             name = argv[argv.index("--name") + 1]
             path = (self.repo / ".worktrees" if self.nest else self.wtroot) / name
+            if self.orca_branch and name.startswith("feat-"):
+                git("worktree", "add", "-q", "-b", self.orca_branch + name[5:], str(path), cwd=self.repo)
             path.mkdir(parents=True, exist_ok=True)
             result = {"worktree": {"id": f"repo-acme::{path}", "path": str(path)}}
-            if name.startswith("feat-") and self.feature_branch:
+            if self.orca_branch and name.startswith("feat-"):
+                result["worktree"]["branch"] = "refs/heads/" + self.orca_branch + name[5:]
+            elif name.startswith("feat-") and self.feature_branch:
                 result["worktree"]["branch"] = "refs/heads/feat/" + name[5:]
         return shell.Result(0, json.dumps({"ok": True, "result": result}), "", argv)
 
@@ -456,25 +464,62 @@ class InitTest(HrCase):
         self.assertEqual(onboarding.exclude_settings(linked), (first, False))
         self.assertEqual(os.path.realpath(first), os.path.realpath(main / ".git" / "info" / "exclude"))
         self.assertEqual(first.read_text().splitlines().count(".claude/settings.local.json"), 1)
-        self.assertEqual(first.read_text().splitlines().count(".orche/units/"), 1)
+        self.assertEqual(first.read_text().splitlines().count(".orche/"), 1)
         onboarding.write_settings(linked, "div-x-build")
         status = subprocess.run(["git", "status", "--porcelain", "--untracked-files=all"], cwd=linked,
                                 capture_output=True, text=True).stdout
         self.assertEqual(status, "")
         self.assertEqual(onboarding.exclude_settings(self.home / "not-git"), (None, False))
 
-    def test_init_excludes_units_dir_in_main_checkout(self):
+    def test_init_excludes_every_orche_file_in_main_checkout(self):
         git_repo(self.repo)
         code, _, err = self.orche("init", "Acme Shop")
         self.assertEqual(code, 0, err)
-        exclude = (self.repo / ".git" / "info" / "exclude").read_text().splitlines()
-        self.assertEqual(exclude.count(".orche/units/"), 1)
+        exclude_file = self.repo / ".git" / "info" / "exclude"
+        exclude = exclude_file.read_text().splitlines()
+        copied = [p.as_posix() for p in templates.project_files() if p.parts[0] != ".orche"]
+        self.assertIn("PROJECT_CARD.md", copied)
+        self.assertIn("docs/LEDGER.tsv", copied)
+        for line in (".orche/", ".claude/settings.local.json", *copied):
+            self.assertEqual(exclude.count(line), 1, line)
+        self.assertNotIn(".orche/units/", exclude)
         brief = self.repo / ".orche" / "units" / "acme-shop-x-20261016-1" / "BRIEF.md"
         brief.parent.mkdir(parents=True)
         brief.write_text("rev: 1\n")
-        status = subprocess.run(["git", "status", "--porcelain", "--untracked-files=all", "--", ".orche/units"],
+        status = subprocess.run(["git", "status", "--porcelain", "--untracked-files=all"],
                                 cwd=self.repo, capture_output=True, text=True).stdout
-        self.assertEqual(status, "")
+        self.assertEqual(status, "")   # the templates, .orche/ and SETUP.md: nothing ORCHE wrote shows
+        before = exclude_file.read_text()
+        self.assertEqual(self.orche("init", "acme-shop", "--refresh")[0], 0)
+        self.assertEqual(exclude_file.read_text(), before)   # idempotent: a second run adds nothing
+
+    def test_refresh_reapplies_the_exclude(self):
+        git_repo(self.repo)
+        self.assertEqual(self.orche("init", "Acme Shop")[0], 0)
+        exclude_file = self.repo / ".git" / "info" / "exclude"
+        exclude_file.write_text("")
+        self.assertEqual(self.orche("init", "acme-shop", "--refresh")[0], 0)
+        self.assertIn(".orche/", exclude_file.read_text().splitlines())
+
+    def test_base_and_branch_prefix_flags(self):
+        git_repo(self.repo)
+        self.assertEqual(self.orche("init", "Acme Shop")[0], 0)
+        report = self.repo / ".orche" / "SETUP.md"
+        self.assertNotIn("Pull requests", report.read_text())    # nothing set: no line
+        code, out, err = self.orche("--json", "init", "acme-shop", "--refresh", "--base", "develop",
+                                    "--branch-prefix", "dev")
+        self.assertEqual(code, 0, err)
+        self.assertEqual(json.loads(out)["publish"], {"base": "develop", "branch_prefix": "dev"})
+        cfg = json.loads((self.home / "config.json").read_text())
+        self.assertEqual(cfg["publish"]["per_project"]["acme-shop"], {"base": "develop", "branch_prefix": "dev"})
+        self.assertIn("- Pull requests: base develop, branches dev/<name>.\n", report.read_text())
+        for flag, value in (("--branch-prefix", "Dev"), ("--branch-prefix", "dev/x"), ("--base", "origin/develop"),
+                            ("--base", "a..b")):
+            code, out, err = self.orche("init", "acme-shop", "--refresh", flag, value)
+            self.assertEqual((code, out), (2, ""), value)
+            self.assertEqual(len(err.splitlines()), 1, err)
+        self.assertEqual(json.loads((self.home / "config.json").read_text())["publish"]["per_project"]["acme-shop"],
+                         {"base": "develop", "branch_prefix": "dev"})
 
     def test_parse_worktree_shapes(self):
         self.assertEqual(onboarding.parse_worktree({"worktree": {"path": "/w/x", "branch": "refs/heads/feat/x"}},
@@ -737,6 +782,64 @@ class FeatNewTest(FeatCase):
         self.assertEqual(self.orche("feat", "new", "acme", "pay", "--scope", "src/pay/**", "--reason", "r")[0], 0)
         self.assertEqual(registry.load()["projects"]["acme-shop"]["divisions"]["build"]["features"][-1]["branch"],
                          "feat/pay")
+
+    def test_issue_key_base_and_prefix_reach_the_worktree(self):
+        cfg = json.loads((self.home / "config.json").read_text())
+        cfg["publish"] = {"per_project": {"acme-shop": {"base": "develop", "branch_prefix": "dev"}}}
+        (self.home / "config.json").write_text(json.dumps(cfg))
+        self.feature_branch = False          # Orca reports no branch: the fallback names it
+        code, out, err = self.orche("feat", "new", "acme", "des-47-passkey-copy", "--scope", "src/**", "--reason", "r")
+        self.assertEqual(code, 0, err)
+        create = self.orca_calls("worktree create")[-1]
+        self.assertEqual(create[create.index("--name"):], ["--name", "feat-des-47-passkey-copy", "--parent-worktree",
+                                                         "id:repo-acme::/srv/orca/acme-shop-build", "--base-branch",
+                                                         "origin/develop", "--linear-issue", "DES-47", "--json"])
+        feats = registry.load()["projects"]["acme-shop"]["divisions"]["build"]["features"]
+        self.assertEqual(feats[-1]["branch"], "dev/des-47-passkey-copy")
+        code, _, err = self.orche("feat", "new", "acme", "12-fix-login", "--scope", "src/**", "--reason", "r")
+        self.assertEqual(code, 0, err)
+        create = self.orca_calls("worktree create")[-1]
+        self.assertEqual(create[create.index("--base-branch"):], ["--base-branch", "origin/develop", "--issue", "12",
+                                                                "--json"])
+
+    def test_a_configured_prefix_renames_the_branch_orca_named(self):
+        git_repo(self.repo)
+        self.orca_branch = "someone/feat-"     # Orca's own prefix setting (a git username) and its --name
+        args = ("--scope", "src/**", "--reason", "r")
+        self.assertEqual(self.orche("feat", "new", "acme", "des-48-y", *args)[0], 0)
+        self.assertEqual(registry.load()["projects"]["acme-shop"]["divisions"]["build"]["features"][-1]["branch"],
+                         "someone/feat-des-48-y")       # no prefix configured: Orca's name stands, no rename
+        self.assertFalse([c for c in self.git_calls if "branch" in c and "-m" in c])
+        cfg = json.loads((self.home / "config.json").read_text())
+        cfg["publish"] = {"per_project": {"acme-shop": {"branch_prefix": "dev"}}}
+        (self.home / "config.json").write_text(json.dumps(cfg))
+        self.assertEqual(self.orche("feat", "new", "acme", "des-47-x", *args)[0], 0)
+        wt = self.wtroot / "feat-des-47-x"
+        self.assertEqual(registry.load()["projects"]["acme-shop"]["divisions"]["build"]["features"][-1]["branch"],
+                         "dev/des-47-x")
+        head = subprocess.run(["git", "-C", str(wt), "rev-parse", "--abbrev-ref", "HEAD"], capture_output=True,
+                              text=True).stdout.strip()
+        self.assertEqual(head, "dev/des-47-x")
+        self.assertIn(["git", "-C", str(wt), "branch", "-m", "someone/feat-des-47-x", "dev/des-47-x"], self.git_calls)
+
+    def test_a_failed_rename_keeps_orcas_branch(self):
+        _, _, branch = onboarding.create_worktree("repo-acme", "feat-z", "dev/z", rename_to="dev/z")
+        self.assertEqual(branch, "feat/z")   # the fake's plain folder is no git checkout: the rename fails
+        self.assertIn("branch rename failed: ", (self.home / "logs" / "hr.log").read_text())
+        self.git_calls.clear()
+        self.feature_branch = False
+        _, _, branch = onboarding.create_worktree("repo-acme", "feat-y", "dev/y", rename_to="dev/y")
+        self.assertEqual((branch, self.git_calls), ("dev/y", []))   # Orca reported none: the fallback, no git call
+
+    def test_division_branch_keeps_div_prefix(self):
+        cfg = json.loads((self.home / "config.json").read_text())
+        cfg["publish"] = {"branch_prefix": "dev"}
+        (self.home / "config.json").write_text(json.dumps(cfg))
+        _, wt_path, branch = onboarding.create_worktree("repo-acme", "div-design", "div/design")
+        self.assertEqual(branch, "div/design")
+        create = self.orca_calls("worktree create")[-1]
+        self.assertEqual(create, ["orca", "worktree", "create", "--repo", "id:repo-acme", "--name", "div-design",
+                                  "--no-parent", "--json"])
 
     def add_project_acme(self, features=()):
         """A second project keyed `acme` (acme-shop loses its `Acme` alias): `feat-acme-shop-x` is

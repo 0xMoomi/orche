@@ -59,10 +59,10 @@ def _publish(reg, member, cwd, key, unit, b, report, summary, proof):
     """A gated pane member's verified done: push its branch and ensure the PR. Published or Gap."""
     text = _report_text(report, summary)
     row = proof.row or {}
-    body = publish.body_of(text, unit=unit, rev=b.rev if b else 1, session=member.session,
-                           verdict=row.get("verdict"), verifier=row.get("verifier"))
-    title = publish.title_of(b.fields.get("GOAL") if b is not None else unit)
     root = (reg.get("projects", {}).get(key) or {}).get("path") or cwd
+    title, body = publish.pr_text(member, root, goal=b.fields.get("GOAL") if b is not None else unit, report=text,
+                                  unit=unit, rev=b.rev if b else 1, verdict=row.get("verdict"),
+                                  verifier=row.get("verifier"))
     return publish.publish(member, donegate._root(member, cwd), root, unit=unit, title=title, body=body)
 
 

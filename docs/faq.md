@@ -85,12 +85,12 @@ to turn Jev on (it runs `orche jev enable`). Calls time out after 1 s and fail o
 
 ## What does `orche init` leave in my repo, and what should I commit?
 
-Commit: `.orche/STANDING.md`, `.orche/project`, `PROJECT_CARD.md`, `docs/RUBRIC.md`,
-`docs/GRAVEYARD.md`, `docs/LEDGER.tsv` (an export of the canonical ledger under
-`~/.claude/orche/ledger/`), `.env.example` (names only) and `.claude/agents/<session>.md`.
-Never commit `.claude/settings.local.json`; ORCHE adds it to the repository's `info/exclude`.
-Briefs and reports under `.orche/units/` are excluded automatically the same way (`orche init`
-adds the line), so they never keep the main checkout dirty.
+Nothing: `orche init` (and `orche init --refresh`) adds every ORCHE file to the repository's
+`.git/info/exclude`: `.orche/` (STANDING.md, the project marker, briefs and reports, the setup
+report), `.claude/settings.local.json`, the units' personas (`.claude/agents/div-*.md`,
+`.claude/agents/feat-*.md`) and the template files `PROJECT_CARD.md`, `docs/RUBRIC.md`,
+`docs/GRAVEYARD.md`, `docs/LEDGER.tsv` and `.env.example`. They never keep the main checkout dirty.
+A file your project already committed stays tracked (git applies exclude to untracked files only).
 Unit memory in each worktree (`.orche/div/<name>/`, `.orche/feat/<name>/`) is the unit's choice;
 it is archived when the unit retires. Existing files are never overwritten.
 

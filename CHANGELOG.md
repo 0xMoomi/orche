@@ -3,6 +3,21 @@
 All notable changes to ORCHE are listed here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow semantic versioning.
 
+## 0.13.0 — 2026-10-27
+
+### Added
+
+- A project can name its own pull request base and branch prefix: `orche init --refresh <project> --base develop --branch-prefix dev` writes `publish.per_project.<project>`, worktrees then start from `origin/develop`, a feature worker's branch is renamed from the one Orca names to `dev/<name>` right after creation, and the setup report names both. Without a prefix the branch Orca names stands, as before.
+- The issue key travels from the worker's name: a worker named `des-47-<topic>` gets the branch `<prefix>/des-47-<topic>` (with a configured prefix), a worktree linked to the issue (Orca `--linear-issue DES-47`, or `--issue 123` for `123-<topic>`), a PR title ending with `(DES-47)` and a body starting with `Fixes DES-47`. The tracker's own GitHub automation moves the issue; ORCHE never calls the tracker.
+- `orche init` and `orche init --refresh` exclude every ORCHE file from git: `.orche/`, `.claude/settings.local.json`, the units' personas and the template files copied outside `.orche/`. Files a project already committed stay tracked.
+
+### Changed
+
+- The merge queue always squashes (`gh pr merge --squash`); the merge commit path is gone.
+- A push waits up to 30 minutes, so a repository's pre-push hook can run its whole verification.
+- The PR footer claims the merge queue only where the queue applies (the project's gate is committed); otherwise it names the unit and the ledger verdict only.
+- `review.cross_vendor` defaults to off: the Codex cross-check runs only when the config asks for it (`optional` or `required`).
+
 ## 0.12.1 — 2026-10-27
 
 ### Changed

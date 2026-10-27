@@ -71,14 +71,17 @@ DEFAULTS = {
     # depth and fanout (G6).
     "flow": {"enabled": True, "quiet_hours": "23:00-08:00", "max_unit_cost_usd": 10, "max_project_cost_usd": 30,
              "revisions": 3, "briefs_per_hour": 20, "runs_per_unit": 4, "depth": 3, "fanout": 5},
-    # publish.base: the branch PRs target and the queue lands on; null = origin/HEAD (neither: an OWNER step).
-    "publish": {"base": None},
+    # publish: base = the PR base branch the queue lands on (null: origin/HEAD; neither: an OWNER step);
+    # branch_prefix = the first path segment of a feature worker's branch (null: `feat`); per_project
+    # overrides land by project name, like the queue's (`orche init --base/--branch-prefix` writes them).
+    "publish": {"base": None, "branch_prefix": None, "per_project": {}},
     # The merge queue (lib/orche/queue): per_project overrides land by project name. lost_after_s:
     # a testing entry whose integrator's pid still lives while the lock is free counts as lost after this
     # (a dead pid at once).
     "queue": {"land": "auto", "timeout_s": 1200, "max_restarts": 2, "lost_after_s": 3600, "per_project": {}},
-    # The review table: a cross-vendor reviewer from `order`, at most `rounds`.
-    "review": {"cross_vendor": "required", "order": ["codex", "claude-opus-5-5", "claude-sonnet-5-5"],
+    # The review table: a cross-vendor reviewer from `order`, at most `rounds`; cross_vendor off (the
+    # default), optional or required (the Codex cross-check runs only when asked).
+    "review": {"cross_vendor": "off", "order": ["codex", "claude-opus-5-5", "claude-sonnet-5-5"],
                "rounds": 2, "build": True, "pane_lines": 400},
     # The tier ladder: a run's model and effort by TIER and vendor ("division": the unit's own model).
     "ladder": {"escalate": True,
@@ -194,3 +197,23 @@ def load() -> dict:
 
 def save(cfg: dict) -> None:
     util.write_json(path(), cfg)
+
+
+def for_project(cfg, section, project) -> dict:
+    """The merged `cfg[section]` with `cfg[section]["per_project"][project]` laid over it (missing pieces: empty)."""
+    sec = cfg.get(section) or {}
+    return {**sec, **((sec.get("per_project") or {}).get(project) or {})}
+
+
+def set_project(section, project, **values) -> None:
+    """Write `section.per_project.<project>.<key>` in ORCHE_HOME/config.json for each value (None deletes
+    the key); only the file's own keys are saved, never the defaults."""
+    data = util.read_json(path(), default={})
+    data = data if isinstance(data, dict) else {}
+    mine = data.setdefault(section, {}).setdefault("per_project", {}).setdefault(project, {})
+    for key, value in values.items():
+        if value is None:
+            mine.pop(key, None)
+        else:
+            mine[key] = value
+    save(data)

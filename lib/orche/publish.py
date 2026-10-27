@@ -8,16 +8,21 @@ forced and never targets another ref; the PR is ready, never a draft, and never 
 `sync` merges `origin/<base>` into a feature's clean, behind branch at a run's start; `guard_base`
 resets a new feature branch that Orca forked from somewhere other than `origin/<base>`.
 
-The base is config `publish.base`, else origin/HEAD of the project's checkout; neither → a Gap with
+The base is config `publish.per_project.<project>.base`, else `publish.base`, else origin/HEAD of the project's checkout; neither → a Gap with
 the OWNER step (`git remote set-head origin -a`), never a guess (R12); the queue and the Build review
 read the same `base` and refuse with `no_base`. A Build HEAD that changes nothing against the fetched
 origin/<base> (coordination) publishes nothing: Unchanged, and the done is filed with `pr: none` (R5);
-a feature's is a Gap. Otherwise ORCHE publishes only the unit's own recorded branch: a feature's `feat/*`,
-Build's `div/build` (or the branch the registry records); a worktree on any other branch is a Gap.
+a feature's is a Gap. Otherwise ORCHE publishes only the unit's own recorded branch: the worker's recorded
+branch, Build's `div/build` (or the branch the registry records); a worktree on any other branch is a Gap.
 
 Every gh call and the push go through github (tests replace PATH's `gh` and use a bare repo as origin).
 `publish` returns a Published, an Unchanged or a Gap (its text and, when only the owner can fix it,
 an OWNER step).
+
+The worker's name carries the issue key (`issue_of`: `des-47-…` -> DES-47, `123-…` -> #123): the PR title
+ends with ` (KEY)` and its body starts with `Fixes KEY`; the tracker's own GitHub automation moves the
+issue (ORCHE never calls the tracker). The footer claims the merge queue only when the project's gate
+applies (`gate`).
 """
 import re
 from dataclasses import dataclass
@@ -27,9 +32,11 @@ from . import github, mask, shell
 FETCH_TIMEOUT = 60
 TITLE_MAX = 72
 BODY_MAX = 4000
-FOOTER = ("ORCHE unit `{unit}` rev {rev} · writer `{session}` · ledger {verdict} by {verifier}\n"
-          "Lands through the ORCHE merge queue after a cross-vendor pre-review and a head review; please do not "
-          "merge by hand.")
+FOOTER = "ORCHE unit `{unit}` rev {rev} · writer `{session}` · ledger {verdict} by {verifier}"
+FOOTER_QUEUE = ("Lands through the ORCHE merge queue after a cross-vendor pre-review and a head review; please do not "
+                "merge by hand.")
+DEFAULT_PREFIX = "feat"
+_ISSUE = re.compile(r"([a-z]+)-(\d+)(?:-|$)|(\d+)-", re.IGNORECASE)
 REJECTED = ("push rejected: origin/{branch} has commits this worktree lacks (someone pushed to it); merge them, "
             "then report again")
 SYNC_NOTE = "## Branch sync: {files} conflict with origin/{base}; merge it yourself first"
@@ -71,14 +78,17 @@ def _first(res) -> str:
     return mask.redact(text.splitlines()[0] if text else f"exit {res.code}")[0]
 
 
-def base(root, cfg=None, worktree=None) -> str | None:
-    """The project's base branch: config `publish.base`, else origin/HEAD in the main checkout (then in
-    `worktree`, the unit's: a git worktree shares it) — `origin/main` -> `main`; None when nothing names
-    one (R12: never a guess)."""
-    if cfg is None:
-        from . import config
-        cfg = config.load()
-    configured = str(((cfg or {}).get("publish") or {}).get("base") or "").strip()
+def settings(cfg, project) -> dict:
+    """config `publish` with `publish.per_project.<project>` laid over it (cfg None: config.load())."""
+    from . import config
+    return config.for_project(config.load() if cfg is None else cfg, "publish", project)
+
+
+def base(root, cfg=None, worktree=None, project=None) -> str | None:
+    """The project's base branch: config `publish.per_project.<project>.base`, else `publish.base`, else
+    origin/HEAD in the main checkout (then in `worktree`, the unit's: a git worktree shares it):
+    `origin/main` -> `main`; None when nothing names one (R12: never a guess)."""
+    configured = str(settings(cfg, project).get("base") or "").strip()
     if configured:
         return configured
     for where in dict.fromkeys(str(w) for w in (root, worktree) if w):
@@ -96,8 +106,22 @@ def base_ref(where, name) -> str:
     return ref if shell.git(where, "rev-parse", "--verify", "-q", f"{ref}^{{commit}}").ok else name
 
 
+def prefix(cfg, project) -> str:
+    """The first path segment of a feature worker's branch: `publish.branch_prefix`, default `feat`."""
+    return str(settings(cfg, project).get("branch_prefix") or "").strip() or DEFAULT_PREFIX
+
+
+def issue_of(name) -> str:
+    """The issue key a worker's name starts with: `des-47-x` or `des-47` -> `DES-47`, `123-x` -> `#123`,
+    else "" (only the first token counts)."""
+    m = _ISSUE.match(str(name or ""))
+    if not m:
+        return ""
+    return f"{m.group(1).upper()}-{m.group(2)}" if m.group(1) else f"#{m.group(3)}"
+
+
 def own_branch(member) -> str:
-    """The branch a gated member publishes from: a feature's recorded `feat/*`, Build's recorded branch
+    """The branch a gated member publishes from: a feature's recorded branch, Build's recorded branch
     or `div/build`; "" when none is known."""
     if member is None:
         return ""
@@ -120,9 +144,9 @@ def branch(member, worktree):
     return recorded, None
 
 
-def gate(root, cfg=None):
+def gate(root, cfg=None, project=None):
     """(base or None, whether `scripts/verify/ci.sh` is committed on origin/<base>): the merge queue's gate."""
-    name = base(root, cfg)
+    name = base(root, cfg, project=project)
     ok = bool(name) and shell.git(root, "cat-file", "-e", f"origin/{name}:scripts/verify/ci.sh", timeout=10).ok
     return name, ok
 
@@ -140,17 +164,33 @@ def changes(worktree, base_name) -> bool:
     return shell.git(worktree, "diff", "--quiet", f"{base_ref(worktree, base_name)}...HEAD").code != 0
 
 
-def title_of(goal) -> str:
+def title_of(goal, issue="") -> str:
+    """The GOAL's first line, masked, within TITLE_MAX; with an issue key it ends with ` (KEY)` (the GOAL
+    part is cut, never the key)."""
     line = next((ln.strip() for ln in str(goal or "").splitlines() if ln.strip()), "ORCHE unit")
     line = mask.redact(line)[0]
-    return line if len(line) <= TITLE_MAX else line[:TITLE_MAX - 1] + "…"
+    tail = f" ({issue})" if issue else ""
+    room = TITLE_MAX - len(tail)
+    return (line if len(line) <= room else line[:room - 1] + "…") + tail
 
 
-def body_of(report, *, unit, rev, session, verdict, verifier) -> str:
-    """Appendix A.12: the unit's REPORT.md, masked and capped, then ORCHE's footer."""
+def body_of(report, *, unit, rev, session, verdict, verifier, issue="", queued=False) -> str:
+    """Appendix A.12: `Fixes KEY` first when the worker's name carries an issue key, then the unit's
+    REPORT.md, masked and capped, then ORCHE's footer (its queue sentence only when the gate applies)."""
     text = mask.redact(str(report or "").strip())[0][:BODY_MAX]
-    return f"{text}\n\n---\n" + FOOTER.format(unit=unit, rev=rev, session=session, verdict=verdict or "-",
-                                             verifier=verifier or "-")
+    footer = FOOTER.format(unit=unit, rev=rev, session=session, verdict=verdict or "-", verifier=verifier or "-")
+    return ((f"Fixes {issue}\n\n" if issue else "") + f"{text}\n\n---\n" + footer
+            + (f"\n{FOOTER_QUEUE}" if queued else ""))
+
+
+def pr_text(member, root, *, goal, report, unit, rev, verdict, verifier, cfg=None) -> tuple:
+    """(title, body) of a gated member's PR: the issue key from the worker's name, the footer's queue
+    sentence when the project's gate applies (one `gate` call)."""
+    project = member.project if member is not None else None
+    key = issue_of(member.name) if member is not None and member.kind == "feat" else ""
+    queued = gate(root, cfg, project)[1]
+    return title_of(goal, key), body_of(report, unit=unit, rev=rev, session=member.session if member else "-",
+                                        verdict=verdict, verifier=verifier, issue=key, queued=queued)
 
 
 def _gh_gap(exc, what, unit) -> Gap:
@@ -214,7 +254,7 @@ def _ensure_pr(wt, name, base_name, head, title, body, unit):
 def publish(member, worktree, root, *, unit, title, body, cfg=None):
     """Push the unit's own branch (never forced) and ensure its ready PR to the base: Published, Unchanged
     (nothing against the base) or Gap."""
-    base_name = base(root, cfg, worktree)
+    base_name = base(root, cfg, worktree, member.project if member is not None else None)
     if not base_name:
         if not shell.git(worktree, "remote", "get-url", "origin").ok:
             return Gap("push failed: no remote origin", "add the repository's origin remote "

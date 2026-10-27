@@ -226,7 +226,7 @@ def gate_rows(reg, cfg) -> list:
     for key, root in _roots(reg):
         if not (root / ".git").exists():
             continue
-        base, ok = publish.gate(root, cfg)
+        base, ok = publish.gate(root, cfg, key)
         rows.append(("WARN", "queue gate", f"{key}: {publish.no_base(root)}") if not base else
                     ("OK", "queue gate", f"{key}: scripts/verify/ci.sh on origin/{base}") if ok else
                     ("WARN", "queue gate", f"{key}: no scripts/verify/ci.sh on origin/{base} — queue add refuses units "

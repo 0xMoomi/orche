@@ -139,8 +139,8 @@ class LandTest(IntegratorCase):
         res = integrator.loop("acme")
         self.assertEqual(res["event"], "idle", self.queue_log())
         m = self.merges()
-        self.assertEqual([x["argv"] for x in m], [["pr", "merge", "1", "--merge", "--match-head-commit", h1],
-                                                  ["pr", "merge", "2", "--merge", "--match-head-commit", h2]])
+        self.assertEqual([x["argv"] for x in m], [["pr", "merge", "1", "--squash", "--match-head-commit", h1],
+                                                  ["pr", "merge", "2", "--squash", "--match-head-commit", h2]])
         self.assertEqual({x["cwd"] for x in m}, {str(self.clone.resolve())})     # gh ran in the queue's clone
         m1, m2 = m[0]["merge"], m[1]["merge"]
         self.assertEqual(git(self.clone, "rev-parse", m[1]["clone_head"] + "^1"), m1)   # PR 2 tested on top of PR 1

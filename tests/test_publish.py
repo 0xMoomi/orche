@@ -9,7 +9,7 @@ from unittest import mock
 import support
 from support import TempHomeCase
 
-from orche import publish
+from orche import config, github, publish, shell
 from orche.roster import Member
 
 GIT_ENV = {"GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@example.com", "GIT_COMMITTER_NAME": "t",
@@ -183,6 +183,82 @@ class PublishTest(PublishCase):
                                verifier="v")
         self.assertTrue(body.startswith("x" * publish.BODY_MAX + "\n\n---\nORCHE unit `u` rev 2 · writer `s`"))
         self.assertLessEqual(len(publish.title_of("y" * 100)), publish.TITLE_MAX)
+
+
+class TeamFitTest(PublishCase):
+    """c72: per-project base and prefix, the issue key from the worker's name, squash merges, patient push."""
+
+    def test_issue_of(self):
+        for name, key in (("des-47-passkey-copy", "DES-47"), ("DES-47", "DES-47"), ("123-fix-login", "#123"),
+                          ("x", ""), ("des-x", ""), ("47", ""), ("payments", ""), ("ab-12x-y", ""), ("", "")):
+            self.assertEqual(publish.issue_of(name), key, name)
+
+    def test_title_and_body_with_and_without_a_key(self):
+        self.assertEqual(publish.title_of("Copy the passkey"), "Copy the passkey")
+        self.assertEqual(publish.title_of("Copy the passkey", "DES-47"), "Copy the passkey (DES-47)")
+        long = publish.title_of("y" * 100, "DES-47")
+        self.assertEqual(len(long), publish.TITLE_MAX)
+        self.assertTrue(long.endswith("… (DES-47)"))
+        kw = dict(unit="u", rev=1, session="s", verdict="v", verifier="w")
+        plain = publish.body_of("report", **kw)
+        self.assertEqual(plain, "report\n\n---\nORCHE unit `u` rev 1 · writer `s` · ledger v by w")
+        self.assertEqual(publish.body_of("report", issue="#12", **kw), "Fixes #12\n\n" + plain)
+        self.assertEqual(publish.body_of("report", queued=True, **kw), plain + "\n" + publish.FOOTER_QUEUE)
+
+    def test_pr_text_claims_the_queue_only_with_the_gate(self):
+        feat = Member("feat-acme-des-47-x", "acme", "feat", "des-47-x", "build")
+        title, body = publish.pr_text(feat, self.repo, goal="Do x", report="r", unit="u", rev=1, verdict="v",
+                                      verifier="w", cfg=config.load())
+        self.assertEqual(title, "Do x (DES-47)")
+        self.assertTrue(body.startswith("Fixes DES-47\n\nr\n"))
+        self.assertNotIn("merge queue", body)
+        other = self.clone("main")
+        (other / "scripts" / "verify").mkdir(parents=True)
+        self.commit(other, "scripts/verify/ci.sh", "#!/bin/sh\n")
+        self.git(other, "push", "-q", "origin", "main")
+        self.git(self.repo, "fetch", "-q", "origin")
+        _, body = publish.pr_text(BUILD, self.repo, goal="Do x", report="r", unit="u", rev=1, verdict="v",
+                                  verifier="w", cfg=config.load())
+        self.assertTrue(body.endswith(publish.FOOTER_QUEUE))
+        self.assertTrue(body.startswith("r\n"))            # a division's name carries no key
+
+    def test_base_and_prefix_per_project(self):
+        cfg = config._merge(config.DEFAULTS, {"publish": {"per_project": {"acme": {"base": "develop",
+                                                                                     "branch_prefix": "dev"}}}})
+        self.assertEqual(publish.base(self.repo, cfg, project="acme"), "develop")
+        self.assertEqual(publish.base(self.repo, cfg, project="other"), "main")     # origin/HEAD
+        self.assertEqual(publish.base(self.repo, cfg), "main")
+        self.assertEqual(publish.prefix(cfg, "acme"), "dev")
+        self.assertEqual(publish.prefix(cfg, "other"), "feat")
+        self.assertEqual(publish.prefix(config.DEFAULTS, "acme"), "feat")
+
+    def test_config_for_project_and_set_project(self):
+        cfg = config.load()
+        self.assertEqual(config.for_project(cfg, "publish", "acme"),
+                         {"base": None, "branch_prefix": None, "per_project": {}})
+        config.set_project("publish", "acme", base="develop", branch_prefix="dev")
+        cfg = config.load()
+        self.assertEqual(config.for_project(cfg, "publish", "acme")["base"], "develop")
+        self.assertIsNone(config.for_project(cfg, "publish", "other")["base"])
+        self.assertEqual(cfg["queue"]["land"], "auto")          # the other sections keep their defaults
+        config.set_project("publish", "acme", branch_prefix=None)
+        self.assertEqual(config.load()["publish"]["per_project"]["acme"], {"base": "develop"})
+        self.assertEqual(config.for_project(config.load(), "queue", "acme"), config.load()["queue"])
+        self.assertEqual(config.DEFAULTS["review"]["cross_vendor"], "off")
+
+    def test_squash_merge_and_patient_push(self):
+        self.assertEqual(github.PUSH_S, 1800)
+        calls = []
+        real = shell.run
+
+        def spy(argv, **kw):
+            calls.append((argv, kw.get("timeout")))
+            return real(argv, **kw)
+        with mock.patch.object(shell, "run", spy):
+            github.push(self.repo, "div/build")
+            github.merge(self.repo, 7, "abc")
+        self.assertEqual(calls[0][1], github.PUSH_S)
+        self.assertEqual(calls[1][0], ["gh", "pr", "merge", "7", "--squash", "--match-head-commit", "abc"])
 
 
 class SyncTest(PublishCase):

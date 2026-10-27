@@ -40,7 +40,6 @@ NO_WAKE = {"inbox": {"wake": False, "quiet_s": 0}, "review": {"build": False}, "
 # exercise it set inbox.quiet_s and a fake clock), no publish starts a detached Build review (tests that
 # want one set review.build) and no run waits on the machine's real free memory (memory tests set
 # runner.min_free_mb or pass min_free_mb, and mock procs.free_mb)
-NO_REVIEW = {"review": {"cross_vendor": "off"}}      # no_wake's configs: no pre-review (test_prereview turns it on)
 # An empty keychain for child processes (`bin/orche.py run|intake|card` read the stored OAuth token
 # through `security` on macOS); each call is recorded, argv only, in $ORCHE_HOME/security-calls.log.
 NO_SECURITY = ("#!/bin/sh\n"
@@ -87,14 +86,13 @@ def no_claude_dir() -> str:
 
 
 def no_wake(cfg: dict) -> dict:
-    """`cfg` with `inbox.wake` false unless it sets `inbox.wake` itself, the pre-review off unless it
-    sets `review.cross_vendor` itself (test config writers; tests/test_prereview.py turns it on) and no
-    memory guard unless it sets `runner.min_free_mb` itself."""
+    """`cfg` with `inbox.wake` false unless it sets `inbox.wake` itself (the pre-review is off by default;
+    tests/test_prereview.py turns it on) and no memory guard unless it sets `runner.min_free_mb` itself."""
     inbox = cfg.get("inbox") if isinstance(cfg.get("inbox"), dict) else {}
     review = cfg.get("review") if isinstance(cfg.get("review"), dict) else {}
     runner = cfg.get("runner") if isinstance(cfg.get("runner"), dict) else {}
     return {**cfg, "inbox": {**NO_WAKE["inbox"], **inbox},
-            "review": {**NO_WAKE["review"], **NO_REVIEW["review"], **review},
+            "review": {**NO_WAKE["review"], **review},
             "runner": {**NO_WAKE["runner"], **runner}}
 
 

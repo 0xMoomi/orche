@@ -617,9 +617,9 @@ def _publish(reg, job, summary, owner, head, result, cfg=None) -> tuple:
     member = roster.Roster(reg).member(job.to)
     b = brief.find(reg, job.unit, project=job.project)
     row = ledger.row_for_sha(job.project, head) or {}
-    body = publish.body_of(result, unit=job.unit, rev=job.rev, session=job.to,
-                           verdict=row.get("verdict"), verifier=row.get("verifier"))
-    title = publish.title_of(b.fields.get("GOAL") if b is not None else job.unit)
+    title, body = publish.pr_text(member, job.root or job.worktree, goal=b.fields.get("GOAL") if b is not None
+                                  else job.unit, report=result, unit=job.unit, rev=job.rev,
+                                  verdict=row.get("verdict"), verifier=row.get("verifier"), cfg=cfg)
     out = publish.publish(member, job.worktree, job.root or job.worktree, unit=job.unit, title=title, body=body,
                           cfg=cfg)
     if isinstance(out, publish.Unchanged):     # R5: nothing against the base; filed without a PR or a review
@@ -722,7 +722,7 @@ def _pre_review(reg, job, cfg, lock, since, stop, head_before, base_prompt, trie
     writer = [x for x in tries if x.kind != "review"][-1].call
     is_stopped = lambda: runs.stop_requested(job.project, job.unit, since)   # noqa: E731
     ctx = pre.Ctx(cfg=cfg, project=job.project, unit=job.unit, rev=job.rev, unit_dir=job.unit_dir,
-                  worktree=job.worktree, base=publish.base(job.root or job.worktree, cfg, job.worktree), writer=job.to,
+                  worktree=job.worktree, base=publish.base(job.root or job.worktree, cfg, job.worktree, job.project), writer=job.to,
                   writer_model=writer.model, fields=dict(b.fields) if b is not None else {}, tag=writer.tag,
                   stop=stop, should_stop=is_stopped, on_start=lambda pid: runs.update(lock, child_pid=pid, pgid=pid),
                   record=lambda answer, head: tries.append(_review_try(answer, head, cfg)))
@@ -807,7 +807,7 @@ def _run_locked(reg, job, call, cfg, lock, since, stop) -> tuple:
     resume = _resumable(job, head_before) if job.gated else None     # §8.5: on the published, pre-sync HEAD
     if job.kind == "feat" and resume is None:     # R28: start in sync with the base (a resumed stage keeps its
         # published head: the queue merges it onto the current base anyway); head_before is read after the merge
-        job.sync_note = publish.sync(job.worktree, publish.base(job.root or job.worktree, cfg, job.worktree)) or ""
+        job.sync_note = publish.sync(job.worktree, publish.base(job.root or job.worktree, cfg, job.worktree, job.project)) or ""
         head_before = shell.git_head(job.worktree)
     filing.set_aside_report(job.unit_dir)
     recipient = filing.recipient(reg, who(job, call))

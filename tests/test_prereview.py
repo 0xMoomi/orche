@@ -389,7 +389,7 @@ class InRunTest(PreReviewCase):
         self.codex_answers("VERDICT: PASS")
         self.run_unit()
         head = self.rev(self.wt)
-        ctx = pre.Ctx(cfg=config.DEFAULTS, project="acme", unit="u", rev=1,
+        ctx = pre.Ctx(cfg=config.load(), project="acme", unit="u", rev=1,
                       unit_dir=self.root / "u", worktree=self.wt, base="main", writer="div-acme-build",
                       writer_model=OPUS, fields={})
         done = pre.Done("done", "s", None, {"number": 1, "url": "u", "head": head}, "r", head)

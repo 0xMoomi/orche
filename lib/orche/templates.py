@@ -49,14 +49,20 @@ def copy_unit(dest_dir, kind: str, **vars) -> list:
     return _copy_tree(TEMPLATES_ROOT / "unit", dest, UNIT_FILES, vars)
 
 
+def project_files() -> list:
+    """The paths (relative, sorted) `copy_project` copies: `templates/project/**` but `*.tmpl` files."""
+    src = TEMPLATES_ROOT / "project"
+    return sorted(p.relative_to(src) for p in src.rglob("*")
+                  if p.is_file() and p.name != ".DS_Store" and p.suffix != ".tmpl")
+
+
 def copy_project(repo_root, **vars) -> list:
     """Copy `templates/project/**` into `repo_root`, skipping files that already exist.
 
     `*.tmpl` files are not copied: onboarding renders them per worktree.
     """
     src = TEMPLATES_ROOT / "project"
-    rels = sorted(p.relative_to(src) for p in src.rglob("*")
-                  if p.is_file() and p.name != ".DS_Store" and p.suffix != ".tmpl")
+    rels = project_files()
     root = Path(repo_root)
     vars = {"PROJECT": root.name, **vars}
     return _copy_tree(src, root, rels, vars)

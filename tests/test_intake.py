@@ -683,7 +683,7 @@ class InitClosesItsWindowTest(FakeClaudeMixin, test_hr.HrCase):
             self.assertIn(part, text)
         self.assertNotRegex(text, "[\u2013\u2014]")
         exclude = (self.repo / ".git" / "info" / "exclude").read_text().splitlines()
-        self.assertIn(".orche/SETUP.md", exclude)
+        self.assertIn(".orche/", exclude)     # the setup report with every other ORCHE file
         self.assertEqual(json.loads(self.orche("--json", "init", "Acme Shop")[1])["closed_window"], None)  # a re-run
 
     def test_only_orche_panes_on_the_folder_close_nothing(self):

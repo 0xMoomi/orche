@@ -38,7 +38,7 @@ FETCH_S = 120
 MEMORY_POLL_S, MEMORY_WAIT_S = 10, 1800
 PROOF_TRIES, PROOF_RETRY_S = 3, 2
 MAX_FILES = 10
-METHOD = "merge"         # gh pr merge --merge
+METHOD = "squash"        # gh pr merge --squash (github.merge), the `landed` record's method
 MAX_RETURNS = 3         # a unit's returns inside W before its head gets `blocked`
 MAX_STOPS = 3           # passes in a row stopped by git/gh before the queue pauses
 IDENT = ["-c", "user.name=ORCHE queue", "-c", "user.email=queue@orche.invalid", "-c", "commit.gpgsign=false",
@@ -495,7 +495,7 @@ class Pass:
     def land(self, g) -> dict:
         if self.fetch_base() != self.base:
             return self.restart()
-        ok, line = github.merge(self.where, self.pr, self.sha, METHOD)
+        ok, line = github.merge(self.where, self.pr, self.sha)
         if not ok:
             try:
                 after = github.view(self.where, self.pr)
@@ -508,12 +508,11 @@ class Pass:
         queue.set_test(self.project, self.id, landed={"method": METHOD, "at": util.now_iso(), "ctree": self.ctree,
                                                  "verdict": g.get("verdict"), "gate": g.get("gate"),
                                                  "secs": g.get("secs")})
-        return self.prove(METHOD, g)
+        return self.prove(g)
 
-    def prove(self, method, g) -> dict:
-        """§5.5's proof: the commit the merge made (origin/<base>'s first-parent child of the tested base,
-        so commits on top of it never hide it) has parents (base, head), squash (base), and the candidate's
-        tree. A fetch that failed twice proves nothing: the entry stays testing (`test.landed`) and the next
+    def prove(self, g) -> dict:
+        """§5.5's proof: the commit the squash merge made (origin/<base>'s first-parent child of the tested
+        base, so commits on top of it never hide it) has the one parent base and the candidate's tree. A fetch that failed twice proves nothing: the entry stays testing (`test.landed`) and the next
         pass proves it again; a fetch error never closes the queue."""
         m = None
         for i in range(PROOF_TRIES):
@@ -527,7 +526,7 @@ class Pass:
                 time.sleep(PROOF_RETRY_S)
         parents = shell.git(self.where, "rev-list", "--parents", "-n", "1", m).out.split()[1:] if m else []
         tree = _sha(self.where, f"{m}^{{tree}}") if m else None
-        want = [self.base, self.sha] if method == "merge" else [self.base]
+        want = [self.base]
         if parents != want or tree != self.ctree:
             return self.proof_failed(m, parents, tree, want)
         return self.merged(m, g)
@@ -555,7 +554,7 @@ class Pass:
         _unlock(self.where)
         self.base, self.cand, self.ctree = t.get("base"), t.get("candidate"), landed.get("ctree")
         self.logp = Path(t["log"]) if t.get("log") else None
-        return self.prove(landed.get("method") or "merge", {k: landed.get(k) for k in ("verdict", "gate", "secs")})
+        return self.prove({k: landed.get(k) for k in ("verdict", "gate", "secs")})
 
     def merged(self, m, g) -> dict:
         verdict = g.get("verdict") or gate.DEFAULT_VERDICT

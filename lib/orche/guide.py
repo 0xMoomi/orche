@@ -87,7 +87,7 @@ def gate_lines(cfg, reg) -> list:
     missing = []
     for key, root in doctor._roots(reg):
         if (root / ".git").exists():
-            base, ok = publish.gate(root, cfg)
+            base, ok = publish.gate(root, cfg, key)
             if not ok:
                 missing.append((key, base))
     runs = "Build's first unit adds it from templates/verify/ci.sh"

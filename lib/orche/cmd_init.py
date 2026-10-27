@@ -27,6 +27,11 @@ live run, the setup report `.orche/SETUP.md` (`write_report`: what was made and 
 `guide.lines`; in `info/exclude`) -> on a first registration, the setup note to Main (`_setup_note`, at most
 `inbox.MAX_LINES` lines, pointing at the report) and, as the very last action, closing the one pane that ran
 init (`_init_window`; never inside `orche setup` or apply-all).
+`--base <branch>` and `--branch-prefix <prefix>` (with or without `--refresh`) write the project's
+`publish.per_project.<key>.base` / `.branch_prefix` (config.set_project): the branch its PRs target and
+its worktrees start from, and the first segment of a feature worker's branch; the setup report then
+names them. Each run (and `--refresh`) adds every ORCHE file to the repository's `info/exclude`
+(onboarding.exclude_settings).
 A path that is a git repository but not in `orca repo list` is added with `orca repo add` once the
 setup is confirmed, right before the first write (an abort leaves Orca untouched; --dry-run never adds:
 a placeholder repo id `pending` stands in). A linked git worktree is refused. The main checkout's
@@ -34,6 +39,7 @@ a placeholder repo id `pending` stands in). A linked git worktree is refused. Th
 """
 import json
 import os
+import re
 import sys
 import time
 from pathlib import Path
@@ -51,6 +57,8 @@ SETUP_REPORT = "SETUP.md"
 CLOSED = "the window that ran init was closed"
 NOT_CLOSED = "could not close the window that ran init: {why}"
 ORCHE_PANES = ("main-", "div-", "feat-")
+BASE_NAME = re.compile(r"^(?!origin/)(?!.*\.\.)(?!.*//)(?!.*\.lock$)[A-Za-z0-9][A-Za-z0-9._/-]*(?<![./])$")
+PREFIX_NAME = re.compile(r"^[a-z][a-z0-9-]*$")
 
 
 def register(subparsers):
@@ -77,7 +85,39 @@ def register(subparsers):
     p.add_argument("--refresh", action="store_true",
                    help="a registered project only: re-render its templates, card link, personas and worktree "
                         "settings, then stop (no Orca, panes, automations or intake; what `orche update` runs)")
+    p.add_argument("--base", default=None, metavar="BRANCH",
+                   help="the branch this project's PRs target and its worktrees start from (e.g. develop)")
+    p.add_argument("--branch-prefix", default=None, metavar="PREFIX",
+                   help="the first segment of a feature worker's branch (default feat; e.g. dev)")
     p.set_defaults(func=cmd_init)
+
+
+def _publish_error(args):
+    """The refusal for a malformed --base / --branch-prefix, else None."""
+    if args.base is not None and not BASE_NAME.match(args.base):
+        return f"--base takes a branch name such as develop (no origin/), not {args.base!r}"
+    if args.branch_prefix is not None and not PREFIX_NAME.match(args.branch_prefix):
+        return (f"--branch-prefix takes lowercase letters, digits and dashes, starting with a letter (such as dev), "
+                f"not {args.branch_prefix!r}")
+    return None
+
+
+def _set_publish(args, key) -> None:
+    """--base / --branch-prefix into `publish.per_project.<key>` (a dry run only prints)."""
+    values = {k: v for k, v in (("base", args.base), ("branch_prefix", args.branch_prefix)) if v is not None}
+    if not values:
+        return
+    if args.dry_run:
+        dry(f"set publish.per_project.{key}: " + ", ".join(f"{k} {v}" for k, v in values.items()))
+    else:
+        config.set_project("publish", key, **values)
+
+
+def _publish_facts(key) -> dict:
+    """The project's {base, branch_prefix} as config names them (None: not set)."""
+    from . import publish
+    s = publish.settings(config.load(), key)
+    return {"base": s.get("base"), "branch_prefix": s.get("branch_prefix")}
 
 
 def _setup_flags(args) -> list:
@@ -120,10 +160,12 @@ def _refresh(args, reg) -> int:
         return fail(EXIT_NOT_FOUND, f"project {key}: {root} is missing")
     if not dry_run:
         paths.ensure_dirs()
+    _set_publish(args, key)
     link, linked = _link_card(key, root, dry_run=dry_run)
     ts = time.strftime("%Y%m%dT%H%M%S")
     try:
         ref = hr.refresh_project(reg, key, root=root, ts=ts, dry_run=dry_run)
+        onboarding.exclude_settings(root, dry_run=dry_run)   # every ORCHE file stays out of git
         if not dry_run:   # origin/HEAD names the base branch a done's PR targets (publish.base); best effort
             shell.git(root, "remote", "set-head", "origin", "-a", timeout=30)
     except onboarding.UnsafeTarget as exc:
@@ -138,7 +180,7 @@ def _refresh(args, reg) -> int:
     restart = [] if dry_run else ([proj["main_session"]] if stamped and proj.get("main_session") else []) + ref.restart
     data = {"project": key, "path": root, "dry_run": dry_run, "refreshed": [str(p) for p in refreshed],
             "kept": [{"path": str(p), "why": w} for p, w in ref.kept], "restart": restart,
-            "setup_report": str(report) if report else None}
+            "setup_report": str(report) if report else None, "publish": _publish_facts(key)}
     lines = [f"{'would refresh' if dry_run else 'refreshed'} {key}: "
              + (f"{len(refreshed)} file(s)" if refreshed else "already current")]
     lines += [f"kept {_tilde(Path(p))}: {why}" for p, why in ref.kept]
@@ -325,21 +367,24 @@ def _intake_text(key, root, intake_line):
 
 def write_report(reg, key, root, intake_line=None) -> Path:
     """`<root>/.orche/SETUP.md`, the setup report Main gives the owner (untracked: `info/exclude`)."""
-    from . import guide
-    proj = reg["projects"][key]
+    from . import guide, publish
+    proj, cfg = reg["projects"][key], config.load()
     _count, names, where = _divisions_text(proj)
     path = paths.project_local(root) / SETUP_REPORT
+    facts = _publish_facts(key)
+    prs = ([f"- Pull requests: base {facts['base'] or publish.base(root, cfg, project=key) or 'origin/HEAD'}, "
+            + (f"branches {facts['branch_prefix']}/<name>." if facts["branch_prefix"] else "branches named by Orca.")]
+           if facts["base"] or facts["branch_prefix"] else [])
     text = "\n".join([f"# ORCHE is set up: {key}", "",
                       f"- Divisions: {names or 'none'}",
                       f"- Workspaces: {where}; nothing is committed to the repository",
-                      f"- Intake: {_intake_text(key, root, intake_line)}",
+                      f"- Intake: {_intake_text(key, root, intake_line)}", *prs,
                       f"- Talk to Main in the {proj.get('main_session') or 'main-' + key} tab, in any language. "
                       "Main plans and decides; divisions do the work; you only get decisions.",
                       "", "## Any time", "",
-                      *guide.lines(config.load(), reg, Path.home()), "",
+                      *guide.lines(cfg, reg, Path.home()), "",
                       'Say "what else can ORCHE do?" to see this list again (Main runs `orche doctor`).', ""])
     util.atomic_write(path, text)
-    onboarding.exclude_lines(root, (f".orche/{SETUP_REPORT}",))
     return path
 
 
@@ -580,6 +625,8 @@ def cmd_init(args):
         except LinkedWorktree as exc:
             return fail(EXIT_USER, str(exc))
         args.repo = top
+    if err := _publish_error(args):
+        return fail(EXIT_NOT_FOUND, err)   # a malformed value: exit 2, one line
     reg = registry.load()
     if args.refresh:
         return _refresh(args, reg)
@@ -642,6 +689,7 @@ def cmd_init(args):
     else:
         paths.ensure_dirs()
         templates.copy_project(root, PROJECT=key)
+    _set_publish(args, key)   # before the worktrees: they start from the project's base
     link, linked = _link_card(key, root, dry_run=dry_run)
     try:
         proj, panes = hr.onboard_project(reg, key, setup, plan, repo_id=repo["id"], root=root, card=_tilde(link),
@@ -676,7 +724,8 @@ def cmd_init(args):
             "wake_skipped": plan.wake_skipped, "panes": panes, "automations": "created" if live else "printed",
             "card": proj["card"], "summary": summary, "added_to_orca": bool(added) and not dry_run,
             "refreshed": [str(p) for p in refreshed], "kept": [{"path": str(p), "why": w} for p, w in kept],
-            "rendered_by": {"before": before, "now": __version__} if upgraded else None, "restart": restart}
+            "rendered_by": {"before": before, "now": __version__} if upgraded else None, "restart": restart,
+            "publish": _publish_facts(key)}
     lines = [f"would add {added} to Orca (orca repo add --path {added})" if dry_run else f"added {added} to Orca"] \
         if added else []
     if renamed:

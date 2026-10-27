@@ -306,7 +306,7 @@ The division session a worker belongs to (its Orca parent): it staffs, briefs, r
 _Avoid_: manager, lead.
 
 **Worker**:
-A feature agent (`feat/<name>`) under any head but Research, R&D and Ops: one slice per brief; it retires once its work landed. Standing workers are only `infra` under Build and an owner the same files earned by two queue returns in a week.
+A feature agent (on the branch Orca names by default; `<prefix>/<name>` when the project sets `publish.per_project.<p>.branch_prefix` (ORCHE renames it right after creation)) under any head but Research, R&D and Ops: one slice per brief; it retires once its work landed. Standing workers are only `infra` under Build and an owner the same files earned by two queue returns in a week.
 _Avoid_: Build's feature (features are not Build-only from 0.10.0).
 
 **Publish**:

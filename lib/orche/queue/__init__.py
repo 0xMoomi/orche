@@ -21,8 +21,7 @@ LAND_AUTO = "land-auto"     # who `approved` an entry that `land: auto` released
 
 def settings(cfg, project) -> dict:
     """The merged config's `queue` (config.load: every key there) with `queue.per_project.<p>` laid over it."""
-    q = cfg["queue"]
-    return {**q, **((q.get("per_project") or {}).get(project) or {})}
+    return config.for_project(cfg, "queue", project)
 
 
 def land_mode(cfg, project) -> str:

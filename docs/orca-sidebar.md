@@ -21,7 +21,7 @@ my-app                                   (Orca repo)
 |---|---|---|
 | Main pane | `main-<proj>` | the project's main checkout |
 | Division card / pane | worktree `div-<division>`, pane `div-<proj>-<division>` | its own worktree, branch `div/<division>` |
-| Feature card / pane | worktree `feat-<feature>`, pane `feat-<proj>-<feature>` | child worktree of its head's division, branch `feat/<feature>` |
+| Feature card / pane | worktree `feat-<feature>`, pane `feat-<proj>-<feature>` | child worktree of its head's division, branch: the branch Orca names by default; `<prefix>/<feature>` when the project sets `publish.per_project.<p>.branch_prefix` (ORCHE renames it right after creation) |
 
 Pane titles equal Claude Code session names. ORCHE starts a division or feature pane with
 `PATH=<plugin>/bin:$PATH ORCHE_SESSION=<session> claude --permission-mode bypassPermissions --name <session>`

@@ -76,6 +76,9 @@ EOF
   such as `main-beta`) files an external-request pointer with the brief body to that project's Main
   instead of a brief. A name that is also one of your divisions means the division.
 - Main briefs heads, never workers: each division's head slices the brief and staffs its own workers.
+- When the project tracks work in an issue tracker, create or pick the issue first and name the worker after it
+  (`des-47-<topic>`): ORCHE names the branch, links the worktree and writes `Fixes DES-47` in the pull request.
+  Put the key in the brief; the head names the worker.
 - TIER: `mechanical` (rename, bump, copy edit) → exec; `standard` (feature, fix, tests) → a
   head, which staffs workers; `hard` (cross-cutting design, concurrency, root cause, migrations) → deep-reasoner at max.
   A brief that needs workers is standard or hard, never mechanical (a mechanical run has no `orche`).

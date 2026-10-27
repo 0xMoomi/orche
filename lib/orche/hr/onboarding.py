@@ -12,7 +12,7 @@ import shutil
 import time
 from pathlib import Path
 
-from .. import brief, log, orca, paths, registry, shell, templates, units, util, vendors
+from .. import log, orca, paths, registry, shell, templates, units, util, vendors
 from ..cli import dry
 from . import book, panes
 
@@ -26,8 +26,11 @@ ROLE_TEXT = {
 }
 
 
-UNITS_EXCLUDE = brief.UNITS + "/"   # briefs/reports: never tracked, never keep the main checkout dirty
-EXCLUDE_LINES = (units.SETTINGS_LOCAL, UNITS_EXCLUDE)
+# Every ORCHE file in the repository: the whole `.orche/` (unit files, briefs and reports, the setup report),
+# the shared `.claude/settings.local.json`, the units' personas (`.claude/agents/<session>.md`, session_name)
+# and each file templates.copy_project puts outside `.orche/`.
+EXCLUDE_LINES = (".orche/", units.SETTINGS_LOCAL, ".claude/agents/div-*.md", ".claude/agents/feat-*.md",
+                 *(p.as_posix() for p in templates.project_files() if p.parts[0] != ".orche"))
 
 
 class UnsafeTarget(Exception):
@@ -49,8 +52,8 @@ def guard(target_dir, base, main_root=None) -> None:
 
 
 def exclude_settings(worktree_dir, *, dry_run=False):
-    """Add `.claude/settings.local.json` and `.orche/units/` to the repository's shared
-    `info/exclude` (each once).
+    """Add EXCLUDE_LINES (every ORCHE file) to the repository's shared `info/exclude` (each once). A file
+    the project already committed stays tracked: git applies exclude to untracked files only.
 
     Returns (the exclude file path or None when the worktree is not a git checkout, wrote?).
     """
@@ -111,14 +114,29 @@ def find_worktree(repo_id, name):
     return None
 
 
-def create_worktree(repo_id, name, fallback_branch, *, parent=None, dry_run=False):
+def create_worktree(repo_id, name, fallback_branch, *, parent=None, base=None, issue="", rename_to=None,
+                    dry_run=False):
+    """`orca worktree create`: from `origin/<base>` when the project's config names a base (else Orca's
+    repo default), linked to the issue key (`--linear-issue KEY`, `--issue N` for `#N`) when there is one.
+    `rename_to` (a feature's `<prefix>/<name>` when the project sets `publish.branch_prefix`): the branch
+    Orca named is renamed to it right after creation; a failed rename keeps Orca's name (one log line)."""
     argv = ["--repo", f"id:{repo_id}", "--name", name]
     argv += ["--parent-worktree", f"id:{parent}"] if parent else ["--no-parent"]
+    argv += ["--base-branch", f"origin/{base}"] if base else []
+    argv += (["--issue", issue[1:]] if issue.startswith("#") else ["--linear-issue", issue]) if issue else []
     if dry_run:
         orca.worktree("create", *argv, dry_run=True)
         path = f"<{name} worktree>"
         return f"{repo_id}::{path}", path, fallback_branch
-    return parse_worktree(orca.worktree("create", *argv), repo_id, name, fallback_branch)
+    wt_id, path, branch = parse_worktree(orca.worktree("create", *argv), repo_id, name, fallback_branch)
+    if rename_to and branch != rename_to:
+        res = shell.git(path, "branch", "-m", branch, rename_to, timeout=30)
+        if res.ok:
+            branch = rename_to
+        else:
+            log.log("hr", "branch rename failed: " + next((ln.strip() for ln in (res.err or res.out or "").splitlines()
+                                                           if ln.strip()), f"exit {res.code}"))
+    return wt_id, path, branch
 
 
 def write_settings(worktree_dir, agent, *, main_root=None, dry_run=False) -> tuple:
@@ -284,14 +302,19 @@ def onboard(*, project, repo_root, repo_id, kind, name, model, effort, wake, par
     """Create one unit's worktree, files and (if `wake`) pane. Returns the partial registry entry.
 
     The session is session_name(kind, project, name), the worktree name `<kind>-<name>` and the
-    fallback branch `<kind>/<name>`.
+    branch the one Orca names (fallback `div/<name>` or, for a feature, `<prefix>/<name>`: publish.prefix,
+    default `feat`); a feature of a project that sets `publish.branch_prefix` is renamed to `<prefix>/<name>`.
     `custom` ({"label", "charter"}) marks a custom division: its persona comes from `div-custom.md`.
     A persona it replaces is first copied to `ORCHE_HOME/backups/<project>/<ts>/` (as `orche init` does).
     `existing` (an `onboarding` registry entry) resumes: only the file steps and the pane run.
     Otherwise an Orca worktree already named `<kind>-<name>` is adopted, else one is created,
     and `on_created({"worktree", "branch"})` lets the caller save a provisional entry at once.
     """
-    session, worktree_name, branch = session_name(kind, project, name), f"{kind}-{name}", f"{kind}/{name}"
+    from .. import publish   # here, not at the top: hr stays free of the git/gh publish layer at import
+    feature = kind == "feat"
+    session, worktree_name = session_name(kind, project, name), f"{kind}-{name}"
+    branch = f"{publish.prefix(None, project) if feature else kind}/{name}"
+    configured = feature and bool(publish.settings(None, project).get("branch_prefix"))
     if existing:
         wt_id, branch = existing["worktree"], existing["branch"]
         wt_path = units.worktree_path(wt_id)
@@ -300,8 +323,10 @@ def onboard(*, project, repo_root, repo_id, kind, name, model, effort, wake, par
         if found:
             wt_id, wt_path, branch = found[0], found[1], found[2] or branch
         else:
-            wt_id, wt_path, branch = create_worktree(repo_id, worktree_name, branch, parent=parent,
-                                                     dry_run=dry_run)
+            wt_id, wt_path, branch = create_worktree(
+                repo_id, worktree_name, branch, parent=parent, base=publish.settings(None, project).get("base"),
+                issue=publish.issue_of(name) if feature else "", rename_to=branch if configured else None,
+                dry_run=dry_run)
     if not dry_run and units.is_within(repo_root, wt_path):
         raise orca.OrcaError(f"worktree for {name} resolved to the main checkout {wt_path}", "bad_output")
     if on_created and not existing and not dry_run:

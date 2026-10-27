@@ -273,7 +273,7 @@ def build_review(project, pr, unit=None, *, wait_s=0, reg=None, cfg=None) -> dic
     _ended(project, pr, sha, state, reg)
     if state != "OPEN":       # G8a: the heartbeat asks gh nothing; a closed or merged PR ends here, quietly
         return {"status": "closed", "head": sha, "state": view.get("state")}
-    base = publish.base(root, cfg)
+    base = publish.base(root, cfg, project=project)
     if not base:
         return _not_run(project, pr, sha, unit, head, f"head review not run — {publish.no_base(root)}")
     h7 = sha[:7]
@@ -451,7 +451,7 @@ def _pre_round(reg, cfg, project, pr, unit, view, root) -> dict | None:
                         effort=getattr(a.call, "effort", None), res=a.res, started=a.started,
                         finished=a.finished, status=a.word, kind="review", cfg=cfg, stop_reason=a.why or None)
 
-    base = publish.base(root, cfg)
+    base = publish.base(root, cfg, project=project)
     if not base:
         return {"status": "pre-error", "head": sha, "error": publish.no_base(root)}
     hit = history.spend_hit(project, b.unit if b is not None else None, cfg, tag=f"buildreview: {project}")
