@@ -178,10 +178,9 @@ class PublishTest(PublishCase):
         ok = publish.publish(BUILD, self.repo, self.repo, unit="u", title="t", body="b", cfg={"publish": {"base": "main"}})
         self.assertIsInstance(ok, publish.Published)
 
-    def test_body_masks_caps_and_carries_the_footer(self):
-        body = publish.body_of("x" * 5000, unit="u", rev=2, session="s", verdict="unit-test-verified",
-                               verifier="v")
-        self.assertTrue(body.startswith("x" * publish.BODY_MAX + "\n\n---\nORCHE unit `u` rev 2 · writer `s`"))
+    def test_body_masks_caps_and_names_no_writer(self):
+        body = publish.body_of("x" * 5000)
+        self.assertEqual(body, "x" * publish.BODY_MAX)
         self.assertLessEqual(len(publish.title_of("y" * 100)), publish.TITLE_MAX)
 
 
@@ -199,26 +198,24 @@ class TeamFitTest(PublishCase):
         long = publish.title_of("y" * 100, "DES-47")
         self.assertEqual(len(long), publish.TITLE_MAX)
         self.assertTrue(long.endswith("… (DES-47)"))
-        kw = dict(unit="u", rev=1, session="s", verdict="v", verifier="w")
-        plain = publish.body_of("report", **kw)
-        self.assertEqual(plain, "report\n\n---\nORCHE unit `u` rev 1 · writer `s` · ledger v by w")
-        self.assertEqual(publish.body_of("report", issue="#12", **kw), "Fixes #12\n\n" + plain)
-        self.assertEqual(publish.body_of("report", queued=True, **kw), plain + "\n" + publish.FOOTER_QUEUE)
+        self.assertEqual(publish.body_of("report"), "report")
+        self.assertEqual(publish.body_of("report", issue="#12"), "Fixes #12\n\nreport")
+        self.assertEqual(publish.body_of("report", queued=True),
+                         "report\n\nLands through the merge queue after its checks and the head review; please do not "
+                         "merge by hand.")
 
     def test_pr_text_claims_the_queue_only_with_the_gate(self):
         feat = Member("feat-acme-des-47-x", "acme", "feat", "des-47-x", "build")
-        title, body = publish.pr_text(feat, self.repo, goal="Do x", report="r", unit="u", rev=1, verdict="v",
-                                      verifier="w", cfg=config.load())
+        title, body = publish.pr_text(feat, self.repo, goal="Do x", report="r", cfg=config.load())
         self.assertEqual(title, "Do x (DES-47)")
-        self.assertTrue(body.startswith("Fixes DES-47\n\nr\n"))
+        self.assertEqual(body, "Fixes DES-47\n\nr")
         self.assertNotIn("merge queue", body)
         other = self.clone("main")
         (other / "scripts" / "verify").mkdir(parents=True)
         self.commit(other, "scripts/verify/ci.sh", "#!/bin/sh\n")
         self.git(other, "push", "-q", "origin", "main")
         self.git(self.repo, "fetch", "-q", "origin")
-        _, body = publish.pr_text(BUILD, self.repo, goal="Do x", report="r", unit="u", rev=1, verdict="v",
-                                  verifier="w", cfg=config.load())
+        _, body = publish.pr_text(BUILD, self.repo, goal="Do x", report="r", cfg=config.load())
         self.assertTrue(body.endswith(publish.FOOTER_QUEUE))
         self.assertTrue(body.startswith("r\n"))            # a division's name carries no key
 

@@ -21,6 +21,52 @@ the merge queue lands it.
 - Never push, merge, rebase or retarget yourself; ORCHE pushes your branch (never forced)
   after your done passes the gate.
 
+## Craft
+
+### The engineering bar (the owner's rules)
+- Precedent first: find how this repo and established tools already solve it, follow that pattern and cite it.
+- Installed before new: use the dependencies already here and read their docs and types before concluding one lacks
+  a feature. A maintained library beats reimplementing a common feature; a new dependency must exist, be pinned and
+  come with its lockfile change.
+- Simplest change that meets ACCEPT: no speculative abstraction, option, config key or hook "for later".
+- No backward-compat layers, fallbacks or shims: update every caller and delete the old path.
+- Grow in layers from a working end-to-end minimum. Modules keep one job and a clear boundary: validate input at the
+  boundary and trust the interior.
+- Long-term shape: no stopgap that would have to be replaced; when only a stopgap fits, report the gap instead.
+
+### The loop (code)
+- Read the brief, the module you change, its callers and its tests before editing; settle the data shape first.
+- Run VERIFY once before changing anything and note what already fails. In a fresh worktree "module not found"
+  means missing installs until proven otherwise.
+- Red, green, one vertical slice at a time: one failing test of behaviour through the public seam, watched failing
+  for the expected reason; the least code that passes; the focused test while iterating and VERIFY before each
+  commit; refactor only on green.
+- Tests: expected values written by hand from the spec, never computed by the code under test. Mock only what crosses
+  the boundary (network, clock, other services); never assert on a mock, a private structure or log wording.
+- Before done, mutate in your head: a wrong constant, a flipped branch, a missing write, an empty input. At least one
+  test must fail for each.
+- Writes are idempotent: running the change twice, or after a partial failure, converges and never duplicates.
+
+### Bugs
+- First a loop that shows the bug failing (a test, else a script), cut down to the smallest input that still fails.
+- Read the whole error and stack. Rank 3 to 5 hypotheses that each predict something you can check; change one
+  variable at a time; tag temporary logs and remove them before you commit.
+- Fix the first wrong decision, not the place the symptom shows, and search for siblings of the same mistake.
+- Prove the regression test: revert the fix and it fails, restore it and it passes.
+- Two fixes failed on one premise: write the premise down and test it before a third. A flaky or timing failure
+  waits on the condition with a timeout; never add a sleep, a retry or a skip.
+
+### Done
+- Never relax a gate to get green: no edited ACCEPT, raised threshold or timeout, added retry or skipped test.
+- Verify on the real artifact: run the command now and read its output. Exit 0, or a run that did nothing, proves
+  nothing. Name what you could not verify and every failing test you saw, yours or not.
+- Commits: small, each green, a conventional subject (`fix(queue): ...`), structural and behavioural changes apart,
+  no AI attribution line.
+- REPORT.md becomes the PR body: why the change, what it leaves out, its blast radius, the commands run with results.
+  Plain words, the point first, no filler or hype. A code comment says why, only where that is not obvious.
+- When the brief cannot be met inside SCOPE, end `STATUS: failed` with the gap and the smallest SCOPE or ACCEPT
+  change that would close it; your head answers with an AMEND. Never widen scope yourself.
+
 {{ALWAYS_PAUSE}}
 
 {{DISPATCH}}

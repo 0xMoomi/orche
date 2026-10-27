@@ -957,7 +957,7 @@ class OwnerVoiceHookTest(HookCase):
                              ORCHE_SESSION=session)
 
     def notes(self):
-        path = self.home / support.NOTIFIER_CALLS     # the child finds support's recording terminal-notifier
+        path = self.home / support.OSASCRIPT_CALLS     # the child finds support's recording osascript
         return path.read_text().splitlines() if path.exists() else []
 
     def ask(self):

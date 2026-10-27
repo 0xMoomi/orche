@@ -580,7 +580,7 @@ class InitTest(HrCase):
         self.assertEqual(json.loads((self.home / "config.json").read_text())["publish"]["per_project"]["acme-shop"],
                          {"base": "main", "branch_prefix": "dev", "issues": "OPS"})
         report = (self.repo / ".orche" / "SETUP.md").read_text()
-        self.assertIn("- Read the repository's team conventions: entire.\n", report)   # nothing unset is left
+        self.assertIn("- Read the repository's team conventions: branch_prefix, entire.\n", report)   # every match
 
     def test_a_plain_repository_detects_nothing(self):
         git_repo(self.repo)

@@ -59,12 +59,23 @@ class BuildTest(unittest.TestCase):
         self.assertIsNone(data["ask"]["add"])
         self.assertIsNone(data["ask"]["change"])
         setup, models = data["ask"]["setup"]
-        self.assertEqual(setup["tool"]["question"], "Which divisions should this project start with?")
-        self.assertEqual(labels(setup), ["The default 4 (recommended)", "Light: 2", "Pick them"])
-        self.assertEqual(setup["values"]["The default 4 (recommended)"], ["rnd", "research", "build", "gtm"])
+        self.assertEqual(setup["tool"]["question"], "How will this project run?")
+        self.assertEqual(labels(setup), ["Build-focused (recommended)", "Operations", "Pick them"])
+        self.assertEqual(setup["values"]["Build-focused (recommended)"],
+                         {"preset": "build", "divisions": ["build", "design", "rnd", "research"],
+                          "custom": {"design": {}}})
+        self.assertEqual(setup["tool"]["options"][0]["description"],
+                         "build, design, rnd on Opus 5.5 and research on Sonnet 5.5; Build's workers specialise in "
+                         "front, back and infra. For a product that is being built.")
+        self.assertEqual(setup["tool"]["options"][1]["description"],
+                         "build, design, rnd, research and gtm. For a service that is live.")
         self.assertEqual(labels(models)[0], "Fitted to each (recommended)")
+        self.assertEqual(models["tool"]["options"][0]["description"], "Build·Design·R&D Opus 5.5, Research Sonnet 5.5")
         std, extra = data["ask"]["pick"]
         self.assertTrue(std["tool"]["multiSelect"])
+        self.assertEqual(std["values"], {"Build (recommended)": "build", "Design (recommended)": "design",
+                                         "R&D (recommended)": "rnd", "Research (recommended)": "research"})
+        self.assertEqual(labels(extra), ["GTM", "Ops", "Content", "None"])
         self.assertEqual(labels(extra)[-1], "None")
         self.assertEqual(extra["values"]["None"], None)
 
@@ -72,10 +83,10 @@ class BuildTest(unittest.TestCase):
         data = self.build(reg(research={"model": SONNET}, build={"model": OPUS}))
         add = data["ask"]["add"]
         self.assertEqual(add["tool"]["question"], "Which divisions should I add? (pick any)")
-        self.assertEqual(labels(add), ["R&D", "GTM", "Ops", "A new one"])
+        self.assertEqual(labels(add), ["R&D", "GTM", "Design", "A new one"])
         self.assertEqual(add["values"]["A new one"], "*")
         full = self.build(reg(research={}, build={}, rnd={}, gtm={}))
-        self.assertEqual(labels(full["ask"]["add"]), ["Ops", "Design", "Content", "A new one"])
+        self.assertEqual(labels(full["ask"]["add"]), ["Design", "Ops", "Content", "A new one"])
 
     def test_c_gtm_on_opus_offers_sonnet_first_and_keep_last(self):
         data = self.build(reg(gtm={"model": OPUS}, build={"model": OPUS}))
@@ -183,16 +194,18 @@ class CliTest(HrCase):
         self.assertEqual(code, 2)
         self.assertIn("unknown project nope; for a project not under ORCHE yet, run it without a project", err)
 
-    def test_first_install_asks_the_default_four_first(self):
+    def test_first_install_asks_the_recommended_preset_first(self):
         """R-PLAIN-3: the install prompt runs `orche hr choices --json` right after install, before any
-        project is registered; its first setup question offers the default four first, as the recommendation."""
+        project is registered; its first setup question offers the preset read from the folder first, marked."""
         self.assertEqual(registry.load()["projects"], {})
         code, out, err = self.orche("hr", "choices", "--json")
         self.assertEqual(code, 0, err)
-        first = json.loads(out)["ask"]["setup"][0]
+        data = json.loads(out)
+        first = data["ask"]["setup"][0]
         label = first["tool"]["options"][0]["label"]
-        self.assertEqual(label, "The default 4 (recommended)")
-        self.assertEqual(first["values"][label], list(setup_flow.DEFAULT_DIVISIONS))
+        self.assertTrue(label.endswith(" (recommended)"), label)
+        self.assertEqual(first["values"][label]["preset"], data["recommended_preset"])
+        self.assertEqual(first["values"][label]["divisions"], list(setup_flow.PRESETS[data["recommended_preset"]]))
         self.assertEqual(registry.load()["projects"], {})
 
     def test_choices_writes_nothing(self):

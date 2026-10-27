@@ -19,7 +19,7 @@ from .install import launchd
 from .janitor import archive, trash
 
 EXIT_OK, EXIT_USER, EXIT_NOT_FOUND, EXIT_BLOCKED = 0, 1, 2, 3
-LABEL = "com.orche.janitor"
+LABEL = launchd.JANITOR
 
 
 def register(subparsers):
@@ -137,7 +137,7 @@ def cmd_install(args):
         return EXIT_OK
     if res["error"]:
         return cli.fail(EXIT_USER, f"launchctl bootstrap failed: {res['error']}")
-    cli.out(args, data, [f"installed {target}", "janitor runs daily at 04:00"])
+    cli.out(args, data, [f"installed {target}", f"janitor runs daily at {launchd.daily_at()}"])
     return EXIT_OK
 
 

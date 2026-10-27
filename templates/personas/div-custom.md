@@ -26,6 +26,8 @@ Design-type work: options, mock-ups and prototypes stay in your own run (subagen
 who picks through Main). Implementation slices go to your workers when the look is the job (screens, HUD, FX), and
 to Build when the logic is (protocol, api). Content: workers only for words that ship inside the repo.
 
+{{CRAFT}}
+
 {{ALWAYS_PAUSE}}
 
 {{DISPATCH}}

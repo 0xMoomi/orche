@@ -194,7 +194,9 @@ class FirstPassTest(test_install.InstallCase):
         self.granted = True
         lines = self.install("--mode", "settings", "--no-jev").splitlines()
         self.assertEqual(lines[-2:], [privacy.FIRST_PASS_WAIT, "reconcile job: first pass OK (0.31 s)"])
-        self.assertEqual([a[1] for a in self.ran[:4]], ["bootout", "enable", "bootstrap", "kickstart"])
+        self.assertEqual([a[1] for a in self.ran[:7]],   # the heartbeat, the janitor, then the first pass
+                         ["bootout", "enable", "bootstrap", "bootout", "enable", "bootstrap", "kickstart"])
+        self.assertTrue(self.ran[5][-1].endswith("com.orche.janitor.plist"), self.ran[5])
         # a plain kickstart (review #6): `-k` would kill the job's own pass started at load
         self.assertEqual(self.kicks(), [["launchctl", "kickstart", f"gui/{UID}/com.orche.reconcile"]])
         self.assertEqual(self.opens(), [])

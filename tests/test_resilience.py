@@ -943,6 +943,9 @@ class ScaleDoctorTest(support.TempHomeCase):
         self.assertEqual(doctor.gh_rows(reg), [
             ("WARN", "gh", "loose: no origin remote — the merge queue lands PRs on GitHub"),
             ("OK", "gh", "pikit: gh as despell-bot · WRITE on DESPELL/PIKIT · base main")])
+        (self.home / "config.json").write_text(json.dumps(support.no_wake(
+            {"publish": {"per_project": {"pikit": {"base": "develop"}}}})))
+        self.assertEqual(doctor.gh_rows(reg)[1][2], "pikit: gh as despell-bot · WRITE on DESPELL/PIKIT · base develop")
         self.fake_gh("READ")
         level, name, detail = doctor.gh_rows(reg)[1]
         self.assertEqual((level, name), ("WARN", "gh"))

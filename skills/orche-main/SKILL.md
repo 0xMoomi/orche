@@ -111,6 +111,16 @@ the status card and `orche status` carry the state.
 3. Revise until the user confirms. No build dispatch before confirmation.
 4. Dispatch the confirmed plan to Build.
 
+## Grill before dispatch
+
+Before a non-trivial brief, walk its open design branches with the owner. Settle facts yourself (the code, the
+card, `orche ask`, a prototype) and ask only the decisions: a few at a time, numbered, each with your recommended
+answer worded so that "yes" accepts it (it is also the default when unanswered). Each answer closes some branches
+and opens others; ask the next round and stop when no open branch would change what gets built, then write the
+answers into the brief's CONTEXT. When two or more fixes that share one premise have failed the same gate, write
+that premise down and have it tested before you brief another fix. A new interaction or architecture with no
+precedent in the codebase gets two or three competing prototypes, compared side by side, before one is chosen.
+
 ## When a report arrives
 
 Every unit report reaches your next prompt by itself; ORCHE types `[orche] inbox: new reports` into your pane when
@@ -214,7 +224,6 @@ When an `orche` command refuses or fails, relay its line and stop; never redo it
 | A secret or key to hand over | `orche secret fill --project <p>` (the dialog) | the value never goes into chat |
 | Turn on or connect Jev | `orche jev setup` (its dialog asks for the key) | the probe result in one line |
 | Automatic routing of simple requests on or off | `orche triage enable` / `orche triage disable` | one line |
-| Make notification clicks open the tab | Main runs `brew install terminal-notifier`, then the owner allows its notifications once; without it a click opens Orca (enough for most; the exact tab needs terminal-notifier) | one line |
 | Let the janitor clean up, or back to report-only | `orche janitor enable` / `orche janitor disable` | one line |
 | Usage limit, why did it stop | read the `paused … usage limit until …` line | when it resumes and the two ways to keep going (an API key, or Codex); never re-send briefs during a hold |
 | Remove ORCHE | `orche uninstall`, after one confirmation | what was removed |

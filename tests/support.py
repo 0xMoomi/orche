@@ -14,16 +14,12 @@ if str(ROOT / "lib") not in sys.path:
 # Process-wide default for every test module (TempHomeCase re-applies it per test): the Jev key
 # store never touches the real keychain and no real dialog opens.
 from orche import headless, jev_setup as _jev_setup, jevkey as _jevkey, reconcile as _reconcile  # noqa: E402
-from orche import notify as _notify  # noqa: E402
 
 _jevkey.PLATFORM = "linux"
 _jevkey.SECURITY = "/nonexistent/orche-test/security"
 _jev_setup.OSASCRIPT = "/nonexistent/orche-test/osascript"
 # No in-process pass arms the watchdog (SIGALRM, its exit thread) unless the test asks: run_pass(watchdog_s=…).
 _reconcile.WATCHDOG_S = 0
-# In-process notifications take the osascript path unless a test patches notify.WHICH (child processes
-# find the recording `terminal-notifier` stub of no_claude_dir instead, never the real one).
-_notify.WHICH = lambda name: None
 
 
 _NO_CLAUDE_DIR = None
@@ -53,14 +49,13 @@ RECORDING = ("#!/bin/sh\n"
              "[ -n \"$ORCHE_HOME\" ] && printf '%s\\n' \"$*\" >> \"$ORCHE_HOME/{name}-calls.log\" 2>/dev/null\n"
              "exit {code}\n")
 OSASCRIPT_CALLS = "osascript-calls.log"
-NOTIFIER_CALLS = "terminal-notifier-calls.log"
 LAUNCHCTL_CALLS = "launchctl-calls.log"
 OPEN_CALLS = "open-calls.log"
 
 
 def no_claude_dir() -> str:
-    """A directory whose `claude`, `codex`, `orca`, `security` and `launchctl` always fail and whose `osascript`,
-    `terminal-notifier` and `open` only record their call (no test shows a notification, a Finder window or System
+    """A directory whose `claude`, `codex`, `orca`, `security` and `launchctl` always fail and whose `osascript`
+    and `open` only record their call (no test shows a notification, a Finder window or System
     Settings). It goes first on PATH for the
     whole test process (below), so code that falls back to the default `claude_bin` (e.g. the intake
     at the end of `orche init`) or `orca_bin` (a nudger) can never start the developer's real Claude
@@ -76,7 +71,6 @@ def no_claude_dir() -> str:
         for name, text in (("claude", NO_CLAUDE), ("codex", NO_CODEX), ("orca", NO_ORCA), ("security", NO_SECURITY),
                            ("gh", NO_GH),
                            ("osascript", RECORDING.format(name="osascript", code=0)),
-                           ("terminal-notifier", RECORDING.format(name="terminal-notifier", code=0)),
                            ("open", RECORDING.format(name="open", code=0)),
                            ("launchctl", RECORDING.format(name="launchctl", code=113))):
             stub = Path(_NO_CLAUDE_DIR) / name
@@ -290,7 +284,8 @@ def fake_codex(folder: Path, spec: dict) -> Path:
 # it refuses a head other than the PR's (GitHub's text) or with spec["merge_fail"], else writes a commit with
 # parents (base, head) — (base) for --squash — and the 3-way merge's tree (base's own tree with
 # spec["merge_other"]: "something else landed"), moves the base branch and appends {"argv", "cwd", "base",
-# "merge", "clone_head"} to folder/merges.jsonl. Anything else exits 1. Each call appends {"argv", "cwd"} to
+# "merge", "clone_head"} to folder/merges.jsonl. `repo create NAME --private|--public --source . --push` makes a bare
+# folder/NAME.git, adds it as the caller's origin, pushes HEAD there and prints its URL. Anything else exits 1. Each call appends {"argv", "cwd"} to
 # folder/gh-calls.jsonl.
 FAKE_GH = r"""#!{python}
 import json, os, subprocess, sys
@@ -328,6 +323,12 @@ if key == "auth status":
     print("Logged in to github.com account tester"); sys.exit(0)
 if key == "repo view":
     print(json.dumps({{"nameWithOwner": "acme/acme", "defaultBranchRef": {{"name": "main"}}}})); sys.exit(0)
+if key == "repo create":
+    bare = os.path.join(HERE, args[2] + ".git")
+    for argv in (["git", "init", "-q", "--bare", "-b", "main", bare], ["git", "remote", "add", "origin", bare],
+                 ["git", "push", "-q", "-u", "origin", "HEAD"]):
+        subprocess.run(argv, check=True, capture_output=True)
+    print("https://github.com/acme/" + args[2]); sys.exit(0)
 if key == "pr list":
     head, state = opt("--head"), (opt("--state") or "open").upper()
     hits = [p for p in SPEC.get("prs", []) if (head is None or p.get("headRefName") == head)

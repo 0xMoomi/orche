@@ -83,7 +83,7 @@ class RenderTest(unittest.TestCase):
 
 
 class OwnerCase(support.TempHomeCase):
-    """A fake clock (`now`), quiet hours off, notifications on macOS, Orca not running and no terminal-notifier
+    """A fake clock (`now`), quiet hours off, notifications on macOS and Orca not running
     (the plain osascript path): every argv is recorded."""
 
     def setUp(self):
@@ -235,69 +235,6 @@ class NotifySendTest(OwnerCase):
             self.assertTrue(notify.send("ORCHE", "x", kind="t"))
         self.assertEqual(self.calls[1], ["osascript", "-e", "on run argv", "-e", notify.SCRIPT[1], "-e", "end run",
                                          "x", "ORCHE"])
-
-    def test_terminal_notifier_opens_the_projects_main_tab(self):
-        with mock.patch.object(notify, "WHICH", lambda name: "/opt/homebrew/bin/" + name):
-            self.assertTrue(notify.send("ORCHE", "x", sound=True, kind="t", project="acme"))
-            self.assertTrue(notify.send("-t", "-e do shell script", kind="t"))
-            self.assertTrue(notify.send("ORCHE", "x", kind="t", project="acme; rm -rf ~"))
-        bin_ = str(support.ROOT / "bin" / "orche")
-        self.assertEqual(self.calls, [
-            ["terminal-notifier", "-title", "ORCHE", "-message", "x", "-sound", "Glass", "-activate",
-             "com.stablyai.orca", "-execute", f"{bin_} focus acme"],
-            ["terminal-notifier", "-title", " -t", "-message", " -e do shell script", "-activate", "com.stablyai.orca"],
-            ["terminal-notifier", "-title", "ORCHE", "-message", "x", "-activate", "com.stablyai.orca"]])
-        self.assertIn("notify t: project key refused", self.log("hooks"))
-        self.assertNotIn("rm -rf", self.log("hooks") + self.log())
-        self.assertEqual(notify.ORCHE_BIN, support.ROOT / "bin" / "orche")
-        with mock.patch.object(notify, "ORCHE_BIN", support.ROOT / "a dir" / "orche"):
-            self.assertEqual(notify.notifier_argv("T", "B", project="acme")[-1],
-                             f"'{support.ROOT / 'a dir' / 'orche'}' focus acme")
-
-    def test_a_refused_terminal_notifier_falls_back_to_osascript(self):
-        """c64: terminal-notifier exits 3 (permission refused) or times out: osascript shows it instead."""
-        timeouts = []
-
-        def runner(code):
-            def run(argv, *, timeout, input, env=None):
-                self.calls.append(list(argv))
-                timeouts.append(timeout)
-                ok = argv[0] != "terminal-notifier"
-                return shell.Result(0 if ok else code, "", "", list(argv))
-            return run
-        osa = notify.argv("ORCHE", "secret plan 42", orca=False)
-        with mock.patch.object(notify, "WHICH", lambda name: "/opt/homebrew/bin/" + name):
-            for code in (3, 124):
-                self.calls.clear()
-                timeouts.clear()
-                with mock.patch.object(shell, "RUNNER", runner(code)):
-                    self.assertTrue(notify.send("ORCHE", "secret plan 42", kind="t"))
-                self.assertEqual([c[0] for c in self.calls], ["terminal-notifier", "osascript"])
-                self.assertEqual(self.calls[1], osa)
-                self.assertEqual(timeouts, [notify.NOTIFIER_TIMEOUT_S, notify.TIMEOUT_S])
-                self.assertIn(f"notify t: terminal-notifier exit {code}, osascript fallback", self.log("hooks"))
-            self.calls.clear()
-            with mock.patch.object(shell, "RUNNER", lambda argv, **kw: self.calls.append(list(argv)) or
-                                   shell.Result(1, "", "", list(argv))):
-                self.assertFalse(notify.send("ORCHE", "x", kind="u"))   # the result is osascript's
-            self.assertEqual([c[0] for c in self.calls], ["terminal-notifier", "osascript"])
-            self.assertIn("notify u: osascript exit 1", self.log("hooks"))
-            self.calls.clear()
-
-            def raises(argv, **kw):
-                self.calls.append(list(argv))
-                if argv[0] == "terminal-notifier":
-                    raise OSError("terminal-notifier secret plan 42")
-                return shell.Result(0, "", "", list(argv))
-            with mock.patch.object(shell, "RUNNER", raises):
-                self.assertTrue(notify.send("ORCHE", "x", kind="v"))
-            self.assertEqual([c[0] for c in self.calls], ["terminal-notifier", "osascript"])
-            self.assertIn("notify v: terminal-notifier OSError, osascript fallback", self.log("hooks"))
-            self.calls.clear()
-            self.assertTrue(notify.send("ORCHE", "x", kind="w"))       # exit 0: no osascript
-            self.assertEqual([c[0] for c in self.calls], ["terminal-notifier"])
-        self.assertNotIn("secret plan", self.log("hooks") + self.log())
-        self.assertEqual(notify.NOTIFIER_TIMEOUT_S, 3)
 
     def test_a_failing_osascript_is_logged_without_the_text(self):
         with mock.patch.object(shell, "RUNNER", lambda argv, **kw: shell.Result(1, "", "boom", argv)):

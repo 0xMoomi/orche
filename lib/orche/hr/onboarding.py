@@ -9,6 +9,7 @@ nothing is written; worktree paths are shown as `<name worktree>` placeholders.
 """
 import json
 import os
+import re
 import shutil
 import time
 from pathlib import Path
@@ -198,9 +199,18 @@ def persona_template(role, name, custom=False):
 
 def render_persona(tmpl, **vars) -> str:
     """Persona template `tmpl` rendered: first each `{{PART}}` line with the block every persona shares,
-    `personas/parts/<part>.md`, then `vars` (so a `{{...}}` inside a value, e.g. a charter, stays as is)."""
+    `personas/parts/<part>.md`, then `vars` (so a `{{...}}` inside a value, e.g. a charter, stays as is).
+    A run of blank lines becomes one, so a value that renders empty (a custom kind without a craft) leaves no gap."""
     parts = {p.stem.upper(): templates.load(p) for p in sorted((PERSONAS / "parts").glob("*.md"))}
-    return templates.render(templates.render(tmpl.read_text(encoding="utf-8"), **parts), **vars)
+    text = templates.render(templates.render(tmpl.read_text(encoding="utf-8"), **parts), **vars)
+    return re.sub(r"\n{3,}", "\n\n", text)
+
+
+def craft_text(name) -> str:
+    """The `## Craft` section a custom division of kind `name` carries: `personas/craft/<name>.md`
+    (design, content), else empty. A standard division's craft is written in its own template."""
+    path = PERSONAS / "craft" / f"{name}.md"
+    return templates.load(path) if path.is_file() else ""
 
 
 def _with_header(text, file) -> str:
@@ -222,7 +232,7 @@ def persona_text(role, *, project, name, session, model, effort, custom=None):
     model = "inherit" if vendors.vendor_of(model) == vendors.CODEX else model
     tmpl = persona_template(role, name, custom=bool(custom))
     if tmpl is not None:
-        extra = {"LABEL": custom["label"], "CHARTER": custom["charter"]} if custom else {}
+        extra = {"LABEL": custom["label"], "CHARTER": custom["charter"], "CRAFT": craft_text(name)} if custom else {}
         text = render_persona(tmpl, PROJECT=project, NAME=name, SESSION=session, MODEL=model, EFFORT=effort,
                               **extra)
         return _with_header(text, tmpl.name), True

@@ -754,49 +754,6 @@ class ProjectPaneTest(CoreCase):
         self.assertEqual(self.calls, [])
 
 
-class FocusTest(CoreCase):
-    """c62: `orche focus <project|session>` (a notification click runs it) switches Orca to a pane; a closed
-    Main is reopened through the `orche wake main-<p>` path; a closed division pane is only reported."""
-
-    def calls_of(self, sub):
-        return [c for c in self.calls if c[1:3] == ["terminal", sub]]
-
-    def test_a_project_key_or_alias_switches_to_its_main(self):
-        self.terminals = [{"handle": "t-main", "title": "✳ main-acme-shop"},
-                          {"handle": "t-build", "title": "div-acme-shop-build"}]
-        for name in ("acme-shop", "shop", "main-acme-shop"):
-            self.assertEqual(self.orche("focus", name), (0, "switched to main-acme-shop\n", ""))
-        self.assertEqual(self.orche("focus", "div-acme-shop-build"), (0, "switched to div-acme-shop-build\n", ""))
-        self.assertEqual([c[4] for c in self.calls_of("switch")], ["t-main", "t-main", "t-main", "t-build"])
-        self.assertEqual(self.calls_of("create"), [])
-
-    def test_a_closed_main_is_reopened_and_a_closed_division_is_reported(self):
-        code, out, _ = self.orche("focus", "acme-shop")
-        self.assertEqual((code, out), (0, "main-acme-shop pane opened\n"))
-        self.assertEqual(len(self.calls_of("create")), 1)
-        self.terminals = [{"handle": "t-old", "title": "div-acme-shop-build", "connected": False}]
-        self.assertEqual(self.orche("focus", "div-acme-shop-build"), (1, "no open pane: div-acme-shop-build\n", ""))
-        self.assertEqual((len(self.calls_of("create")), self.calls_of("switch")), (1, []))
-
-    def test_dry_run_unknown_names_and_orca_errors(self):
-        self.terminals = [{"handle": "t-main", "title": "main-acme-shop"}]
-        self.assertEqual(self.orche("--dry-run", "focus", "acme-shop"), (0, "would switch to main-acme-shop\n", ""))
-        self.assertEqual(self.calls_of("switch"), [])
-        self.terminals = []
-        code, out, err = self.orche("--dry-run", "focus", "acme-shop")
-        self.assertEqual((code, out), (0, "would open main-acme-shop pane (dry-run)\n"))
-        self.assertIn("[dry-run] orca terminal create", err)
-        self.assertEqual(self.calls_of("create"), [])
-        self.assertEqual(self.orche("focus", "nope"), (2, "", "orche: unknown project or session: nope\n"))
-
-        def runner(argv, *, timeout, input, env=None):
-            self.calls.append(argv)
-            return shell.Result(1, json.dumps({"ok": False, "error": {"message": "orca down"}}), "", argv)
-        shell.RUNNER = runner
-        self.assertEqual(self.orche("focus", "acme-shop"),
-                         (1, "", "orche: could not list Orca panes: orca_error: orca down\n"))
-
-
 class CardTest(CoreCase):
     def setUp(self):
         super().setUp()

@@ -19,7 +19,12 @@ ALWAYS_PAUSE = ("force-push to a shared branch", "deploy", "data deletion", "cus
                 "external publication", "payments")
 INJECT = re.compile(r"<!-- inject:start -->\n(.*?)\n<!-- inject:end -->", re.S)
 VARS = dict(PROJECT="acme", NAME="build", SESSION="div-acme-build", MODEL="claude-opus-5-5", EFFORT="high",
-            LABEL="Design", CHARTER="Owns the visual system.")   # LABEL/CHARTER: div-custom.md only
+            LABEL="Design", CHARTER="Owns the visual system.", CRAFT="")   # LABEL/CHARTER/CRAFT: div-custom.md only
+# c77: the owner's engineering rules every Build and worker craft carries.
+OWNER_BAR = ("Precedent first", "Installed before new", "maintained library", "Simplest change",
+             "No backward-compat layers", "Grow in layers", "clear boundary", "Long-term")
+DESIGN = {"label": "Design", "charter": "Owns the product's interface."}
+CONTENT = {"label": "Content", "charter": "Writes the product's words."}
 
 
 def frontmatter(text):
@@ -184,6 +189,79 @@ class PersonaTemplatesTest(unittest.TestCase):
         self.assertTrue(text.startswith("---\nname: div-acme-build\n"))
         self.assertIn("# Build division (build): acme", text)
 
+    def craft_of(self, role, name, custom=None):
+        """The rendered persona's one `## Craft` section, placed after Guards and before Always-pause."""
+        text, from_template = onboarding.persona_text(role, project="acme", name=name, session=f"x-{name}",
+                                                      model="claude-opus-5-5", effort="high", custom=custom)
+        self.assertTrue(from_template, name)
+        self.assertEqual(text.count("\n## Craft\n"), 1, name)
+        self.assertLess(text.index("\n## Guards\n"), text.index("\n## Craft\n"), name)
+        self.assertLess(text.index("\n## Craft\n"), text.index("\n## Always-pause\n"), name)
+        return re.search(r"(?ms)^## Craft\n.*?(?=\n\n## )", text).group(0)
+
+    def assert_craft(self, role, name, budget, phrases, custom=None):
+        """c77: each division and the worker carry a distilled craft section within its line budget (60, worker 50)."""
+        craft = self.craft_of(role, name, custom)
+        self.assertLessEqual(len(craft.splitlines()), budget, name)
+        for phrase in phrases:
+            self.assertIn(phrase, craft, f"{name}: {phrase}")
+
+    def test_build_craft(self):
+        self.assert_craft("division", "build", 60, OWNER_BAR + ("Tracer bullets", "Security basics", "AI-trace",
+                          "the headless head review keeps its eight lines", "### Done means"))
+
+    def test_worker_craft(self):
+        self.assert_craft("feature", "checkout", 50, OWNER_BAR + ("Red, green, one vertical slice",
+                          "Prove the regression test", "REPORT.md becomes the PR body", "Never widen scope yourself"))
+
+    def test_rnd_craft(self):
+        self.assert_craft("division", "rnd", 60, ("falsification box", "A spike ends deleted or promoted",
+                                                  "Explain the number", "Design it twice"))
+
+    def test_research_craft(self):
+        self.assert_craft("division", "research", 60, ("needs two independent sources", "the date of its data",
+                                                       "what would change it", "Jobs to be done"))
+
+    def test_gtm_craft(self):
+        self.assert_craft("division", "gtm", 60, ("Positioning: for <ICP>", "one primary action", "Channels by stage",
+                                                  "sample size", "one measurable next step"))
+
+    def test_ops_craft(self):
+        self.assert_craft("division", "ops", 60, ("Write the rollback first", "canary baseline", "revoke it first",
+                                                  "A runbook is numbered steps"))
+
+    def test_design_craft(self):
+        self.assert_craft("division", "design", 60, ("loading, empty, error, success", "4.5:1",
+                                                     "Review the running product", "One token source"), DESIGN)
+
+    def test_content_craft(self):
+        self.assert_craft("division", "content", 60, ("[needs owner input]", "(tutorial)", "Release notes"), CONTENT)
+
+    def test_a_custom_kind_without_a_craft_renders_none(self):
+        """`personas/craft/<kind>.md` exists only for a listed custom kind (it has a charter); any other custom
+        division renders no Craft and no run of blank lines."""
+        from orche import config
+        for path in (PERSONAS / "craft").glob("*.md"):
+            self.assertTrue(config.DEFAULTS["kinds"][path.stem]["charter"], path.name)
+        text, _ = onboarding.persona_text("division", project="acme", name="art", session="div-acme-art",
+                                          model="claude-opus-5-5", effort="high",
+                                          custom={"label": "Art", "charter": "Owns the art."})
+        self.assertNotIn("## Craft", text)
+        self.assertNotIn("\n\n\n", text)
+
+    def test_no_persona_names_an_installed_skill(self):
+        """c77: a persona carries its craft itself, never a pointer to an installed skill: no slash command but
+        `/clear` and no skill pack's name, in a template or a rendered persona."""
+        texts = {p.name: p.read_text() for p in PERSONAS.rglob("*.md")}
+        for role, name, custom in ([("division", n, None) for n in ("build", "rnd", "research", "gtm", "ops")]
+                                   + [("feature", "checkout", None), ("division", "design", DESIGN),
+                                      ("division", "content", CONTENT)]):
+            texts[name] = onboarding.persona_text(role, project="acme", name=name, session=f"x-{name}",
+                                                  model="claude-opus-5-5", effort="high", custom=custom)[0]
+        for where, text in texts.items():
+            self.assertNotRegex(text, r"(?i)gstack|superpowers|mattpocock|pstack|poteto|vibesubin", where)
+            self.assertEqual(set(re.findall(r"(?<![\w./~-])/([a-z][a-z0-9-]+)", text)) - {"clear"}, set(), where)
+
 
 class SkillsTest(unittest.TestCase):
     def test_skills_have_frontmatter_and_a_short_inject_block(self):
@@ -327,7 +405,6 @@ class SkillsTest(unittest.TestCase):
         table = readme[readme.index("## Any time"):]
         for say in ("turn on Jev", "cross-check PRs with Codex", "set the token for background runs",
                     "let the janitor clean up", "set up the merge queue for <project>", "run up to 30 agents",
-                    "make notification clicks open the tab",
                     "set up again", "update", "what changed in <project>?", "how much did this cost?",
                     "check the setup", "what else can ORCHE do?"):
             self.assertIn(f'"{say}"', table)
@@ -335,10 +412,6 @@ class SkillsTest(unittest.TestCase):
         main = " ".join((SKILLS / "orche-main" / "SKILL.md").read_text().split())
         self.assertIn('| What else can ORCHE do, what do you recommend | `orche doctor` (its "Next steps" block) |', main)
         self.assertIn("| Set up a project, set up again, add a division, change a model |", main)
-        self.assertIn("| Make notification clicks open the tab | Main runs `brew install terminal-notifier`, then the "
-                      "owner allows its notifications once; without it a click opens Orca (enough for most; the "
-                      "exact tab needs terminal-notifier) | one line |", main)
-        self.assertIn("`orche focus <proj\\|session>`", (SKILLS / "orche" / "SKILL.md").read_text())
         apply_text = " ".join((SKILLS / "orche-apply" / "SKILL.md").read_text().split())
         self.assertIn("init writes `.orche/SETUP.md` (the setup report) and Main reports it", apply_text)
         self.assertIn("the `setup report:` path it printed", apply_text)
@@ -346,7 +419,7 @@ class SkillsTest(unittest.TestCase):
     def test_rulebooks_cover_their_topics(self):
         main = (SKILLS / "orche-main" / "SKILL.md").read_text()
         for heading in ("## Dispatch grammar", "## When a report arrives", "## Question discipline",
-                        "## Status card", "## Echo-back", "## Candor"):
+                        "## Status card", "## Echo-back", "## Candor", "## Grill before dispatch"):
             self.assertIn(heading, main)
         build = (SKILLS / "orche-build" / "SKILL.md").read_text()
         card = INJECT.search(build).group(1)

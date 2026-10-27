@@ -1,6 +1,6 @@
 {
   "name": "orche",
-  "version": "0.14.0",
+  "version": "0.15.0",
   "description": "Orchestration layer for Claude Code + Orca: one Main per project, division heads that staff workers in their own worktrees, a merge queue that lands green PRs, and a verification ledger",
   "author": {
     "name": "0xmoomi"

@@ -106,8 +106,6 @@ exit 0
 # Everything ORCHE or install.sh may run that acts on this machine: each must be a fake in fakebin
 # (or nowhere on PATH) before any child starts.
 MACHINE_TOOLS = ("claude", "orca", "osascript", "security", "launchctl", "open", "pbcopy", "pbpaste")
-# terminal-notifier (c62): absent unless a test puts a fake in fakebin; never the real one.
-OPTIONAL_TOOLS = ("terminal-notifier",)
 OLD_PYTHON = """#!/bin/sh
 case "$1" in --version) echo "Python 3.9.6"; exit 0 ;; esac
 exit 1
@@ -193,7 +191,7 @@ class InstallShTest(unittest.TestCase):
         """`env`, after checking that none of MACHINE_TOOLS on its PATH is outside fakebin: a test
         whose PATH lets the real launchctl, open, osascript, security, claude or orca through fails
         here, before anything runs."""
-        for name in MACHINE_TOOLS + OPTIONAL_TOOLS:
+        for name in MACHINE_TOOLS:
             found = shutil.which(name, path=env["PATH"])
             if found is not None and Path(found).parent != self.fake:
                 self.fail(f"{name} would run {found}: put a fake in fakebin first")
@@ -331,8 +329,6 @@ class InstallShTest(unittest.TestCase):
         # on this PATH replaced the developer's heartbeat job with the temp clone's).
         for name in MACHINE_TOOLS:
             self.assertEqual(shutil.which(name, path=self.env["PATH"]), str(self.fake / name), name)
-        for name in OPTIONAL_TOOLS:
-            self.assertIsNone(shutil.which(name, path=self.env["PATH"]), name)
         real = _write(self.tmp / "elsewhere" / "launchctl", "#!/bin/sh\nexit 0\n")
         with self.assertRaises(AssertionError) as caught:   # the fence refuses before any spawn
             self.fenced({**self.env, "PATH": f"{real.parent}:{self.env['PATH']}"})

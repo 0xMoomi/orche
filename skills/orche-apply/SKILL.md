@@ -43,7 +43,8 @@ no checklist, no dry-run, no question. Pass timeout 600000 (the intake runs last
 `Main is open in the main-<proj> tab with the setup summary; from here on, talk to Main there.`
 and closes this window, as in step 6 below; init writes `.orche/SETUP.md` (the setup report) and Main reports it.
 Only when it printed `could not close the window that ran init` or `could not switch`, hand over as step 6 says
-and stop. If it fails with `not inside a git repository`, ask for the project path.
+and stop. If it fails with `not inside a git repository`, run the first setup below (it asks whether to create the
+repository here).
 A path or a project name means that project.
 
 ## In plain words (choices)
@@ -84,10 +85,17 @@ Never hand it to the `hr` agent: a subagent cannot ask.
   setup report then names them.
 - Which divisions: from the same JSON, one line per existing division (`<label> (<key>) — <desc> · <model label>
   · <status_text>`) and one line naming the kinds that can be added; no question.
-- First setup: step 1 below and `orche hr choices --json`; ask `ask.setup`; a divisions value
-  `"pick"` → `ask.pick`; a models value `"pick"` → `ask.model.<kind>` per chosen division (four per call); write the
-  setup file with `divisions`, `custom` (a picked `design`/`content` as `{}`) and `models` (none for `"recommended"`,
-  the picked model id for every division) (step 3); preview (step 4), then ask, in the user's language, whether to make
+- First setup: `orche hr choices --json` in the folder the user is in. When `ask.where` is not null (no git repository
+  here), ask its two entries first in one call (`Where is the project?`, then `GitHub`): `{"new": true}` → the project
+  is this folder, made by `orche init --new <private|public|local>` at apply time; `{"path": "*"}` → the path the
+  user types (a folder without `.git` there also gets `--new <visibility>`, one with it plain `orche init <path>`);
+  then run `orche hr choices --json` again in a repository folder only if the user named one. Then ask `ask.setup`:
+  the preset question (`How will this project run?`, the recommended preset first) and the models question; a preset's
+  value is a setup-file fragment (`preset`, `divisions`, `custom`) to copy as is; `"pick"` → `ask.pick`; a models
+  value `"pick"` → `ask.model.<kind>` per chosen division (four per call); write the setup file with that fragment (or
+  `divisions` and `custom`, a picked `design`/`content` as `{}`) and `models` (none for `"recommended"`, the picked
+  model id for every division) (step 3); for a new repository skip the preview and apply with `orche init [<path>]
+  --new <visibility> --setup-file <path>` after the confirmation below; preview (step 4), then ask, in the user's language, whether to make
   it as shown (the preview's `Summary:` line in the user's words, one line), header "confirm", options "make it
   (recommended)" — "ends by reading the project (intake): about a minute, under $1" and "change it" — "write what to
   change"; on make it, apply (step 5). The literal `orche init` keeps the no-question path above.

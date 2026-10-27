@@ -616,10 +616,8 @@ def _publish(reg, job, summary, owner, head, result, cfg=None) -> tuple:
     files `info` "unverified: <gap>" with the gap's OWNER step, if any."""
     member = roster.Roster(reg).member(job.to)
     b = brief.find(reg, job.unit, project=job.project)
-    row = ledger.row_for_sha(job.project, head) or {}
     title, body = publish.pr_text(member, job.root or job.worktree, goal=b.fields.get("GOAL") if b is not None
-                                  else job.unit, report=result, unit=job.unit, rev=job.rev,
-                                  verdict=row.get("verdict"), verifier=row.get("verifier"), cfg=cfg)
+                                  else job.unit, report=result, cfg=cfg)
     out = publish.publish(member, job.worktree, job.root or job.worktree, unit=job.unit, title=title, body=body,
                           cfg=cfg)
     if isinstance(out, publish.Unchanged):     # R5: nothing against the base; filed without a PR or a review

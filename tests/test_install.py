@@ -663,6 +663,8 @@ class DoctorTest(InstallCase):
         steps = lines[at + 1:]
         self.assertTrue(steps and all(ln.startswith("- ") for ln in steps), steps)
         self.assertEqual(steps[-1], '- Something wrong: any time. Say "check the setup"; Main runs `orche doctor`.')
+        self.assertIn("- More agents at once: how many workers may run in parallel. Up to 4 at once (default). ", out)
+        self.assertIn("- Janitor: cleans up daily; ", out)
         self.assertFalse(any(ln.startswith(("WARN", "FAIL")) for ln in steps))   # install.sh greps those only
         self.json_doctor = True
         code, out, _ = self.doctor()
@@ -715,24 +717,12 @@ class DoctorTest(InstallCase):
         self.assertIn(f"WARN\torche on PATH\t{LOGIN_SH} -lc cannot find orche; add to your shell profile: "
                       f"export PATH=\"{support.ROOT / 'bin'}:$PATH\"", out.splitlines())
 
-    def test_without_terminal_notifier_the_row_says_what_a_click_does(self):
-        """c62, c65: terminal-notifier is optional, never a WARN; the row and the next steps say what a click opens."""
-        registry.save(registry.empty())
-        code, out, _ = self.doctor(missing=("terminal-notifier",))
-        self.assertEqual(code, 0, out)
-        self.assertIn("OK\ttool terminal-notifier\tnot installed (optional: brew install terminal-notifier makes a "
-                      "notification click open the project's Main tab; allow its notifications once when macOS "
-                      "asks)", out.splitlines())
-        self.assertIn('- Notification click: opens Orca (enough for most; the exact tab needs terminal-notifier). '
-                      'Say "make notification clicks open the tab"', out)
-
     def test_warn_for_missing_age_ok_for_valid_registry(self):
         registry.save(registry.empty())
         code, out, _ = self.doctor()
         self.assertEqual(code, 0, out)
         lines = out.splitlines()
         self.assertIn("WARN\ttool age\tnot found on PATH", lines)
-        self.assertTrue(any(l.startswith("OK\ttool terminal-notifier\t") for l in lines))
         self.assertIn("OK\tregistry\tvalid (0 project(s))", lines)
         self.assertTrue(any(l.startswith("OK\torca\t") for l in lines))
         self.assertTrue(any(l.startswith("WARN\tstatusline\t") for l in lines))

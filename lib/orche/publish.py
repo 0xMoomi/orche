@@ -21,8 +21,8 @@ an OWNER step).
 
 The worker's name carries the issue key (`issue_of`: `des-47-…` -> DES-47, `123-…` -> #123): the PR title
 ends with ` (KEY)` and its body starts with `Fixes KEY`; the tracker's own GitHub automation moves the
-issue (ORCHE never calls the tracker). The footer claims the merge queue only when the project's gate
-applies (`gate`).
+issue (ORCHE never calls the tracker). The body names no writer (no AI-authorship marker: a squash merge can
+copy it into history); its queue sentence appears only when the project's gate applies (`gate`).
 """
 import re
 from dataclasses import dataclass
@@ -32,9 +32,7 @@ from . import github, mask, shell
 FETCH_TIMEOUT = 60
 TITLE_MAX = 72
 BODY_MAX = 4000
-FOOTER = "ORCHE unit `{unit}` rev {rev} · writer `{session}` · ledger {verdict} by {verifier}"
-FOOTER_QUEUE = ("Lands through the ORCHE merge queue after a cross-vendor pre-review and a head review; please do not "
-                "merge by hand.")
+FOOTER_QUEUE = "Lands through the merge queue after its checks and the head review; please do not merge by hand."
 DEFAULT_PREFIX = "feat"
 _ISSUE = re.compile(r"([a-z]+)-(\d+)(?:-|$)|(\d+)-", re.IGNORECASE)
 REJECTED = ("push rejected: origin/{branch} has commits this worktree lacks (someone pushed to it); merge them, "
@@ -174,23 +172,20 @@ def title_of(goal, issue="") -> str:
     return (line if len(line) <= room else line[:room - 1] + "…") + tail
 
 
-def body_of(report, *, unit, rev, session, verdict, verifier, issue="", queued=False) -> str:
+def body_of(report, *, issue="", queued=False) -> str:
     """Appendix A.12: `Fixes KEY` first when the worker's name carries an issue key, then the unit's
-    REPORT.md, masked and capped, then ORCHE's footer (its queue sentence only when the gate applies)."""
+    REPORT.md, masked and capped, then the queue sentence (only when the gate applies)."""
     text = mask.redact(str(report or "").strip())[0][:BODY_MAX]
-    footer = FOOTER.format(unit=unit, rev=rev, session=session, verdict=verdict or "-", verifier=verifier or "-")
-    return ((f"Fixes {issue}\n\n" if issue else "") + f"{text}\n\n---\n" + footer
-            + (f"\n{FOOTER_QUEUE}" if queued else ""))
+    return (f"Fixes {issue}\n\n" if issue else "") + text + (f"\n\n{FOOTER_QUEUE}" if queued else "")
 
 
-def pr_text(member, root, *, goal, report, unit, rev, verdict, verifier, cfg=None) -> tuple:
-    """(title, body) of a gated member's PR: the issue key from the worker's name, the footer's queue
-    sentence when the project's gate applies (one `gate` call)."""
+def pr_text(member, root, *, goal, report, cfg=None) -> tuple:
+    """(title, body) of a gated member's PR: the issue key from the worker's name, the queue sentence when the
+    project's gate applies (one `gate` call)."""
     project = member.project if member is not None else None
     key = issue_of(member.name) if member is not None and member.kind == "feat" else ""
     queued = gate(root, cfg, project)[1]
-    return title_of(goal, key), body_of(report, unit=unit, rev=rev, session=member.session if member else "-",
-                                        verdict=verdict, verifier=verifier, issue=key, queued=queued)
+    return title_of(goal, key), body_of(report, issue=key, queued=queued)
 
 
 def _gh_gap(exc, what, unit) -> Gap:

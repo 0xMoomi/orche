@@ -38,7 +38,6 @@ ORCHE unit rules (full help: /orche)
 | `orche ledger check --pr <pr> --sha <sha>` | `VERIFIED <verdict>` or `NOT-VERIFIED` for the PR's head SHA |
 | `orche feat new\|sleep\|wake\|retire` | Feature-agent lifecycle (HR; limits apply) |
 | `orche sleep <unit>` / `orche wake <unit>` | Close a pane and pause / resume a session |
-| `orche focus <proj\|session>` | Switch Orca to a pane (a project's Main by default; a closed Main is reopened) |
 | `orche decide ...` | Append a row to the unit's DECISIONS.tsv |
 | `orche report <status> --summary "..."` | File a unit's completion/blocker as one inbox pointer (to the brief's sender: Main, or the head for its workers) |
 | `orche run <unit>` | Run (or re-run by hand) one unit headless with `claude -p` in its worktree; the Stop hook starts new units this way. `--dry-run` prints the argv |

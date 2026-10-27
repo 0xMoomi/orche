@@ -1,7 +1,8 @@
 """`orche hr choices` (design 2026-10-23 §10.3, Appendix D): the division kinds and models of a
 project, and the owner's questions built from them (`ask`), each one element of AskUserQuestion's
-`questions` plus the value of every label. Read-only; the only subprocesses are `codex --version` and
-the RAM probe of `ask.scale` (`procs.mem_total_mb`).
+`questions` plus the value of every label. Read-only; the only subprocesses are `codex --version`, the RAM
+probe of `ask.scale` (`procs.mem_total_mb`) and, for a project not under ORCHE yet, local git reads of the
+folder the owner is in (detect).
 
 Guardrails (pinned by tests/test_choices.py): never an unavailable model as an option (it is named
 in the question instead), the recommendation first and marked, a header of at most 12 characters,
@@ -12,10 +13,9 @@ owner-editable data)."""
 import os
 import shutil
 
-from .. import procs, registry, scale, vendors
+from .. import procs, registry, scale, setup_flow, vendors
 
-DEFAULT_SET = ("rnd", "research", "build", "gtm")
-LIGHT_SET = ("rnd", "build")
+PRESETS = setup_flow.PRESETS
 HIDDEN = ("retired", "onboarding")
 SCALES = ("default", "20", "30")
 TIGHT_RAM_MB, TIGHT_DISK_MB = 32 * 1024, 30 * 1024
@@ -34,17 +34,18 @@ TEXTS = {
     "codex_absent": "Codex is not installed (install: npm install -g @openai/codex, then codex login)",
     "codex_broken": "Codex is installed but does not start (fix: npm install -g @openai/codex@latest)",
     "codex_active": "Codex is not offered while this division's pane is open (sleep it first)",
-    "setup_q": "Which divisions should this project start with?", "setup_h": "Divisions",
-    "preset_default": ("The default {n} (recommended)", "{labels}: prototype to launch"),
-    "preset_light": ("Light: 2", "{labels}: prototypes and building only"),
+    "setup_q": "How will this project run?", "setup_h": "Preset",
+    "preset": {"build": ("Build-focused", "{groups}; Build's workers specialise in front, back and infra. For a "
+                                          "product that is being built."),
+               "operations": ("Operations", "{names}. For a service that is live.")},
     "preset_pick": ("Pick them", "one by one, {extras} included"),
     "setup_models_q": "Which models should the divisions use?", "setup_models_h": "Models",
     "models_fitted": ("Fitted to each (recommended)", "{groups}"),
     "models_all": ("All {model}", "the strongest for all · cost {dots}"),
     "models_pick": ("Per division", "one question per division next"),
-    "pick_std_q": "Which standard divisions? (pick any)", "pick_std_h": "Standard",
+    "pick_std_q": "Which divisions? (pick any)", "pick_std_h": "Divisions",
     "pick_extra_q": "Any more? (pick any)", "pick_extra_h": "Extras",
-    "none": ("None", "standard ones only"),
+    "none": ("None", "only the ones above"),
     "status": {"active": "active", "dormant": "dormant", "paused": "paused", "onboarding": "onboarding",
                "retired": "retired"},
     "scale_q": "How many agents should run at once?{machine}", "scale_h": "Scale", "scale_now": " (now)",
@@ -54,6 +55,14 @@ TEXTS = {
                                  "(about ${hour}/h API-equivalent)"),
               "30": ("Up to 30", "{par} runs at once · spend cap ${cap} (about ${hour}/h) · a Claude subscription hits "
                                  "its usage window: mix in an API key or Codex")},
+    "where_q": "Where is the project?", "where_h": "Project",
+    "where_new": ("Create a new repository in this folder ({name})", "git init and a first commit here; then GitHub "
+                  "and Orca"),
+    "where_other": ("Use another folder (type its path)", "an existing repository or an empty folder elsewhere"),
+    "github_q": "Should the new repository go to GitHub?", "github_h": "GitHub",
+    "github": {"private": ("Private", "a private repository under your gh account"),
+               "public": ("Public", "anyone can see it"),
+               "local": ("Local only (no GitHub yet)", 'publish it later: say "publish this repository to GitHub"')},
     "rules": "name: 2–16 characters, a-z first, then a-z, 0-9 or single hyphens (e.g. marketing) · "
              "label: ≤ 24 characters · charter: one paragraph, ≤ 400 characters",
 }
@@ -169,8 +178,8 @@ def _models(t, cfg, catalog, avail) -> list:
     return models
 
 
-def _kinds(t, cfg, key, proj) -> list:
-    """Every division kind of the project (or of a new one), in display order."""
+def _kinds(t, cfg, key, proj, rec) -> list:
+    """Every division kind of the project (or of a new one, suggested from preset `rec`), in display order."""
     divs = proj.get("divisions") or {}
     customs = proj.get("custom_divisions") or {}
     stage = proj.get("stage") or "building"
@@ -183,9 +192,9 @@ def _kinds(t, cfg, key, proj) -> list:
         exists = div is not None and status != "retired"
         if key:
             suggested = not exists and status != "retired" and (
-                name in DEFAULT_SET or (name == "ops" and stage == "public"))
+                name in PRESETS["operations"] or (name == "ops" and stage == "public"))
         else:
-            suggested = name in DEFAULT_SET
+            suggested = name in PRESETS[rec]
         kinds.append({"key": name, "standard": name in registry.DIVISIONS,
                       "label": custom.get("label") or (info["label"] if info["listed"] else name),
                       "desc": info["desc"], "charter": custom.get("charter") or info["charter"] or None,
@@ -218,19 +227,37 @@ def _project_asks(t, kinds, mlabel) -> tuple:
     return add, _entry(q, t["change_h"], False, opts)
 
 
-def _setup_asks(t, kinds, models, mlabel, custom, avail) -> tuple:
-    """`ask.setup` and `ask.pick` of a project not under ORCHE yet."""
-    by = {k["key"]: k for k in kinds}
-    dlabels = [by[n]["label"] for n in DEFAULT_SET if n in by]
-    extras = [k for k in kinds if k["key"] not in DEFAULT_SET]
+def _and(words) -> str:
+    return words[0] if len(words) == 1 else ", ".join(words[:-1]) + " and " + words[-1]
+
+
+def _preset_option(t, name, by, mlabel, rec) -> tuple:
+    """One preset of `ask.setup`: its label (the recommendation marked), its description and its value, a setup
+    file fragment (`preset`, the divisions, a custom one as {})."""
+    members = [n for n in PRESETS[name] if n in by]
     groups = {}
-    for n in DEFAULT_SET:
-        if n in by:
-            groups.setdefault(by[n]["recommended"], []).append(by[n]["label"])
+    for n in members:
+        groups.setdefault(by[n]["recommended"], []).append(n)
+    lab, desc = t["preset"][name]
+    value = {"preset": name, "divisions": members,
+             "custom": {n: {} for n in members if n not in registry.DIVISIONS}}
+    return (lab + (t["rec"] if name == rec else ""),
+            desc.format(groups=" and ".join(f"{', '.join(ns)} on {mlabel.get(m) or m}" for m, ns in groups.items()),
+                        names=_and(members)), value, name)
+
+
+def _setup_asks(t, kinds, models, mlabel, custom, avail, rec) -> tuple:
+    """`ask.setup` and `ask.pick` of a project not under ORCHE yet; `rec` is the recommended preset."""
+    by = {k["key"]: k for k in kinds}
+    chosen = [n for n in PRESETS[rec] if n in by]
+    extras = [k for k in kinds if k["key"] not in chosen]
+    groups = {}
+    for n in chosen:
+        groups.setdefault(by[n]["recommended"], []).append(by[n]["label"])
     group_text = ", ".join(f"{'·'.join(labs)} {mlabel.get(m) or m}" for m, labs in groups.items())
     strongest = custom["recommended"]
     sdots = next((m["cost"] for m in models if m["model"] == strongest), "")
-    (dl, dd), (ll, ld), (pl, pd) = t["preset_default"], t["preset_light"], t["preset_pick"]
+    pl, pd = t["preset_pick"]
     (fl, fd), (al, ad), (ml, md) = t["models_fitted"], t["models_all"], t["models_pick"]
     # "All <strongest>" only when that model runs here (a Codex recommendation needs Codex)
     s_ok = vendors.vendor_of(strongest) != vendors.CODEX or (avail is not None and avail.ok)
@@ -239,24 +266,35 @@ def _setup_asks(t, kinds, models, mlabel, custom, avail) -> tuple:
         mopts.append((al.format(model=mlabel.get(strongest) or strongest), ad.format(dots=sdots), strongest, "all"))
     mopts.append((ml, md, "pick", "pick"))
     s_note = "" if s_ok else _codex_note(t, avail)
+    order = sorted(PRESETS, key=lambda name: name != rec)
     setup = [
-        _entry(t["setup_q"], t["setup_h"], False, [
-            (dl.format(n=len(DEFAULT_SET)), dd.format(labels="·".join(dlabels)), list(DEFAULT_SET), "default"),
-            (ll, ld.format(labels="·".join(by[n]["label"] for n in LIGHT_SET)), list(LIGHT_SET), "light"),
-            (pl, pd.format(extras="·".join(k["label"] for k in extras)), "pick", "pick")]),
+        _entry(t["setup_q"], t["setup_h"], False,
+               [_preset_option(t, name, by, mlabel, rec) for name in order]
+               + [(pl, pd.format(extras="·".join(k["label"] for k in extras)), "pick", "pick")]),
         _entry(t["setup_models_q"] + (f" {s_note}" if s_note else ""), t["setup_models_h"], False, mopts)]
     nl, nd = t["none"]
     pick = [
         _entry(t["pick_std_q"], t["pick_std_h"], True,
-               [(by[n]["label"] + t["rec"], by[n]["desc"], n, n) for n in DEFAULT_SET if n in by]),
+               [(by[n]["label"] + t["rec"], by[n]["desc"], n, n) for n in chosen]),
         _entry(t["pick_extra_q"], t["pick_extra_h"], True,
                [(k["label"], k["desc"], k["key"], k["key"]) for k in extras[:3]] + [(nl, nd, None, "none")])]
     return setup, pick
 
 
-def build(reg, cfg, key, avail=None, machine=None) -> dict:
+def _where_asks(t, here) -> list:
+    """`ask.where` of a folder without a git repository: where the project is, then (for a new one) GitHub."""
+    (nl, nd), (ol, od) = t["where_new"], t["where_other"]
+    where = _entry(t["where_q"], t["where_h"], False, [
+        (nl.format(name=os.path.basename(os.path.realpath(here))) + t["rec"], nd, {"new": True}, "new"),
+        (ol, od, {"path": "*"}, "path")])
+    gh = [(lab + (t["rec"] if vis == "private" else ""), desc, vis, vis) for vis, (lab, desc) in t["github"].items()]
+    return [where, _entry(t["github_q"], t["github_h"], False, gh)]
+
+
+def build(reg, cfg, key, avail=None, machine=None, here=None) -> dict:
     """The choices JSON (Appendix D.1) of project `key` (None: a project not under ORCHE yet);
-    `machine` {ram_mb, free_disk_mb} defaults to machine_info() of the project's path."""
+    `machine` {ram_mb, free_disk_mb} defaults to machine_info() of the project's path; `here` (a project not
+    under ORCHE yet): the folder the owner is in (no git repository there: `ask.where` first)."""
     t = TEXTS
     proj = ((reg or {}).get("projects") or {}).get(key) or {} if key else {}
     divs = proj.get("divisions") or {}
@@ -266,12 +304,16 @@ def build(reg, cfg, key, avail=None, machine=None) -> dict:
         avail = vendors.available(cfg)
     models = _models(t, cfg, catalog, avail)
     mlabel = {m["model"]: m["label"] for m in models}
-    kinds = _kinds(t, cfg, key, proj)
+    from .. import detect
+    top = detect.toplevel(here) if here and not key else None
+    rec = detect.stage(top) if top else "build"
+    kinds = _kinds(t, cfg, key, proj, rec)
     star = vendors.kind(cfg, "custom")
     custom = {"recommended": star["model"], "pane_effort": star["effort"], "why": star["why"],
               "rules": t["rules"]}
 
-    ask = {"add": None, "change": None, "model": {}, "setup": None, "pick": None}
+    ask = {"where": _where_asks(t, here) if here and not key and not top else None,
+           "add": None, "change": None, "model": {}, "setup": None, "pick": None}
     if machine is None:
         machine = machine_info(proj.get("path"))
     cur_scale, ask["scale"] = _scale_entry(t, cfg, reg, machine)
@@ -289,6 +331,6 @@ def build(reg, cfg, key, avail=None, machine=None) -> dict:
     if key:
         ask["add"], ask["change"] = _project_asks(t, kinds, mlabel)
     else:
-        ask["setup"], ask["pick"] = _setup_asks(t, kinds, models, mlabel, custom, avail)
-    return {"project": key, "stage": stage, "kinds": kinds, "custom": custom, "models": models,
+        ask["setup"], ask["pick"] = _setup_asks(t, kinds, models, mlabel, custom, avail, rec)
+    return {"project": key, "stage": stage, "recommended_preset": None if key else rec, "kinds": kinds, "custom": custom, "models": models,
             "scale": {"current": cur_scale, "presets": list(scale.presets(cfg)), "machine": machine}, "ask": ask}

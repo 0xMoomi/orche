@@ -3,7 +3,8 @@ interactive checklist) and the one-line summary.
 
 A setup is `{"divisions": [standard names], "custom": {name: {label, charter, model, effort}},
 "stage": str, "aliases": [str], "models": {division: model string}}` — the same JSON `orche init --print-setup` prints and
-`--setup-file` reads. Defaults (an unregistered repo): every standard division except `ops`, no
+`--setup-file` reads. A setup file may also name a `preset` (PRESETS): without `divisions` it gives them, and
+init records it (the `build` preset adds Build's specialist standing order). Defaults (an unregistered repo): every standard division except `ops`, no
 custom division, stage `building`, no aliases, no models (the recommendation). A registered
 project's setup is what it has (its recorded models included).
 Stdlib only; the checklist is plain stdin/stdout (no curses).
@@ -14,7 +15,9 @@ import re
 from . import config, registry, vendors
 
 DEFAULT_DIVISIONS = ("rnd", "research", "build", "gtm")
-SETUP_KEYS = ("divisions", "custom", "stage", "aliases", "models")
+# The two first-setup presets (`orche hr choices` recommends one from detect.stage); `design` is a custom division.
+PRESETS = {"build": ("build", "design", "rnd", "research"), "operations": ("build", "design", "rnd", "research", "gtm")}
+SETUP_KEYS = ("divisions", "custom", "stage", "aliases", "models", "preset")
 CUSTOM_INPUT_KEYS = ("label", "charter", "model", "effort")
 _BLANK_LINE = re.compile(r"\n\s*\n")
 _ITEM_NUMBER = re.compile(r"[0-9]+")   # ASCII digits only: `²` or `１` is no item number
@@ -131,6 +134,20 @@ def from_data(data: dict, base: dict) -> dict:
         except SetupError as exc:
             errors += exc.errors
     setup["custom"].update(new_custom)
+    if "preset" in data:
+        if data["preset"] not in PRESETS:
+            errors.append(f"setup: preset must be one of {'|'.join(PRESETS)}, got {data['preset']!r}")
+        else:
+            setup["preset"] = data["preset"]
+            members = PRESETS[data["preset"]]
+            if "divisions" not in data:
+                setup["divisions"] = [d for d in registry.DIVISIONS if d in members]
+            for name in members:
+                if name not in registry.DIVISIONS and name not in setup["custom"]:
+                    try:
+                        setup["custom"][name] = custom_spec(name, {})
+                    except SetupError as exc:
+                        errors += exc.errors
     if "divisions" in data:
         divisions = data["divisions"]
         if not isinstance(divisions, list) or not all(isinstance(d, str) for d in divisions):

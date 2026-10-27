@@ -3,6 +3,34 @@
 All notable changes to ORCHE are listed here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow semantic versioning.
 
+## 0.15.0 — 2026-10-27
+
+### Added
+
+- A new, empty folder can be set up directly: ORCHE asks whether to create the repository there, then makes it end to end (git, a first commit with the merge queue's check script, a private or public GitHub repository, Orca) with `orche init --new`, and skips the intake of an empty repository.
+- The first setup offers two presets, build-focused and operations, and recommends the one the repository suggests (code with a deploy config, a release workflow or tags means operations); the build-focused preset adds a standing order that makes Build's workers specialists in front, back and infra.
+- `orche init` opens one pull request adding the merge queue's check script, built from the project's own test command, when the base branch lacks it, so the queue turns on once that pull request is merged.
+- Build's persona carries a craft section: the owner's engineering rules, the questions to answer before slicing, tracer-bullet slices, how to read a diff when a slice reaches the pane, and what counts as evidence.
+- The worker's persona carries a craft section: precedent first, one vertical slice at a time from a failing test, root-cause debugging, verification on the real artifact, a report that becomes the PR body, and a scope gap reported instead of widened.
+- R&D's persona carries a craft section: the decision framed before any experiment, prototypes and spikes that answer one question and end deleted or promoted, numbers with their runs and limits, and every design drafted twice.
+- Research's persona carries a craft section: the question first, origin sources, two independent sources for a claim that carries the conclusion, links with dates, jobs to be done by segment, and a one-page brief that leads with the answer and its confidence.
+- GTM's persona carries a craft section: the order of work, a positioning and ICP shape, copy and conversion rules, offer and price, launch and channels by stage, and measurement that ends in one measurable next step.
+- Ops's persona carries a craft section: the rollback written before a deploy, a canary watched against its baseline, secrets kept out of files and logs, alert hygiene, incidents and runbooks.
+- A Design or Content division gets a craft section of its own (`templates/personas/craft/`); other custom divisions get none.
+- Main's rulebook has a "Grill before dispatch" paragraph: before a non-trivial brief Main settles the open design branches with the owner, has a premise that two failed fixes share tested first, and asks for competing prototypes when nothing in the codebase sets a precedent.
+
+### Changed
+
+- Pull request bodies no longer carry a provenance footer naming the writing session; `orche doctor` shows a project's own base branch; the setup report lists every team convention it detected.
+
+- The setup report explains itself: it counts the agents (one per division, always on, plus one worker per running unit of work up to the current limit), says in plain words what each feature does, and describes the merge queue and the janitor concretely.
+- The janitor is on by default: `orche install` and `orche update` turn it on once and install its daily schedule like the heartbeat job, and `orche janitor disable` still turns it off for good.
+- The setup report has a "Running now" section: the heartbeat interval, the janitor's daily time and rules, the merge queue's state for the project, Jev and notifications, with this machine's real values.
+
+### Removed
+
+- terminal-notifier support and `orche focus`: a notification click opens Orca, whose own notification already opens the tab when Main's turn ends.
+
 ## 0.14.0 — 2026-10-27
 
 ### Added

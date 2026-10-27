@@ -14,12 +14,7 @@ from .. import (__version__, config, github, headless, jev_setup, ladder, mask, 
                 runs, shell, units, vendors)
 from . import settings, statusline
 
-TOOLS = ("gcloud", "gh", "vercel", "age", "zstd", "terminal-notifier")
-OPTIONAL = ("terminal-notifier",)              # never a WARN: Orca's own notification is enough
-MISSING = {"terminal-notifier": "not installed (optional: brew install terminal-notifier makes a notification click "
-                                "open the project's Main tab; allow its notifications once when macOS asks)"}
-FOUND = {"terminal-notifier": "found (allow its notifications once under System Settings > Notifications when "
-                              "macOS asks; a refused permission falls back to Orca's own notification)"}
+TOOLS = ("gcloud", "gh", "vercel", "age", "zstd")
 WRITE_PERMS = ("ADMIN", "MAINTAIN", "WRITE")     # gh viewerPermission the merge queue can merge with
 DEPLOY_FILES = ("vercel.json", "netlify.toml")
 
@@ -174,7 +169,9 @@ def _roots(reg):
 
 def gh_rows(reg) -> list:
     """`gh` per project: the account gh acts as, its viewerPermission on the project's repository (the
-    merge queue needs WRITE or more) and the base; gh not installed: one WARN."""
+    merge queue needs WRITE or more) and the project's base (publish.base, else GitHub's default branch); gh not
+    installed: one WARN."""
+    from .. import publish
     if shutil.which("gh") is None:
         return [("WARN", "gh", "gh is not installed: the merge queue cannot open or merge PRs — brew install gh, "
                                "then gh auth login")]
@@ -199,7 +196,7 @@ def gh_rows(reg) -> list:
                                        "its origin remote"))
             continue
         perm, repo = str(data.get("viewerPermission") or "NONE"), data.get("nameWithOwner") or "?"
-        base = (data.get("defaultBranchRef") or {}).get("name") or "?"
+        base = publish.base(root, project=key) or (data.get("defaultBranchRef") or {}).get("name") or "?"
         rows.append(("OK", "gh", f"{key}: gh as {login} · {perm} on {repo} · base {base}") if perm in WRITE_PERMS
                     else ("WARN", "gh", f"{key}: gh account {login} has {perm} on {repo} — the queue cannot merge: "
                                         "gh auth switch -u <an account with write>, or gh auth login"))
@@ -440,6 +437,25 @@ def reconcile_job_rows(home) -> list:
     return [("OK", name, f"loaded, every {every}s")]
 
 
+def janitor_rows(home) -> list:
+    """The janitor's daily LaunchAgent: OK when its plist is there (on, or report only); WARN only when it
+    is missing after an install (install writes it); OK before any install."""
+    from .. import janitor
+    from . import StateUnreadable, launchd, load_state
+    name = "janitor"
+    if sys.platform != "darwin":
+        return [("OK", name, "not macOS: run `orche janitor run` daily (cron/systemd)")]
+    if launchd.plist_path(launchd.JANITOR, home).is_file():
+        how = "on" if janitor.enabled_flag().exists() else "report only (orche janitor enable lets it act)"
+        return [("OK", name, f"daily at {launchd.daily_at()}, {how}")]
+    try:
+        installed = bool(load_state())
+    except StateUnreadable:
+        installed = True
+    return [("WARN", name, "daily schedule missing: run orche install") if installed else
+            ("OK", name, "not scheduled yet (orche install adds it)")]
+
+
 def checks(ctx) -> list:
     out = []
 
@@ -466,14 +482,13 @@ def checks(ctx) -> list:
         add(*row)
     for tool in TOOLS:
         found = shutil.which(tool)
-        add("OK" if found or tool in OPTIONAL else "WARN", f"tool {tool}",
-            FOUND.get(tool, found) if found else MISSING.get(tool, "not found on PATH"))
+        add("OK" if found else "WARN", f"tool {tool}", found or "not found on PATH")
     add(*jev_setup.doctor_row())
     add(*oauth.doctor_row())
     level, detail = _orche_home()
     add(level, "orche_home", detail)
     job = job_state(ctx.home)
-    for row in (disk_checks() + heartbeat_rows(job) + reconcile_job_rows(ctx.home)
+    for row in (disk_checks() + heartbeat_rows(job) + reconcile_job_rows(ctx.home) + janitor_rows(ctx.home)
                 + privacy_rows(job)):
         add(*row)
     try:

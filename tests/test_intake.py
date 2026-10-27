@@ -33,11 +33,16 @@ def git(cwd, *argv):
                    capture_output=True, env={**os.environ, **GIT_ENV})
 
 
-def git_repo(path: Path) -> Path:
+def git_repo(path: Path, code=False) -> Path:
+    """A repository with a README; with `code`, a few source files too (init skips the intake of an empty one)."""
     path.mkdir(parents=True, exist_ok=True)
     subprocess.run(["git", "init", "-q", str(path)], check=True, capture_output=True)
     (path / "README.md").write_text("# acme\n")
-    git(path, "add", "README.md")
+    if code:
+        (path / "src").mkdir()
+        for n in range(5):
+            (path / "src" / f"m{n}.py").write_text(f"X = {n}\n")
+    git(path, "add", ".")
     git(path, "commit", "-q", "-m", "init")
     return path
 
@@ -494,7 +499,7 @@ class IfStaleTest(IntakeCase):
 class InitIntakeTest(FakeClaudeMixin, test_hr.HrCase):
     def setUp(self):
         super().setUp()
-        git_repo(self.repo)
+        git_repo(self.repo, code=True)
         self.setup_fake()
 
     def test_init_ends_with_the_intake(self):
@@ -623,6 +628,9 @@ class InitIntakeTest(FakeClaudeMixin, test_hr.HrCase):
                 last = [l for l in out.splitlines() if l.startswith("intake ")][-1]   # a first init adds the window line
                 self.assertTrue(last.startswith("intake skipped: "), last)
                 self.assertTrue(last.endswith("; run `orche intake acme-shop` later"), last)
+                why = last[len("intake skipped: "):-len("; run `orche intake acme-shop` later")]
+                self.assertIn(f'- Intake: skipped ({why}); say "run the intake" once there is code to read; Main runs '
+                              "`orche intake acme-shop`.\n", (self.repo / ".orche" / "SETUP.md").read_text())
                 self.assertFalse((self.repo / ".orche" / "intake.json").exists())
                 self.assertFalse((self.repo / ".orche" / "div").exists())
 
@@ -639,7 +647,7 @@ class InitClosesItsWindowTest(FakeClaudeMixin, test_hr.HrCase):
 
     def setUp(self):
         super().setUp()
-        git_repo(self.repo)
+        git_repo(self.repo, code=True)
         self.setup_fake()
         self.reply(answer({"build": "b", "gtm": "g"}))
 
@@ -677,7 +685,15 @@ class InitClosesItsWindowTest(FakeClaudeMixin, test_hr.HrCase):
         text = self.report().read_text()
         self.assertTrue(text.startswith("# ORCHE is set up: acme-shop\n\n- Divisions: build (claude-opus-5-5); "
                                         "gtm (claude-sonnet-5-5)\n"), text)
-        for part in (f"- Intake: {self.INTAKE}\n", "nothing is committed to the repository",
+        for part in ("- Agents: 2 division agents, one Orca tab each, always on. Each unit of work adds one worker "
+                     "while it runs; up to 4 run at once (custom).\n",
+                     "- Intake: read the repository once and wrote the project card and the division charters "
+                     "(claude-sonnet-5-5, $0.42, 38 s).\n",
+                     "nothing is committed to the repository; ORCHE's own files are excluded from git\n",
+                     "\n## Running now\n\n- Heartbeat: every 300 s (the reconcile job): ",
+                     "\n- Notifications: Orca shows one when Main finishes a reply; ",
+                     "- Janitor: cleans up daily; ", "- More agents at once: how many workers may run in parallel. "
+                     "Up to 4 at once (custom). ",
                      "- Talk to Main in the main-acme-shop tab, in any language.", "\n## Any time\n\n- ",
                      'Say "what else can ORCHE do?" to see this list again (Main runs `orche doctor`).'):
             self.assertIn(part, text)

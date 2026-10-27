@@ -55,14 +55,11 @@ def unidentified_message(r, place) -> str:
             "(ORCHE panes set it automatically) or run inside a unit worktree")
 
 
-def _publish(reg, member, cwd, key, unit, b, report, summary, proof):
+def _publish(reg, member, cwd, key, unit, b, report, summary):
     """A gated pane member's verified done: push its branch and ensure the PR. Published or Gap."""
     text = _report_text(report, summary)
-    row = proof.row or {}
     root = (reg.get("projects", {}).get(key) or {}).get("path") or cwd
-    title, body = publish.pr_text(member, root, goal=b.fields.get("GOAL") if b is not None else unit, report=text,
-                                  unit=unit, rev=b.rev if b else 1, verdict=row.get("verdict"),
-                                  verifier=row.get("verifier"))
+    title, body = publish.pr_text(member, root, goal=b.fields.get("GOAL") if b is not None else unit, report=text)
     return publish.publish(member, donegate._root(member, cwd), root, unit=unit, title=title, body=body)
 
 
@@ -132,7 +129,7 @@ def cmd_report(args):
         return EXIT_BLOCKED
     pr = review = None
     if args.status == "done" and donegate.gated(who.member) and not args.dry_run:
-        out = _publish(reg, who.member, cwd, key, unit, b, report, summary, proof)
+        out = _publish(reg, who.member, cwd, key, unit, b, report, summary)
         if isinstance(out, publish.Gap):
             print(f"orche: done not filed: {out.text}" + (f"\nOWNER: {out.owner}" if out.owner else ""),
                   file=sys.stderr)

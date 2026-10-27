@@ -9,7 +9,7 @@ from pathlib import Path
 from unittest import mock
 
 import support
-from orche import procs, reconcile, shell, units
+from orche import janitor, procs, reconcile, shell, units
 from orche.install import doctor, launchd
 from test_install import InstallCase
 
@@ -121,6 +121,46 @@ class InstallStepTest(InstallCase):
         cfg["reconcile"] = {"enabled": False}
         (self.home / "config.json").write_text(json.dumps(cfg))
         self.assertEqual(doctor.reconcile_job_rows(self.h)[0][0], "OK")
+
+
+@unittest.skipUnless(sys.platform == "darwin", "the LaunchAgent is macOS only")
+class JanitorDefaultTest(InstallCase):
+    """c75: install turns the janitor on once and writes its daily schedule; a re-install (what `orche update`
+    runs) keeps an owner's `orche janitor disable`; doctor warns only when the schedule is gone after an install."""
+
+    def plist(self):
+        return self.h / "Library/LaunchAgents/com.orche.janitor.plist"
+
+    def test_install_turns_the_janitor_on_and_an_update_keeps_a_disable(self):
+        self.assertEqual(doctor.janitor_rows(self.h), [("OK", "janitor", "not scheduled yet (orche install adds it)")])
+        out = self.install("--mode", "settings", "--yes")
+        self.assertIn(f"janitor: set {janitor.enabled_flag()} (on by default; `orche janitor disable` turns it off)",
+                      out)
+        self.assertIn(f"janitor: write {self.plist()} (daily at 04:00, not loaded: --home is not the real home)", out)
+        self.assertTrue(janitor.enabled_flag().exists())
+        when = plistlib.loads(self.plist().read_bytes())["StartCalendarInterval"]
+        self.assertEqual((when["Hour"], when["Minute"]), (4, 0))
+        self.assertEqual(launchd.daily_at(), "04:00")
+        self.assertEqual(doctor.janitor_rows(self.h), [("OK", "janitor", "daily at 04:00, on")])
+        self.assertEqual(self.orche("janitor", "disable")[0], 0)
+        out = self.install("--mode", "settings", "--yes")   # orche update re-runs install
+        self.assertNotIn("janitor: set", out)
+        self.assertFalse(janitor.enabled_flag().exists())
+        self.assertTrue(self.plist().is_file())
+        self.assertEqual(doctor.janitor_rows(self.h)[0][2],
+                         "daily at 04:00, report only (orche janitor enable lets it act)")
+        self.plist().unlink()
+        self.assertEqual(doctor.janitor_rows(self.h), [("WARN", "janitor", "daily schedule missing: run orche install")])
+        self.install("--mode", "settings", "--yes")
+        self.assertTrue(self.plist().is_file())
+        self.assertEqual(self.orche("uninstall", "--home", str(self.h))[0], 0)
+        self.assertFalse(self.plist().exists())
+
+    def test_dry_run_writes_nothing(self):
+        out = self.install("--mode", "settings", "--yes", "--dry-run")
+        self.assertIn("janitor: would set ", out)
+        self.assertFalse(janitor.enabled_flag().exists())
+        self.assertFalse(self.plist().exists())
 
 
 class KickTest(support.TempHomeCase):

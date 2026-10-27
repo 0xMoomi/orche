@@ -2,9 +2,9 @@
 time" list of the setup report (`.orche/SETUP.md`, written by `orche init`).
 
 `lines(cfg, reg, home)` returns one English line per feature, shaped
-`- <Feature>: <state>. Say "<owner words>"; Main runs <command>.`: the features that are off first,
-then the ones that are on, then the always-present lines; at most MAX_LINES lines. Nothing here
-reads a stored secret, calls the network or writes a file.
+`- <Feature>: <what it is>. <State>. Say "<owner words>"; <who runs what>.` so a reader needs no
+glossary: the features that are off first, then the ones that are on, then the always-present lines; at
+most MAX_LINES lines. Jev and the janitor drop out once on: the setup report's "Running now" names them. Nothing here reads a stored secret, calls the network or writes a file.
 """
 import shutil
 
@@ -14,38 +14,38 @@ from .review import pre
 
 MAX_LINES = 12
 MAX_GATES = 2   # more projects without a gate share one line
-JANITOR_LABEL = "com.orche.janitor"
 ALWAYS = (
     '- Change the setup: any time. Say "add a design division", "switch research to Sonnet" or "set up again"; '
     "Main runs `orche hr add`, `orche hr model` or `orche init --refresh`.",
     '- Update: any time. Say "update"; Main runs `orche update`.',
-    '- Other projects: any time. Say "what changed in <project>?"; Main runs `orche card <project>` and '
+    "- Other projects: ask another project's Main what changed. Any time. Say \"what changed in <project>?\"; "
+    'Main runs `orche card <project>` and '
     '`orche ask <project> "…"`.',
     '- Cost: any time. Say "how much did this cost?"; Main runs `orche metrics`.',
     '- Something wrong: any time. Say "check the setup"; Main runs `orche doctor`.',
 )
 
 
-def _line(feature, state, say, runs) -> str:
-    return f'- {feature}: {state}. Say "{say}"; {runs}.'
+def _line(feature, what, state, say, runs) -> str:
+    return f'- {feature}: {what}. {state}. Say "{say}"; {runs}.'
 
 
 def jev_line(cfg):
     """(on?, line): on when `jev.enabled` and a key is stored (or in the environment)."""
     src, _err = jevkey.source(cfg["jev"].get("api_key_env") or jev.DEFAULT_KEY_ENV)
     on = bool(cfg["jev"].get("enabled")) and bool(src)
-    return on, _line("Jev (the triage classifier and gates)", "on" if on else "off", "turn on Jev",
-                     "Main runs `orche jev setup`")
+    return on, _line("Jev", "a small model that sorts incoming requests and checks gates before Main spends tokens",
+                     "On" if on else "Off", "turn on Jev", "Main runs `orche jev setup`")
 
 
 def codex_line(cfg):
     """(on?, line): on when `codex` is on PATH and `review.cross_vendor` is not off."""
     installed, mode = shutil.which("codex") is not None, pre.mode_of(cfg)
     on = installed and mode != "off"
-    state = "on" if on else "Codex is not installed" if not installed else "cross-vendor review is off"
+    state = "On" if on else "Off: Codex is not installed" if not installed else "Off: cross-vendor review is off"
     runs = ("ORCHE already uses it" if on else "Main sets `review.cross_vendor` to `required` in the config"
             if installed else "you run `npm install -g @openai/codex` and `codex login`; ORCHE then uses it")
-    return on, _line("Codex cross-check (a second vendor reviews each PR)", state,
+    return on, _line("Codex cross-check", "a second AI vendor reviews each pull request before a person does", state,
                      "cross-check PRs with Codex", runs)
 
 
@@ -53,57 +53,64 @@ def token_line():
     src, _err = oauth.source()
     runs = ("Main runs `orche auth set` to replace it" if src else
             "you run `claude setup-token`, then Main runs `orche auth set`")
-    return bool(src), _line("Background-run token", "set" if src else "not set", "set the token for background runs",
-                            runs)
+    return bool(src), _line("Background-run token", "lets ORCHE start agents while no Claude window is open",
+                            "Set" if src else "Not set", "set the token for background runs", runs)
 
 
-def janitor_line(home):
+def janitor_line(cfg, home):
     """(on?, line): on when the janitor is enabled and its daily schedule is installed."""
     from . import janitor
-    on = janitor.enabled_flag().exists() and launchd.plist_path(JANITOR_LABEL, home).is_file()
-    return on, _line("Janitor (daily cleanup)", "on" if on else "off", "let the janitor clean up",
+    st = {**janitor.DEFAULTS, **(cfg.get("janitor") or {})}
+    on = janitor.enabled_flag().exists() and launchd.plist_path(launchd.JANITOR, home).is_file()
+    what = (f"cleans up daily; retired agents' workspaces and build caches or scratch files idle {st['idle_days']} "
+            f"days go to a trash emptied after {st['trash_days']} days")
+    return on, _line("Janitor", what, "On" if on else "Off", "let the janitor clean up",
                      "Main runs `orche janitor enable` and `orche janitor install-schedule`")
 
 
-def notify_line():
-    """(on?, line): on when terminal-notifier is on PATH (a notification click then opens the Main tab)."""
-    on = shutil.which("terminal-notifier") is not None
-    return on, _line("Notification click", "opens the project's Main tab" if on else
-                     "opens Orca (enough for most; the exact tab needs terminal-notifier)",
-                     "make notification clicks open the tab",
-                     "Main runs `brew install terminal-notifier`; you allow it once")
+def parallel(cfg, reg) -> tuple:
+    """(workers that may run at once in one project, the scale preset's label): `runner.max_parallel` as
+    config has it and `default`, `preset <name>` or `custom`."""
+    name = scale.current(cfg, reg)
+    return cfg["runner"]["max_parallel"], name if name in ("default", scale.CUSTOM) else f"preset {name}"
 
 
 def scale_line(cfg, reg):
-    name = scale.current(cfg, reg)
-    state = "preset 30" if name == "30" else f"preset {name}"
-    return name == "30", _line("More agents at once", state, "run up to 30 agents", "Main runs `orche hr scale 30`")
+    n, label = parallel(cfg, reg)
+    return label == "preset 30", _line("More agents at once", "how many workers may run in parallel",
+                                       f"Up to {n} at once ({label})", "run up to 30 agents",
+                                       "Main runs `orche hr scale 30`")
 
 
 def gate_lines(cfg, reg) -> list:
     """One line per registered project whose base branch lacks `scripts/verify/ci.sh` (the doctor's
-    `queue gate` rows), merged into one line past MAX_GATES."""
+    `queue gate` rows) and that has no PR adding it (verifygate.pending), merged into one line past MAX_GATES."""
+    from . import verifygate
     from .install import doctor
     missing = []
     for key, root in doctor._roots(reg):
-        if (root / ".git").exists():
+        if (root / ".git").exists() and not verifygate.pending(root):
             base, ok = publish.gate(root, cfg, key)
             if not ok:
                 missing.append((key, base))
-    runs = "Build's first unit adds it from templates/verify/ci.sh"
+    what = "lands approved pull requests by itself after its checks pass"
+    runs = "Build's first unit adds the script from templates/verify/ci.sh"
     if len(missing) > MAX_GATES:
-        return [_line("Merge-queue gate", f"missing in {missing[0][0]} and {len(missing) - 1} more projects",
+        return [_line("Merge queue", what, f"{missing[0][0]} and {len(missing) - 1} more projects lack the check "
+                      "script (scripts/verify/ci.sh), so a person merges each PR there",
                       "set up the merge queue for <project>", runs)]
-    return [_line(f"Merge-queue gate for {key}", f"no scripts/verify/ci.sh on origin/{base}" if base else
-                  "no base branch", f"set up the merge queue for {key}", runs if base else
+    return [_line(f"Merge queue for {key}", what, "Until the repository has the check script (scripts/verify/ci.sh "
+                  f"on {base}) a person merges each PR" if base else "No base branch found yet, so a person merges "
+                  "each PR", f"set up the merge queue for {key}", runs if base else
                   f"Main runs `orche init {key} --refresh` (it finds the base branch), then {runs}")
             for key, base in missing]
 
 
 def lines(cfg, reg, home) -> list:
     """The "Any time" lines: off first, then on, then the always-present ones (<= MAX_LINES)."""
-    states = [jev_line(cfg), codex_line(cfg), token_line(), janitor_line(home), scale_line(cfg, reg),
-              notify_line()]
+    jev_state, janitor_state = jev_line(cfg), janitor_line(cfg, home)
+    states = [jev_state, codex_line(cfg), token_line(), janitor_state, scale_line(cfg, reg)]
+    states = [s for s in states if not (s[0] and s in (jev_state, janitor_state))]   # on: in Running now
     states += [(False, line) for line in gate_lines(cfg, reg)]
     off = [line for on, line in states if not on]
     on = [line for is_on, line in states if is_on]

@@ -11,6 +11,7 @@ audit:   weekly HR report (hr/audit.py); `--apply` sleeps the proposed units, `-
 correct: append the next numbered standing order to `<repo>/.orche/STANDING.md` (R-STANDING-1).
 """
 import json
+import os
 
 from . import config, hr, intake, paths, procs, registry
 from .cli import EXIT_NOT_FOUND, EXIT_OK, EXIT_USER, fail
@@ -186,7 +187,7 @@ def cmd_choices(args):
                                         "run it without a project")
         key = found[0]
     cfg = config.load()
-    data = choices.build(reg, cfg, key)
+    data = choices.build(reg, cfg, key, here=None if key else os.getcwd())
     if getattr(args, "json", False):
         print(json.dumps(data, indent=2, ensure_ascii=False))
         return EXIT_OK

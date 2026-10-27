@@ -1034,14 +1034,17 @@ class SetupFileModelTest(support.TempHomeCase):
 
     def test_the_apply_skill_setup_json_with_a_picked_design_parses(self):
         skill = " ".join((support.ROOT / "skills" / "orche-apply" / "SKILL.md").read_text().split())
-        self.assertIn("write the setup file with `divisions`, `custom` (a picked `design`/`content` as `{}`) and "
-                      "`models`", skill)
+        self.assertIn("write the setup file with that fragment (or `divisions` and `custom`, a picked "
+                      "`design`/`content` as `{}`) and `models`", skill)
         self.assertNotIn("--lang", (support.ROOT / "README.md").read_text())
         data = {"divisions": ["rnd"], "custom": {"design": {}}, "models": {"rnd": "claude-sonnet-5-5"}}
         setup = setup_flow.from_data(data, setup_flow.defaults())
         self.assertIn("design", setup["custom"])
         self.assertEqual(setup_flow.names(setup), ["rnd", "design"])
         self.assertEqual(setup_flow.models(setup)["rnd"], "claude-sonnet-5-5")
+        preset = {"preset": "build", "divisions": ["build", "design", "rnd", "research"], "custom": {"design": {}}}
+        setup = setup_flow.from_data(preset, setup_flow.defaults())
+        self.assertEqual((setup["preset"], setup_flow.names(setup)), ("build", ["rnd", "research", "build", "design"]))
 
     def test_a_custom_spec_model_is_checked_strictly_at_write(self):
         with self.assertRaises(setup_flow.SetupError) as ctx:

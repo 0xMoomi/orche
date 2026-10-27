@@ -34,6 +34,15 @@ tracker's team key; the setup report then names them. Before the flags, each run
 `orche update`) reads the repository's team conventions (`detect.conventions`: merged PRs' base, issue-keyed
 remote branches, `.entire/`) and writes each one that is still unset (`_detect`; a flag on the same run wins). Each run (and `--refresh`) adds every ORCHE file to the repository's `info/exclude`
 (onboarding.exclude_settings).
+`--new [private|public|local]` (a folder without `.git` only, else exit 2) first makes the repository, each step
+one line and the first failure the end (`_new_repo`): `git init -b main`, a README when the folder is empty, the
+merge queue's check script (verifygate.write), the first commit, then for private/public `gh repo create <folder name> --<visibility> --source . --push` (a gh failure
+is one line and the setup goes on as local; the setup report then says how to publish it), then the normal flow
+on that folder, which adds it to Orca.
+A setup's `preset` (`--setup-file`, setup_flow.PRESETS) is recorded on the project; `build` also appends Build's
+specialist standing order once (`_apply_preset`, book.correct). A live run then makes sure the merge queue's check
+script reaches the base branch (verifygate.ensure: one PR at most) before the intake, and the intake is skipped
+in an empty repository (fewer than detect.EMPTY_FILES tracked files, stage build).
 A path that is a git repository but not in `orca repo list` is added with `orca repo add` once the
 setup is confirmed, right before the first write (an abort leaves Orca untouched; --dry-run never adds:
 a placeholder repo id `pending` stands in). A linked git worktree is refused. The main checkout's
@@ -46,7 +55,7 @@ import sys
 import time
 from pathlib import Path
 
-from . import __version__, config, hr, intake, mask, orca, paths, privacy, registry, setup_flow, shell, templates, units, util, vendors
+from . import __version__, config, github, hr, intake, mask, orca, paths, privacy, registry, setup_flow, shell, templates, units, util, vendors
 from .cli import EXIT_BLOCKED, EXIT_NOT_FOUND, EXIT_OK, EXIT_USER, dry, fail, out, warn
 from .hr import onboarding
 
@@ -54,7 +63,8 @@ EXIT_INTERRUPTED = 130   # a setup given wrongly exits EXIT_USER (1), like argpa
 PERSONAS_UPDATED = "personas updated for {names}: read at their next session start"
 SETUP_FLAGS = ("--divisions", "--custom", "--setup-file", "--stage", "--aliases", "--wake")
 SETUP_ASK = ('read the report at report: and tell the owner, in their language, what was set up and the "Any time" '
-             "list as short lines; then ask for the first request")
+             "list as short lines: translate every line, keep the numbers and the quoted owner words; then ask for "
+             "the first request")
 SETUP_REPORT = "SETUP.md"
 CLOSED = "the window that ran init was closed"
 NOT_CLOSED = "could not close the window that ran init: {why}"
@@ -63,6 +73,13 @@ BASE_NAME = re.compile(r"^(?!origin/)(?!.*\.\.)(?!.*//)(?!.*\.lock$)[A-Za-z0-9][
 PREFIX_NAME = re.compile(r"^[a-z][a-z0-9-]*$")
 ISSUES_NAME = re.compile(r"^[A-Z][A-Z0-9]*$")
 PUBLISH_KEYS = ("base", "branch_prefix", "issues")
+VISIBILITY = ("private", "public", "local")
+SPECIALISTS = ("Build's workers are specialists: front (screens, client code, the app's look and interaction), back "
+               "(API, data, services, jobs), infra (deploy, CI, environments, secrets, cost). The head names each worker "
+               "by its area (front-<topic>, back-<topic>, infra-<topic>), scopes it to that area, and splits a unit "
+               "that spans two areas into two workers.")
+PRESET_LINES = {"build": "- Preset: build-focused (Build's workers specialise in front, back and infra).",
+                "operations": "- Preset: operations."}
 
 
 def register(subparsers):
@@ -95,6 +112,9 @@ def register(subparsers):
                    help="the first segment of a feature worker's branch (default feat; e.g. dev)")
     p.add_argument("--issues", default=None, metavar="KEY",
                    help="the issue tracker's team key (e.g. DES: a worker named des-47-<topic> fixes DES-47)")
+    p.add_argument("--new", nargs="?", const="private", choices=VISIBILITY, default=None,
+                   help="the folder has no git repository yet: create it (git init, a first commit, GitHub "
+                        "private by default or public, or local only), then set it up")
     p.set_defaults(func=cmd_init)
 
 
@@ -112,8 +132,9 @@ def _publish_error(args):
 
 def _detect(args, key, root) -> list:
     """The repository's team conventions (detect.conventions) into `publish.per_project.<key>`, each key only
-    while it is unset there and no flag of this run names it (never over a flag or an earlier detection); the names set, plus `entire` when the
-    repository uses Entire (read live, never stored). A dry run reads nothing."""
+    while it is unset there and no flag of this run names it (never over a flag or an earlier detection). Returns
+    every key whose value now equals the detected one (none a flag of this run names), in PUBLISH_KEYS order,
+    plus `entire` when the repository uses Entire (read live, never stored). A dry run reads nothing."""
     from . import detect
     if args.dry_run:
         return []
@@ -123,7 +144,9 @@ def _detect(args, key, root) -> list:
               if k in found and have.get(k) in (None, "") and getattr(args, k, None) is None}
     if values:
         config.set_project("publish", key, **values)
-    return list(values) + (["entire"] if found.get("entire") else [])
+    now = {**have, **values}
+    same = [k for k in PUBLISH_KEYS if k in found and now.get(k) == found[k] and getattr(args, k, None) is None]
+    return same + (["entire"] if found.get("entire") else [])
 
 
 def _set_publish(args, key) -> None:
@@ -215,10 +238,10 @@ def _refresh(args, reg) -> int:
     return EXIT_OK
 
 
-def _report(reg, key, root, intake_line=None, detected=()):
+def _report(reg, key, root, intake_line=None, detected=(), **kw):
     """write_report, best effort: a failure is one warning, never a failed init."""
     try:
-        return write_report(reg, key, root, intake_line, detected)
+        return write_report(reg, key, root, intake_line, detected, **kw)
     except (OSError, util.JsonError) as exc:
         warn(f"setup report not written: {exc}")
         return None
@@ -383,11 +406,55 @@ def _divisions_text(proj):
 
 
 def _intake_text(key, root, intake_line):
-    """The intake line of this run, else the stamp's summary, else "off"."""
-    if intake_line and intake_line != "intake: covered":
-        return intake_line
-    stamp = intake.read_stamp(root)
-    return intake.summary_line({**stamp, "project": key}) if stamp else intake_line or "off"
+    """What the intake did, in plain words: it read the repository (this run or an earlier one, from the
+    stamp), else why it was skipped and what to say to run it."""
+    skipped = intake_line and intake_line.startswith(("intake skipped: ", "intake interrupted"))
+    stamp = None if skipped else intake.read_stamp(root)
+    if stamp:
+        cost = stamp.get("cost_usd")
+        money = f"${cost:.2f}" if isinstance(cost, (int, float)) else "$?"
+        return ("read the repository once and wrote the project card and the division charters "
+                f"({stamp.get('model')}, {money}, {int(round(stamp.get('duration_s') or 0))} s).")
+    why = ("interrupted" if intake_line.startswith("intake interrupted") else
+           intake_line[len("intake skipped: "):].rsplit("; run `orche intake", 1)[0]) if skipped else "not run"
+    return (f'skipped ({why}); say "run the intake" once there is code to read; Main runs `orche intake {key}`.')
+
+
+def _running_lines(reg, key, root, cfg, gate=None) -> list:
+    """The setup report's "Running now": what works without the owner, with this machine's real values; the
+    merge queue's state from `gate` (verifygate.ensure) when this run has one, else read locally."""
+    from . import guide, janitor, publish, queue, reconcile, verifygate
+    from .install import launchd
+    rec = reconcile.settings(cfg)
+    beat = (f"every {reconcile.every_s(rec)} s (the reconcile job): wakes Main and the divisions when work waits"
+            if rec.get("enabled", True) else "off (reconcile.enabled false); Main and the divisions wake only "
+            "when you write")
+    st = {**janitor.DEFAULTS, **(cfg.get("janitor") or {})}
+    jan_on, _ = guide.janitor_line(cfg, Path.home())
+    jan = (f"daily at {launchd.daily_at()}; moves retired units' workspaces, and build caches of units idle for "
+           f"{st['idle_days']} days, to a trash it empties after {st['trash_days']} days; touches nothing in the "
+           "repository" if jan_on else 'off; say "let the janitor clean up" (listed below)')
+    git = (Path(root) / ".git").exists()
+    base, ok = publish.gate(root, cfg, key) if git else (None, False)
+    if gate is not None:
+        state = verifygate.running(gate)
+    elif ok:
+        state = "on"
+    elif git and verifygate.pending(root):
+        state = f"waiting for the pull request from {verifygate.BRANCH} to be merged"
+    else:
+        state = "waiting for the script (Build's first unit adds it)"
+    lands = ("lands it by itself when that passes" if queue.land_mode(cfg, key) == "auto"
+             else 'lands it when you say "merge"')
+    jev_on, _ = guide.jev_line(cfg)
+    return [f"- Heartbeat: {beat}.",
+            f"- Janitor: {jan}.",
+            f"- Merge queue: on when the repository has scripts/verify/ci.sh on {base or 'its base branch'} (runs "
+            f"that script on each approved PR; {lands}); this project: {state}.",
+            "- Jev: " + ("on: sorts incoming requests and checks gates before Main spends tokens." if jev_on
+                         else 'off; say "turn on Jev" (listed below).'),
+            "- Notifications: Orca shows one when Main finishes a reply; ORCHE reminds you after 30 minutes when a "
+            "decision still waits."]
 
 
 def _team_lines(key, root, detected) -> list:
@@ -410,18 +477,25 @@ def _team_lines(key, root, detected) -> list:
     return lines
 
 
-def write_report(reg, key, root, intake_line=None, detected=()) -> Path:
-    """`<root>/.orche/SETUP.md`, the setup report Main gives the owner (untracked: `info/exclude`)."""
+def write_report(reg, key, root, intake_line=None, detected=(), created=(), gate=None) -> Path:
+    """`<root>/.orche/SETUP.md`, the setup report Main gives the owner (untracked: `info/exclude`); `created`:
+    the lines of a repository `--new` made (_created_lines); `gate`: this run's verifygate.ensure answer."""
     from . import guide
     proj, cfg = reg["projects"][key], config.load()
-    _count, names, where = _divisions_text(proj)
+    count, names, where = _divisions_text(proj)
+    most, preset = guide.parallel(cfg, reg)
     path = paths.project_local(root) / SETUP_REPORT
-    text = "\n".join([f"# ORCHE is set up: {key}", "",
+    text = "\n".join([f"# ORCHE is set up: {key}", "", *created,
                       f"- Divisions: {names or 'none'}",
-                      f"- Workspaces: {where}; nothing is committed to the repository",
+                      *([PRESET_LINES[proj["preset"]]] if proj.get("preset") in PRESET_LINES else []),
+                      f"- Agents: {count} division agent{'' if count == 1 else 's'}, one Orca tab each, always on. Each unit of work adds one "
+                      f"worker while it runs; up to {most} run at once ({preset}).",
+                      f"- Workspaces: {where}; nothing is committed to the repository; ORCHE's own files are "
+                      "excluded from git",
                       f"- Intake: {_intake_text(key, root, intake_line)}", *_team_lines(key, root, detected),
                       f"- Talk to Main in the {proj.get('main_session') or 'main-' + key} tab, in any language. "
                       "Main plans and decides; divisions do the work; you only get decisions.",
+                      "", "## Running now", "", *_running_lines(reg, key, root, cfg, gate),
                       "", "## Any time", "",
                       *guide.lines(cfg, reg, Path.home()), "",
                       'Say "what else can ORCHE do?" to see this list again (Main runs `orche doctor`).', ""])
@@ -607,12 +681,16 @@ def _intake(args, reg, key, root, names):
         return None, {"status": "off"}
     if not intake.missing_divisions(names, intake.read_stamp(root)):
         return "intake: covered", {"status": "covered"}
+    from . import detect
+    later = f"run `orche intake {key}` later"
+    if detect.tracked(root) < detect.EMPTY_FILES and detect.stage(root) == "build":
+        return f"intake skipped: the repository is empty; {later}", {"status": "skipped",
+                                                                     "reason": "the repository is empty"}
     if args.dry_run:
         return f"would run: orche intake {key}", {"status": "dry-run"}
     model = intake.settings(cfg).get("model") or "claude-sonnet-5-5"
     print(f"intake {key}: sweeping {root} (headless, read-only, {model}; usually under a minute; "
           "Ctrl-C skips it, `--no-intake` turns it off)…", file=sys.stderr, flush=True)
-    later = f"run `orche intake {key}` later"
     try:
         with intake.progress(model):
             rec = intake.run(reg, key, cfg)
@@ -656,7 +734,85 @@ def _plan(reg, key, setup, wake):
         return None, fail(exc.code, exc.msg)
 
 
+def _new_repo(args):
+    """`--new`: the repository in the target folder (args.repo, else the current directory), made end to end.
+    Returns (root, lines, facts {visibility, url, github_error}) or (None, exit code, None); a dry run only prints."""
+    root = os.path.realpath(os.path.expanduser(args.repo or os.getcwd()))
+    if os.path.lexists(os.path.join(root, ".git")):
+        return None, fail(EXIT_NOT_FOUND, f"{root} is already a git repository; run orche init without --new"), None
+    name, vis = os.path.basename(root), args.new
+    gh = [] if vis == "local" else [f"gh repo create {name} --{vis} --source . --push"]
+    if args.dry_run:
+        for step in ["git init -q -b main", "git add -A", 'git commit -q --allow-empty -m "init"', *gh]:
+            dry(f"{step} (in {root})")
+        return None, EXIT_OK, None
+    os.makedirs(root, exist_ok=True)
+    empty, lines = not os.listdir(root), []
+    if empty:
+        util.atomic_write(Path(root) / "README.md", f"# {name}\n")
+    from . import verifygate
+    verifygate.write(root)   # the merge queue's gate is on from the first push
+    for label, argv in ((f"git init: {root} (branch main)", ("init", "-q", "-b", "main")),
+                        (None, ("add", "-A")), ("first commit: init", ("commit", "-q", "--allow-empty", "-m", "init"))):
+        res = shell.git(root, *argv, timeout=60)
+        if not res.ok:
+            print("\n".join(lines))
+            return None, fail(EXIT_USER, f"git {argv[0]} failed: {github.first_line(res)}"), None
+        if label:
+            lines.append(label)
+    facts = {"visibility": vis, "url": None, "github_error": None}
+    if vis != "local":
+        try:
+            text = github.run(root, "repo", "create", name, f"--{vis}", "--source", ".", "--push", timeout=github.NET_S)
+            facts["url"] = next((ln.strip() for ln in reversed(text.splitlines()) if ln.strip()), None)
+            shell.git(root, "remote", "set-head", "origin", "main", timeout=10)   # the base, read locally
+            lines.append(f"GitHub: {facts['url']} ({vis})")
+        except github.GhError as exc:
+            why = mask.redact(str(exc).removeprefix("gh: "))[0]
+            facts.update(visibility="local", github_error=why)
+            lines.append(f"GitHub: not created ({why}); going on without a remote")
+    return root, lines, facts
+
+
+def _created_lines(facts) -> list:
+    """The setup report's line for a repository `--new` made (and the GitHub step when gh failed)."""
+    if not facts:
+        return []
+    lines = [f"- Repository: created here ({facts['visibility']}, {facts['url'] or 'no remote'})."]
+    if facts["github_error"]:
+        lines.append(f'- GitHub: not created ({facts["github_error"]}); say "publish this repository to GitHub"; '
+                     "Main runs gh repo create")
+    return lines
+
+
+def _apply_preset(reg, key, setup, dry_run) -> None:
+    """The setup's preset recorded on the project; the `build` preset's standing order appended once."""
+    from .hr import book
+    name = setup.get("preset")
+    if not name:
+        return
+    if dry_run:
+        dry(f"record preset {name}" + (" and append Build's specialist standing order" if name == "build" else ""))
+        return
+    if reg["projects"][key].get("preset") != name:
+        book.write(reg, lambda r: r["projects"][key].__setitem__("preset", name))
+    proj = reg["projects"][key]
+    path = Path(proj["path"]) / proj["standing"]
+    if name == "build" and SPECIALISTS not in (path.read_text(encoding="utf-8") if path.exists() else ""):
+        book.correct(reg, key, SPECIALISTS, by="orche init")
+
+
 def cmd_init(args):
+    new_lines, created = [], None
+    if args.new is not None:
+        if args.refresh or args.print_setup:
+            return fail(EXIT_USER, "--new creates a repository; drop --refresh and --print-setup")
+        if err := _publish_error(args):
+            return fail(EXIT_NOT_FOUND, err)
+        made = _new_repo(args)
+        if made[0] is None:
+            return made[1]
+        args.repo, new_lines, created = made
     if args.repo is None:   # a bare `orche init`: the repository holding the current directory
         top = _cwd_repo()
         if not top:
@@ -738,6 +894,7 @@ def cmd_init(args):
                                          dry_run=dry_run, models=setup.get("models"))
     except hr.Refused as exc:
         return fail(exc.code, exc.msg)
+    _apply_preset(reg, key, setup, dry_run)
     ts = time.strftime("%Y%m%dT%H%M%S")
     try:   # re-render the ORCHE-owned files of the registered units (design §15.2)
         ref = hr.refresh_project(reg, key, root=root, ts=ts, dry_run=dry_run)
@@ -767,9 +924,9 @@ def cmd_init(args):
             "card": proj["card"], "summary": summary, "added_to_orca": bool(added) and not dry_run,
             "refreshed": [str(p) for p in refreshed], "kept": [{"path": str(p), "why": w} for p, w in kept],
             "rendered_by": {"before": before, "now": __version__} if upgraded else None, "restart": restart,
-            "publish": _publish_facts(key)}
-    lines = [f"would add {added} to Orca (orca repo add --path {added})" if dry_run else f"added {added} to Orca"] \
-        if added else []
+            "publish": _publish_facts(key), "new_repository": created}
+    lines = new_lines + ([f"would add {added} to Orca (orca repo add --path {added})" if dry_run else
+                          f"added {added} to Orca"] if added else [])
     if renamed:
         lines.append(renamed)
     lines.append(f"{'would init' if dry_run else 'initialized'} {key} ({root}) stage={stage}")
@@ -788,6 +945,12 @@ def cmd_init(args):
         lines.append(f"backups: {_tilde(backups)}")
     if upgraded:
         lines.append(f"rendered by {before or 'an earlier version'}, now {__version__}")
+    gate = None
+    if not dry_run and (Path(root) / ".git").exists():   # the merge queue's check script on the base, or its PR
+        from . import verifygate
+        gate = verifygate.ensure(root, key)
+        lines.append(f"merge queue: {verifygate.running(gate)}")
+    data["merge_queue"] = gate
     names = list(dict.fromkeys(registry.divisions_of(proj) + list(divisions)))   # a dry run saved none
     intake_line, data["intake"] = _intake(args, reg, key, root, names)
     if intake_line:
@@ -795,7 +958,8 @@ def cmd_init(args):
     first = existing is None
     closing = first and getattr(args, "close_window", True)   # off when init runs inside setup/apply-all
     data["closed_window"], data["setup_note"], handle = None, False, None
-    report = None if dry_run or key not in reg["projects"] else _report(reg, key, root, intake_line, detected)
+    report = None if dry_run or key not in reg["projects"] else _report(reg, key, root, intake_line, detected,
+                                                                         created=_created_lines(created), gate=gate)
     data["setup_report"] = str(report) if report else None
     if dry_run:
         data["switched"] = False
