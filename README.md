@@ -46,7 +46,7 @@ Say it to Main in your own words; Main runs the command.
 | "cross-check PRs with Codex" | you install Codex once (`npm install -g @openai/codex`, `codex login`); a second vendor then pre-reviews every PR, and Codex can be a division's model (headless only) |
 | "set the token for background runs" | you run `claude setup-token`; Main stores it with `orche auth set` |
 | "let the janitor clean up" | on by default (`orche install` turns it on and schedules it daily); this turns it back on after `orche janitor disable` |
-| "set up the merge queue for <project>" | Build's first unit adds `scripts/verify/ci.sh` from `templates/verify/ci.sh` |
+| "set up the merge queue for <project>" | `orche init --refresh <project>` (also part of every `orche update`) opens one PR adding `scripts/verify/ci.sh`; merging it turns the queue on |
 | "run up to 30 agents" | `orche hr scale 30`; on a Claude subscription many agents reach the usage window and ORCHE waits for its reset |
 | "add a design division", "switch research to Sonnet", "set up again" | a choice dialog, then `orche hr add`, `orche hr model` or `orche init --refresh` |
 | "pull requests go to develop and branches start with dev/" | `orche init --refresh <project> --base develop --branch-prefix dev` |

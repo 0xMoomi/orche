@@ -29,9 +29,13 @@ class FlowCase(HookCase):
     add_project_b = DispatchRelayTest.add_project_b
 
     def first(self, body=BODY):
+        """The unit folder this dispatch made: the new one, not the newest mtime (a later write into an older
+        folder, or a coarse clock, would otherwise name the wrong unit)."""
+        before = set(self.units_dir().iterdir()) if self.units_dir().is_dir() else set()
         res = self.orche("dispatch", stdin=body)
         self.assertEqual(res.returncode, 0, res.stdout + res.stderr)
-        return sorted(self.units_dir().iterdir(), key=lambda p: p.stat().st_mtime)[-1]
+        made = [p for p in self.units_dir().iterdir() if p not in before and p.is_dir()]
+        return sorted(made, key=lambda p: p.stat().st_mtime)[-1]
 
     def revs(self, folder, *ns, ago=10):
         t = time.time() - ago
@@ -637,13 +641,13 @@ class ChainTest(FlowCase):
 
     def test_fan_out_counts_children_in_the_window_the_owner_resets_it_main_is_not_capped(self):
         [p] = self.chain(1)
-        self.owner_spoke(later=-20)                                      # W opens well before the children
+        self.owner_spoke(later=-600)                                     # W opens well before the children
         for i in range(4):
             f = self.first(TO_FEAT.replace("Add coupon field", f"Add child {i}"))
             header(f, "L", p.name)
-            sent = time.time() - 10                                      # inside W, before "now", pinned
+            sent = time.time() - 300                                     # inside W, before "now", pinned
             os.utime(f / "BRIEF.rev1.md", (sent, sent))
-        os.utime(p / "BRIEF.md", (time.time() + 5, time.time() + 5))   # still the division's current unit
+        os.utime(p / "BRIEF.md", (time.time() + 600, time.time() + 600))   # still the division's current unit
 
         def child(name):
             return self.orche("dispatch", stdin=TO_FEAT.replace("Add coupon field", name), ORCHE_SESSION="div-acme-build")
@@ -655,7 +659,7 @@ class ChainTest(FlowCase):
         self.assertIn(f"block 1: refused — {p.name} already has 5 child briefs since {since} without the owner "
                       "(cap 5). Do not send another: report it to your sender (`orche report blocked --summary "
                       "\"<what is left>\"`). STOP still works.", res.stdout)
-        self.owner_spoke(later=10)                                       # the owner's word: a new window
+        self.owner_spoke(later=900)                                      # the owner's word: a new window
         self.assertEqual(child("Add child 6").returncode, 0)
         self.assertEqual(self.orche("dispatch", stdin=GIFT).returncode, 0)
 

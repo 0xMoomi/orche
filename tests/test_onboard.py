@@ -11,6 +11,7 @@ from unittest import mock
 import support
 import test_hr
 from orche import cmd_init, config, detect, registry, shell, verifygate
+from orche.install import doctor
 from orche.hr import choices
 
 GIT_ENV = {"GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@example.com", "GIT_COMMITTER_NAME": "t",
@@ -340,23 +341,67 @@ class GatePullRequestTest(test_hr.HrCase):
         self.assertNotIn("- Merge queue for acme-shop", report)                # no "Any time" line while it is open
         self.assertEqual(self.orche("init", "Acme Shop", "--no-intake")[0], 0)
         self.assertEqual(len(self.creates()), 1)
-        self.assertEqual(self.orche("init", "acme-shop", "--refresh")[0], 0)
-        self.assertIn(f"this project: waiting for the pull request from {verifygate.BRANCH} to be merged.\n",
+        code, out, err = self.orche("init", "acme-shop", "--refresh")
+        self.assertEqual(code, 0, err)
+        self.assertEqual(len(self.creates()), 1)
+        self.assertIn(f"merge queue: waiting for PR #1 ({url}) to be merged", out)
+        self.assertIn(f"this project: waiting for PR #1 ({url}) to be merged.\n",
                       (self.repo / ".orche" / "SETUP.md").read_text())
+        self.assertEqual(registry.load()["projects"]["acme-shop"]["verify_pr"], {"number": 1, "url": url})
 
     def test_gh_failure_writes_the_waiting_line(self):
         (self.gh / "spec.json").write_text(json.dumps({"fail": "not logged in to any GitHub hosts"}))
         code, _, err = self.orche("init", "Acme Shop", "--no-intake")
         self.assertEqual(code, 0, err)
         self.assertFalse(self.creates())
+        report = (self.repo / ".orche" / "SETUP.md").read_text()
         self.assertIn('this project: waiting; the check script could not be pushed (not logged in to any GitHub '
-                      'hosts); say "set up the merge queue".\n', (self.repo / ".orche" / "SETUP.md").read_text())
+                      'hosts).\n', report)
+        self.assertIn('Say "set up the merge queue for acme-shop"; Main runs `orche init --refresh acme-shop`.\n',
+                      report)
         self.assertNotIn(verifygate.BRANCH, git_out(self.bare, "branch", "--list"))
 
     def test_dry_run_opens_nothing(self):
         code, _, err = self.orche("--dry-run", "init", "Acme Shop", "--no-intake")
         self.assertEqual(code, 0, err)
         self.assertFalse(support.gh_calls(self.gh))
+
+    def gate_row(self):
+        [row] = [r for r in doctor.gate_rows(registry.load(), config.load()) if r[1] == "queue gate"]
+        return row
+
+    def test_a_refresh_opens_the_pull_request_once(self):
+        """c78: `orche update` runs `init --refresh` per project, so an existing project gets its one PR there."""
+        (self.gh / "spec.json").write_text(json.dumps({"fail": "not logged in to any GitHub hosts"}))
+        self.assertEqual(self.orche("init", "Acme Shop", "--no-intake")[0], 0)
+        self.assertEqual(self.gate_row(), ("WARN", "queue gate", "acme-shop: no check script on origin/main and no "
+                                                                 "PR; orche init --refresh acme-shop opens one"))
+        (self.gh / "spec.json").write_text(json.dumps({"prs": []}))
+        calls = len(support.gh_calls(self.gh))
+        code, out, err = self.orche("--dry-run", "init", "acme-shop", "--refresh")
+        self.assertEqual(code, 0, err)
+        self.assertEqual(len(support.gh_calls(self.gh)), calls)              # a dry run opens nothing
+        self.assertNotIn("merge queue:", out)
+        url = "https://github.com/acme/acme/pull/1"
+        code, out, err = self.orche("init", "acme-shop", "--refresh")
+        self.assertEqual(code, 0, err)
+        self.assertEqual(len(self.creates()), 1)
+        self.assertIn(f"merge queue: waiting for PR #1 ({url}) to be merged", out)
+        report = (self.repo / ".orche" / "SETUP.md").read_text()
+        self.assertIn(f"this project: waiting for PR #1 ({url}) to be merged.\n", report)
+        self.assertNotIn("- Merge queue for acme-shop", report)
+        self.assertEqual(self.gate_row(), ("WARN", "queue gate", f"acme-shop: waiting for PR #1 ({url})"))
+        self.assertEqual(self.orche("init", "acme-shop", "--refresh")[0], 0)
+        self.assertEqual(len(self.creates()), 1)                              # the second refresh finds it
+        verifygate.write(self.repo)
+        commit_all(self.repo, "gate")
+        git_out(self.repo, "push", "-q", "origin", "main")
+        code, out, err = self.orche("init", "acme-shop", "--refresh")
+        self.assertEqual(code, 0, err)
+        self.assertIn("merge queue: on", out)
+        self.assertIn("this project: on.\n", (self.repo / ".orche" / "SETUP.md").read_text())
+        self.assertEqual(self.gate_row(), ("OK", "queue gate", "acme-shop: scripts/verify/ci.sh on origin/main"))
+        self.assertEqual(len(self.creates()), 1)
 
     def test_the_script_on_main_means_on(self):
         verifygate.write(self.repo)

@@ -231,8 +231,9 @@ def _deploys(root) -> list:
 
 def gate_rows(reg, cfg) -> list:
     """`queue gate` (scripts/verify/ci.sh on origin/<base>) and `deploy on merge` (a deploy config that
-    makes every queue merge a deploy: WARN under queue.land auto, R1) per project with a git checkout."""
-    from .. import publish, queue
+    makes every queue merge a deploy: WARN under queue.land auto, R1) per project with a git checkout; a pushed
+    orche/verify-gate branch (verifygate.pending) is the open PR adding the script, named as init recorded it."""
+    from .. import publish, queue, verifygate
     rows = []
     for key, root in _roots(reg):
         if not (root / ".git").exists():
@@ -240,8 +241,10 @@ def gate_rows(reg, cfg) -> list:
         base, ok = publish.gate(root, cfg, key)
         rows.append(("WARN", "queue gate", f"{key}: {publish.no_base(root)}") if not base else
                     ("OK", "queue gate", f"{key}: scripts/verify/ci.sh on origin/{base}") if ok else
-                    ("WARN", "queue gate", f"{key}: no scripts/verify/ci.sh on origin/{base} — queue add refuses units "
-                                           "without a committed gate; Build's first unit adds it (templates/verify/ci.sh)"))
+                    ("WARN", "queue gate", f"{key}: waiting for {verifygate.awaiting(reg['projects'][key])}")
+                    if verifygate.pending(root) else
+                    ("WARN", "queue gate", f"{key}: no check script on origin/{base} and no PR; "
+                                           f"orche init --refresh {key} opens one"))
         found = _deploys(root)
         if found and queue.land_mode(cfg, key) == "owner":
             rows.append(("OK", "deploy on merge", f"{key}: {found[0]} — merges land on the owner's word (queue.land owner)"))

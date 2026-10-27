@@ -12,8 +12,8 @@ worktree settings, the card link; an overwritten persona is first copied to
 (saved only when it changes) and ends by naming the panes to restart. `--print-setup` prints the setup
 JSON and exits. `--refresh` (a registered project only; what `orche update` runs per project) does just
 that re-render — the card link, personas, worktree settings, the stamp (never a project template
-file: one the user deleted stays deleted) and the setup report — and stops: no Orca, panes, automations or intake; setup flags are
-refused; a folder it may not read is `unreadable (privacy): <path>` (exit 3).
+file: one the user deleted stays deleted), the merge queue's check script (verifygate.ensure, as a full init) and
+the setup report — and stops: no Orca, panes, automations or intake; setup flags are refused; a folder it may not read is `unreadable (privacy): <path>` (exit 3).
 
 Order: resolve the repo (`orca repo list`, read-only even under --dry-run) -> setup -> project templates +
 card symlink -> registry entry -> `.orche/project` marker (the project key, read by the status
@@ -40,8 +40,8 @@ merge queue's check script (verifygate.write), the first commit, then for privat
 is one line and the setup goes on as local; the setup report then says how to publish it), then the normal flow
 on that folder, which adds it to Orca.
 A setup's `preset` (`--setup-file`, setup_flow.PRESETS) is recorded on the project; `build` also appends Build's
-specialist standing order once (`_apply_preset`, book.correct). A live run then makes sure the merge queue's check
-script reaches the base branch (verifygate.ensure: one PR at most) before the intake, and the intake is skipped
+specialist standing order once (`_apply_preset`, book.correct). A live run (and a live `--refresh`) then makes sure the
+merge queue's check script reaches the base branch (`_merge_queue`: verifygate.ensure, one PR at most) before the intake, and the intake is skipped
 in an empty repository (fewer than detect.EMPTY_FILES tracked files, stage build).
 A path that is a git repository but not in `orca repo list` is added with `orca repo add` once the
 setup is confirmed, right before the first write (an abort leaves Orca untouched; --dry-run never adds:
@@ -223,19 +223,37 @@ def _refresh(args, reg) -> int:
     except (OSError, util.JsonError) as exc:
         return fail(EXIT_USER, f"refresh {key} stopped: {exc}")
     stamped = not dry_run and hr.stamp_version(reg, key, __version__)
-    report = None if dry_run else _report(reg, key, root, detected=detected)
+    gate_lines = []
+    gate = None if dry_run else _merge_queue(reg, key, root, gate_lines)
+    report = None if dry_run else _report(reg, key, root, detected=detected, gate=gate)
     refreshed = list(ref.changed) + ([link] if linked in ("created", "relinked") else [])
     restart = [] if dry_run else ([proj["main_session"]] if stamped and proj.get("main_session") else []) + ref.restart
     data = {"project": key, "path": root, "dry_run": dry_run, "refreshed": [str(p) for p in refreshed],
             "kept": [{"path": str(p), "why": w} for p, w in ref.kept], "restart": restart,
-            "setup_report": str(report) if report else None, "publish": _publish_facts(key)}
+            "setup_report": str(report) if report else None, "publish": _publish_facts(key), "merge_queue": gate}
     lines = [f"{'would refresh' if dry_run else 'refreshed'} {key}: "
              + (f"{len(refreshed)} file(s)" if refreshed else "already current")]
-    lines += [f"kept {_tilde(Path(p))}: {why}" for p, why in ref.kept]
+    lines += [f"kept {_tilde(Path(p))}: {why}" for p, why in ref.kept] + gate_lines
     if restart:
         lines.append(PERSONAS_UPDATED.format(names=", ".join(restart)))
     out(args, data, lines)
     return EXIT_OK
+
+
+def _merge_queue(reg, key, root, lines):
+    """A live run's merge-queue check script (verifygate.ensure): its state, one `merge queue: …` line on
+    `lines` and an open PR kept on the registry entry (`verify_pr`, saved only when it changes); None without
+    a git checkout."""
+    from . import verifygate
+    from .hr import book
+    if not (Path(root) / ".git").exists():
+        return None
+    gate = verifygate.ensure(root, key)
+    lines.append(f"merge queue: {verifygate.running(gate)}")
+    pr = {"number": gate["number"], "url": gate["url"]} if gate["state"] == "pr" else None
+    if pr and key in reg["projects"] and reg["projects"][key].get("verify_pr") != pr:
+        book.write(reg, lambda r: r["projects"][key].__setitem__("verify_pr", pr))
+    return gate
 
 
 def _report(reg, key, root, intake_line=None, detected=(), **kw):
@@ -440,10 +458,12 @@ def _running_lines(reg, key, root, cfg, gate=None) -> list:
         state = verifygate.running(gate)
     elif ok:
         state = "on"
-    elif git and verifygate.pending(root):
-        state = f"waiting for the pull request from {verifygate.BRANCH} to be merged"
+    elif not git:
+        state = "waiting; the check script could not be pushed (the project folder is not a git repository)"
+    elif verifygate.pending(root):
+        state = f"waiting for {verifygate.awaiting(reg['projects'].get(key))} to be merged"
     else:
-        state = "waiting for the script (Build's first unit adds it)"
+        state = f'waiting; no check script on {base or "the base branch"} and no PR'
     lands = ("lands it by itself when that passes" if queue.land_mode(cfg, key) == "auto"
              else 'lands it when you say "merge"')
     jev_on, _ = guide.jev_line(cfg)
@@ -945,11 +965,7 @@ def cmd_init(args):
         lines.append(f"backups: {_tilde(backups)}")
     if upgraded:
         lines.append(f"rendered by {before or 'an earlier version'}, now {__version__}")
-    gate = None
-    if not dry_run and (Path(root) / ".git").exists():   # the merge queue's check script on the base, or its PR
-        from . import verifygate
-        gate = verifygate.ensure(root, key)
-        lines.append(f"merge queue: {verifygate.running(gate)}")
+    gate = None if dry_run else _merge_queue(reg, key, root, lines)   # the check script on the base, or its PR
     data["merge_queue"] = gate
     names = list(dict.fromkeys(registry.divisions_of(proj) + list(divisions)))   # a dry run saved none
     intake_line, data["intake"] = _intake(args, reg, key, root, names)

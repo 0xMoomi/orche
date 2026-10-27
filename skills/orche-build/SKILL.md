@@ -61,8 +61,8 @@ Staff each brief yourself; Main briefs heads, never workers.
   only main-red. `closed (proof — …)` means a landing failed its proof: check it; only `orche queue resume <p>`
   reopens the queue.
 - The gate is `scripts/verify/ci.sh` (ending with a line `verdict: unit-test-verified` when it runs tests) plus each
-  unit's committed VERIFY scripts, on the PR merged onto the newest main. A project without `ci.sh`: your first unit
-  adds it (section "Verify skill").
+  unit's committed VERIFY scripts, on the PR merged onto the newest main. A project without `ci.sh` gets one PR adding it
+  from `orche init` (and `orche update`); merging that PR turns the queue on.
 - Red or conflict: the queue sends the feature an AMEND itself (merge origin/<base>, fix, report again) and leaves
   you a note; the third return in a window comes to you to re-plan (split, sequence after another PR, drop) or to
   ask Main for the owner.

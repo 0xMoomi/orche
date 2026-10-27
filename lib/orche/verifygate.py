@@ -1,6 +1,7 @@
 """The merge queue's check script, `scripts/verify/ci.sh` (c74): rendered from `templates/verify/ci.sh` with the
 repository's own commands (detect.toolchain), part of the first commit of a repository `orche init --new` makes,
-and offered to an existing repository as one pull request by `orche init` (`ensure`).
+and offered to an existing repository as one pull request by `orche init` and `orche init --refresh`, so
+`orche update` (`ensure`).
 
 `ensure` never asks and never fails init: it answers a state for the setup report's "Running now" line,
   {"state": "on"}                        the script is on origin/<base> (fetched first)
@@ -8,6 +9,8 @@ and offered to an existing repository as one pull request by `orche init` (`ensu
   {"state": "waiting", "reason"}         nothing could be pushed (no origin, no base, gh, the push)
 It opens at most one PR per project: an open PR with head BRANCH, or BRANCH on origin, means it is done.
 The branch is cut from origin/<base> in a temporary worktree, so the owner's checkout is never touched.
+init keeps an open PR's number and URL on the project's registry entry (`verify_pr`), so the doctor and the
+setup report name it without a gh call (`awaiting`), while the pushed branch says it is open (`pending`).
 """
 import re
 import shutil
@@ -51,6 +54,12 @@ def body(check) -> str:
 def pending(root) -> bool:
     """Whether this checkout has pushed BRANCH (its remote-tracking ref): a PR adding the script waits."""
     return shell.git(root, "rev-parse", "--verify", "-q", f"refs/remotes/origin/{BRANCH}", timeout=10).ok
+
+
+def awaiting(proj) -> str:
+    """The PR adding the script as init last recorded it (`verify_pr`): `PR #<n> (<url>)`."""
+    pr = (proj or {}).get("verify_pr") or {}
+    return f"PR #{pr['number']} ({pr['url']})" if pr.get("number") else f"the PR from {BRANCH}"
 
 
 def _waiting(why) -> dict:
@@ -105,4 +114,4 @@ def running(state) -> str:
         return "on"
     if state["state"] == "pr":
         return f"waiting for PR #{state['number']} ({state['url']}) to be merged"
-    return f'waiting; the check script could not be pushed ({state["reason"]}); say "set up the merge queue"'
+    return f"waiting; the check script could not be pushed ({state['reason']})"

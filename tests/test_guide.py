@@ -107,13 +107,12 @@ class GuideTest(support.TempHomeCase):
     def test_a_project_without_the_queue_gate_gets_a_line(self):
         self.project("acme")
         self.assertIn('No base branch found yet, so a person merges each PR. Say "set up the merge queue for acme"; '
-                      'Main runs `orche init acme --refresh`', self.line("Merge queue for acme"))
+                      'Main runs `orche init --refresh acme`', self.line("Merge queue for acme"))
         self.cfg["publish"] = {"base": "main"}
         self.assertEqual(self.line("Merge queue for acme"),
-                         '- Merge queue for acme: lands approved pull requests by itself after its checks pass. Until '
-                         'the repository has the check script (scripts/verify/ci.sh on main) a person merges each PR. '
-                         'Say "set up the merge queue for acme"; Build\'s first unit adds the script from '
-                         'templates/verify/ci.sh.')
+                         '- Merge queue for acme: lands approved pull requests by itself after its checks pass. The '
+                         'check script (scripts/verify/ci.sh) could not be pushed to main, so a person merges each PR. '
+                         'Say "set up the merge queue for acme"; Main runs `orche init --refresh acme`.')
         self.check_shape(self.lines())
 
     def test_many_projects_share_one_gate_line_and_the_list_stays_short(self):
@@ -148,8 +147,8 @@ class GuideTest(support.TempHomeCase):
             "- Janitor: daily at 04:00; moves retired units' workspaces, and build caches of units idle for 7 days, "
             "to a trash it empties after 30 days; touches nothing in the repository.",
             "- Merge queue: on when the repository has scripts/verify/ci.sh on main (runs that script on each "
-            "approved PR; lands it by itself when that passes); this project: waiting for the script (Build's first "
-            "unit adds it).",
+            "approved PR; lands it by itself when that passes); this project: waiting; no check script on main and "
+            "no PR.",
             '- Jev: off; say "turn on Jev" (listed below).',
             "- Notifications: Orca shows one when Main finishes a reply; ORCHE reminds you after 30 minutes when a "
             "decision still waits."])

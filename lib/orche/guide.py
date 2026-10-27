@@ -84,7 +84,8 @@ def scale_line(cfg, reg):
 
 def gate_lines(cfg, reg) -> list:
     """One line per registered project whose base branch lacks `scripts/verify/ci.sh` (the doctor's
-    `queue gate` rows) and that has no PR adding it (verifygate.pending), merged into one line past MAX_GATES."""
+    `queue gate` rows) and that has no PR adding it (verifygate.pending): init could not push the script.
+    Merged into one line past MAX_GATES."""
     from . import verifygate
     from .install import doctor
     missing = []
@@ -94,15 +95,13 @@ def gate_lines(cfg, reg) -> list:
             if not ok:
                 missing.append((key, base))
     what = "lands approved pull requests by itself after its checks pass"
-    runs = "Build's first unit adds the script from templates/verify/ci.sh"
     if len(missing) > MAX_GATES:
         return [_line("Merge queue", what, f"{missing[0][0]} and {len(missing) - 1} more projects lack the check "
                       "script (scripts/verify/ci.sh), so a person merges each PR there",
-                      "set up the merge queue for <project>", runs)]
-    return [_line(f"Merge queue for {key}", what, "Until the repository has the check script (scripts/verify/ci.sh "
-                  f"on {base}) a person merges each PR" if base else "No base branch found yet, so a person merges "
-                  "each PR", f"set up the merge queue for {key}", runs if base else
-                  f"Main runs `orche init {key} --refresh` (it finds the base branch), then {runs}")
+                      "set up the merge queue for <project>", "Main runs `orche init --refresh <project>`")]
+    return [_line(f"Merge queue for {key}", what, f"The check script (scripts/verify/ci.sh) could not be pushed to "
+                  f"{base}, so a person merges each PR" if base else "No base branch found yet, so a person merges "
+                  "each PR", f"set up the merge queue for {key}", f"Main runs `orche init --refresh {key}`")
             for key, base in missing]
 
 

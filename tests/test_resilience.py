@@ -967,7 +967,7 @@ class ScaleDoctorTest(support.TempHomeCase):
         self.assertIn("OWNER: git -C", no_base[2])
         rows = doctor.gate_rows(reg, {**config.load(), "publish": {"base": "main"}})
         self.assertEqual([r[:2] for r in rows], [("WARN", "queue gate"), ("WARN", "deploy on merge")])
-        self.assertIn("site: no scripts/verify/ci.sh on origin/main — queue add refuses", rows[0][2])
+        self.assertEqual(rows[0][2], "site: no check script on origin/main and no PR; orche init --refresh site opens one")
         self.assertIn("site: vercel.json — every queue merge deploys main (queue.land auto)", rows[1][2])
 
     def test_queue_usage_memory_scale_and_ladder_rows(self):

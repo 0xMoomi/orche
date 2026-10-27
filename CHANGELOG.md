@@ -3,6 +3,12 @@
 All notable changes to ORCHE are listed here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow semantic versioning.
 
+## 0.15.1 — 2026-10-27
+
+### Fixed
+
+- `orche init --refresh` and so `orche update` now open the merge queue's check-script PR (at most one per project), so an existing project reaches "on" without a manual step; the setup report and `orche doctor`'s `queue gate` row name that PR.
+
 ## 0.15.0 — 2026-10-27
 
 ### Added
