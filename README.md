@@ -49,6 +49,7 @@ Say it to Main in your own words; Main runs the command.
 | "run up to 30 agents" | `orche hr scale 30`; on a Claude subscription many agents reach the usage window and ORCHE waits for its reset |
 | "add a design division", "switch research to Sonnet", "set up again" | a choice dialog, then `orche hr add`, `orche hr model` or `orche init --refresh` |
 | "pull requests go to develop and branches start with dev/" | `orche init --refresh <project> --base develop --branch-prefix dev` |
+| (nothing to say) | A repository that already follows a team workflow (PRs to develop, dev/des-47 branches, Entire) is read at setup; nothing to configure. |
 | "update" | `orche update`: the newest ORCHE, reinstalled, every project's ORCHE files refreshed (never yours) |
 | "what changed in <project>?" | `orche card <project>`, then `orche ask <project> "…"` |
 | "how much did this cost?" | `orche metrics` |

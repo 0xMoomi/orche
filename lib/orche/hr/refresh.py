@@ -74,7 +74,7 @@ def units_of(proj, division):
 
 
 def refresh_unit(key, unit, *, root, backup_dir, out, dry_run=False) -> None:
-    """Re-render one `_units` row's worktree settings and personas (main checkout and worktree),
+    """Re-render one `_units` row's worktree settings (and Entire's commit linking) and personas (main checkout and worktree),
     appending to `out` (a Refresh)."""
     kind, name, entry, model, effort, spec = unit
     changed, kept, restart = out
@@ -85,6 +85,9 @@ def refresh_unit(key, unit, *, root, backup_dir, out, dry_run=False) -> None:
     if os.path.isdir(wt):
         dirs.append(wt)
         path, wrote = onboarding.write_settings(wt, session, main_root=root, dry_run=dry_run)
+        if wrote:
+            changed.append(path)
+        path, wrote = onboarding.link_entire(root, wt, dry_run=dry_run)
         if wrote:
             changed.append(path)
     else:

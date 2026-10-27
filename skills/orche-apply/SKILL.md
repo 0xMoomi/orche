@@ -77,9 +77,11 @@ Never hand it to the `hr` agent: a subagent cannot ask.
   <model>` (a `null` value, the keep option, changes nothing). Say in plain words when a pane must restart to use it; restart one
   (`orche sleep`, then `orche wake`) only when the user asks and nothing runs there. A feature agent runs on its
   division's model: offer the division.
-- Pull requests and branches: the user names the branch PRs go to (`develop`) or the word branches start with
-  (`dev`) → `orche init --refresh <proj> --base <branch> --branch-prefix <prefix>` (either flag alone); no question
-  unless the branch or the word is missing. The setup report then names them.
+- Pull requests and branches: `orche init` and `orche update` already read them from the repository (merged PRs'
+  base, `dev/des-47-…` branches, Entire); the command is for overriding. The user names the branch PRs go to
+  (`develop`), the word branches start with (`dev`) or the issue team (`DES`) → `orche init --refresh <proj> --base
+  <branch> --branch-prefix <prefix> --issues <KEY>` (any flag alone); no question unless the value is missing. The
+  setup report then names them.
 - Which divisions: from the same JSON, one line per existing division (`<label> (<key>) — <desc> · <model label>
   · <status_text>`) and one line naming the kinds that can be added; no question.
 - First setup: step 1 below and `orche hr choices --json`; ask `ask.setup`; a divisions value

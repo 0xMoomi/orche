@@ -1,7 +1,8 @@
 """Shared onboarding for divisions (`orche init`) and feature agents (`orche feat new`).
 
 Steps: Orca worktree -> unit memory files (`.orche/<div|feat>/<name>/`) -> worktree
-`.claude/settings.local.json` (merged) -> persona `.claude/agents/<session>.md` (rewritten when the
+`.claude/settings.local.json` (merged) -> Entire's commit linking when the repository uses Entire
+(`link_entire`) -> persona `.claude/agents/<session>.md` (rewritten when the
 template's text differs; `hr/refresh.py` re-renders registered units) -> optional pane.
 The caller writes the registry entry. Under dry-run every step prints its argv / target and
 nothing is written; worktree paths are shown as `<name worktree>` placeholders.
@@ -161,6 +162,29 @@ def write_settings(worktree_dir, agent, *, main_root=None, dry_run=False) -> tup
     if target.exists() and merged == current:
         return target, False
     util.write_json(target, merged)
+    return target, True
+
+
+def link_entire(repo_root, worktree_dir, *, dry_run=False) -> tuple:
+    """When the repository uses Entire (`<repo_root>/.entire/settings.json`, read live), make the worktree's
+    `.entire/settings.local.json` hold `"commit_linking": "always"` (created as that one key; an existing
+    file keeps its other keys; `.entire/settings.json` is never touched), so a worker's commits are linked
+    to its session without a prompt. Entire gitignores the local file itself (`.entire/.gitignore`): nothing
+    is committed. Returns (path or None when the repository does not use Entire, wrote?)."""
+    from .. import detect
+    if not detect.uses_entire(repo_root):
+        return None, False
+    target = Path(worktree_dir) / ".entire" / "settings.local.json"
+    current = util.read_json(target, default={}) if target.exists() else {}
+    if not isinstance(current, dict):
+        raise util.JsonError(target, "not a JSON object")
+    if current.get("commit_linking") == "always":
+        return target, False
+    if dry_run:
+        dry(f"write {target} commit_linking=always")
+        return target, True
+    guard(target.parent, worktree_dir, repo_root)
+    util.write_json(target, {**current, "commit_linking": "always"})
     return target, True
 
 
@@ -340,6 +364,7 @@ def onboard(*, project, repo_root, repo_id, kind, name, model, effort, wake, par
         guard(unit_dir, wt_path, repo_root)
         templates.copy_unit(unit_dir, role, PROJECT=project, UNIT=name, SESSION=session)
     write_settings(wt_path, session, main_root=repo_root, dry_run=dry_run)
+    link_entire(repo_root, wt_path, dry_run=dry_run)
     exclude_settings(wt_path, dry_run=dry_run)
     write_persona([repo_root, wt_path], session, role, project=project, name=name, session=session,
                   model=model, effort=effort, main_root=repo_root, dry_run=dry_run, custom=custom,

@@ -72,9 +72,11 @@ DEFAULTS = {
     "flow": {"enabled": True, "quiet_hours": "23:00-08:00", "max_unit_cost_usd": 10, "max_project_cost_usd": 30,
              "revisions": 3, "briefs_per_hour": 20, "runs_per_unit": 4, "depth": 3, "fanout": 5},
     # publish: base = the PR base branch the queue lands on (null: origin/HEAD; neither: an OWNER step);
-    # branch_prefix = the first path segment of a feature worker's branch (null: `feat`); per_project
-    # overrides land by project name, like the queue's (`orche init --base/--branch-prefix` writes them).
-    "publish": {"base": None, "branch_prefix": None, "per_project": {}},
+    # branch_prefix = the first path segment of a feature worker's branch (null: `feat`); issues = the issue
+    # tracker's team key, e.g. `DES` (a worker is then named `des-<N>-<topic>`); per_project overrides land by
+    # project name, like the queue's (`orche init --base/--branch-prefix/--issues` writes them, and init reads
+    # the unset ones from the repository: lib/orche/detect.py).
+    "publish": {"base": None, "branch_prefix": None, "issues": None, "per_project": {}},
     # The merge queue (lib/orche/queue): per_project overrides land by project name. lost_after_s:
     # a testing entry whose integrator's pid still lives while the lock is free counts as lost after this
     # (a dead pid at once).

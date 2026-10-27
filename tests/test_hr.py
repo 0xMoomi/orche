@@ -74,11 +74,11 @@ class HrCase(support.TempHomeCase):
         shell.RUNNER = self.fake_runner
         self.addCleanup(setattr, shell, "RUNNER", REAL_RUNNER)
 
-    def fake_runner(self, argv, *, timeout, input, env=None):
+    def fake_runner(self, argv, *, timeout, input, env=None, cwd=None):
         if argv[0] != "orca":
             if argv[0] == "git":
                 self.git_calls.append(argv)
-            return REAL_RUNNER(argv, timeout=timeout, input=input)
+            return REAL_RUNNER(argv, timeout=timeout, input=input, **({"cwd": cwd} if cwd else {}))
         self.calls.append(argv)
         key = " ".join(argv[1:3])
         result = {}
@@ -509,7 +509,7 @@ class InitTest(HrCase):
         code, out, err = self.orche("--json", "init", "acme-shop", "--refresh", "--base", "develop",
                                     "--branch-prefix", "dev")
         self.assertEqual(code, 0, err)
-        self.assertEqual(json.loads(out)["publish"], {"base": "develop", "branch_prefix": "dev"})
+        self.assertEqual(json.loads(out)["publish"], {"base": "develop", "branch_prefix": "dev", "issues": None})
         cfg = json.loads((self.home / "config.json").read_text())
         self.assertEqual(cfg["publish"]["per_project"]["acme-shop"], {"base": "develop", "branch_prefix": "dev"})
         self.assertIn("- Pull requests: base develop, branches dev/<name>.\n", report.read_text())
@@ -520,6 +520,77 @@ class InitTest(HrCase):
             self.assertEqual(len(err.splitlines()), 1, err)
         self.assertEqual(json.loads((self.home / "config.json").read_text())["publish"]["per_project"]["acme-shop"],
                          {"base": "develop", "branch_prefix": "dev"})
+
+    def team_repo(self, prs=24, to="develop"):
+        """The project as a team repository: an origin with dev/des-<n> branches, 20 of `prs` merged PRs to `to`
+        (the rest to main), `.entire/settings.json`; the fake gh answers."""
+        git_repo(self.repo)
+        origin = self.home / "origin.git"
+        git("init", "-q", "--bare", "-b", "main", str(origin), cwd=self.home)
+        git("remote", "add", "origin", str(origin), cwd=self.repo)
+        for ref in ("main", "dev/des-1-a", "dev/des-2-b", "dev/des-3-c", "feature/x"):
+            git("push", "-q", "origin", f"HEAD:refs/heads/{ref}", cwd=self.repo)
+        git("fetch", "-q", "origin", cwd=self.repo)
+        git("remote", "set-head", "origin", "main", cwd=self.repo)
+        (self.repo / ".entire").mkdir()
+        (self.repo / ".entire" / "settings.json").write_text('{"enabled": true}\n')
+        support.fake_gh(self.home / "gh", {"prs": [{"number": n, "state": "MERGED", "headRefOid": "0" * 40,
+                                                    "baseRefName": to if n <= 20 else "main"}
+                                                   for n in range(1, prs + 1)]})
+
+    def test_init_reads_the_team_conventions(self):
+        self.team_repo()
+        config_path = self.home / "config.json"
+        cfg = json.loads(config_path.read_text())
+        cfg["publish"] = {"per_project": {"acme-shop": {"branch_prefix": "team"}}}   # set before: kept
+        config_path.write_text(json.dumps(cfg))
+        code, _, err = self.orche("init", "Acme Shop")
+        self.assertEqual(code, 0, err)
+        self.assertEqual(json.loads(config_path.read_text())["publish"]["per_project"]["acme-shop"],
+                         {"branch_prefix": "team", "base": "develop", "issues": "DES"})
+        report = (self.repo / ".orche" / "SETUP.md").read_text()
+        self.assertIn("- Read the repository's team conventions: base, issues, entire.\n", report)
+        self.assertIn("- Pull requests: base develop, branches team/<name>, issues DES-<N> (name the worker "
+                      "des-<N>-<topic>).\n", report)
+        self.assertIn("- Entire: on in this repository; worker commits are linked to their session (commit_linking "
+                      "always in .entire/settings.local.json).\n", report)
+        self.assertIn("- Linear: Orca is not connected to the DES team;", report)
+        self.assertTrue(self.orca_calls("linear team"))
+        for div in ("build", "rnd"):   # every unit worktree links its commits to its session
+            local = self.wtroot / f"div-{div}" / ".entire" / "settings.local.json"
+            self.assertEqual(json.loads(local.read_text()), {"commit_linking": "always"})
+        create = self.orca_calls("worktree create")[0]
+        self.assertEqual(create[create.index("--base-branch") + 1], "origin/develop")   # detected before the worktrees
+
+    def test_refresh_detects_again_and_a_flag_wins(self):
+        git_repo(self.repo)
+        self.assertEqual(self.orche("init", "Acme Shop")[0], 0)
+        shutil.rmtree(self.repo / ".git")
+        self.team_repo()
+        code, out, err = self.orche("--json", "init", "acme-shop", "--refresh", "--base", "main")
+        self.assertEqual(code, 0, err)
+        self.assertEqual(json.loads(out)["publish"], {"base": "main", "branch_prefix": "dev", "issues": "DES"})
+        report = (self.repo / ".orche" / "SETUP.md").read_text()
+        self.assertIn("- Read the repository's team conventions: branch_prefix, issues, entire.\n", report)
+        self.assertIn("- Pull requests: base main, branches dev/<name>, issues DES-<N>", report)
+        (self.home / "fake-orca.json").write_text("{}")
+        code, out, err = self.orche("--json", "init", "acme-shop", "--refresh", "--issues", "des")
+        self.assertEqual((code, out, len(err.splitlines())), (2, "", 1), err)
+        self.assertEqual(self.orche("init", "acme-shop", "--refresh", "--issues", "OPS")[0], 0)
+        self.assertEqual(json.loads((self.home / "config.json").read_text())["publish"]["per_project"]["acme-shop"],
+                         {"base": "main", "branch_prefix": "dev", "issues": "OPS"})
+        report = (self.repo / ".orche" / "SETUP.md").read_text()
+        self.assertIn("- Read the repository's team conventions: entire.\n", report)   # nothing unset is left
+
+    def test_a_plain_repository_detects_nothing(self):
+        git_repo(self.repo)
+        self.assertEqual(self.orche("init", "Acme Shop")[0], 0)
+        self.assertNotIn("publish", json.loads((self.home / "config.json").read_text()))
+        report = (self.repo / ".orche" / "SETUP.md").read_text()
+        for word in ("team conventions", "Pull requests", "Entire", "Linear"):
+            self.assertNotIn(word, report)
+        self.assertFalse(self.orca_calls("linear team"))
+        self.assertFalse((self.wtroot / "div-build" / ".entire").exists())
 
     def test_parse_worktree_shapes(self):
         self.assertEqual(onboarding.parse_worktree({"worktree": {"path": "/w/x", "branch": "refs/heads/feat/x"}},

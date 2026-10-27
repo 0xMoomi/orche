@@ -15,6 +15,7 @@ ALLOWED = {
     "terminal": {"list", "create", "send", "rename", "wait", "read", "close", "switch"},
     "orchestration": {"send", "check"},
     "automations": {"create", "list", "remove"},
+    "linear": {"team"},
 }
 
 
@@ -104,6 +105,16 @@ def orchestration(sub, *args, **kw):
 
 def automations(sub, *args, **kw):
     return call("automations", sub, *args, **kw)
+
+
+def linear_teams(*, timeout=10) -> list:
+    """The Linear team keys Orca is connected to (`orca linear team list`); [] when it is not or fails."""
+    try:
+        result = call("linear", "team", "list", timeout=timeout)
+    except OrcaError:
+        return []
+    items = result.get("teams") if isinstance(result, dict) else result
+    return [str(t.get("key")) for t in items if isinstance(t, dict) and t.get("key")] if isinstance(items, list) else []
 
 
 _LEAD = re.compile(r"^[\W_]+")

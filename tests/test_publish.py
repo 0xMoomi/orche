@@ -235,7 +235,7 @@ class TeamFitTest(PublishCase):
     def test_config_for_project_and_set_project(self):
         cfg = config.load()
         self.assertEqual(config.for_project(cfg, "publish", "acme"),
-                         {"base": None, "branch_prefix": None, "per_project": {}})
+                         {"base": None, "branch_prefix": None, "issues": None, "per_project": {}})
         config.set_project("publish", "acme", base="develop", branch_prefix="dev")
         cfg = config.load()
         self.assertEqual(config.for_project(cfg, "publish", "acme")["base"], "develop")

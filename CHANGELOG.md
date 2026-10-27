@@ -3,6 +3,15 @@
 All notable changes to ORCHE are listed here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow semantic versioning.
 
+## 0.14.0 — 2026-10-27
+
+### Added
+
+- `orche init`, `orche init --refresh` and `orche update` read a project's team conventions from its repository and set the ones still unset: the pull request base from recent merged pull requests, the branch prefix and the issue team key from issue-keyed remote branches such as `dev/des-47-x`, and Entire from `.entire/settings.json`. Explicit flags win; a plain repository changes nothing.
+- `orche init --issues <KEY>` names the issue tracker's team key (`publish.per_project.<project>.issues`); the setup report names it and says when Orca is not connected to that Linear team.
+- In a repository that uses Entire, every unit worktree gets `commit_linking: always` in `.entire/settings.local.json`, so a worker's commits are linked to its session.
+- `orche doctor` warns when a project uses Entire but the `entire` command is not on PATH.
+
 ## 0.13.0 — 2026-10-27
 
 ### Added

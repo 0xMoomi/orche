@@ -851,7 +851,7 @@ class ApplyAllDryRunTest(InstallCase):
 
 
 class ApplyAllRunTest(HrCase):
-    def fake_runner(self, argv, *, timeout, input, env=None):
+    def fake_runner(self, argv, *, timeout, input, env=None, cwd=None):
         if argv[0] == "orca" and argv[1] == "status":
             return shell.Result(0, json.dumps({"ok": True, "result": {}}), "", argv)
         if argv[0] == "orca" and argv[1:3] == ["repo", "list"]:
@@ -862,7 +862,7 @@ class ApplyAllRunTest(HrCase):
             if getattr(self, "dup", False):
                 repos = [repos[0], {"id": "repo-acme-2", "path": str(self.repo), "displayName": "Acme Shop again"}]
             return shell.Result(0, json.dumps({"ok": True, "result": {"repos": repos}}), "", argv)
-        return super().fake_runner(argv, timeout=timeout, input=input)
+        return super().fake_runner(argv, timeout=timeout, input=input, cwd=cwd)
 
     def test_inits_each_unregistered_repo_honours_awake_limit_and_continues_past_failure(self):
         self.beta = self.home / "repos" / "beta"

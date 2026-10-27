@@ -588,8 +588,8 @@ class SessionUniquenessTest(SetupCase):
         self.other = self.home / "repos" / "acme"
         self.other.mkdir(parents=True)
 
-    def fake_runner(self, argv, *, timeout, input, env=None):
-        result = super().fake_runner(argv, timeout=timeout, input=input)
+    def fake_runner(self, argv, *, timeout, input, env=None, cwd=None):
+        result = super().fake_runner(argv, timeout=timeout, input=input, cwd=cwd)
         if argv[:3] != ["orca", "repo", "list"]:
             return result
         data = json.loads(result.out)
@@ -694,12 +694,12 @@ class AddRepoTest(SetupCase):
         self.display = "new-app"
         self.added = []
 
-    def fake_runner(self, argv, *, timeout, input, env=None):
+    def fake_runner(self, argv, *, timeout, input, env=None, cwd=None):
         if argv[:3] == ["orca", "repo", "add"]:
             self.calls.append(argv)
             self.added.append(argv[argv.index("--path") + 1])
             return shell.Result(0, json.dumps({"ok": True, "result": {}}), "", argv)
-        result = super().fake_runner(argv, timeout=timeout, input=input)
+        result = super().fake_runner(argv, timeout=timeout, input=input, cwd=cwd)
         if argv[:3] == ["orca", "repo", "list"] and self.added and self.list_error_after_add:
             return shell.Result(0, json.dumps({"ok": False, "error": {"message": self.list_error_after_add}}),
                                 "", argv)
@@ -841,8 +841,8 @@ class BareInitTest(SetupCase):
         super().setUp()
         self.here = git_repo(self.home / "repos" / "cwd-app")
 
-    def fake_runner(self, argv, *, timeout, input, env=None):
-        result = super().fake_runner(argv, timeout=timeout, input=input)
+    def fake_runner(self, argv, *, timeout, input, env=None, cwd=None):
+        result = super().fake_runner(argv, timeout=timeout, input=input, cwd=cwd)
         if argv[:3] == ["orca", "repo", "list"]:
             data = json.loads(result.out)
             data["result"]["repos"].append({"id": "repo-cwd", "path": str(self.here), "displayName": "cwd-app",
@@ -935,12 +935,12 @@ class LandOnMainTest(SetupCase):
     def test_a_failed_switch_is_one_warning_and_init_still_succeeds(self):
         real = self.fake_runner
 
-        def runner(argv, *, timeout, input, env=None):
+        def runner(argv, *, timeout, input, env=None, cwd=None):
             if argv[1:3] == ["terminal", "switch"]:
                 self.calls.append(argv)
                 return shell.Result(1, json.dumps({"ok": False, "error": {"code": "boom", "message": "no window"}}),
                                     "", argv)
-            return real(argv, timeout=timeout, input=input)
+            return real(argv, timeout=timeout, input=input, cwd=cwd)
         shell.RUNNER = runner
         code, out, err = self.orche("--json", "init", "Acme Shop", "--divisions", "build", "--no-intake")
         self.assertEqual(code, 0, err)
@@ -954,12 +954,12 @@ class LandOnMainTest(SetupCase):
     def test_a_failed_switch_never_claims_main_is_open(self):
         real = self.fake_runner
 
-        def runner(argv, *, timeout, input, env=None):
+        def runner(argv, *, timeout, input, env=None, cwd=None):
             if argv[1:3] == ["terminal", "switch"]:
                 self.calls.append(argv)
                 return shell.Result(1, json.dumps({"ok": False, "error": {"code": "boom", "message": "no window"}}),
                                     "", argv)
-            return real(argv, timeout=timeout, input=input)
+            return real(argv, timeout=timeout, input=input, cwd=cwd)
         shell.RUNNER = runner
         code, out, err = self.orche("init", "Acme Shop", "--divisions", "build", "--no-intake")
         self.assertEqual(code, 0, err)
@@ -969,8 +969,8 @@ class LandOnMainTest(SetupCase):
     def test_a_missing_main_tab_warns_and_does_not_switch(self):
         real = self.fake_runner
 
-        def runner(argv, *, timeout, input, env=None):
-            result = real(argv, timeout=timeout, input=input)
+        def runner(argv, *, timeout, input, env=None, cwd=None):
+            result = real(argv, timeout=timeout, input=input, cwd=cwd)
             self.terminals[:] = [t for t in self.terminals if t["title"] != "main-acme-shop"]
             return result
         shell.RUNNER = runner

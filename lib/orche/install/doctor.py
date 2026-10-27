@@ -206,6 +206,20 @@ def gh_rows(reg) -> list:
     return rows
 
 
+def entire_rows(reg, which=shutil.which) -> list:
+    """`entire`: WARN when a registered project uses Entire (`.entire/settings.json`) and the `entire`
+    command is not on PATH (its workers' commits are then not linked to their sessions); OK when it is;
+    no row when no project uses Entire."""
+    from .. import detect
+    users = [key for key, root in _roots(reg) if detect.uses_entire(root)]
+    if not users:
+        return []
+    if which("entire"):
+        return [("OK", "entire", f"found; used by {', '.join(users)}")]
+    return [("WARN", "entire", f"{key} uses Entire but the entire command is not on PATH; its commits will not be "
+                               "linked to their sessions") for key in users]
+
+
 def _deploys(root) -> list:
     found = [n for n in DEPLOY_FILES if (root / n).is_file()]
     for wf in sorted((root / ".github" / "workflows").glob("*.y*ml")):
@@ -469,7 +483,7 @@ def checks(ctx) -> list:
             add(*row)
         for row in process_checks(reg):
             add(*row)
-        for row in upgrade_checks(reg):
+        for row in upgrade_checks(reg) + entire_rows(reg):
             add(*row)
         for row in scale_checks(reg):
             add(*row)
