@@ -226,7 +226,7 @@ _Avoid_: estimate (Codex's token-priced figure), placeholder cost.
 _Avoid_: zombie lock.
 
 **Urgent pointer**:
-A waking pointer whose status is `blocked`, `question` or `failed`, or that carries `urgent: true`. It wakes Main without the quiet window; the owner is notified only by Main's closing line.
+A waking pointer whose status is `blocked`, `question` or `failed`, or that carries `urgent: true`. It wakes Main without the quiet window; it sends the owner no notification (Orca's own covers Main's reply).
 _Avoid_: priority, alert.
 
 **Quiet window**:
@@ -274,7 +274,7 @@ The one waking pointer from `orche` to Main when every unit of a multi-unit line
 _Avoid_: lineage done, final report.
 
 **Closing line**:
-The last non-empty line outside fences of Main's reply: `RUNNING: …`, `OWNER: …` or `DONE: …`. It is the only thing ORCHE notifies the owner about (`flow.owner`); an untagged reply notifies nothing.
+The last non-empty line outside fences of Main's reply: `RUNNING: …`, `OWNER: …` or `DONE: …`. `OWNER` records the ask and `DONE` closes it (`flow.owner`); Orca's own notification covers the reply, and ORCHE reminds the owner of an ask still open after 30 minutes.
 _Avoid_: last line, sign-off, footer.
 
 **Ask**:

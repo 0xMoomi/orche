@@ -60,7 +60,7 @@ def claim(text) -> Claim | None:
     return Claim(word, line, i)
 
 
-def _gated(m) -> bool:
+def gated(m) -> bool:
     """Ledger-gated members: the Build division and feature agents."""
     return m is not None and (m.kind == "feat" or (m.kind == "div" and m.name == "build"))
 
@@ -92,7 +92,7 @@ def _status_md(m, root, transcript_path) -> list:
 
 
 def _stop_proof(c, m, cwd, transcript_path, deadline) -> Proof:
-    if c is None or c.word not in DONE_WORDS or not _gated(m):
+    if c is None or c.word not in DONE_WORDS or not gated(m):
         return Proof(None, None)
     root = _root(m, cwd)
     left = (deadline - time.monotonic()) if deadline is not None else 2
@@ -143,7 +143,7 @@ def for_report(member, cwd, status) -> Proof:
     root = _root(member, cwd)
     head = shell.git_head(root)
     row = ledger.row_for_sha(member.project, head) if (member is not None and head) else None
-    if status != "done" or not _gated(member):
+    if status != "done" or not gated(member):
         return Proof(head, row)
     return Proof(head, row, tuple(_ledger_gaps(member.project, head, row, _MINIMUM["done"], root)))
 
@@ -153,12 +153,12 @@ def _commit_gap(worktree, head_before, head):
         return "no commit"
     if not head_before:
         return "history rewritten (HEAD before the run unknown)"
-    res = shell.run(["git", "-C", str(worktree), "merge-base", "--is-ancestor", head_before, head], timeout=30)
+    res = shell.git(worktree, "merge-base", "--is-ancestor", head_before, head, timeout=30)
     return None if res.ok else f"history rewritten ({head_before[:7]} is not an ancestor of HEAD)"
 
 
 def _tree_gap(worktree, session):
-    res = shell.run(["git", "-C", str(worktree), "status", "--porcelain", "--untracked-files=all"], timeout=30)
+    res = shell.git(worktree, "status", "--porcelain", "--untracked-files=all", timeout=30)
     if not res.ok:
         return "uncommitted changes"
     foreign = [ln for ln in res.out.splitlines()
@@ -182,7 +182,7 @@ def after_run(member, word, worktree, head_before, head) -> Proof:
     aside) and the ledger row; `missing` holds the first gap only."""
     # Keyed by the target identity's project (Roster), not the brief's job.project: the row is the target's.
     row = ledger.row_for_sha(member.project, head) if (member is not None and head) else None
-    if word not in DONE_WORDS or not _gated(member):
+    if word not in DONE_WORDS or not gated(member):
         return Proof(head, row)
     why = (_commit_gap(worktree, head_before, head) or _tree_gap(worktree, member.session)
            or _row_gap(word, head, row, member.session))

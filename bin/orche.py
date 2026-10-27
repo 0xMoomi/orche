@@ -14,7 +14,6 @@ would silently overwrite the root value (a dry run could mutate for real), so
 """
 import argparse
 import importlib.util
-import json
 import sys
 from pathlib import Path
 
@@ -25,7 +24,7 @@ from orche import pyguard  # noqa: E402  (before any other orche module)
 
 pyguard.check_cli()
 
-from orche import __version__, registry  # noqa: E402
+from orche import __version__, cli, registry  # noqa: E402
 
 EXIT_OK, EXIT_USER, EXIT_NOT_FOUND, EXIT_BLOCKED = 0, 1, 2, 3
 GLOBAL_FLAGS = ("--json", "--dry-run")
@@ -39,16 +38,8 @@ class Parser(argparse.ArgumentParser):
         self.exit(EXIT_USER, f"{self.prog}: error: {mask.redact(message)[0]}\n")
 
 
-def emit(args, data, human_lines):
-    if args.json:
-        print(json.dumps(data, indent=2, ensure_ascii=False))
-    else:
-        for line in human_lines:
-            print(line)
-
-
 def cmd_version(args):
-    emit(args, {"name": "orche", "version": __version__}, [f"orche {__version__}"])
+    cli.out(args, {"name": "orche", "version": __version__}, [f"orche {__version__}"])
     return EXIT_OK
 
 
@@ -57,7 +48,7 @@ def cmd_projects(args):
     rows = [{"key": key, "stage": proj.get("stage"), "aliases": proj.get("aliases", []),
              "path": proj.get("path")} for key, proj in sorted(reg["projects"].items())]
     lines = [f"{r['key']}\t{r['stage']}\t{','.join(r['aliases'])}" for r in rows] or ["no projects"]
-    emit(args, rows, lines)
+    cli.out(args, rows, lines)
     return EXIT_OK
 
 

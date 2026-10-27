@@ -24,7 +24,6 @@ SEGMENT = PLUGIN_ROOT / "templates" / "statusline-segment.sh"
 # One per hooks.json handler: dispatch_relay serves Stop and StopFailure.
 HOOK_NAMES = ("dispatch_relay", "dispatch_relay", "report_inject", "env_read_gate", "scope_gate", "session_start", "session_end")
 PLUGIN_CMDS = [f'"{PLUGIN_ROOT}/hooks/run.sh" {name}' for name in HOOK_NAMES]
-LEGACY_CMDS = [f'python3 "{PLUGIN_ROOT}/hooks/{name}.py"' for name in HOOK_NAMES]  # before hooks/run.sh
 
 STATUSLINE = """#!/bin/bash
 input=$(cat)
@@ -245,32 +244,6 @@ class InstallTest(InstallCase):
         self.assertNotIn("/plugin install", out)
         self.assertNotIn("careful", out)
 
-    def legacy_install(self):
-        """Settings + install-state.json as a pre-run.sh `orche install --mode settings` left them."""
-        self.install("--mode", "settings")
-        data, state = self.read_settings(), self.state()
-        for entries in data["hooks"].values():
-            for entry in entries:
-                for hook in entry["hooks"]:
-                    if hook["command"] in PLUGIN_CMDS:
-                        hook["command"] = LEGACY_CMDS[PLUGIN_CMDS.index(hook["command"])]
-        for hook in state["added_hooks"]:
-            hook["command"] = LEGACY_CMDS[PLUGIN_CMDS.index(hook["command"])]
-        (self.c / "settings.json").write_text(json.dumps(data, indent=2) + "\n")
-        (self.home / "install-state.json").write_text(json.dumps(state))
-
-    def test_settings_install_replaces_legacy_python3_hooks(self):
-        self.legacy_install()
-        out = self.install("--mode", "settings")
-        cmds = self.commands(self.read_settings())
-        self.assertEqual([c for c in cmds if c in LEGACY_CMDS], [])
-        self.assertEqual([cmds.count(c) for c in PLUGIN_CMDS], [PLUGIN_CMDS.count(c) for c in PLUGIN_CMDS])
-        self.assertEqual(len(cmds), 2 + 7)
-        self.assertIn(f"settings: replace (hook Stop {LEGACY_CMDS[0]} (now hooks/run.sh))", out)
-        self.assertEqual(sorted(h["command"] for h in self.state()["added_hooks"]), sorted(PLUGIN_CMDS))
-        self.assertEqual(self.orche("uninstall", "--home", str(self.h))[0], 0)
-        self.assertEqual(self.read_settings(), self.settings)
-
     # -- R4: switching install modes never leaves two Stop hooks --------------------------------
     def test_plugin_install_after_settings_install_removes_settings_hooks(self):
         self.install("--mode", "settings")
@@ -286,14 +259,6 @@ class InstallTest(InstallCase):
         self.assertEqual(self.orche("uninstall", "--home", str(self.h))[0], 0)
         self.assertEqual(self.read_settings(), self.settings)
 
-    def test_plugin_install_removes_legacy_python3_hooks_too(self):
-        self.legacy_install()
-        self.install()
-        cmds = self.commands(self.read_settings())
-        self.assertEqual([c for c in cmds if c in LEGACY_CMDS + PLUGIN_CMDS], [])
-        self.assertEqual(self.read_settings()["hooks"], self.settings["hooks"])
-        self.assertEqual(self.state()["added_hooks"], [])
-
     def test_careful_hook_recorded_by_an_older_install_is_left_alone(self):
         script = self.careful_script()
         cmd = f'bash "{script}"'
@@ -307,31 +272,6 @@ class InstallTest(InstallCase):
         self.assertEqual(self.orche("uninstall", "--home", str(self.h))[0], 0)
         self.assertEqual(self.read_settings(), self.settings)
 
-    def add_stop_hook_by_hand(self, command):
-        data = self.read_settings()
-        data["hooks"]["Stop"].append({"hooks": [{"type": "command", "command": command}]})
-        (self.c / "settings.json").write_text(json.dumps(data, indent=2) + "\n")
-
-    def test_settings_reinstall_with_both_shapes_keeps_the_record(self):
-        """Review I-1: the python3 shape added by hand is replaced; the run.sh record survives uninstall."""
-        self.install("--mode", "settings")
-        self.add_stop_hook_by_hand(LEGACY_CMDS[0])
-        self.install("--mode", "settings")
-        self.assertEqual(sorted(h["command"] for h in self.state()["added_hooks"]), sorted(PLUGIN_CMDS))
-        cmds = self.commands(self.read_settings())
-        stop = self.commands(self.read_settings(), "Stop")
-        self.assertEqual(([c for c in cmds if c in LEGACY_CMDS], stop.count(PLUGIN_CMDS[0])), ([], 1))
-        self.assertEqual(self.orche("uninstall", "--home", str(self.h))[0], 0)
-        self.assertEqual(self.read_settings(), self.settings)
-
-    def test_legacy_record_with_both_shapes_is_rerecorded_in_run_sh_shape(self):
-        self.legacy_install()   # records the python3 shape
-        self.add_stop_hook_by_hand(PLUGIN_CMDS[0])
-        self.install("--mode", "settings")
-        self.assertEqual(sorted(h["command"] for h in self.state()["added_hooks"]), sorted(PLUGIN_CMDS))
-        self.assertEqual(self.orche("uninstall", "--home", str(self.h))[0], 0)
-        self.assertEqual(self.read_settings(), self.settings)
-
     def test_settings_install_after_plugin_install_adds_hooks_once(self):
         self.install()
         self.assertEqual(self.read_settings()["hooks"], self.settings["hooks"])
@@ -341,17 +281,6 @@ class InstallTest(InstallCase):
         self.assertEqual([cmds.count(c) for c in PLUGIN_CMDS], [PLUGIN_CMDS.count(c) for c in PLUGIN_CMDS])
         self.assertEqual(len(cmds), 2 + 7)
         self.assertEqual(sorted(h["command"] for h in self.state()["added_hooks"]), sorted(PLUGIN_CMDS))
-
-    def test_uninstall_removes_both_hook_shapes(self):
-        self.legacy_install()  # install-state.json from before run.sh still records the python3 shape
-        self.assertEqual(self.orche("uninstall", "--home", str(self.h))[0], 0)
-        self.assertEqual(self.read_settings(), self.settings)
-        self.install("--mode", "settings")  # recorded run.sh shape, settings hand-reverted to python3
-        data = self.read_settings()
-        data["hooks"]["Stop"][-1]["hooks"][0]["command"] = LEGACY_CMDS[0]
-        (self.c / "settings.json").write_text(json.dumps(data, indent=2) + "\n")
-        self.assertEqual(self.orche("uninstall", "--home", str(self.h))[0], 0)
-        self.assertEqual(self.read_settings(), self.settings)
 
     def test_careful_script_is_never_registered(self):
         self.careful_script()
@@ -516,17 +445,6 @@ class InstallTest(InstallCase):
         errors = [l for l in out.splitlines() if l.startswith("state: error")]
         self.assertEqual(errors, ["state: error (install-state.json: Permission denied)"], out)
         self.assertEqual(self.read_settings()["cleanupPeriodDays"], 3650)  # install itself went ahead
-
-    def test_legacy_install_json_is_read_and_migrated(self):
-        cmd = PLUGIN_CMDS[0]
-        self.settings["hooks"]["Stop"].append({"hooks": [{"type": "command", "command": cmd}]})
-        (self.c / "settings.json").write_text(json.dumps(self.settings, indent=2) + "\n")
-        (self.home / "install.json").write_text(json.dumps(
-            {"plugin_root": str(PLUGIN_ROOT), "added_hooks": [{"event": "Stop", "command": cmd}]}))
-        self.assertEqual(self.orche("uninstall", "--home", str(self.h))[0], 0)
-        self.assertNotIn(cmd, self.commands(self.read_settings()))
-        self.assertFalse((self.home / "install.json").exists())
-        self.assertTrue((self.home / "install-state.json").is_file())
 
     def test_agents_md_appearing_before_the_move_is_not_replaced(self):
         from orche.install import codex
@@ -881,27 +799,6 @@ class DoctorTest(InstallCase):
         self.install()   # R4: plugin mode removes them; doctor is quiet again
         _, out, _ = self.doctor()
         self.assertIn("OK\thooks\torche plugin enabled", out.splitlines())
-
-    def test_old_python3_hook_entries_with_enabled_plugin_warn(self):
-        registry.save(registry.empty())
-        data = json.loads(json.dumps(self.settings))
-        data["hooks"]["Stop"] = [{"hooks": [{"type": "command", "command": LEGACY_CMDS[0]}]}]
-        data.setdefault("enabledPlugins", {})["orche@orche"] = True
-        (self.c / "settings.json").write_text(json.dumps(data, indent=2) + "\n")
-        _, out, _ = self.doctor()
-        self.assertIn("WARN\thooks\thooks registered twice (plugin + 1 settings.json entries): run orche install "
-                      "(plugin mode removes the settings entries) or disable the plugin", out.splitlines())
-
-    def test_both_hook_shapes_in_settings_warn(self):
-        registry.save(registry.empty())
-        data = json.loads(json.dumps(self.settings))
-        data["hooks"]["Stop"] = [{"hooks": [{"type": "command", "command": LEGACY_CMDS[0]}]},
-                                 {"hooks": [{"type": "command", "command": PLUGIN_CMDS[0]}]}]
-        (self.c / "settings.json").write_text(json.dumps(data, indent=2) + "\n")
-        _, out, _ = self.doctor()
-        self.assertIn("WARN\thooks\tsettings.json holds both hook shapes (python3 .../hooks/<hook>.py and "
-                      "hooks/run.sh <hook>): run orche install --mode settings to replace the old ones",
-                      out.splitlines())
 
     def test_invalid_registry_fails_and_orca_down_warns(self):
         (self.home / "registry.json").write_text("{nope")

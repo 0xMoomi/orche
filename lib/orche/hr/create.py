@@ -87,21 +87,20 @@ def onboard_project(reg, key, setup, plan, *, repo_id, root, card, dry_run=False
         if not dry_run:
             # Only additions reach here (see cmd_init._setup); an older entry without the field stays as it is.
             changed = (proj.get("custom_divisions") or {}) != custom
-            if changed:
-                proj["custom_divisions"] = dict(custom)
+            change = (lambda r: r["projects"][key].update(custom_divisions=dict(custom))) if changed else None
             if resume_line:
                 book.record(reg, f"init {key} resumed by {by} (skipping {','.join(plan.skipped) or 'nothing'})",
-                            project=key, save=changed)
+                            project=key, change=change)
             elif changed:
-                registry.save(reg)
+                book.write(reg, change)
     else:
         proj = {"repo_id": repo_id, "path": root, "stage": setup["stage"], "aliases": setup["aliases"],
                 "main_session": onboarding.session_name("main", key),
                 "card": card, "standing": ".orche/STANDING.md", "divisions": {},
                 "custom_divisions": dict(custom)}
         if not dry_run:
-            reg["projects"][key] = proj
-            book.record(reg, f"init {key} (repo {repo_id}) by {by}", project=key)
+            book.record(reg, f"init {key} (repo {repo_id}) by {by}", project=key,
+                        change=lambda r: r["projects"].__setitem__(key, proj))
     try:
         onboarding.write_project_marker(key, root, dry_run=dry_run)
         onboarding.exclude_settings(root, dry_run=dry_run)  # .orche/units/ never dirties the checkout
@@ -130,16 +129,17 @@ def _onboard_division(reg, key, proj, name, *, wake, root, repo_id, spec, by, dr
         == "onboarding" else None
 
     def provisional(wt):
-        proj["divisions"][name] = {"status": "onboarding", **wt, **base, "last_activity": util.now_iso()}
-        registry.save(reg)
+        record = {"status": "onboarding", **wt, **base, "last_activity": util.now_iso()}
+        book.write(reg, lambda r: r["projects"][key]["divisions"].__setitem__(name, dict(record)))
 
     entry = onboarding.onboard(project=key, repo_root=root, repo_id=repo_id, kind="div", name=name,
                                model=model, effort=effort, wake=wake, existing=resume,
                                on_created=provisional, dry_run=dry_run,
                                custom={"label": spec["label"], "charter": spec["charter"]} if spec else None)
     if not dry_run:
-        proj["divisions"][name] = {**entry, **base}
+        record = {**entry, **base}
         book.record(reg, f"create {session} ({entry['status']}) by {by} on {model}" + (" (resumed)" if resume else ""),
+                    change=lambda r: r["projects"][key]["divisions"].__setitem__(name, dict(record)),
                     event={"type": "create", "project": key, "unit": name, "by": by})
 
 
@@ -272,9 +272,11 @@ def create_feature(reg, key, name, *, scope, reason, by=None, batch=None, strict
     feature = {"name": name, "scope": list(scope), "session": session,
                "created": resume["created"] if resume else now, "last_activity": now, "reason": reason}
 
+    def features_in(r):
+        return r["projects"][key]["divisions"][division].setdefault("features", [])
+
     def provisional(wt):
-        features.append({**feature, **wt, "status": "onboarding"})
-        registry.save(reg)
+        book.write(reg, lambda r: features_in(r).append({**feature, **wt, "status": "onboarding"}))
     try:
         entry = onboarding.onboard(project=key, repo_root=proj["path"], repo_id=proj["repo_id"], kind="feat",
                                    name=name, model=model, effort=effort, wake=not headless, parent=head["worktree"],
@@ -293,12 +295,15 @@ def create_feature(reg, key, name, *, scope, reason, by=None, batch=None, strict
     feature.update(worktree=entry["worktree"], branch=entry["branch"], status=status)
     if headless and not codex:
         feature["pane"] = False
-    features[:] = [f for f in features if not (f["name"] == name and f["status"] == "onboarding")]
-    features.append(feature)
+
+    def change(r):
+        mine = features_in(r)
+        mine[:] = [f for f in mine if not (f["name"] == name and f["status"] == "onboarding")]
+        mine.append(dict(feature))
     event = {"type": "create", "project": key, "unit": f"{division}/{name}", "by": by}
     if batch:
         event["batch"] = batch
-    book.record(reg, f"create {session} by {by}: {reason}", event=event,
+    book.record(reg, f"create {session} by {by}: {reason}", change=change, event=event,
                 note=f"New feature agent {session}: {reason}")
     try:
         orca.worktree("set", "--worktree", f"id:{entry['worktree']}", "--unread")

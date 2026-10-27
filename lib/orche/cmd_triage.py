@@ -17,18 +17,11 @@ import sys
 import time
 from pathlib import Path
 
-from . import config, paths, registry, triage, util
+from . import cli, config, paths, registry, triage, util
 
 EXIT_OK, EXIT_USER = 0, 1
 LAST = 20
 EVAL_BACKENDS = ("auto", "jev", "claude-haiku", "heuristics")
-
-
-def _emit(args, data, lines):
-    if args.json:
-        print(json.dumps(data, indent=2, ensure_ascii=False))
-    else:
-        print("\n".join(lines))
 
 
 # ---- enable / disable ------------------------------------------------------
@@ -54,7 +47,7 @@ def _set_enabled(args, value):
         warning = eval_warning({"enabled": True, "resolved_backend": resolved, "eval": eval_status(resolved)})
         if warning:
             lines.append(warning)
-    _emit(args, {"enabled": value, "dry_run": bool(args.dry_run)}, lines)
+    cli.out(args, {"enabled": value, "dry_run": bool(args.dry_run)}, lines)
     return EXIT_OK
 
 
@@ -170,7 +163,7 @@ def _status_lines(d) -> list:
 
 def cmd_status(args):
     data = status_data()
-    _emit(args, data, _status_lines(data))
+    cli.out(args, data, _status_lines(data))
     return EXIT_OK
 
 
@@ -271,7 +264,7 @@ def cmd_eval(args):
             return None, model, 0.0, None
         for prompt, _label in rows:
             triage.decide(prompt, divisions, cfg, None, count)
-        _emit(args, {"dry_run": True, "prompts": len(rows), "classifier_calls": len(calls), "backend": model},
+        cli.out(args, {"dry_run": True, "prompts": len(rows), "classifier_calls": len(calls), "backend": model},
               [f"would make {len(calls)} {model} classifier calls for {len(rows)} labelled prompts"])
         return EXIT_OK
     rep = report(evaluate(rows, cfg, divisions, classifier), model)
@@ -279,7 +272,7 @@ def cmd_eval(args):
         save_eval(args.file, model, rep)
     except OSError as exc:
         print(f"orche: cannot record the eval in {eval_path()}: {exc}", file=sys.stderr)
-    _emit(args, rep, _report_lines(rep))
+    cli.out(args, rep, _report_lines(rep))
     return EXIT_OK
 
 

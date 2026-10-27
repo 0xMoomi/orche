@@ -106,7 +106,7 @@ class Job:
     text: str = field(default="", repr=False)   # BRIEF.md as read at resolve
     root: Path = None        # the project's main checkout (publish.base reads origin/HEAD there)
     kind: str = ""           # the target's roster kind: a `feat` run starts with publish.sync
-    gated: bool = False      # publish.gated(target): templates/run/commit-gated.md, and a verified done publishes
+    gated: bool = False      # donegate.gated(target): templates/run/commit-gated.md, and a verified done publishes
     sync_note: str = ""      # publish.sync's `## Branch sync` note for the prompt, set at the run's start
     effort: str = "medium"   # the rung's effort (ladder.rung)
     base: str = ""           # the ceiling: the division's model (Main: OPUS)
@@ -194,7 +194,7 @@ def resolve(reg, unit, cfg=None) -> Job:
               pin_note=pin_note,
               persona=persona if persona.is_file() else None, timebox=fields.get("TIMEBOX", "").strip(),
               context=context if context is not None and context.is_file() else None, rev=b.rev, text=b.text,
-              root=Path(root), kind=target.kind, gated=publish.gated(target))
+              root=Path(root), kind=target.kind, gated=donegate.gated(target))
     if target.status == "retired":
         raise runs.RunError(EXIT_NOT_FOUND, f"{unit}: target {to} is retired", job)
     if not wt or not Path(wt).is_dir():
@@ -255,7 +255,7 @@ def writable_roots(job) -> tuple:
     linked worktree writes objects and refs there), ORCHE_HOME (ledger rows, secrets requests,
     dispatch, logs) and the project's units folder. Raises ValueError when git cannot name the
     common dir: the run would not be able to commit."""
-    res = shell.run(["git", "-C", str(job.worktree), "rev-parse", "--path-format=absolute", "--git-common-dir"],
+    res = shell.git(job.worktree, "rev-parse", "--path-format=absolute", "--git-common-dir",
                     timeout=headless.CHECK_TIMEOUT_S)
     common = (res.out or "").strip()
     if not res.ok or not common:

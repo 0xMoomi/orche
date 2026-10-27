@@ -1,7 +1,7 @@
 """The headless head review (design §3.5, Appendix A.7): after a pre-review PASS (or skip), a fresh,
 read-only session with Build's persona and model at the standard rung reads the facts and the diff
 against the eight-line checklist. Both PASS → the runner queues the PR (R5) and the done is quiet;
-RETURN, disagreement, high risk, size or error → a waking pointer to the Build pane with both verdicts.
+RETURN, disagreement, high risk, size or error → a waking pointer to Build with both verdicts.
 
 The reviewer runs exactly as the pre-review's (review.call_for: Claude sealed with Read, Glob and Grep;
 Codex `-s read-only`, no writable root, no network) in a detached worktree at the PR head, and `git status
@@ -10,7 +10,7 @@ value of the package is masked and the untrusted ones fenced (review.fence); the
 every pointer are masked. The answer's first non-blank line is a lone `VERDICT: PASS` or `VERDICT:
 RETURN`, else `error`; checklist lines (`- N: why`) after a PASS make it a RETURN.
 
-Spend and holds (§7, §8.5): G4 before the call (over a cap → a `skipped` row, the pane decides); the
+Spend and holds (§7, §8.5): G4 before the call (over a cap → a `skipped` row, Build decides); the
 reviewer's vendor held → no call and no row, one quiet `held: … (stage build-review)` note, and the
 heartbeat starts it once the hold is over; a usage limit hit during the call → the same. Every call
 is a history line (`kind: build-review`, its vendor, model and cost).
@@ -335,7 +335,7 @@ def _decide(reg, cfg, rv, project, pr, unit, view, sha, base, h7, root, where, h
                 holds.join(vendor, project, who, STAGE)
                 return _held(project, pr, sha, unit, head, vendor, hold)
             hit = history.spend_hit(project, unit, cfg, tag=f"buildreview: {project}")
-            if hit:                   # G4: the pane decides
+            if hit:                   # G4: Build decides
                 verdict, error = "skipped", f"spend cap: head review not run ({hit})"
             else:
                 model = call.model

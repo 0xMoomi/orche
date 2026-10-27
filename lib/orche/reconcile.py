@@ -37,7 +37,6 @@ reconcile/heartbeat.json last. Classes (design §2.2):
   not run, running or reported on at this rev, with no open child of its own, whose pane has been
   idle SILENT_IDLE_S or whose rev is SILENT_TIMEBOX × TIMEBOX old -> `orche deliver --remind` once
   per revision; SILENT_ESCALATE_S later (or at 2 × TIMEBOX) one urgent `info` to the brief's sender;
-- waker: the pre-0.6.0 `com.orche.main-waker` job is loaded -> one owner notification a day;
 - owner (flow.owner.heartbeat, before the classes above): an answered ask is marked, a filled secret
   no dialog reported is told to Main, then the 10-minute fallback, a held notice or the open ask's
   re-notification (30, 60, 120, 240 min after it; none in quiet hours, one at their end). A
@@ -70,7 +69,7 @@ import time
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 
-from . import __version__, brief, config, inbox, log, notify, orca, paths, procs, registry, roster, units, util
+from . import __version__, brief, config, inbox, log, orca, paths, procs, registry, roster, units, util
 from .flow import guard, lineage, owner, usage
 
 STATE_TTL = _dt.timedelta(hours=48)
@@ -88,8 +87,7 @@ SILENT_ESCALATE_S = 1800  # silent: the escalation this long after the reminder,
 KIND = {"unread": "nudge", "undelivered": "deliver", "busy": "restart", "drain": "drain", "silent": "remind",
         "held": "rerun"}
 EVENT = {"drain": "drain-stale"}
-DAILY = ("reopens:", "waker")   # per-day counters, kept for the day
-WAKER = "com.orche.main-waker"
+DAILY = ("reopens:",)   # per-day counters, kept for the day
 WATCHDOG_S = 2 * BUDGET_S       # a pass still running this long after it took the lock is aborted (exit 3)
 WATCHDOG_GRACE_S = 15           # ... by a thread this much later when SIGALRM could not interrupt the call
 ABORT_EXIT = 3
@@ -114,6 +112,20 @@ def settings(cfg=None) -> dict:
     return dict((cfg or config.load()).get("reconcile") or config.DEFAULTS["reconcile"])
 
 
+def every_s(cfg) -> int:
+    """reconcile.every_s of `cfg` (settings()): the pass interval in seconds."""
+    return int(cfg.get("every_s", 300))
+
+
+def _state() -> dict:
+    """state.json; {} when missing, malformed or not an object (an OSError still raises)."""
+    try:
+        state = util.read_json(state_path(), default={})
+    except util.JsonError:
+        return {}
+    return state if isinstance(state, dict) else {}
+
+
 @dataclass
 class _Args:
     dry_run: bool
@@ -121,7 +133,7 @@ class _Args:
 
 @dataclass
 class Condition:
-    cls: str            # unread | closed | undelivered | drain | busy | silent | waker
+    cls: str            # unread | closed | undelivered | drain | busy | silent | held
     key: str            # the episode: "<class>:<target>:<episode>"
     project: str
     target: str         # session (unread, closed) or unit
@@ -138,7 +150,7 @@ class Condition:
 
 @dataclass
 class Action:
-    kind: str           # nudge | deliver | drain | restart | reopen | remind | escalate | notify
+    kind: str           # nudge | deliver | drain | restart | rerun | reopen | remind | escalate
     cond: Condition
     attempt: int
     cap: int
@@ -167,8 +179,6 @@ class Action:
             return f"{verb} {c.target} pane ({why}; {verb} {self.attempt}/{self.cap} today)"
         if self.kind == "remind":
             return f"remind {c.target} in {c.to} (rev {c.rev}, {c.info.get('reason')}; try 1/1)"
-        if self.kind == "notify":
-            return f"notify the owner: {c.target} is loaded (once a day)"
         if self.cap == 0:
             return f"escalate {c.cls} {c.target} ({c.status or 'asleep'}, {mins} min)"
         return f"escalate {c.cls} {c.target} (after {self.cap} tries, {mins} min)"
@@ -252,73 +262,6 @@ def _busy(reg, now, keys, cfg_all=None) -> list:
                                  max(0.0, (now - since).total_seconds()), rev=b.rev, to=to,
                                  info={"since": _stamp(at), "vendor": vendor, "per_pass": per_pass}))
     return out
-
-
-def _note(action, cls, project, target, line, failed=None) -> dict:
-    """A row of a pass step that acted itself (queue, usage, review), as owner.heartbeat's."""
-    return {"action": action, "class": cls, "project": project, "target": target, "rev": None, "attempt": 1,
-            "cap": 1, "line": line, "failed": failed}
-
-
-def _queue_starts(reg, keys, dry_run) -> list:
-    """Class `queue` (§5.10, R19), per project whose merge queue has entries and no integrator running:
-    under `land: auto` entries still waiting for the owner's word become plain waiting (queue.release);
-    a `testing` entry whose integrator is gone (its pid dead, or queue.lost_after_s passed) goes back to
-    the front (integrator.recover; only its gate's own processes are stopped); then work the integrator
-    may take (queue.startable: an approved waiting entry or a merge whose proof is pending; neither the
-    queue nor the project paused by `orche queue pause` or `orche flow pause`) -> queue.start(p). The
-    queue's own files and the process table only (no git, no gh)."""
-    from . import queue
-    from .queue import integrator
-    cfg = config.load()
-    rows = []
-    for key in sorted(reg.get("projects", {})):
-        if keys is not None and key not in keys:
-            continue
-        try:
-            s = queue.summary(key)
-            if not s["entries"] or queue.running(key):
-                continue
-            stale = [e for e in s["entries"] if e.get("state") == "testing" and not queue.landed(e)]
-            if dry_run:
-                lost = stale
-            else:
-                queue.release(key, cfg)
-                lost = integrator.recover(key) if stale else []
-                s = queue.summary(key)
-            can = queue.startable(key)
-        except Exception as exc:  # noqa: BLE001 - one unreadable queue never stops the pass
-            log.log("hooks", f"reconcile: queue {key}: {type(exc).__name__}: {exc}")
-            continue
-        for e in lost:
-            rows.append(_note("queue-lost", "queue", key, key,
-                              f"{'would check the testing' if dry_run else 'recovered the lost'} PR #{e.get('pr')} "
-                              f"of {key}{'' if dry_run else ' (back at the front)'}"))
-        if not can:
-            continue
-        waiting = s["waiting"] - s["await"]
-        failed = None
-        if not dry_run:
-            try:
-                queue.start(key)
-            except Exception as exc:  # noqa: BLE001 - one queue never stops the pass
-                failed = type(exc).__name__
-                log.log("hooks", f"reconcile: queue start {key}: {failed}: {exc}")
-        rows.append(_note("queue-start", "queue", key, key, f"{'would start' if dry_run else 'start'} the merge "
-                                                            f"queue of {key} ({waiting} waiting)", failed))
-    return rows
-
-
-def in_quiet_hours(cfg_all, now) -> bool:
-    """flow.quiet_hours "HH:MM-HH:MM" (may cross midnight) holds `now`'s own wall time (the pass's clock,
-    not the host's zone); False when unset or malformed."""
-    raw = str(((cfg_all or {}).get("flow") or {}).get("quiet_hours") or "")
-    try:
-        a, b = (int(h) * 60 + int(m) for h, m in (x.strip().split(":") for x in raw.split("-")))
-    except ValueError:
-        return False
-    t = now.hour * 60 + now.minute
-    return a <= t < b if a <= b else (t >= a or t < b)
 
 
 def probe(term):
@@ -584,10 +527,6 @@ def plan(conds, state, now, resolved=frozenset()) -> tuple:
             if c.ready:
                 actions.append(Action("drain", c, 1, 1))
             continue
-        if c.cls == "waker":
-            if (new.get("waker") or {}).get("day") != day:
-                actions.append(Action("notify", c, 1, 1))
-            continue
         e = new[c.key] = _entry(state, c.key, now)
         e.update(project=c.project, target=c.target, cls=c.cls, to=c.to, seen=units.iso(now),
                  **({"rev": c.rev} if c.rev is not None else {}),
@@ -734,23 +673,10 @@ def _last_nudge(session) -> str:
 
 def _tell_owner(project, text, now) -> None:
     """An owner notification: a project's escalation is a `stuck` notice (flow.owner.announce: recorded
-    first, the per-project gap, a held one sent by the next pass, no sound in quiet hours); the global
-    waker notice goes through notify.send. Text and title travel as osascript arguments. One events
-    line when shown."""
-    if project:
-        shown = owner.announce(project, "stuck", text, now)
-    else:
-        cfg_all = config.load()
-        shown = notify.enabled(cfg_all) and notify.send("ORCHE", text, sound=not in_quiet_hours(cfg_all, now),
-                                                        kind="reconcile")
-    if shown:
-        log.log("events", f"reconcile owner-notified project={project or '-'}")
-
-
-def waker_loaded() -> bool:
-    """The pre-0.6.0 Main waker LaunchAgent is loaded (the doctor's check)."""
-    from .install import doctor
-    return bool(doctor.main_waker_rows())
+    first, the per-project gap, a held one sent by the next pass, no sound in quiet hours). Text and
+    title travel as osascript arguments. One events line when shown."""
+    if owner.announce(project, "stuck", text, now):
+        log.log("events", f"reconcile owner-notified project={project}")
 
 
 def apply(reg, action, now) -> None:
@@ -768,9 +694,6 @@ def apply(reg, action, now) -> None:
         _reopen(reg, c)
     elif kind == "remind":
         _remind(c.target, str(c.info.get("reason") or ""))
-    elif kind == "notify":
-        _tell_owner("", f"{WAKER} is still loaded: it predates 0.6.0 and doubles Main's wakes — run "
-                        f"launchctl bootout gui/{os.getuid()}/{WAKER}", now)
     else:
         _escalate(reg, action, now)
 
@@ -779,9 +702,6 @@ def _record(new, a, now) -> None:
     """The bookkeeping of an applied action, also when its apply raised: a failing repair spends its
     attempt, so it is capped and escalated once like any other."""
     at = units.iso(now)
-    if a.kind == "notify":
-        new["waker"] = {"day": now.date().isoformat(), "at": at}
-        return
     e = new.get(a.cond.key)
     if a.kind == "drain" or e is None:
         return
@@ -1028,11 +948,7 @@ def _block(blocked, key, path, dry_run=False) -> None:
 
 
 def read_heartbeat():
-    try:
-        data = util.read_json(heartbeat_path(), default=None)
-    except util.JsonError:
-        return None
-    return data if isinstance(data, dict) else None
+    return util.read_dict(heartbeat_path())
 
 
 def write_heartbeat(now, cfg, took_s, actions, enabled=True, unreadable=None, readable=()) -> None:
@@ -1043,7 +959,7 @@ def write_heartbeat(now, cfg, took_s, actions, enabled=True, unreadable=None, re
     old = read_heartbeat() or {}
     day = now.date().isoformat()
     today = (int(old.get("repairs_today") or 0) if old.get("day") == day else 0) + actions
-    doc = {"at": now.isoformat(timespec="seconds"), "every_s": int(cfg.get("every_s", 300)),
+    doc = {"at": now.isoformat(timespec="seconds"), "every_s": every_s(cfg),
            "version": __version__, "took_s": round(took_s, 2), "actions": actions,
            "enabled": bool(enabled), "day": day, "repairs_today": today}
     job = is_job()
@@ -1102,6 +1018,11 @@ def _pass(cfg_all, cfg, now, started, dry_run, out, keys=None, as_json=False) ->
         if as_json:
             out(json.dumps(doc, ensure_ascii=False))
         return 0
+
+    def emit(row, text):
+        doc["actions"].append(row)
+        if not as_json:
+            out(text)
     if not cfg.get("enabled", True):
         if not dry_run:
             write_heartbeat(now, cfg, time.monotonic() - started, 0, enabled=False)
@@ -1155,15 +1076,12 @@ def _pass(cfg_all, cfg, now, started, dry_run, out, keys=None, as_json=False) ->
     _phase("owner")
     notes = list(owner.heartbeat(reg, now, dry_run, scope()))
     _phase("queue")        # 0.9.0: the merge queue's integrator, started when an entry waits
-    notes += _queue_starts(reg, scope(), dry_run)
+    from .queue import heartbeat as queue_beat
+    notes += queue_beat.heartbeat(reg, scope(), dry_run)
     _phase("usage")        # 0.9.0: a usage hold's owner notice, once; its end, once
     notes += usage.heartbeat(now, dry_run)
     _phase("observe")
-    try:
-        state = util.read_json(state_path(), default={})
-    except util.JsonError:
-        state = {}
-    state = state if isinstance(state, dict) else {}
+    state = _state()
     others = {k: v for k, v in state.items()
               if keys is not None and isinstance(v, dict) and v.get("project") and v.get("project") not in keys}
     mine = {k: v for k, v in state.items() if k not in others}
@@ -1172,31 +1090,23 @@ def _pass(cfg_all, cfg, now, started, dry_run, out, keys=None, as_json=False) ->
     while True:   # a denial mid-scan: that project is unreadable, the others are observed again
         try:
             conds = observe(reg, now, scope(), wake=wake, terms=terms, cfg_all=cfg_all,
-                            hush=in_quiet_hours(cfg_all, now))
+                            hush=owner.in_quiet_hours(cfg_all, now))
             break
         except OSError as exc:
             if not denied(exc):
                 raise
     held = {c.project for c in conds if guard.paused(c.project) is not None}
     conds = [c for c in conds if c.project not in held or c.cls == "drain"]   # G8: the owner paused it
-    if not dry_run and waker_loaded():
-        conds.append(Condition("waker", "waker", "", WAKER, 0.0))
     actions, new = plan(conds, mine, now, resolved(reg, mine))
     new.update(others)
     if dry_run:
         later = build.heartbeat(reg, scope(), True, started + BUDGET_S)
         for row in shut + notes:
-            doc["actions"].append(row)
-            if not as_json:
-                out(row["line"])
+            emit(row, row["line"])
         for a in actions:
-            doc["actions"].append(_row(a, ""))
-            if not as_json:
-                out(f"would {a.describe()}")
+            emit(_row(a, ""), f"would {a.describe()}")
         for row in later:
-            doc["actions"].append(row)
-            if not as_json:
-                out(row["line"])
+            emit(row, row["line"])
         if not actions and not shut and not notes and not later and not as_json:
             out("reconcile: nothing to repair")
         return done_json()
@@ -1205,16 +1115,12 @@ def _pass(cfg_all, cfg, now, started, dry_run, out, keys=None, as_json=False) ->
     util.write_json(state_path(), new)
     for row in shut:
         log.log("events", f"reconcile action=lineage-close project={row['project']} lineage={row['target']}")
-        doc["actions"].append(row)
-        if not as_json:
-            out(row["line"])
+        emit(row, row["line"])
         done += 1
     for row in notes:
         log.log("events", f"reconcile action={row['action']} project={row['project']} target={row['target']} "
                           f"rev=- attempt={row['attempt']}/{row['cap']}")
-        doc["actions"].append(row)
-        if not as_json:
-            out(row["line"])
+        emit(row, row["line"])
         done += 1
     for a in actions:
         if time.monotonic() - started >= BUDGET_S:
@@ -1231,17 +1137,13 @@ def _pass(cfg_all, cfg, now, started, dry_run, out, keys=None, as_json=False) ->
             if not denied(exc):
                 log.log("hooks", f"reconcile: {a.kind} {a.cond.target}: {failed}: {exc}")
         log.log("events", a.event() + (f" failed={failed}" if failed else ""))
-        doc["actions"].append(_row(a, failed))
-        if not as_json:
-            out(a.describe() + (f" — failed ({failed})" if failed else ""))
+        emit(_row(a, failed), a.describe() + (f" — failed ({failed})" if failed else ""))
         done += 1
     _phase("review")       # 0.9.0: a pending Build review, at most one a pass, after the repairs
     for row in build.heartbeat(reg, scope(), False, started + BUDGET_S):
         log.log("events", f"reconcile action={row['action']} project={row['project']} target={row['target']} "
                           f"rev=- attempt=1/1" + (f" failed={row['failed']}" if row["failed"] else ""))
-        doc["actions"].append(row)
-        if not as_json:
-            out(row["line"] + (f" — failed ({row['failed']})" if row["failed"] else ""))
+        emit(row, row["line"] + (f" — failed ({row['failed']})" if row["failed"] else ""))
         done += 1
     took = time.monotonic() - started
     if done:
@@ -1283,13 +1185,10 @@ def stalled(project) -> list:
     """`orche status`'s stalled lines' data: the project's repairs on file in state.json that ORCHE has
     tried (attempts) or escalated: [{cls, target, rev, to, tries, cap, escalated, escalated_at, next,
     last, detail}]."""
-    try:
-        state = util.read_json(state_path(), default={})
-    except util.JsonError:
-        return []
+    state = _state()
     from . import deliver
     out = []
-    for key in sorted(state if isinstance(state, dict) else {}):
+    for key in sorted(state):
         e = state[key]
         if not isinstance(e, dict) or e.get("project") != project or e.get("cls") == "held":
             continue          # a held unit's re-run in flight is not a stall
@@ -1327,12 +1226,8 @@ def stalled_line(s) -> str:
 def repairs() -> dict:
     """{(class, target): entry} of state.json's unread, closed and undelivered entries, the newest
     seen per pair (`orche status`'s hints)."""
-    try:
-        state = util.read_json(state_path(), default={})
-    except util.JsonError:
-        return {}
     out = {}
-    for e in (state.values() if isinstance(state, dict) else ()):
+    for e in _state().values():
         if isinstance(e, dict) and e.get("cls") in ("unread", "closed", "undelivered"):
             k = (e["cls"], str(e.get("target") or ""))
             if k not in out or str(e.get("seen") or "") > str(out[k].get("seen") or ""):
@@ -1373,7 +1268,7 @@ def heartbeat_age(now=None):
 def heartbeat_line(now=None, cfg=None) -> str:
     """`orche status`'s global line."""
     cfg = settings(cfg)
-    every = int(cfg.get("every_s", 300))
+    every = every_s(cfg)
     if not cfg.get("enabled", True):
         return "heartbeat: off (reconcile.enabled false)"
     hb, age = heartbeat_age(now)
@@ -1392,7 +1287,7 @@ def heartbeat_line(now=None, cfg=None) -> str:
 def heartbeat_json(now=None, cfg=None) -> dict:
     cfg = settings(cfg)
     hb, age = heartbeat_age(now)
-    every = int(cfg.get("every_s", 300))
+    every = every_s(cfg)
     return {"enabled": bool(cfg.get("enabled", True)), "at": (hb or {}).get("at"),
             "age_s": None if age is None else int(age), "every_s": every,
             "stale": age is None or age > STALE_INTERVALS * every}
@@ -1435,7 +1330,7 @@ def doctor_row(now=None, cfg=None, job=None):
     """(level, "heartbeat", detail): WARN when the job is blocked (job_blocked), stale or never ran,
     OK otherwise (off included)."""
     cfg = settings(cfg)
-    every = int(cfg.get("every_s", 300))
+    every = every_s(cfg)
     if not cfg.get("enabled", True):
         return ("OK", "heartbeat", "off (reconcile.enabled false)")
     hb, age = heartbeat_age(now)
@@ -1462,7 +1357,7 @@ def kick(now=None) -> bool:
     cfg = settings()
     if not cfg.get("enabled", True):
         return False
-    every = int(cfg.get("every_s", 300))
+    every = every_s(cfg)
     _hb, age = heartbeat_age(now)
     if age is not None and age <= KICK_INTERVALS * every:
         return False

@@ -6,7 +6,7 @@ Precondition of `wake` and `sleep`: `unit.owns_worktree` (the CLI routes Main to
 import sys
 import time
 
-from .. import cli, orca, registry, roster, units, util, vendors
+from .. import cli, orca, roster, units, util, vendors
 from . import book, limits, panes
 
 STALE_HANDOFF_SECONDS = 30 * 60
@@ -49,10 +49,10 @@ def handoff_problem(unit):
     return None
 
 
-def _record(reg, unit, status, verb) -> None:
-    unit.entry["status"] = status
+def _record(reg, unit, status, verb, **fields) -> None:
     by = roster.actor()
     book.record(reg, f"{verb} {unit.session} by {by}",
+                change=lambda r: book.entry_in(r, unit).update(fields, status=status),
                 event={"type": verb, "project": unit.project, "unit": unit.event_unit, "by": by})
 
 
@@ -115,9 +115,8 @@ def wake(reg, unit, *, dry_run=False) -> tuple:
         orca.terminal("create", *argv)
     except orca.OrcaError as exc:
         raise book.Refused(cli.EXIT_USER, f"could not open a pane for {unit.session}: {exc}") from None
-    unit.entry["last_activity"] = util.now_iso()
     units.touch_activity(unit.session)
-    _record(reg, unit, "active", "wake")
+    _record(reg, unit, "active", "wake", last_activity=util.now_iso())
     return {"unit": unit.session, "status": "active"}, f"{unit.session} active"
 
 
@@ -134,9 +133,13 @@ def _pane_for_headless(reg, unit, *, dry_run=False) -> tuple:
         orca.terminal("create", *argv)
     except orca.OrcaError as exc:
         raise book.Refused(cli.EXIT_USER, f"could not open a pane for {unit.session}: {exc}") from None
-    unit.entry.pop("pane", None)
-    unit.entry["last_activity"] = util.now_iso()
-    registry.save(reg)
+    now = util.now_iso()
+
+    def change(r):
+        entry = book.entry_in(r, unit)
+        entry.pop("pane", None)
+        entry["last_activity"] = now
+    book.write(reg, change)
     return {"unit": unit.session, "status": "active", "pane": True}, f"{unit.session} active (pane opened)"
 
 
@@ -185,8 +188,8 @@ def set_stage(reg, key, stage, *, wake_ops=True, dry_run=False) -> tuple:
     proj = reg["projects"][key]
     changed, by = proj["stage"] != stage, roster.actor()
     if changed and not dry_run:
-        proj["stage"] = stage
         book.record(reg, f"stage {key} -> {stage} by {by}",
+                    change=lambda r: r["projects"][key].update(stage=stage),
                     event={"type": "stage", "project": key, "unit": stage, "by": by})
     woke, checklist, notes = False, [], []
     if stage == "public":

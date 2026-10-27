@@ -12,7 +12,7 @@ import os
 from typing import NamedTuple
 
 from .. import config, paths, registry, units, vendors
-from . import onboarding
+from . import book, onboarding
 
 SKIP = ("retired", "onboarding")
 
@@ -47,8 +47,7 @@ def stamp_version(reg, key, version) -> bool:
     proj = reg["projects"][key]
     if proj.get("orche_version") == version:
         return False
-    proj["orche_version"] = version
-    registry.save(reg)
+    book.write(reg, lambda r: r["projects"][key].update(orche_version=version))
     return True
 
 

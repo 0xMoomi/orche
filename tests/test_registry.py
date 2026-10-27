@@ -3,6 +3,7 @@ import importlib.machinery
 import importlib.util
 import io
 import json
+import re
 import subprocess
 import sys
 import unittest
@@ -249,7 +250,7 @@ class CliTest(support.TempHomeCase):
         return cp.returncode, cp.stdout, cp.stderr
 
     def test_version(self):
-        self.assertEqual(self.orche("version"), (0, "orche 0.12.0\n", ""))
+        self.assertEqual(self.orche("version"), (0, "orche 0.12.1\n", ""))
 
     def test_projects_json_empty_home(self):
         self.assertEqual(self.orche("projects", "--json"), (0, "[]\n", ""))
@@ -345,7 +346,7 @@ class BusyTest(support.TempHomeCase):
         with open(registry.path().with_name("registry.lock"), "a") as other, \
                 mock.patch.object(registry, "LOCK_WAIT_S", 0.3):
             fcntl.flock(other, fcntl.LOCK_EX)                       # another orche holds it
-            with self.assertRaisesRegex(registry.Busy, "registry busy: another orche feat/sleep/wake"):
+            with self.assertRaisesRegex(registry.Busy, "registry busy: another orche command"):
                 with registry.lock():
                     pass
             err = io.StringIO()
@@ -356,3 +357,55 @@ class BusyTest(support.TempHomeCase):
             self.assertIn("registry busy", err.getvalue())
         with registry.lock():                                       # released: it takes the lock again
             pass
+
+
+class LostUpdateTest(support.TempHomeCase):
+    """c69: every registry write applies its change to a registry loaded under `lock()`; a writer holding
+    an older copy (a heartbeat pass, `orche hr add`) never saves it over a concurrent writer's change."""
+
+    def test_a_stale_copy_keeps_a_concurrent_change(self):
+        from orche import hr
+        registry.save(sample())
+        stale = registry.load()                                # loaded at the start of a pass
+        hr.set_frozen(registry.load(), True)                   # another writer, meanwhile
+        self.assertTrue(hr.stamp_version(stale, "acme-shop", "9.9.9"))
+        reg = registry.load()
+        self.assertEqual((reg["frozen"], reg["projects"]["acme-shop"]["orche_version"]), (True, "9.9.9"))
+        self.assertEqual(stale["projects"]["acme-shop"]["orche_version"], "9.9.9")   # the caller's copy too
+
+    def test_concurrent_updates_are_serialized(self):
+        import threading
+        import time
+        from unittest import mock
+        registry.save(registry.empty())
+        load = registry.load
+
+        def slow_load():                                       # widen the load -> save window
+            reg = load()
+            time.sleep(0.01)
+            return reg
+
+        def bump(reg):
+            reg["limits"]["per_project_per_day"] += 1
+
+        with mock.patch.object(registry, "load", slow_load):
+            threads = [threading.Thread(target=lambda: [registry.update(bump) for _ in range(5)]) for _ in range(4)]
+            for t in threads:
+                t.start()
+            for t in threads:
+                t.join()
+        self.assertEqual(registry.load()["limits"]["per_project_per_day"],
+                         registry.LIMIT_DEFAULTS["per_project_per_day"] + 20)
+
+    def test_update_inside_lock_does_not_deadlock(self):
+        registry.save(registry.empty())
+        with registry.lock():
+            reg, result = registry.update(lambda r: r.update(frozen=True) or "ok")
+        self.assertEqual((reg["frozen"], result, registry.load()["frozen"]), (True, "ok", True))
+
+    def test_saves_only_in_registry_py(self):
+        """Every write goes through `update` (which saves under `lock()`): no `save(` call elsewhere in lib/."""
+        pattern = re.compile(r"\bregistry\.save\(|from \.+registry import .*\bsave\b")
+        hits = [p.relative_to(support.ROOT).as_posix() for p in sorted((support.ROOT / "lib").rglob("*.py"))
+                if p != support.ROOT / "lib" / "orche" / "registry.py" and pattern.search(p.read_text())]
+        self.assertEqual(hits, [])

@@ -519,7 +519,7 @@ class JevCliTest(OnboardingCase):
         c = jev.client()
         self.assertIsNotNone(c)
         self.assertEqual(c.key_source, "file")
-        self.assertIsNotNone(jev.card_needs_refresh(["feat: a button"]))
+        self.assertIsNotNone(jev.classify_pointers([{"unit": "u1", "status": "done"}]))
         jevkey.remove()
         self.assertIsNone(jev.client())  # no key anywhere: Jev stays out, Haiku fallback
 

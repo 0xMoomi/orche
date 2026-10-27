@@ -50,13 +50,6 @@ class Stop(Exception):
     MAX_STOPS."""
 
 
-def _num(value, default) -> int:
-    try:
-        return int(value)
-    except (TypeError, ValueError):
-        return default
-
-
 def _sha(where, ref):
     res = shell.git(where, "rev-parse", "--verify", "-q", ref)
     return res.out.strip() if res.ok and res.out.strip() else None
@@ -208,7 +201,7 @@ def _memory_ok(cfg, project) -> bool:
     """§8.3: wait (10 s polls, up to 30 min) for runner.min_free_mb free. T4 adds procs.free_mb;
     without it there is nothing to measure and the gate starts."""
     free_mb = getattr(procs, "free_mb", None)
-    need = _num((cfg.get("runner") or {}).get("min_free_mb"), 0)
+    need = units.num((cfg.get("runner") or {}).get("min_free_mb"), 0)
     if free_mb is None or need <= 0:
         return True
     end, said = time.monotonic() + MEMORY_WAIT_S, False
@@ -294,8 +287,8 @@ def _recover(project) -> list:
     is stopped (gate.sweep: only processes carrying the take's tag or its verified step, never a bare
     recorded pgid); past max_restarts → paused."""
     s = queue.settings(config.load(), project)
-    mx = _num(s.get("max_restarts"), 2)
-    after_s = max(0, _num(s["lost_after_s"], config.DEFAULTS["queue"]["lost_after_s"]))
+    mx = units.num(s.get("max_restarts"), config.DEFAULTS["queue"]["max_restarts"])
+    after_s = max(0, units.num(s["lost_after_s"], config.DEFAULTS["queue"]["lost_after_s"]))
     now = units.parse_iso(util.now_iso())
     lost = queue.lost(project, lambda t: _lost(t, after_s, now))
     for e, t in lost:
@@ -354,7 +347,7 @@ class Pass:
         self.name = self.unit or f"pr{self.pr}"
         self.verify = entry.get("verify") or []
         self.tag = (entry.get("test") or {}).get("tag")
-        self.timeout_s = max(1, _num(self.s.get("timeout_s"), 1200))
+        self.timeout_s = max(1, units.num(self.s.get("timeout_s"), config.DEFAULTS["queue"]["timeout_s"]))
         self.where = self.base = self.cand = self.ctree = self.logp = None
 
     # pointers
@@ -584,7 +577,7 @@ class Pass:
         return _res(0, "merged", self.pr, f"merged PR #{self.pr} @{self.sha[:7]} as {m[:7]} ({verdict})")
 
     def restart(self) -> dict:
-        mx = _num(self.s.get("max_restarts"), 2)
+        mx = units.num(self.s.get("max_restarts"), config.DEFAULTS["queue"]["max_restarts"])
         e = queue.front(self.project, self.id, restarts=True, entry=self.entry, event="restarted", base=self.base,
                         candidate=self.cand, reason=f"origin/{self.base_branch} moved during the gate")
         k = e["restarts"] if e is not None else 0
@@ -665,7 +658,7 @@ class Pass:
             self.to_head("failed", f"the queue could not return PR #{self.pr} to {self.unit}: "
                                     f"{'the unit is unknown' if b is None else 'no head'}", **extra)
             return _res(0, "returned", self.pr, line)
-        if _num(self.entry.get("rev"), 0) and b.rev > _num(self.entry.get("rev"), 0):
+        if units.num(self.entry.get("rev"), 0) and b.rev > units.num(self.entry.get("rev"), 0):
             self.to_head("info", f"returned PR #{self.pr} ({reason}): {detail} — {self.unit} is at rev {b.rev} "
                                   "already: no AMEND", **extra)
             return _res(0, "returned", self.pr, line)
@@ -717,7 +710,7 @@ def _all_landed(project, reg, entry, head) -> None:
     for b, status in kids:
         if b.unit in queued:
             return
-        hit = [ln for ln in merged.get(b.unit, []) if _num(ln.get("rev"), 0) >= b.rev]
+        hit = [ln for ln in merged.get(b.unit, []) if units.num(ln.get("rev"), 0) >= b.rev]
         to = r.member(b.to)
         if hit:
             prs.append(hit[-1]["pr"])

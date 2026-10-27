@@ -135,7 +135,7 @@ In the same turn:
 Several reports in one wake (ORCHE waits for a quiet moment, so a batch arrives together) get one consolidated
 reply.
 
-ORCHE wakes Main itself since 0.6.0 and notifies the owner only from your closing `OWNER:`/`DONE:` line; never install or re-register
+ORCHE wakes Main itself since 0.6.0; Orca notifies the owner when your reply ends, and ORCHE reminds them of an open `OWNER:` ask; never install or re-register
 a waker, launchd job or polling script for this; if you believe wakes are failing, run `orche status` (read its `heartbeat:` line) and
 `orche doctor` and report.
 

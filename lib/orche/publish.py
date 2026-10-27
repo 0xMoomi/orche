@@ -66,11 +66,6 @@ class Gap:
     owner: str | None = None
 
 
-def gated(member) -> bool:
-    """Members whose done publishes: the Build division and feature agents (the ledger-gated ones)."""
-    return member is not None and (member.kind == "feat" or (member.kind == "div" and member.name == "build"))
-
-
 def _first(res) -> str:
     text = (res.err or res.out or "").strip()
     return mask.redact(text.splitlines()[0] if text else f"exit {res.code}")[0]
@@ -128,8 +123,7 @@ def branch(member, worktree):
 def gate(root, cfg=None):
     """(base or None, whether `scripts/verify/ci.sh` is committed on origin/<base>): the merge queue's gate."""
     name = base(root, cfg)
-    ok = bool(name) and shell.run(["git", "-C", str(root), "cat-file", "-e", f"origin/{name}:scripts/verify/ci.sh"],
-                                  timeout=10).ok
+    ok = bool(name) and shell.git(root, "cat-file", "-e", f"origin/{name}:scripts/verify/ci.sh", timeout=10).ok
     return name, ok
 
 

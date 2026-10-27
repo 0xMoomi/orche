@@ -174,3 +174,31 @@ def no_pass(reg, live=True) -> tuple:
         return "privacy", [*(g.format(name=app.name) for g in GUIDANCE), f"  {app.name}: {app}"]
     log = paths.orche_home() / "logs" / "reconcile.log"
     return "slow", [f"reconcile job: no pass within {FIRST_PASS_S} s — run orche reconcile and read {log}"]
+
+
+def interrupted() -> int:
+    """Ctrl-C during a wait: one line, exit 130, no traceback."""
+    print(INTERRUPTED, file=sys.stderr, flush=True)
+    return EXIT_INTERRUPTED
+
+
+def first_pass_check(started, live=True, progress=None) -> dict:
+    """After the job was (re)loaded: wait FIRST_PASS_S for a pass of its own (heartbeat.json
+    `job_at` at or after `started`, every protected project readable), checked before any kick, then
+    a plain kickstart (a running pass is left alone); the progress line goes to `progress` (default
+    stdout) first. {"ok", "took_s", "hint", "lines"}; on a timeout the lines are no_pass's: the
+    guidance (Finder and Full Disk Access opened when `live`) when a project is under a protected
+    folder or a recent privacy abort says so, else where to look. Ctrl-C raises KeyboardInterrupt."""
+    from . import registry
+    from .install import launchd
+    print(FIRST_PASS_WAIT, file=progress or sys.stdout, flush=True)
+    hb = wait_job_pass(started, FIRST_PASS_S, kick=lambda: launchd.kickstart(launchd.RECONCILE))
+    if hb is not None:
+        return {"ok": True, "took_s": hb.get("took_s"), "hint": None,
+                "lines": [f"reconcile job: first pass OK ({hb.get('took_s')} s)"]}
+    try:
+        reg = registry.load()
+    except registry.RegistryError:
+        reg = {}
+    hint, lines = no_pass(reg, live=live)
+    return {"ok": False, "took_s": None, "hint": hint, "lines": lines}

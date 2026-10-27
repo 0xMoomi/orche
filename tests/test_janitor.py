@@ -18,7 +18,7 @@ from pathlib import Path
 
 import support
 from orche import registry, shell
-from orche.janitor import archive, discover, rules
+from orche.janitor import archive, discover, rules, trash
 from test_registry import load_cli
 
 DAY = 86400
@@ -617,9 +617,9 @@ class RulesTest(support.TempHomeCase):
         self.assertEqual(rules.pointer("drop session:feat-a"), ("session", "feat-a"))
         self.assertIsNone(rules.pointer("trashed scratch/x"))
         today = dt.date(2026, 10, 16)
-        self.assertTrue(rules.purge_due("2026-09-15", today, 30))
-        self.assertFalse(rules.purge_due("2026-09-17", today, 30))
-        self.assertFalse(rules.purge_due("junk", today, 30))
+        self.assertTrue(trash.purge_due("2026-09-15", today, 30))
+        self.assertFalse(trash.purge_due("2026-09-17", today, 30))
+        self.assertFalse(trash.purge_due("junk", today, 30))
 
 
 class ScheduleTest(JanitorCase):

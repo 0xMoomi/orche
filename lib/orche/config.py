@@ -9,7 +9,6 @@ DEFAULTS = {
     # macOS notifications (lib/orche/notify.py): Main's OWNER:/DONE: closing lines, a parked guard
     # refusal, HR, the Keymaster and the heartbeat's escalations. false: none.
     "notify": True,
-    "lang": "en",
     # How the Stop hook delivers a brief to a division/feature: `runner` spawns `orche run <unit>`
     # (headless `claude -p`); `pane` starts `orche deliver <unit>`, which types into the unit's Orca pane.
     "delivery": "runner",

@@ -7,7 +7,6 @@ artifacts: build caches of idle dormant/retired units, Orca Codex `.tmp`, ownerl
 Untouchables are never listed: active/paused units, `.env*`, `memory/`, registry, cards,
 LEDGER/GRAVEYARD/DECISIONS/STATUS/HANDOFF/CHARTER. Dirty or live checkouts are listed as skips.
 """
-import datetime as _dt
 import hashlib
 import os
 import re
@@ -70,13 +69,6 @@ def pointer(what):
 
 def row_hash(project, line) -> str:
     return hashlib.sha256(f"{project}\0{line.strip()}".encode()).hexdigest()[:20]
-
-
-def purge_due(name, today, days) -> bool:
-    try:
-        return (today - _dt.date.fromisoformat(name)).days > days
-    except ValueError:
-        return False
 
 
 def _session_live(ctx, name):

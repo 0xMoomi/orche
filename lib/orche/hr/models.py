@@ -8,7 +8,7 @@ active Claude pane switches when it restarts.
 """
 import time
 
-from .. import cli, config, paths, registry, roster, vendors
+from .. import cli, config, paths, roster, vendors
 from . import book, onboarding, refresh
 
 
@@ -47,11 +47,13 @@ def set_model(reg, key, name, model, *, by=None, dry_run=False) -> tuple:
                                + " && ".join(f"orche sleep {s}" for s in awake))
     by = by or roster.actor()
     if not dry_run:
-        entry["model"] = model
-        spec = (proj.get("custom_divisions") or {}).get(name)
-        if spec is not None:
-            spec["model"] = model
-        registry.save(reg)
+        def change(r):
+            p = r["projects"][key]
+            p["divisions"][name]["model"] = model
+            spec = (p.get("custom_divisions") or {}).get(name)
+            if spec is not None:
+                spec["model"] = model
+        book.write(reg, change)
         out = refresh.Refresh([], [], [])
         backup_dir = paths.orche_home() / "backups" / key / time.strftime("%Y%m%dT%H%M%S")
         for unit in refresh.units_of(proj, name):

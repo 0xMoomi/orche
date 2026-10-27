@@ -349,7 +349,7 @@ def _where(target, timeout):
     if owner and target.worktree is not None:
         return str(target.worktree), target.branch or "-", root
     recorded = target.branch if owner else ""
-    res = (shell.run(["git", "-C", root, "branch", "--show-current"], timeout=timeout)
+    res = (shell.git(root, "branch", "--show-current", timeout=timeout)
            if root and timeout > 0 and not recorded else None)
     branch = recorded or (res.out.strip() if res is not None and res.ok else "") or "-"
     return root + (_MAIN_CHECKOUT if owner else ""), branch, root

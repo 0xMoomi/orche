@@ -32,7 +32,7 @@ Already installed? Inside a project, say "orche init" to Claude Code, or "set up
 - A `main-<project>` tab in Orca where you talk to Main, in any language. Main plans and decides; divisions do the work, each in its own worktree (`div-<division>`), dormant until work arrives (no pane, no cost).
 - A report from Main: "ORCHE is set up", what was made and what you can switch on any time (also in `<project>/.orche/SETUP.md`).
 - Nothing committed to your repository: the project's ORCHE files (`.orche/`, `PROJECT_CARD.md`, `AGENTS.md`) stay untracked.
-- A worker's PR is pre-reviewed by a second model, then its head reviews it and the merge queue tests it on top of `main` with `scripts/verify/ci.sh` and merges it when green. Main ends every reply with `RUNNING`, `OWNER` or `DONE`; only `OWNER` (a decision for you) and `DONE` notify you.
+- A worker's PR is pre-reviewed by a second model, then its head reviews it and the merge queue tests it on top of `main` with `scripts/verify/ci.sh` and merges it when green. Main ends every reply with `RUNNING`, `OWNER` or `DONE`. Orca notifies you when Main finishes a reply; ORCHE reminds you after 30 minutes when a decision still waits.
 
 ## Any time
 

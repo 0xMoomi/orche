@@ -99,7 +99,7 @@ def _active(div):
     return any(f.get("status") == "active" for f in div.get("features") or [])
 
 
-def _model_entry(t, cfg, models, kind, question, current=None, active=False):
+def _model_entry(t, cfg, models, kind, question, avail, current=None, active=False):
     """`ask.model.<kind>`: available models, the recommendation first and marked; for an existing
     division (`current`) the current model goes and Keep (None) comes."""
     rec = kind["recommended"]
@@ -120,7 +120,7 @@ def _model_entry(t, cfg, models, kind, question, current=None, active=False):
                 t["keep_desc"].format(model=cur) + (f" · {kind['why']}" if keep_rec and kind["why"] else ""),
                 None, "keep")
         opts = [keep] + opts[:3] if keep_rec else opts[:3] + [keep]
-    note = _codex_note(t, kind.get("_avail"))
+    note = _codex_note(t, avail)
     if active and not note:
         note = t["codex_active"] if any(m["vendor"] == vendors.CODEX and m["available"] for m in models) else ""
     return _entry(question + (f" {note}" if note else ""), t["model_h"], False, opts)
@@ -155,18 +155,8 @@ def _scale_entry(t, cfg, reg, machine):
     return cur, _entry(t["scale_q"].format(machine=note), t["scale_h"], False, opts)
 
 
-def build(reg, cfg, key, avail=None, machine=None) -> dict:
-    """The choices JSON (Appendix D.1) of project `key` (None: a project not under ORCHE yet);
-    `machine` {ram_mb, free_disk_mb} defaults to machine_info() of the project's path."""
-    t = TEXTS
-    proj = ((reg or {}).get("projects") or {}).get(key) or {} if key else {}
-    divs = proj.get("divisions") or {}
-    customs = proj.get("custom_divisions") or {}
-    stage = proj.get("stage") or "building"
-    catalog = vendors._catalog(cfg)
-    if avail is None and any(vendors.vendor_of(m) == vendors.CODEX for m in catalog):
-        avail = vendors.available(cfg)
-
+def _models(t, cfg, catalog, avail) -> list:
+    """The catalog's models, each with its label, cost dots and whether it runs here."""
     models = []
     for m in catalog:
         row = vendors.catalog(cfg, m)
@@ -176,8 +166,14 @@ def build(reg, cfg, key, avail=None, machine=None) -> dict:
                        "cost": row["dots"] + (t["estimate"] if codex and row["dots"] else ""),
                        "available": ok, "reason": None if ok else _codex_note(t, avail),
                        "headless_only": codex})
-    mlabel = {m["model"]: m["label"] for m in models}
+    return models
 
+
+def _kinds(t, cfg, key, proj) -> list:
+    """Every division kind of the project (or of a new one), in display order."""
+    divs = proj.get("divisions") or {}
+    customs = proj.get("custom_divisions") or {}
+    stage = proj.get("stage") or "building"
     kinds = []
     for name in _kind_order(cfg, proj):
         info = vendors.kind(cfg, name)
@@ -198,6 +194,79 @@ def build(reg, cfg, key, avail=None, machine=None) -> dict:
                       "session": (div or {}).get("session"), "model": (div or {}).get("model") if div else None,
                       "recommended": info["model"], "pane_effort": info["effort"], "why": info["why"],
                       "suggested": suggested})
+    return kinds
+
+
+def _project_asks(t, kinds, mlabel) -> tuple:
+    """`ask.add` and `ask.change` of a project under ORCHE."""
+    addable = [k for k in kinds if k["status"] is None]
+    addable.sort(key=lambda k: not k["suggested"])
+    opts = [(k["label"], k["desc"], k["key"], k["key"]) for k in addable[:3]]
+    opts.append((t["new_label"], t["new_desc"], "*", "*"))
+    add = _entry(t["add_q"], t["add_h"], True, opts)
+    live = [k for k in kinds if k["exists"] and k["status"] not in HIDDEN]
+    opts = []
+    for k in live:
+        cur = k["model"] or k["recommended"]
+        text = t["now_rec"] if cur == k["recommended"] else t["now_other"]
+        opts.append((k["label"], text.format(model=mlabel.get(cur) or cur,
+                                             rec=mlabel.get(k["recommended"]) or k["recommended"]),
+                     k["key"], k["key"]))
+    q = t["change_q"]
+    if len(live) > 4:
+        q += t["change_more"].format(labels=", ".join(k["label"] for k in live[4:]))
+    return add, _entry(q, t["change_h"], False, opts)
+
+
+def _setup_asks(t, kinds, models, mlabel, custom, avail) -> tuple:
+    """`ask.setup` and `ask.pick` of a project not under ORCHE yet."""
+    by = {k["key"]: k for k in kinds}
+    dlabels = [by[n]["label"] for n in DEFAULT_SET if n in by]
+    extras = [k for k in kinds if k["key"] not in DEFAULT_SET]
+    groups = {}
+    for n in DEFAULT_SET:
+        if n in by:
+            groups.setdefault(by[n]["recommended"], []).append(by[n]["label"])
+    group_text = ", ".join(f"{'·'.join(labs)} {mlabel.get(m) or m}" for m, labs in groups.items())
+    strongest = custom["recommended"]
+    sdots = next((m["cost"] for m in models if m["model"] == strongest), "")
+    (dl, dd), (ll, ld), (pl, pd) = t["preset_default"], t["preset_light"], t["preset_pick"]
+    (fl, fd), (al, ad), (ml, md) = t["models_fitted"], t["models_all"], t["models_pick"]
+    # "All <strongest>" only when that model runs here (a Codex recommendation needs Codex)
+    s_ok = vendors.vendor_of(strongest) != vendors.CODEX or (avail is not None and avail.ok)
+    mopts = [(fl, fd.format(groups=group_text), "recommended", "recommended")]
+    if s_ok:
+        mopts.append((al.format(model=mlabel.get(strongest) or strongest), ad.format(dots=sdots), strongest, "all"))
+    mopts.append((ml, md, "pick", "pick"))
+    s_note = "" if s_ok else _codex_note(t, avail)
+    setup = [
+        _entry(t["setup_q"], t["setup_h"], False, [
+            (dl.format(n=len(DEFAULT_SET)), dd.format(labels="·".join(dlabels)), list(DEFAULT_SET), "default"),
+            (ll, ld.format(labels="·".join(by[n]["label"] for n in LIGHT_SET)), list(LIGHT_SET), "light"),
+            (pl, pd.format(extras="·".join(k["label"] for k in extras)), "pick", "pick")]),
+        _entry(t["setup_models_q"] + (f" {s_note}" if s_note else ""), t["setup_models_h"], False, mopts)]
+    nl, nd = t["none"]
+    pick = [
+        _entry(t["pick_std_q"], t["pick_std_h"], True,
+               [(by[n]["label"] + t["rec"], by[n]["desc"], n, n) for n in DEFAULT_SET if n in by]),
+        _entry(t["pick_extra_q"], t["pick_extra_h"], True,
+               [(k["label"], k["desc"], k["key"], k["key"]) for k in extras[:3]] + [(nl, nd, None, "none")])]
+    return setup, pick
+
+
+def build(reg, cfg, key, avail=None, machine=None) -> dict:
+    """The choices JSON (Appendix D.1) of project `key` (None: a project not under ORCHE yet);
+    `machine` {ram_mb, free_disk_mb} defaults to machine_info() of the project's path."""
+    t = TEXTS
+    proj = ((reg or {}).get("projects") or {}).get(key) or {} if key else {}
+    divs = proj.get("divisions") or {}
+    stage = proj.get("stage") or "building"
+    catalog = vendors._catalog(cfg)
+    if avail is None and any(vendors.vendor_of(m) == vendors.CODEX for m in catalog):
+        avail = vendors.available(cfg)
+    models = _models(t, cfg, catalog, avail)
+    mlabel = {m["model"]: m["label"] for m in models}
+    kinds = _kinds(t, cfg, key, proj)
     star = vendors.kind(cfg, "custom")
     custom = {"recommended": star["model"], "pane_effort": star["effort"], "why": star["why"],
               "rules": t["rules"]}
@@ -207,69 +276,19 @@ def build(reg, cfg, key, avail=None, machine=None) -> dict:
         machine = machine_info(proj.get("path"))
     cur_scale, ask["scale"] = _scale_entry(t, cfg, reg, machine)
     for k in kinds:
-        k["_avail"] = avail
         if k["status"] in HIDDEN:
             ask["model"][k["key"]] = None
         elif k["exists"]:
             cur = k["model"] or k["recommended"]
             q = t["model_change"].format(label=k["label"], model=mlabel.get(cur) or cur)
-            ask["model"][k["key"]] = _model_entry(t, cfg, models, k, q, cur, _active(divs[k["key"]]))
+            ask["model"][k["key"]] = _model_entry(t, cfg, models, k, q, avail, cur, _active(divs[k["key"]]))
         else:
-            ask["model"][k["key"]] = _model_entry(t, cfg, models, k, t["model_new"].format(label=k["label"]))
-    star_kind = {"recommended": custom["recommended"], "why": custom["why"], "_avail": avail}
-    ask["model"]["*"] = _model_entry(t, cfg, models, star_kind, t["model_star"])
-
+            ask["model"][k["key"]] = _model_entry(t, cfg, models, k, t["model_new"].format(label=k["label"]), avail)
+    star_kind = {"recommended": custom["recommended"], "why": custom["why"]}
+    ask["model"]["*"] = _model_entry(t, cfg, models, star_kind, t["model_star"], avail)
     if key:
-        addable = [k for k in kinds if k["status"] is None]
-        addable.sort(key=lambda k: not k["suggested"])
-        opts = [(k["label"], k["desc"], k["key"], k["key"]) for k in addable[:3]]
-        opts.append((t["new_label"], t["new_desc"], "*", "*"))
-        ask["add"] = _entry(t["add_q"], t["add_h"], True, opts)
-        live = [k for k in kinds if k["exists"] and k["status"] not in HIDDEN]
-        opts = []
-        for k in live:
-            cur = k["model"] or k["recommended"]
-            text = t["now_rec"] if cur == k["recommended"] else t["now_other"]
-            opts.append((k["label"], text.format(model=mlabel.get(cur) or cur,
-                                                 rec=mlabel.get(k["recommended"]) or k["recommended"]),
-                         k["key"], k["key"]))
-        q = t["change_q"]
-        if len(live) > 4:
-            q += t["change_more"].format(labels=", ".join(k["label"] for k in live[4:]))
-        ask["change"] = _entry(q, t["change_h"], False, opts)
+        ask["add"], ask["change"] = _project_asks(t, kinds, mlabel)
     else:
-        by = {k["key"]: k for k in kinds}
-        dlabels = [by[n]["label"] for n in DEFAULT_SET if n in by]
-        extras = [k for k in kinds if k["key"] not in DEFAULT_SET]
-        groups = {}
-        for n in DEFAULT_SET:
-            if n in by:
-                groups.setdefault(by[n]["recommended"], []).append(by[n]["label"])
-        group_text = ", ".join(f"{'·'.join(labs)} {mlabel.get(m) or m}" for m, labs in groups.items())
-        strongest = custom["recommended"]
-        sdots = next((m["cost"] for m in models if m["model"] == strongest), "")
-        (dl, dd), (ll, ld), (pl, pd) = t["preset_default"], t["preset_light"], t["preset_pick"]
-        (fl, fd), (al, ad), (ml, md) = t["models_fitted"], t["models_all"], t["models_pick"]
-        # "All <strongest>" only when that model runs here (a Codex recommendation needs Codex)
-        s_ok = vendors.vendor_of(strongest) != vendors.CODEX or (avail is not None and avail.ok)
-        mopts = [(fl, fd.format(groups=group_text), "recommended", "recommended")]
-        if s_ok:
-            mopts.append((al.format(model=mlabel.get(strongest) or strongest), ad.format(dots=sdots), strongest, "all"))
-        mopts.append((ml, md, "pick", "pick"))
-        s_note = "" if s_ok else _codex_note(t, avail)
-        ask["setup"] = [
-            _entry(t["setup_q"], t["setup_h"], False, [
-                (dl.format(n=len(DEFAULT_SET)), dd.format(labels="·".join(dlabels)), list(DEFAULT_SET), "default"),
-                (ll, ld.format(labels="·".join(by[n]["label"] for n in LIGHT_SET)), list(LIGHT_SET), "light"),
-                (pl, pd.format(extras="·".join(k["label"] for k in extras)), "pick", "pick")]),
-            _entry(t["setup_models_q"] + (f" {s_note}" if s_note else ""), t["setup_models_h"], False, mopts)]
-        nl, nd = t["none"]
-        ask["pick"] = [
-            _entry(t["pick_std_q"], t["pick_std_h"], True,
-                   [(by[n]["label"] + t["rec"], by[n]["desc"], n, n) for n in DEFAULT_SET if n in by]),
-            _entry(t["pick_extra_q"], t["pick_extra_h"], True,
-                   [(k["label"], k["desc"], k["key"], k["key"]) for k in extras[:3]] + [(nl, nd, None, "none")])]
-    for k in kinds:
-        k.pop("_avail", None)
+        ask["setup"], ask["pick"] = _setup_asks(t, kinds, models, mlabel, custom, avail)
     return {"project": key, "stage": stage, "kinds": kinds, "custom": custom, "models": models,
             "scale": {"current": cur_scale, "presets": list(scale.presets(cfg)), "machine": machine}, "ask": ask}

@@ -101,8 +101,8 @@ def apply(name, by, *, dry_run=False):
             if not k.startswith("limits."):
                 _put(raw, k, v)
         config.save(raw)
-        reg["limits"].update(target(cfg, name)[1])
-        book.record(reg, f"scale {name} by {by}", event={"type": "scale", "project": "*", "unit": "hr", "by": by},
+        limits = target(cfg, name)[1]
+        book.record(reg, f"scale {name} by {by}", change=lambda r: r["limits"].update(limits), event={"type": "scale", "project": "*", "unit": "hr", "by": by},
                     note=f"HR scale {name}: {summary(cfg, name)}")
     data = {"preset": name, "was": was, "dry_run": dry_run, "changed": bool(diff) and not dry_run,
             "changes": [{"key": k, "old": a, "new": b} for k, a, b in diff]}

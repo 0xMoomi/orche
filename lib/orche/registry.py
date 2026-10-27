@@ -4,6 +4,10 @@ A project's divisions are the standard ones it onboarded (keys of `divisions` th
 DIVISIONS) plus its custom ones (`custom_divisions`: name -> {label, charter, model, effort});
 a custom division's runtime record (worktree, session, status) lives in `divisions` like a
 standard one. `divisions_of(proj)` is the one enumeration every command uses.
+
+Every write goes through `update(mutate)`: the change is applied to a registry loaded under `lock()`
+and saved before the lock is released, so two writers (a heartbeat wake and `orche hr add`) cannot
+lose each other's changes. `save` is called only here.
 """
 import contextlib
 import copy
@@ -90,7 +94,7 @@ def lock():
                 break
             except BlockingIOError:
                 if time.monotonic() >= deadline:
-                    raise Busy("registry busy: another orche feat/sleep/wake is running; try again") from None
+                    raise Busy("registry busy: another orche command is writing it; try again") from None
                 time.sleep(0.2)
         _held.depth = 1
         try:
@@ -115,6 +119,16 @@ def load() -> dict:
     if errors:
         raise RegistryError(errors, where=path())
     return reg
+
+
+def update(mutate):
+    """Load the registry under `lock()`, apply `mutate(reg)`, save it. Returns (reg, mutate's result).
+    Re-entrant: a caller already inside `lock()` (orche sleep/wake/feat) keeps holding it."""
+    with lock():
+        reg = load()
+        result = mutate(reg)
+        save(reg)
+    return reg, result
 
 
 def save(reg: dict) -> None:

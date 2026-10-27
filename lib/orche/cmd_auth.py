@@ -7,22 +7,14 @@ get it (see `oauth`); panes keep the interactive login. The token is never read 
 line and never printed, logged or shown in a dry run.
 """
 import argparse
-import json
 import sys
 
-from . import jev_setup, jevkey, oauth
+from . import cli, jev_setup, jevkey, oauth
 
 EXIT_OK, EXIT_USER = 0, 1
 ARGV_REFUSED = ("orche: the token is never taken from the command line (it would land in shell "
                 "history and process lists); run `orche auth set` and paste it at the hidden prompt, "
                 "or pipe it on stdin")
-
-
-def _emit(args, data, lines):
-    if args.json:
-        print(json.dumps(data, indent=2, ensure_ascii=False))
-    else:
-        print("\n".join(lines))
 
 
 def _read_token():
@@ -42,7 +34,7 @@ def cmd_set(args):
         return EXIT_USER
     backend = jevkey.backend()
     if args.dry_run:
-        _emit(args, {"dry_run": True, "backend": backend},
+        cli.out(args, {"dry_run": True, "backend": backend},
               [f"would store the Claude OAuth token in the {backend}"])
         return EXIT_OK
     token = _read_token()
@@ -54,7 +46,7 @@ def cmd_set(args):
     except jevkey.KeyStoreError as exc:
         print(f"orche: {jevkey.scrub(str(exc), token)}", file=sys.stderr)
         return EXIT_USER
-    _emit(args, {"stored": True, "backend": backend},
+    cli.out(args, {"stored": True, "backend": backend},
           [f"Claude OAuth token stored in the {backend}; headless runs use it (panes keep the login)"])
     return EXIT_OK
 
@@ -62,7 +54,7 @@ def cmd_set(args):
 def cmd_rm(args):
     backend = jevkey.backend()
     if args.dry_run:
-        _emit(args, {"dry_run": True, "backend": backend},
+        cli.out(args, {"dry_run": True, "backend": backend},
               [f"would remove the Claude OAuth token from the {backend}"])
         return EXIT_OK
     try:
@@ -70,7 +62,7 @@ def cmd_rm(args):
     except jevkey.KeyStoreError as exc:
         print(f"orche: {exc}", file=sys.stderr)
         return EXIT_USER
-    _emit(args, {"removed": removed, "backend": backend},
+    cli.out(args, {"removed": removed, "backend": backend},
           [f"Claude OAuth token removed from the {backend}" if removed
            else f"no Claude OAuth token in the {backend}"])
     return EXIT_OK
@@ -80,9 +72,9 @@ def cmd_status(args):
     src, err = oauth.source()
     data = {"source": src, "backend": jevkey.backend(), "env": oauth.ENV, "error": err}
     if err:
-        _emit(args, data, [f"oauth token: unknown ({err})"])
+        cli.out(args, data, [f"oauth token: unknown ({err})"])
         return EXIT_USER
-    _emit(args, data, [f"oauth token: {src} — headless runs use it (panes keep the login)" if src
+    cli.out(args, data, [f"oauth token: {src} — headless runs use it (panes keep the login)" if src
                        else f"oauth token: {oauth.UNSET_LINE}"])
     return EXIT_OK
 

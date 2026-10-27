@@ -26,9 +26,8 @@ ROLE_TEXT = {
 }
 
 
-EXCLUDE_LINE = units.SETTINGS_LOCAL
 UNITS_EXCLUDE = brief.UNITS + "/"   # briefs/reports: never tracked, never keep the main checkout dirty
-EXCLUDE_LINES = (EXCLUDE_LINE, UNITS_EXCLUDE)
+EXCLUDE_LINES = (units.SETTINGS_LOCAL, UNITS_EXCLUDE)
 
 
 class UnsafeTarget(Exception):
@@ -66,7 +65,7 @@ def exclude_lines(worktree_dir, lines, *, dry_run=False):
     if dry_run:
         dry(f"append {' '.join(lines)} to the info/exclude of {worktree_dir} (once)")
         return None, False
-    res = shell.run(["git", "-C", str(worktree_dir), "rev-parse", "--git-path", "info/exclude"], timeout=30)
+    res = shell.git(worktree_dir, "rev-parse", "--git-path", "info/exclude", timeout=30)
     if not res.ok or not res.out.strip():
         log.log("hr", f"info/exclude not updated: {worktree_dir} is not a git checkout")
         return None, False

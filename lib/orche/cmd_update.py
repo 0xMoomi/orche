@@ -98,10 +98,10 @@ def version_of(text) -> str:
 
 
 def _state() -> dict:
-    from . import cmd_install
+    from . import install
     try:
-        return cmd_install._load_state()
-    except cmd_install.StateUnreadable:
+        return install.load_state()
+    except install.StateUnreadable:
         return {}
 
 
@@ -122,12 +122,12 @@ def _development(root):
 
 
 def _mode() -> str:
-    from . import cmd_install
-    return cmd_install.installed_mode(Path.home())
+    from . import install
+    return install.installed_mode(Path.home())
 
 
 def cmd_update(args):
-    from .cmd_install import RECONCILE_STEP
+    from .install import RECONCILE_STEP
     dry_run = args.dry_run
     state = _state()
     root = _root(state)

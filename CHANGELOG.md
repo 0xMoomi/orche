@@ -3,6 +3,27 @@
 All notable changes to ORCHE are listed here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow semantic versioning.
 
+## 0.12.1 — 2026-10-27
+
+### Changed
+
+- One rule in one place: ledger gating (`donegate.gated`), unit folders (`lineage.unit_dirs`), the pane lookup, the self-spawn (`procs.spawn_orche`), `units.num`, the queue's defaults, command output (`cli.out`/`cli.fail`) and 13 inline `git -C` calls (`shell.git`) each have one implementation; `hr/choices.build` and `cmd_init` lose their duplicated blocks.
+- `reconcile.py` is about 100 lines lighter: the queue step lives in `queue/heartbeat.py`, quiet hours in `flow.owner`, and a heartbeat pass no longer imports the doctor and Jev modules; install state, the heartbeat job check and the first-pass check moved from `cmd_install` into `install/`, `launchd` and `privacy`; `util.read_dict` replaces six copies of the same JSON read.
+- Main's closing line no longer triggers an ORCHE notification: Orca shows its own when a turn ends, so the owner got two. ORCHE still notifies what Orca cannot know: a decision still waiting after 30 minutes (then 60, 120, 240), a runner's parked refusal, a secret request and HR records.
+
+### Fixed
+
+- Every registry write now applies its change to a registry loaded under the lock (`registry.update`), so a heartbeat wake and an owner command writing at the same time can no longer lose one of the two changes.
+
+### Removed
+
+- The pre-0.6.0 `com.orche.main-waker` check: no daily owner notification from reconcile and no `main-waker` row in `orche doctor`.
+- The one-version migration of the old `install.json`: only `install-state.json` is read.
+- The old `python3 "<root>/hooks/<hook>.py"` hook shape: install no longer replaces it, uninstall no longer removes it, and `orche doctor` no longer warns about both shapes.
+- `orche jev eval label` and its `--with-claude` flag (it only printed a note); the labels format is in `orche jev eval --help`.
+- The unwired Jev helpers `classify_prompt`, `match_scope` and `card_needs_refresh`.
+- `autoCompactWindow: 200000` in the `exec` agent, as the pane flag went in 0.12.0: the installer's `CLAUDE_AUTOCOMPACT_PCT_OVERRIDE=50` halves it.
+
 ## 0.12.0 — 2026-10-26
 
 ### Added

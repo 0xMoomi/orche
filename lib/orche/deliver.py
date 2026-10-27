@@ -103,7 +103,7 @@ def _type(session, text, *, strict, wait_s, still_needed, before_send=None, on_f
         return state, int(time.monotonic() - started)
 
     try:
-        term = orca.match_title(orca.terminals_of(orca.terminal("list", timeout=CALL_S)), session)
+        term = orca.find_terminal_by_title(session, timeout=CALL_S)
     except Exception as exc:  # noqa: BLE001 - an unreachable Orca is a failed nudge
         log.log("hooks", f"deliver: terminal list for {session}: {exc}")
         return done("nudge-failed")
@@ -187,7 +187,7 @@ REOPEN_WAIT_S = 30              # for the reopened pane to be listed; the tui-id
 def _listed(session):
     """`session`'s pane as `terminal list` shows it now, or None (also when Orca cannot list)."""
     try:
-        return orca.match_title(orca.terminals_of(orca.terminal("list", timeout=CALL_S)), session)
+        return orca.find_terminal_by_title(session, timeout=CALL_S)
     except Exception:  # noqa: BLE001 - an unlisted pane is no pane
         return None
 

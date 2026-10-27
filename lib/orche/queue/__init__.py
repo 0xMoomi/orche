@@ -10,7 +10,6 @@ import fcntl
 import os
 import re
 import statistics
-import sys
 import time
 
 from .. import cli, config, inbox, ledger, log as _log, paths, procs, publish, registry, roster, runs, units, util
@@ -28,13 +27,6 @@ def settings(cfg, project) -> dict:
 
 def land_mode(cfg, project) -> str:
     return "owner" if settings(cfg, project).get("land") == "owner" else "auto"
-
-
-def _int(value) -> int:
-    try:
-        return int(value)
-    except (TypeError, ValueError):
-        return 0
 
 
 def entry_id(pr, head) -> str:
@@ -249,14 +241,14 @@ def reopen(project, green, *, clear=True, entry=None, **fields) -> bool:
 def stop(project) -> int:
     """R-QUEUE-9: one more pass in a row stopped (git, gh, the clone, a bug): the count (queue.json `stops`)."""
     with store.edit(project) as q:
-        n = q["stops"] = _int(q.get("stops")) + 1
+        n = q["stops"] = units.num(q.get("stops")) + 1
     return n
 
 
 def cleared(project) -> None:
     """A pass that got through: the count of passes stopped in a row back to 0."""
     try:
-        if not _int(store.read(project).get("stops")):
+        if not units.num(store.read(project).get("stops")):
             return
     except util.JsonError:
         return
@@ -362,7 +354,7 @@ def _front(q, eid, restarts=False):
         q["entries"].remove(e)
         e.update(state="waiting", test=None)
         if restarts:
-            e["restarts"] = _int(e.get("restarts")) + 1
+            e["restarts"] = units.num(e.get("restarts")) + 1
         q["entries"].insert(0, e)
     return e
 
@@ -388,7 +380,7 @@ def lost(project, is_lost) -> list:
             if t.get("landed") or not is_lost(t):
                 continue
             q["entries"].remove(e)
-            e.update(state="waiting", test=None, restarts=_int(e.get("restarts")) + 1)
+            e.update(state="waiting", test=None, restarts=units.num(e.get("restarts")) + 1)
             q["entries"].insert(len(out), e)
             out.append((e, t))
     for e, t in out:
@@ -441,9 +433,8 @@ def start(project) -> bool:
         return True
     if not startable(project):
         return False
-    argv = [sys.executable, str(paths.PLUGIN_ROOT / "bin" / "orche.py"), "queue", "run", project]
     try:
-        procs.spawn_detached(argv, store.folder(project) / "integrator.log")
+        procs.spawn_orche(["queue", "run", project], store.folder(project) / "integrator.log")
     except OSError as exc:
         _log.log("queue", f"{project}: integrator start failed: {exc}")
         return False

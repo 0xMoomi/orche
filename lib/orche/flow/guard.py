@@ -70,11 +70,7 @@ def owner_seen(project):
 
 def paused(project):
     """pause.json ({by, at, reason}) or None."""
-    try:
-        data = util.read_json(folder(project) / "pause.json", default=None)
-    except util.JsonError:
-        return None
-    return data if isinstance(data, dict) else None
+    return util.read_dict(folder(project) / "pause.json")
 
 
 def pause(project, by, reason=""):
@@ -116,15 +112,6 @@ def _revs(folder_, since):
     except OSError:
         pass
     return sorted(out)
-
-
-def _unit_dirs(reg, project):
-    root = units.project_root(reg, project)
-    d = root / brief.UNITS if root is not None else None
-    try:
-        return sorted(p for p in d.iterdir() if p.is_dir()) if d is not None else []
-    except OSError:
-        return []
 
 
 def _norm(goal):
@@ -173,7 +160,7 @@ def _chain(reg, block, sender, w):
         return Refused(f"{p.unit} is already {d} briefs deep (cap {depth}); a brief from {sender.session} "
                        f"would make it {d + 1}. Do not dispatch it yourself: name the work in your report and ask "
                        f"Main to dispatch it. STOP still works.", "G6", p.unit, d + 1)
-    n = lineage.children(reg, p, _unit_dirs(reg, sender.project), since=w.timestamp())
+    n = lineage.children(reg, p, lineage.unit_dirs(reg, sender.project), since=w.timestamp())
     if n >= fanout:
         return Refused(f"{p.unit} already has {n} child briefs since {units.hhmm(w)} without the owner (cap "
                        f"{fanout}). Do not send another: report it to your sender (`orche report blocked "
@@ -226,7 +213,7 @@ def check(reg, block, sender, now=None, to=None, runner=False, accepted=0):
                                f"the owner. " + ASK.format(what="re-sending it"), "G2", unit, BLOCKED)
     else:
         goal = _norm(block.fields.get("GOAL"))
-        for d in _unit_dirs(reg, proj):
+        for d in lineage.unit_dirs(reg, proj):
             b = brief.find(reg, d.name, project=proj)
             if (b is not None and b.rev and b.to == to and _norm(b.fields.get("GOAL")) == goal
                     and _blocked_twice(b, sender.session, w)):
@@ -244,7 +231,7 @@ def check(reg, block, sender, now=None, to=None, runner=False, accepted=0):
             return Refused(f"{unit} ran {n} times since {units.hhmm(w)} without the owner (cap {runs}). "
                            + ASK.format(what="running it again"), "G5", unit, n)
     start = max(w, now - _dt.timedelta(hours=1))
-    n = accepted + sum(len(_revs(d, start.timestamp())) for d in _unit_dirs(reg, proj))
+    n = accepted + sum(len(_revs(d, start.timestamp())) for d in lineage.unit_dirs(reg, proj))
     rate = cap("briefs_per_hour")
     if n >= rate:
         return Refused(f"{proj} sent {n} briefs and AMENDs since {units.hhmm(start)} without the owner "
@@ -369,7 +356,7 @@ def looping(reg, project, now=None):
         return []
     w = window(project, now)
     out = []
-    for d in _unit_dirs(reg, project):
+    for d in lineage.unit_dirs(reg, project):
         n = len([r for r, _ in _revs(d, w.timestamp()) if r >= 2])
         if n >= cap("revisions"):
             out.append({"unit": d.name, "n": n, "since": units.hhmm(w)})

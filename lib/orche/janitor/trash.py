@@ -97,17 +97,18 @@ def undo(tid, *, dry_run=False) -> dict:
     return manifest
 
 
+def purge_due(name, today, days) -> bool:
+    """Whether a trash day directory named `name` (YYYY-MM-DD) is older than `days` days."""
+    try:
+        return (today - _dt.date.fromisoformat(name)).days > days
+    except ValueError:
+        return False
+
+
 def due_dirs(today, days) -> list:
     """Trash day directories older than `days` days."""
-    out = []
-    for day in sorted(root().glob("*")):
-        try:
-            date = _dt.date.fromisoformat(day.name)
-        except ValueError:
-            continue
-        if day.is_dir() and not day.is_symlink() and (today - date).days > days:
-            out.append(day)
-    return out
+    return [day for day in sorted(root().glob("*"))
+            if purge_due(day.name, today, days) and day.is_dir() and not day.is_symlink()]
 
 
 def purge(day_dir, *, record) -> int:

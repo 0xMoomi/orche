@@ -404,23 +404,17 @@ class ClientTest(JevCase):
 class HelpersTest(JevCase):
     def test_disabled_or_unconfigured_returns_none_without_calls(self):
         opener = jev.OPENER = FakeOpener(answer_all(default_value))
-        self.assertIsNone(jev.classify_prompt("hi"))  # defaults: disabled
+        self.assertIsNone(jev.classify_pointers([{"unit": "u1"}]))  # defaults: disabled
         self.configure(enabled=True, base_url="")
-        self.assertIsNone(jev.match_scope("add search", ["search"]))
+        self.assertIsNone(jev.classify_pointers([{"unit": "u1"}]))
         self.configure(enabled=True)
         os.environ.pop("JEV_API_KEY")
-        self.assertIsNone(jev.card_needs_refresh(["feat: x"]))
+        self.assertIsNone(jev.classify_pointers([{"unit": "u1"}]))
         self.assertEqual(opener.requests, [])
 
     def test_helpers_parse(self):
         self.configure()
         jev.OPENER = FakeOpener(answer_all(default_value))
-        got = jev.classify_prompt("ship it", ["build", "rnd"])
-        self.assertEqual(got, {"target": "build", "needs_plan": 0.97, "irreversible": 0.97, "urgency": 2,
-                               "routine_kind": "status", "confidence": 0.95})
-        self.assertEqual(jev.match_scope("add search", [{"name": "search", "scope": ["src/search/**"]}]),
-                         {"match": "search", "new_justified": 0.97, "confidence": 0.95})
-        self.assertEqual(jev.card_needs_refresh(["feat: new button"]), 0.97)
         self.assertEqual(jev.classify_pointers([{"unit": "u1", "status": "done"}]),
                          {"u1": {"wake_now": 0.97, "user_now": 0.97}})
         jev.OPENER = FakeOpener(exc=TimeoutError())
@@ -681,12 +675,6 @@ class CliTest(JevCase):
     def test_threshold_none_when_never_reached(self):
         self.assertIsNone(cmd_jev._threshold([(0.95, False), (0.5, True)], 0.9))
         self.assertEqual(cmd_jev._threshold([(0.95, True), (0.5, False)], 0.9), 0.6)
-
-    def test_label_not_implemented(self):
-        code, out, _err = self.orche("jev", "eval", "label")
-        self.assertEqual(code, 0)
-        self.assertIn("labels.jsonl", out)
-        self.assertIn("NOT produced", out)
 
     def test_enable_disable_and_dry_run(self):
         cfg = self.home / "config.json"

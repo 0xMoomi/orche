@@ -52,9 +52,10 @@ class AgentFilesTest(unittest.TestCase):
 
     def test_agent_values(self):
         fm = {p.stem: frontmatter(p.read_text()) for p in AGENTS.glob("*.md")}
-        self.assertEqual((fm["exec"]["model"], fm["exec"]["effort"], fm["exec"]["autoCompactWindow"],
-                          fm["exec"]["maxTurns"]), ("claude-sonnet-5-5", "medium", "200000", "60"))
+        self.assertEqual((fm["exec"]["model"], fm["exec"]["effort"], fm["exec"]["maxTurns"]),
+                         ("claude-sonnet-5-5", "medium", "60"))
         self.assertNotIn("tools", fm["exec"])
+        self.assertNotIn("autoCompactWindow", fm["exec"])
         self.assertEqual((fm["hr"]["model"], fm["hr"]["effort"], fm["hr"]["memory"]), ("claude-sonnet-5-5", "low", "user"))
         self.assertEqual((fm["deep-reasoner"]["model"], fm["deep-reasoner"]["effort"]), ("claude-opus-5-5", "max"))
         self.assertEqual((fm["runner"]["model"], fm["runner"]["effort"], fm["runner"]["tools"]),
@@ -254,7 +255,7 @@ class SkillsTest(unittest.TestCase):
         self.assertIn("division/model setup: skill orche-apply", block)
         self.assertNotIn("OWNER/DONE notify the owner.", block)
         self.assertLessEqual(len(block), 1500)
-        for part in ("## Divisions and models", "orche hr add", "notifies the owner only from your closing"):
+        for part in ("## Divisions and models", "orche hr add", "Orca notifies the owner when your reply ends"):
             self.assertIn(part, text)
 
     def test_hr_agent_names_model_commands(self):

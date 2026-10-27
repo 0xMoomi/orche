@@ -198,11 +198,7 @@ def read_context(path, cfg):
 
 
 def read_stamp(root):
-    try:
-        data = util.read_json(stamp_path(root), default=None)
-    except util.JsonError:
-        return None
-    return data if isinstance(data, dict) else None
+    return util.read_dict(stamp_path(root))
 
 
 # ---- staleness -------------------------------------------------------------
@@ -211,10 +207,10 @@ def _commits_since(root, head):
     """Commits from `head` to HEAD, None when `head` is unknown or no ancestor of HEAD."""
     if not head:
         return None
-    res = shell.run(["git", "-C", str(root), "merge-base", "--is-ancestor", head, "HEAD"], timeout=30)
+    res = shell.git(root, "merge-base", "--is-ancestor", head, "HEAD", timeout=30)
     if not res.ok:
         return None
-    res = shell.run(["git", "-C", str(root), "rev-list", "--count", f"{head}..HEAD"], timeout=30)
+    res = shell.git(root, "rev-list", "--count", f"{head}..HEAD", timeout=30)
     try:
         return int(res.out.strip()) if res.ok else None
     except ValueError:
@@ -333,7 +329,7 @@ def _env_names(root, rel) -> list:
 
 def git_log(root, n=LOG_COMMITS) -> list:
     """`git log --oneline -<n>` of the checkout, each line cut at 100 characters; [] on failure."""
-    res = shell.run(["git", "-C", str(root), "-c", "core.pager=cat", "log", "--oneline", f"-{n}"], timeout=30)
+    res = shell.git(root, "-c", "core.pager=cat", "log", "--oneline", f"-{n}", timeout=30)
     return [line[:100] for line in (res.out or "").splitlines()] if res.ok else []
 
 

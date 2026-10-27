@@ -80,6 +80,12 @@ def register(subparsers):
     p.set_defaults(func=cmd_init)
 
 
+def _setup_flags(args) -> list:
+    """The setup flags given on the command line, by name."""
+    return [f for f, v in zip(SETUP_FLAGS, (args.divisions is not None, args.custom, args.setup_file,
+                                            args.stage, args.aliases is not None, args.wake)) if v]
+
+
 def _registered(needle, reg):
     """The registry key of `needle` (a key, an alias or the main checkout's path), else None."""
     real = os.path.realpath(os.path.expanduser(needle))
@@ -93,8 +99,7 @@ def _refresh(args, reg) -> int:
     """`--refresh`: the ORCHE-owned files of a registered project from the current templates —
     the card link, personas and worktree settings (no project template file) — and the
     `orche_version` stamp. Reads no codebase, touches no Orca, never the user's files."""
-    given = [f for f, v in zip(SETUP_FLAGS, (args.divisions is not None, args.custom, args.setup_file,
-                                             args.stage, args.aliases is not None, args.wake)) if v]
+    given = _setup_flags(args)
     if given or args.print_setup or args.automations:
         return fail(EXIT_USER, f"--refresh only re-renders; drop {', '.join(given) or '--print-setup/--automations'}")
     key = _registered(args.repo, reg)
@@ -120,7 +125,7 @@ def _refresh(args, reg) -> int:
     try:
         ref = hr.refresh_project(reg, key, root=root, ts=ts, dry_run=dry_run)
         if not dry_run:   # origin/HEAD names the base branch a done's PR targets (publish.base); best effort
-            shell.run(["git", "-C", root, "remote", "set-head", "origin", "-a"], timeout=30)
+            shell.git(root, "remote", "set-head", "origin", "-a", timeout=30)
     except onboarding.UnsafeTarget as exc:
         return fail(EXIT_BLOCKED, f"refresh {key} stopped: {exc}")
     except PermissionError as exc:
@@ -182,8 +187,7 @@ def _find_repo(needle, reg):
     so does a path that is a registered project's main checkout (never re-added to Orca).
     """
     result = orca.repo_list()
-    repos = [r for r in (result.get("repos", []) if isinstance(result, dict) else result or [])
-             if isinstance(r, dict)]
+    repos = orca.repos_of(result)
     found = registry.project(reg, needle)
     if found:
         key, proj = found
@@ -253,8 +257,8 @@ def _add_repo(real):
         result = orca.repo_list()
     except orca.OrcaError as exc:
         return None, fail(EXIT_USER, f"added {real} to Orca but orca repo list failed: {exc}")
-    for repo in (result.get("repos", []) if isinstance(result, dict) else result or []):
-        if isinstance(repo, dict) and repo.get("path") and os.path.realpath(repo["path"]) == real:
+    for repo in orca.repos_of(result):
+        if repo.get("path") and os.path.realpath(repo["path"]) == real:
             return repo, None
     return None, fail(EXIT_USER, f"added {real} to Orca but orca repo list does not show it")
 
@@ -537,6 +541,35 @@ def _intake(args, reg, key, root, names):
                                                                               "model", "divisions", "turns")}}
 
 
+def _taken(reg, key, repo, root) -> str:
+    taken = reg["projects"][key]
+    return (f"project key {key} is taken by repo {taken.get('repo_id')} ({taken.get('path')}), "
+            f"not {repo['id']} ({root}); rename the Orca repo or remove the stale registry entry")
+
+
+def _key_error(reg, key, repo, root):
+    """The exit code refusing `key` for `repo` at `root` (no key, the repo registered under another
+    key, or the key held by another repo), else None."""
+    if not key:
+        return fail(EXIT_USER, f"cannot derive a project key from {repo.get('displayName')!r}")
+    other = _conflict(reg, key, repo, root)
+    if other:
+        return fail(EXIT_USER, f"repo {repo['id']} ({root}) is already registered as project {other}")
+    existing = reg["projects"].get(key)
+    if existing and (existing.get("repo_id") != repo["id"]
+                     or os.path.realpath(existing.get("path") or "/nonexistent") != root):
+        return fail(EXIT_USER, _taken(reg, key, repo, root))
+    return None
+
+
+def _plan(reg, key, setup, wake):
+    """(hr.plan_divisions result, None) or (None, exit code) on a refusal."""
+    try:
+        return hr.plan_divisions(reg, key, setup, wake, models=setup.get("models")), None
+    except hr.Refused as exc:
+        return None, fail(exc.code, exc.msg)
+
+
 def cmd_init(args):
     if args.repo is None:   # a bare `orche init`: the repository holding the current directory
         top = _cwd_repo()
@@ -551,8 +584,7 @@ def cmd_init(args):
     if args.refresh:
         return _refresh(args, reg)
     if args.print_setup:
-        given = [f for f, v in zip(SETUP_FLAGS, (args.divisions is not None, args.custom, args.setup_file,
-                                                 args.stage, args.aliases is not None, args.wake)) if v]
+        given = _setup_flags(args)
         if given:
             return fail(EXIT_USER, f"--print-setup only prints; drop {', '.join(given)}")
         return _print_setup(args, reg)
@@ -573,18 +605,10 @@ def cmd_init(args):
         return fail(EXIT_NOT_FOUND, f"no registry project or Orca repo matches {args.repo!r} "
                                     "(see: orche projects, orca repo list)")
     key = key or util.slugify(repo.get("displayName") or Path(repo["path"]).name)
-    if not key:
-        return fail(EXIT_USER, f"cannot derive a project key from {repo.get('displayName')!r}")
     root, dry_run = os.path.realpath(repo["path"]), args.dry_run
-    other = _conflict(reg, key, repo, root)
-    if other:
-        return fail(EXIT_USER, f"repo {repo['id']} ({root}) is already registered as project {other}")
+    if err := _key_error(reg, key, repo, root):
+        return err
     existing = reg["projects"].get(key)
-    if existing and (existing.get("repo_id") != repo["id"]
-                     or os.path.realpath(existing.get("path") or "/nonexistent") != root):
-        return fail(EXIT_USER, f"project key {key} is taken by repo {existing.get('repo_id')} "
-                               f"({existing.get('path')}), not {repo['id']} ({root}); rename the Orca repo "
-                               "or remove the stale registry entry")
     interactive = _interactive(args)
     setup, err = _setup(args, key, existing, reg)
     if setup is None:
@@ -593,10 +617,9 @@ def cmd_init(args):
     wake, err = _check_wake(setup, args.wake)
     if wake is None:
         return err
-    try:
-        plan = hr.plan_divisions(reg, key, setup, wake, models=setup.get("models"))
-    except hr.Refused as exc:
-        return fail(exc.code, exc.msg)
+    plan, err = _plan(reg, key, setup, wake)
+    if plan is None:
+        return err
     custom = setup["custom"]
     summary = _summary(setup, existing, plan.wake)   # before onboarding mutates `existing`
     renamed = None
@@ -607,20 +630,13 @@ def cmd_init(args):
         live = util.slugify(repo.get("displayName") or Path(repo["path"]).name)
         if live != key:   # Orca's display name, not the folder name, names the project
             key, renamed = live, f"registered as {live} (Orca names the repo {repo.get('displayName')})"
-            if not key:
-                return fail(EXIT_USER, f"cannot derive a project key from {repo.get('displayName')!r}")
-            other = _conflict(reg, key, repo, root)
-            if other:
-                return fail(EXIT_USER, f"repo {repo['id']} ({root}) is already registered as project {other}")
-            if key in reg["projects"]:
-                taken = reg["projects"][key]
-                return fail(EXIT_USER, f"project key {key} is taken by repo {taken.get('repo_id')} "
-                                       f"({taken.get('path')}), not {repo['id']} ({root}); rename the Orca repo "
-                                       "or remove the stale registry entry")
-            try:
-                plan = hr.plan_divisions(reg, key, setup, wake, models=setup.get("models"))
-            except hr.Refused as exc:
-                return fail(exc.code, exc.msg)
+            if err := _key_error(reg, key, repo, root):
+                return err
+            if key in reg["projects"]:   # stricter here: even the same repo under this key is refused
+                return fail(EXIT_USER, _taken(reg, key, repo, root))
+            plan, err = _plan(reg, key, setup, wake)
+            if plan is None:
+                return err
     if dry_run:
         dry(f"copy templates/project -> {root} (missing files only, *.tmpl skipped)")
     else:
@@ -738,12 +754,13 @@ def _first_pass_if_protected(root) -> int:
     """A project registered under a protected folder (macOS privacy) while the heartbeat job is
     loaded: the install's first-pass check, so the owner gets the same guidance now rather than a
     silent job later. Human output only (apply-all's --json inits never wait)."""
-    from . import cmd_install, privacy, units
-    if not privacy.protected(root) or not cmd_install.job_loaded():
+    from . import privacy, units
+    from .install import launchd
+    if not privacy.protected(root) or not launchd.job_loaded():
         return EXIT_OK
     try:
-        first = cmd_install.first_pass_check(units.now())
+        first = privacy.first_pass_check(units.now())
     except KeyboardInterrupt:
-        return cmd_install.interrupted()
+        return privacy.interrupted()
     print("\n".join(first["lines"]), flush=True)
     return EXIT_OK

@@ -25,7 +25,7 @@ import os
 import sys
 from pathlib import Path
 
-from . import brief, donegate, inbox, mask, publish, registry, roster, units, util
+from . import brief, cli, donegate, inbox, mask, publish, registry, roster, units, util
 from .review import pre
 from .flow import lineage, owner
 
@@ -46,11 +46,6 @@ def register(subparsers):
     p.add_argument("--owner", help="the one step or decision only the owner can take (`secret NAME[, NAME]` "
                                    "after `orche secret request`): Main sees it first as OWNER STEP")
     p.set_defaults(func=cmd_report)
-
-
-def _fail(msg):
-    print(f"orche: {msg}", file=sys.stderr)
-    return EXIT_USER
 
 
 def unidentified_message(r, place) -> str:
@@ -92,40 +87,40 @@ def cmd_report(args):
               "your final message", file=sys.stderr)
         return EXIT_RUNNER
     if args.status not in inbox.STATUSES:
-        return _fail(f"status must be one of {'|'.join(inbox.STATUSES)}, got {args.status!r}")
+        return cli.fail(EXIT_USER, f"status must be one of {'|'.join(inbox.STATUSES)}, got {args.status!r}")
     err = brief.unit_id_error(args.unit) if args.unit else None
     if err:
-        return _fail(err)
+        return cli.fail(EXIT_USER, err)
     reg = registry.load()
     cwd = os.getcwd()
     r = roster.Roster(reg)
     who = r.identify(cwd)
     if who.session is None:
-        return _fail(unidentified_message(r, who.place))
+        return cli.fail(EXIT_USER, unidentified_message(r, who.place))
     if who.member is None:
-        return _fail("cannot tell which session is reporting; set ORCHE_SESSION or run inside a unit")
+        return cli.fail(EXIT_USER, "cannot tell which session is reporting; set ORCHE_SESSION or run inside a unit")
     me, key = who.member.session, who.member.project
     summary = inbox.clip(mask.redact(args.summary)[0])
     if not summary:
-        return _fail("--summary is empty")
+        return cli.fail(EXIT_USER, "--summary is empty")
     if args.unit:
         unit = args.unit
         b = brief.find(reg, unit, project=key)
         if b is None or b.rev == 0:
-            return _fail(f"unknown unit {unit!r} (no .orche/units/{unit}/BRIEF.md)")
+            return cli.fail(EXIT_USER, f"unknown unit {unit!r} (no .orche/units/{unit}/BRIEF.md)")
     else:
         b = brief.newest(reg, key, me)
         if b is None and args.status not in ADHOC_STATUSES:
-            return _fail(f"no brief addressed to {me}; pass --unit")
+            return cli.fail(EXIT_USER, f"no brief addressed to {me}; pass --unit")
         unit = b.unit if b else f"adhoc-{util.slugify(me)}-{units.now():%Y%m%d}"
     to = args.to or r.recipient(me, b.sender if b else None)
     if not to:
-        return _fail(f"no recipient for {me}; pass --to")
+        return cli.fail(EXIT_USER, f"no recipient for {me}; pass --to")
     target = r.member(to)
     if target is None:
-        return _fail(f"unknown target session {to!r} (not in the registry)")
+        return cli.fail(EXIT_USER, f"unknown target session {to!r} (not in the registry)")
     if target.status == "retired":
-        return _fail(f"target session {to!r} is retired")
+        return cli.fail(EXIT_USER, f"target session {to!r} is retired")
     if args.report_path:
         report = str(Path(args.report_path).expanduser().resolve())
     else:
@@ -136,7 +131,7 @@ def cmd_report(args):
         print(proof.message, file=sys.stderr)
         return EXIT_BLOCKED
     pr = review = None
-    if args.status == "done" and publish.gated(who.member) and not args.dry_run:
+    if args.status == "done" and donegate.gated(who.member) and not args.dry_run:
         out = _publish(reg, who.member, cwd, key, unit, b, report, summary, proof)
         if isinstance(out, publish.Gap):
             print(f"orche: done not filed: {out.text}" + (f"\nOWNER: {out.owner}" if out.owner else ""),
@@ -169,7 +164,7 @@ def cmd_report(args):
         if not args.dry_run:
             units.touch_activity(me)
     except ValueError as exc:
-        return _fail(str(exc))
+        return cli.fail(EXIT_USER, str(exc))
     if args.json:
         print(json.dumps(ptr, indent=2, ensure_ascii=False))
     elif args.dry_run:

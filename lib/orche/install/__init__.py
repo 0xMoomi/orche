@@ -12,6 +12,8 @@ from pathlib import Path
 
 from .. import paths, util
 
+STATE_FILE = "install-state.json"
+RECONCILE_STEP = "reconcile job"    # the install step (and its output lines) of the heartbeat LaunchAgent
 MUTATING = {"patch", "create", "backup", "symlink", "relink", "move", "remove", "set", "add", "replace", "write", "restore"}
 
 
@@ -45,6 +47,53 @@ class Ctx:
                 text += f" ({act['detail']})"
             out.append(text)
         return out
+
+
+class StateUnreadable(Exception):
+    """install-state.json exists but cannot be read as an object."""
+
+    def __init__(self, path, reason):
+        super().__init__(f"{path.name}: {reason}")
+        self.path = path
+
+
+def load_state() -> dict:
+    """install-state.json. Missing -> {}. Present but unreadable -> StateUnreadable (never treated
+    as empty)."""
+    path = paths.orche_home() / STATE_FILE
+    if not path.exists():
+        return {}
+    try:
+        state = util.read_json(path, default=None)
+    except util.JsonError as exc:
+        raise StateUnreadable(path, f"invalid JSON ({exc.reason})") from None
+    except OSError as exc:
+        raise StateUnreadable(path, exc.strerror or str(exc)) from None
+    if not isinstance(state, dict):
+        raise StateUnreadable(path, "not a JSON object")
+    return state
+
+
+def plugin_enabled(home) -> bool:
+    """The ORCHE plugin is enabled in `home`'s ~/.claude/settings.json (unreadable: no)."""
+    from . import settings   # settings imports this package
+    try:
+        data = util.read_json(settings.settings_path(Ctx(home)), default={})
+    except (OSError, util.JsonError):
+        return False
+    return settings.plugin_enabled(data)
+
+
+def installed_mode(home) -> str:
+    """The mode the last install used (install-state.json `mode`), else `plugin` when the ORCHE plugin
+    is enabled, else `settings`: what `orche setup` installs with and what the --grant refusal names."""
+    try:
+        mode = load_state().get("mode")
+    except StateUnreadable:
+        mode = None
+    if mode in ("plugin", "settings"):
+        return mode
+    return "plugin" if plugin_enabled(home) else "settings"
 
 
 def read_text(path) -> str:

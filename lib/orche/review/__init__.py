@@ -75,7 +75,7 @@ def one_line(text, limit=300) -> str:
 
 def tree(cwd):
     """`git status --porcelain` of the worktree, or None when git cannot tell."""
-    res = shell.run(["git", "-C", str(cwd), "status", "--porcelain"], timeout=30)
+    res = shell.git(cwd, "status", "--porcelain", timeout=30)
     return res.out if res.ok else None
 
 

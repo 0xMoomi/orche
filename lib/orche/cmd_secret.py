@@ -3,7 +3,6 @@
 request/wait/fill/add/ls/missing/rotate/run/render/share/revoke/redact-transcripts.
 No subcommand ever prints a value; `--dry-run` prints backend argv with `<value>`.
 """
-import json
 import os
 import re
 import shlex
@@ -12,7 +11,7 @@ import sys
 import time
 from pathlib import Path
 
-from . import log, registry, roster, units, util
+from . import cli, log, registry, roster, units, util
 from .secrets import ENVS, SecretError, parse_envs, share, store
 from .secrets import dialog
 
@@ -104,14 +103,6 @@ def _guard(func):
     return wrapped
 
 
-def emit(args, data, lines):
-    if args.json:
-        print(json.dumps(data, indent=2, ensure_ascii=False))
-    else:
-        for line in lines:
-            print(line)
-
-
 def _context(args):
     reg = registry.load()
     key = store.resolve_project(reg, getattr(args, "project", None))
@@ -149,7 +140,7 @@ def cmd_request(args):
     data = {"id": rid, "created": created, "request": req, "dialog": spawned, "dry_run": args.dry_run,
             "planned": ex.planned}
     lines = (_plan_lines(ex) + [f"would request {rid}"]) if args.dry_run else [f"requested {rid}"]
-    emit(args, data, lines)
+    cli.out(args, data, lines)
     return EXIT_OK
 
 
@@ -164,10 +155,10 @@ def cmd_wait(args):
             print(f"orche secret: no request for {name}", file=sys.stderr)
             return EXIT_NOT_FOUND
         if reqs[-1][1].get("status") == "filled":
-            emit(args, {"name": name, "id": reqs[-1][0], "status": "READY"}, ["READY"])
+            cli.out(args, {"name": name, "id": reqs[-1][0], "status": "READY"}, ["READY"])
             return EXIT_OK
         if time.monotonic() >= deadline:
-            emit(args, {"name": name, "id": reqs[-1][0], "status": "TIMEOUT"}, ["TIMEOUT"])
+            cli.out(args, {"name": name, "id": reqs[-1][0], "status": "TIMEOUT"}, ["TIMEOUT"])
             return EXIT_NOT_FOUND
         time.sleep(POLL_SECONDS)
 
@@ -185,7 +176,7 @@ def cmd_fill(args):
         project = store.resolve_project(registry.load(), args.project)
     ex, summary = _run_dialog(args, project)
     lines = _plan_lines(ex) + [f"{outcome}: {' '.join(ids)}" for outcome, ids in sorted(summary.items())]
-    emit(args, {"summary": summary, "dry_run": args.dry_run, "planned": ex.planned}, lines or ["nothing pending"])
+    cli.out(args, {"summary": summary, "dry_run": args.dry_run, "planned": ex.planned}, lines or ["nothing pending"])
     return EXIT_OK if not summary.get("failed") else EXIT_USER
 
 
@@ -207,7 +198,7 @@ def cmd_add(args):
     value = None
     lines = _plan_lines(ex) if args.dry_run else \
         [f"stored {name} ({env}) -> {', '.join(b)}" for env, b in stored.items()]
-    emit(args, {"name": name, "stored": stored, "dry_run": args.dry_run, "planned": ex.planned}, lines)
+    cli.out(args, {"name": name, "stored": stored, "dry_run": args.dry_run, "planned": ex.planned}, lines)
     return EXIT_OK
 
 
@@ -215,7 +206,7 @@ def cmd_ls(args):
     _, key, _ = _context(args)
     env = parse_envs(args.env)[0] if args.env else None
     names = store.known_names(key, env)
-    emit(args, {"project": key, "env": env, "names": names},
+    cli.out(args, {"project": key, "env": env, "names": names},
          [f"{n}\t{','.join(e)}" for n, e in names.items()] or ["no secrets"])
     return EXIT_OK
 
@@ -224,7 +215,7 @@ def cmd_missing(args):
     _, key, _ = _context(args)
     reference = set(store.known_names(key, "dev")) | set(_example_names(args.repo))
     missing = sorted(reference - set(store.known_names(key, args.env)))
-    emit(args, {"project": key, "env": args.env, "missing": missing}, missing)
+    cli.out(args, {"project": key, "env": args.env, "missing": missing}, missing)
     return EXIT_OK
 
 
@@ -251,7 +242,7 @@ def cmd_rotate(args):
     ids = [rid for rid, _ in reqs]
     lines = _plan_lines(ex) + [f"rotate requested {rid}" for rid in ids]
     lines += [f"{outcome}: {' '.join(v)}" for outcome, v in sorted(summary.items())]
-    emit(args, {"requests": ids, "summary": summary, "dry_run": args.dry_run, "planned": ex.planned}, lines)
+    cli.out(args, {"requests": ids, "summary": summary, "dry_run": args.dry_run, "planned": ex.planned}, lines)
     return EXIT_USER if summary.get("failed") else EXIT_OK
 
 
@@ -298,7 +289,7 @@ def cmd_run(args):
     ex = store.Exec(args.dry_run)
     names, values = _resolve_values(args, cfg, ex)
     if args.dry_run:
-        emit(args, {"names": names, "cmd": cmd, "planned": ex.planned, "dry_run": True},
+        cli.out(args, {"names": names, "cmd": cmd, "planned": ex.planned, "dry_run": True},
              _plan_lines(ex) + [f"would exec: {shlex.join(cmd)} with {','.join(names)}"])
         return EXIT_OK
     env = dict(os.environ)
@@ -361,7 +352,7 @@ def cmd_render(args):
     names, values = _resolve_values(args, cfg, ex)
     if args.dry_run:
         backup = [f"would back up {out} to {out.parent / '.env.bak-<ts>.local'}"] if exists else []
-        emit(args, {"out": str(out), "names": names, "planned": ex.planned, "dry_run": True},
+        cli.out(args, {"out": str(out), "names": names, "planned": ex.planned, "dry_run": True},
              _plan_lines(ex) + backup + [f"would write {out} with {','.join(names)}"])
         return EXIT_OK
     if exists:
@@ -370,7 +361,7 @@ def cmd_render(args):
     util.atomic_write(out, store.dotenv_text(values), mode=0o600)
     values = None
     store.audit("render", key, ",".join(names), args.env, cfg.get("backend"), None, str(out))
-    emit(args, {"out": str(out), "names": names}, [f"wrote {out} ({len(names)} names)"])
+    cli.out(args, {"out": str(out), "names": names}, [f"wrote {out} ({len(names)} names)"])
     print(RENDER_WARNING.format(path=out), file=sys.stderr)
     return EXIT_OK
 
@@ -385,7 +376,7 @@ def cmd_share(args):
     ex = store.Exec(args.dry_run)
     entry = share.share(ex, cfg, args.to, args.env, names, out)
     lines = _plan_lines(ex) if args.dry_run else [f"shared {','.join(names)} ({args.env}) with {entry['to']} -> {out}"]
-    emit(args, {**entry, "dry_run": args.dry_run, "planned": ex.planned}, lines)
+    cli.out(args, {**entry, "dry_run": args.dry_run, "planned": ex.planned}, lines)
     return EXIT_OK
 
 
@@ -440,7 +431,7 @@ def cmd_revoke(args):
     lines.append(f"pending: {', '.join(pending_all) or '-'}")
     if pending_all and not args.dry_run:
         lines.append(f"pending names stay shared; run `orche secret fill`, then `orche secret revoke {args.who}` again")
-    emit(args, {"to": email, "requests": ids, "rotated": rotated_all, "pending": pending_all,
+    cli.out(args, {"to": email, "requests": ids, "rotated": rotated_all, "pending": pending_all,
                 "dry_run": args.dry_run, "planned": planned}, lines)
     return EXIT_USER if failed else EXIT_OK
 
@@ -458,5 +449,5 @@ def cmd_redact(args):
     if not args.dry_run:
         lines.append(f"backup: {report['backup']} (mode 0600, holds the unredacted transcripts; "
                      f"kept indefinitely until you delete it)")
-    emit(args, {**report, "dry_run": args.dry_run, "planned": ex.planned}, lines)
+    cli.out(args, {**report, "dry_run": args.dry_run, "planned": ex.planned}, lines)
     return EXIT_USER if report["errors"] else EXIT_OK

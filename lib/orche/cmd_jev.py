@@ -1,4 +1,4 @@
-"""`orche jev enable|disable` and the offline evaluation harness `orche jev eval extract|label|run|report`.
+"""`orche jev enable|disable` and the offline evaluation harness `orche jev eval extract|run|report`.
 
 SPEC §7.3 rule 5: Jev is validated offline first — masked samples from local transcripts, labels
 from a separate Claude session, accuracy and calibration per placement — before hooks rely on it.
@@ -13,7 +13,7 @@ import sys
 import time
 from pathlib import Path
 
-from . import config, jev, jev_setup, jevkey, mask, metrics, paths, registry, units, util
+from . import cli, config, jev, jev_setup, jevkey, mask, metrics, paths, registry, units, util
 from .janitor import discover
 
 EXIT_OK, EXIT_USER = 0, 1
@@ -22,13 +22,12 @@ KIND_PLACEMENTS = {"prompt": ("drain", "routine", "intake"), "report": ("drain",
 # Placeholder pointer fields: a drain sample is asked exactly as the hook asks about a pointer.
 EVAL_POINTER = {"unit": "sample", "from": "worker", "status": "done"}
 ACT_TARGET, CONFIRM_TARGET = 0.9, 0.75
-NOTIFICATION_TAG = metrics.NOTIFICATION_TAG
 _REMINDER = re.compile(r"<system-reminder>.*?(?:</system-reminder>|\Z)", re.DOTALL)
 _RESULT = re.compile(r"<result>(.*?)(?:</result>|\Z)", re.DOTALL)
 LABEL_HELP = (
-    "Labels are NOT produced by this command (deliberately not implemented). Run a separate Claude "
-    "session (Opus 5.5) over jev-eval/samples.jsonl and have it write jev-eval/labels.jsonl, one JSON "
-    'object per line: {"id": <sample id>, "placement": "drain"|"routine"|"intake", "label": <answer>}. '
+    "Labels come from a separate Claude session (Opus 5.5) run over jev-eval/samples.jsonl that writes "
+    "jev-eval/labels.jsonl, one JSON object per line: "
+    '{"id": <sample id>, "placement": "drain"|"routine"|"intake", "label": <answer>}. '
     "drain: true/false (main must act now); routine: one of "
     + ", ".join(jev.ROUTINE_KINDS)
     + '; intake: {"needs_plan": bool, "irreversible": bool, "urgency": 1-5} (any subset is scored).')
@@ -93,7 +92,7 @@ def extract(root=None, days=60, n_prompts=150, n_reports=100, now=None, slugs=No
             text = metrics._user_text(obj.get("message"))
             if not text:
                 continue
-            if NOTIFICATION_TAG in text:
+            if metrics.NOTIFICATION_TAG in text:
                 m = _RESULT.search(text)
                 body = m.group(1).strip() if m else ""
                 if body:
@@ -244,13 +243,6 @@ def _render_model(placements) -> list:
 
 # ---- commands --------------------------------------------------------------
 
-def _emit(args, data, lines):
-    if args.json:
-        print(json.dumps(data, indent=2, ensure_ascii=False))
-    else:
-        print("\n".join(lines))
-
-
 def cmd_extract(args):
     if args.days <= 0 or args.n_prompts < 0 or args.n_reports < 0:
         print("orche: --days must be positive and counts non-negative", file=sys.stderr)
@@ -269,14 +261,8 @@ def cmd_extract(args):
     if not args.dry_run:
         _write_jsonl(target, rows)
     verb = "would write" if args.dry_run else "wrote"
-    _emit(args, {"path": str(target), "dry_run": bool(args.dry_run), **counts},
+    cli.out(args, {"path": str(target), "dry_run": bool(args.dry_run), **counts},
           [f"{verb} {len(rows)} samples ({counts['prompt']} prompts, {counts['report']} reports) to {target}"])
-    return EXIT_OK
-
-
-def cmd_label(args):
-    _emit(args, {"implemented": False, "labels": str(eval_dir() / "labels.jsonl"), "instruction": LABEL_HELP},
-          [LABEL_HELP])
     return EXIT_OK
 
 
@@ -295,13 +281,13 @@ def cmd_run(args):
     if args.dry_run:
         calls = sum(1 for s in samples for pl in KIND_PLACEMENTS.get(s.get("kind"), ())
                     if not args.placement or pl == args.placement)
-        _emit(args, {"dry_run": True, "calls": calls, "path": str(target)},
+        cli.out(args, {"dry_run": True, "calls": calls, "path": str(target)},
               [f"would make {calls} Jev calls and write {target}"])
         return EXIT_OK
     rows = run(samples, c, args.placement)
     _write_jsonl(target, rows)
     failed = sum(1 for r in rows if r["answer"] is None)
-    _emit(args, {"path": str(target), "rows": len(rows), "failed": failed},
+    cli.out(args, {"path": str(target), "rows": len(rows), "failed": failed},
           [f"wrote {len(rows)} results ({failed} failed) to {target}"])
     return EXIT_OK
 
@@ -312,7 +298,7 @@ def cmd_report(args):
         print("orche: no results — run `orche jev eval run` first", file=sys.stderr)
         return EXIT_USER
     rep = report(results, _read_jsonl(eval_dir() / "labels.jsonl"))
-    _emit(args, rep, _render(rep))
+    cli.out(args, rep, _render(rep))
     return EXIT_OK
 
 
@@ -335,7 +321,7 @@ def _set_enabled(args, value):
     lines = [f"{'would set' if args.dry_run else 'set'} jev.enabled={word}"]
     if value and jev.client() is None and not args.dry_run:
         lines.append("note: Jev is unconfigured (no jev.base_url or no key; run `orche jev setup`); calls stay off")
-    _emit(args, {"enabled": value, "dry_run": bool(args.dry_run)}, lines)
+    cli.out(args, {"enabled": value, "dry_run": bool(args.dry_run)}, lines)
     return EXIT_OK
 
 
@@ -347,13 +333,13 @@ def _stdin_key():
 
 def _flow_out(args, res):
     data = {k: v for k, v in res.items() if k != "lines"}
-    _emit(args, data, res["lines"])
+    cli.out(args, data, res["lines"])
     return EXIT_OK if res["status"] in ("on", "skipped") else EXIT_USER
 
 
 def cmd_setup(args):
     if args.dry_run:
-        _emit(args, {"dry_run": True}, ["would ask for a Jev key, store it, probe once and enable Jev on success"])
+        cli.out(args, {"dry_run": True}, ["would ask for a Jev key, store it, probe once and enable Jev on success"])
         return EXIT_OK
     problem = jev_setup.config_problem()
     if problem:  # before any question or stdin read
@@ -375,19 +361,19 @@ def cmd_setup(args):
 
 def cmd_probe(args):
     if args.dry_run:
-        _emit(args, {"dry_run": True}, ["would send one Choice question to the configured Jev endpoint"])
+        cli.out(args, {"dry_run": True}, ["would send one Choice question to the configured Jev endpoint"])
         return EXIT_OK
     res = jev_setup.probe_configured()
     if not res["configured"]:
-        _emit(args, res, [f"jev {jev_setup.NOT_CONFIGURED}: run `orche jev setup`"])
+        cli.out(args, res, [f"jev {jev_setup.NOT_CONFIGURED}: run `orche jev setup`"])
         return EXIT_USER
     if res["ok"]:
         lines = [f"Jev answered ({res['kind']}, {res['ms'] / 1000:.1f} s, key: {res['key']})"]
         if not res["enabled"]:
             lines.append("Jev is off: turn it on with `orche jev enable`")
-        _emit(args, res, lines)
+        cli.out(args, res, lines)
         return EXIT_OK
-    _emit(args, res, [f"Jev probe failed: {res['error']}", jev_setup.OFF_LINE if not res["enabled"] else
+    cli.out(args, res, [f"Jev probe failed: {res['error']}", jev_setup.OFF_LINE if not res["enabled"] else
                       "Jev stays enabled; its calls fail open (triage falls back to Haiku)"])
     return EXIT_USER
 
@@ -399,7 +385,7 @@ def _key_error(exc):
 
 def cmd_key_set(args):
     if args.dry_run:
-        _emit(args, {"dry_run": True, "backend": jevkey.backend()},
+        cli.out(args, {"dry_run": True, "backend": jevkey.backend()},
               [f"would store the Jev key in the {jevkey.backend()}"])
         return EXIT_OK
     try:
@@ -415,13 +401,13 @@ def cmd_key_set(args):
     except jevkey.KeyStoreError as exc:
         return _key_error(jevkey.scrub(str(exc), key))
     jev_setup.forget_record()
-    _emit(args, {"stored": True, "backend": backend}, [jev_setup.stored_line(backend)])
+    cli.out(args, {"stored": True, "backend": backend}, [jev_setup.stored_line(backend)])
     return EXIT_OK
 
 
 def cmd_key_rm(args):
     if args.dry_run:
-        _emit(args, {"dry_run": True, "backend": jevkey.backend()},
+        cli.out(args, {"dry_run": True, "backend": jevkey.backend()},
               [f"would remove the Jev key from the {jevkey.backend()}"])
         return EXIT_OK
     try:
@@ -429,7 +415,7 @@ def cmd_key_rm(args):
     except jevkey.KeyStoreError as exc:
         return _key_error(exc)
     jev_setup.forget_record()
-    _emit(args, {"removed": removed, "backend": jevkey.backend()},
+    cli.out(args, {"removed": removed, "backend": jevkey.backend()},
           [f"Jev key removed from the {jevkey.backend()}" if removed else f"no Jev key in the {jevkey.backend()}"])
     return EXIT_OK
 
@@ -439,9 +425,9 @@ def cmd_key_status(args):
     src, err = jevkey.source(env_name)
     data = {"source": src, "backend": jevkey.backend(), "env": env_name, "error": err}
     if err:
-        _emit(args, data, [f"Jev key: unknown ({err})"])
+        cli.out(args, data, [f"Jev key: unknown ({err})"])
         return EXIT_USER
-    _emit(args, data, [f"Jev key: {src}" if src else f"Jev key: none (set one with `orche jev key set`)"])
+    cli.out(args, data, [f"Jev key: {src}" if src else f"Jev key: none (set one with `orche jev key set`)"])
     return EXIT_OK
 
 
@@ -468,7 +454,7 @@ def register(subparsers):
     sub.add_parser("enable", help="set jev.enabled=true in config").set_defaults(func=lambda a: _set_enabled(a, True))
     sub.add_parser("disable", help="set jev.enabled=false in config").set_defaults(
         func=lambda a: _set_enabled(a, False))
-    ev = sub.add_parser("eval", help="offline evaluation: extract, label, run, report")
+    ev = sub.add_parser("eval", help="offline evaluation: extract, run, report", description=LABEL_HELP)
     esub = ev.add_subparsers(dest="eval_command", metavar="<step>")
     ex = esub.add_parser("extract", help="write masked samples from local transcripts to jev-eval/samples.jsonl")
     ex.add_argument("--days", type=int, default=60, help="window in days (default 60)")
@@ -477,10 +463,6 @@ def register(subparsers):
     ex.add_argument("--root", default=None, help="transcript root (default ~/.claude/projects)")
     ex.add_argument("--project", default=None, metavar="KEY", help="only this registered project's main session")
     ex.set_defaults(func=cmd_extract)
-    lb = esub.add_parser("label", help="NOT IMPLEMENTED: prints how labels.jsonl is produced by a separate "
-                                       "Claude session", description=LABEL_HELP)
-    lb.add_argument("--with-claude", action="store_true", help="accepted for compatibility; not implemented")
-    lb.set_defaults(func=cmd_label)
     rn = esub.add_parser("run", help="call Jev on every sample, write jev-eval/results.jsonl")
     rn.add_argument("--placement", choices=PLACEMENTS, default=None, help="only this placement")
     rn.set_defaults(func=cmd_run)

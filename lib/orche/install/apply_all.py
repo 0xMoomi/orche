@@ -78,8 +78,7 @@ def run(args) -> int:
         result = orca.repo_list()
     except orca.OrcaError as exc:
         return fail(EXIT_USER, f"orca repo list failed: {exc}")
-    repos = [r for r in (result.get("repos", []) if isinstance(result, dict) else result or [])
-             if isinstance(r, dict) and r.get("id")]
+    repos = [r for r in orca.repos_of(result) if r.get("id")]
     reg = registry.load()
     count, limit = hr.awake(reg)
     budget = limit - count

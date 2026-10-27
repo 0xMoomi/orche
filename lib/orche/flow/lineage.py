@@ -39,11 +39,7 @@ def turn_path(session):
 
 
 def read_turn(session):
-    try:
-        data = util.read_json(turn_path(session), default=None)
-    except util.JsonError:
-        return None
-    return data if isinstance(data, dict) else None
+    return util.read_dict(turn_path(session))
 
 
 def write_turn(session, owner, lineages, at=None):
@@ -220,7 +216,7 @@ def lock(sc):
                 fcntl.flock(fh, fcntl.LOCK_UN)
 
 
-def _dirs(reg, project):
+def unit_dirs(reg, project):
     from .. import units
     root = units.project_root(reg, project)
     d = root / brief.UNITS if root is not None else None
@@ -233,7 +229,7 @@ def _dirs(reg, project):
 def groups(reg, project):
     """{lineage: [Brief]} for every brief in `project` (unit order)."""
     out = {}
-    for d in _dirs(reg, project):
+    for d in unit_dirs(reg, project):
         b = brief.find(reg, d.name, project=project)
         if b is not None and b.rev:
             out.setdefault(b.lineage, []).append(b)

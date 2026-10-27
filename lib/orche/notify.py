@@ -22,8 +22,9 @@ the owner wrote:
 Gated by the top-level config `notify`; macOS only (PLATFORM). Never raises. One events line per
 notification tried, naming the caller's `kind` and the outcome, never the text.
 
-Callers: Main's closing line, a parked guard refusal and the heartbeat's project escalations (flow.owner,
-with the project), HR (hr.book), the Keymaster (secrets.store) and the heartbeat's global notice (reconcile).
+Callers: a parked guard refusal and the heartbeat's reminders and project escalations (flow.owner, with the
+project; Orca's own notification covers Main's closing line), HR (hr.book), the Keymaster (secrets.store)
+and the heartbeat's global notice (reconcile).
 """
 import re
 import shlex

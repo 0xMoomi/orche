@@ -1,10 +1,9 @@
 """`orche ledger record|check|summary|export|grade` — verification ledger CLI (logic in ledger.py)."""
-import json
 import os
 import sys
 from pathlib import Path
 
-from . import ledger, registry, roster, shell, units
+from . import cli, ledger, registry, roster, shell, units
 
 EXIT_OK, EXIT_USER, EXIT_NOT_FOUND, EXIT_BLOCKED = 0, 1, 2, 3
 
@@ -64,14 +63,6 @@ def _wrap(handler):
     return run
 
 
-def _emit(args, data, lines):
-    if args.json:
-        print(json.dumps(data, indent=2, ensure_ascii=False))
-    else:
-        for line in lines:
-            print(line)
-
-
 def _project(args, reg=None):
     reg = reg if reg is not None else registry.load()
     if args.proj:
@@ -103,7 +94,7 @@ def cmd_record(args):
         raise _Exit(EXIT_USER, str(exc)) from None
     if not args.dry_run:
         ledger.append(proj, row)
-    _emit(args, {"project": proj, "path": str(ledger.path(proj)), "dry_run": bool(args.dry_run), "row": row},
+    cli.out(args, {"project": proj, "path": str(ledger.path(proj)), "dry_run": bool(args.dry_run), "row": row},
           [ledger.format_row(row)])
     return EXIT_OK
 
@@ -117,10 +108,10 @@ def cmd_check(args):
     try:
         status, row, note = ledger.check(ledger.read(proj), sha, pr, args.min)
     except ledger.Ambiguous as exc:
-        _emit(args, {"status": "AMBIGUOUS", "sha": sha, "candidates": exc.candidates}, [str(exc)])
+        cli.out(args, {"status": "AMBIGUOUS", "sha": sha, "candidates": exc.candidates}, [str(exc)])
         return EXIT_NOT_FOUND
     line = status if row is None else f"{status} {row['verdict']}"
-    _emit(args, {"status": status, "project": proj, "sha": sha, "pr": pr, "min": args.min,
+    cli.out(args, {"status": status, "project": proj, "sha": sha, "pr": pr, "min": args.min,
                  "row": row, "note": note}, [line] + ([f"  ({note})"] if note else []))
     return EXIT_OK if status == "VERIFIED" else EXIT_NOT_FOUND
 
@@ -162,7 +153,7 @@ def cmd_summary(args):
         lines += [f"  {u['branch']} {u['sha'][:12]}" for u in unverified]
     lines.append("last rows:")
     lines += [f"  {ledger.format_row(r)}" for r in last] or ["  (none)"]
-    _emit(args, {"project": proj, "rows": len(rows), "counts": counts,
+    cli.out(args, {"project": proj, "rows": len(rows), "counts": counts,
                  "unverified_heads": unverified, "last": last}, lines)
     return EXIT_OK
 
@@ -183,7 +174,7 @@ def cmd_export(args):
     count = len(ledger.read(proj))
     if not args.dry_run:
         target, count = ledger.export(proj, repo)
-    _emit(args, {"project": proj, "path": str(target), "rows": count, "dry_run": bool(args.dry_run)},
+    cli.out(args, {"project": proj, "path": str(target), "rows": count, "dry_run": bool(args.dry_run)},
           [f"{count} rows -> {target}" + (" (dry run)" if args.dry_run else "")])
     return EXIT_OK
 
@@ -213,7 +204,7 @@ def cmd_grade(args):
     if not args.dry_run:
         package = ledger.save_grader_iteration(state, n, rng, ledger.grader_package(
             args.unit, n, rng, rubric, stat, files))
-    _emit(args, {"unit": args.unit, "iteration": n, "max": ledger.MAX_GRADER_ITERATIONS,
+    cli.out(args, {"unit": args.unit, "iteration": n, "max": ledger.MAX_GRADER_ITERATIONS,
                  "package": str(package), "files": files, "dry_run": bool(args.dry_run)},
           [f"iteration {n}/{ledger.MAX_GRADER_ITERATIONS}", str(package)])
     return EXIT_OK

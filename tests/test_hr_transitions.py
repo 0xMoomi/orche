@@ -41,7 +41,7 @@ class BookTest(test_hr.HrCase):
     def test_record_star_project_and_no_save(self):  # B2
         ev = {"type": "audit", "project": "*", "unit": "*", "by": "user"}
         self.assertEqual(self.patched_record({}, "audit", event=ev), [("event", ev), ("save",), ("log", "audit")])
-        self.assertEqual(self.patched_record({}, "init again", project="p", save=False),
+        self.assertEqual(self.patched_record({}, "init again", project="p"),
                          [("log", "init again"), ("refresh", "p")])
 
     def test_log_writes_header_once(self):  # B3

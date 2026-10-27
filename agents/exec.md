@@ -3,7 +3,6 @@ name: exec
 description: Mechanical/standard execution subagent. Use for one scoped brief (rename, bump, copy edit, a contained fix or test) that needs no design decisions.
 model: claude-sonnet-5-5
 effort: medium
-autoCompactWindow: 200000
 maxTurns: 60
 ---
 

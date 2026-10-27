@@ -110,6 +110,15 @@ def read_json(path, default=None):
         raise JsonError(path, exc) from None
 
 
+def read_dict(path):
+    """A JSON object file as a dict; None when missing, corrupt or not an object (an OSError still raises)."""
+    try:
+        data = read_json(path, default=None)
+    except JsonError:
+        return None
+    return data if isinstance(data, dict) else None
+
+
 def write_json(path, data) -> None:
     atomic_write(path, json.dumps(data, indent=2, ensure_ascii=False) + "\n")
 

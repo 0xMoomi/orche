@@ -109,19 +109,6 @@ def _existing(path):
     return path
 
 
-MAIN_WAKER = "com.orche.main-waker"
-
-
-def main_waker_rows() -> list:
-    """A WARN when the pre-0.6.0 launchd waker is still loaded: it wakes Main next to ORCHE's own
-    nudger (doubled turns). No row when launchctl is missing or the job is not loaded."""
-    res = shell.run(["launchctl", "print", f"gui/{os.getuid()}/{MAIN_WAKER}"], timeout=3)
-    if not res.ok:
-        return []
-    return [("WARN", "main-waker", f"launchd job {MAIN_WAKER} is loaded — it predates 0.6.0 and conflicts with "
-             f"ORCHE's own wake; run: launchctl bootout gui/$(id -u)/{MAIN_WAKER}")]
-
-
 def disk_checks() -> list:
     """(level, name, detail): free space where ORCHE_HOME lives (a full disk keeps the runner
     from filing: reconcile files it later, once writes work again) and the size of logs/runs."""
@@ -431,7 +418,7 @@ def reconcile_job_rows(home) -> list:
         interval = plistlib.loads(path.read_bytes()).get("StartInterval")
     except Exception as exc:  # noqa: BLE001 - a doctor row never fails the doctor
         return [("WARN", name, f"plist unreadable ({type(exc).__name__}) — run orche install")]
-    every = int(cfg.get("every_s", 300))
+    every = reconcile.every_s(cfg)
     if interval != every:
         return [("WARN", name, f"plist runs every {interval}s, reconcile.every_s is {every} — run orche install")]
     if not launchd.loaded(launchd.RECONCILE):
@@ -472,7 +459,7 @@ def checks(ctx) -> list:
     level, detail = _orche_home()
     add(level, "orche_home", detail)
     job = job_state(ctx.home)
-    for row in (disk_checks() + main_waker_rows() + heartbeat_rows(job) + reconcile_job_rows(ctx.home)
+    for row in (disk_checks() + heartbeat_rows(job) + reconcile_job_rows(ctx.home)
                 + privacy_rows(job)):
         add(*row)
     try:
@@ -493,13 +480,9 @@ def checks(ctx) -> list:
         add("WARN", "settings", err)
         data = {}
     in_settings = settings.settings_hooks(data, ctx.plugin_root)
-    shapes = {"run.sh" if settings.legacy_command(ctx.plugin_root, cmd) else "python3" for _, cmd in in_settings}
     if in_settings and settings.plugin_enabled(data):
         add("WARN", "hooks", f"hooks registered twice (plugin + {len(in_settings)} settings.json entries): "
                              "run orche install (plugin mode removes the settings entries) or disable the plugin")
-    elif len(shapes) == 2:
-        add("WARN", "hooks", "settings.json holds both hook shapes (python3 .../hooks/<hook>.py and "
-                             "hooks/run.sh <hook>): run orche install --mode settings to replace the old ones")
     elif settings.plugin_enabled(data):
         add("OK", "hooks", "orche plugin enabled")
     else:

@@ -119,6 +119,12 @@ def terminals_of(result) -> list:
     return [t for t in terms or [] if isinstance(t, dict)]
 
 
+def repos_of(result) -> list:
+    """The repo dicts of an `orca repo list` result (an envelope or a bare list)."""
+    return [r for r in (result.get("repos", []) if isinstance(result, dict) else result or [])
+            if isinstance(r, dict)]
+
+
 def match_title(terminals, title):
     """First terminal whose normalised title equals the normalised `title`, or None."""
     want = normalize_title(title)

@@ -31,7 +31,7 @@ import shlex
 import sys
 from pathlib import Path
 
-from . import config, procs, registry, runs
+from . import config, paths, procs, registry, runs
 
 EXIT_OK, EXIT_USER = 0, 1
 
@@ -40,9 +40,6 @@ def register(subparsers):
     p = subparsers.add_parser("run", help="run one unit headless with claude -p (the runner; manual re-run)")
     p.add_argument("unit", help="unit id <proj>-<slug>-<yyyymmdd>-<n>")
     p.set_defaults(func=cmd_run)
-
-
-SCRIPT = Path(__file__).resolve().parents[2] / "bin" / "orche.py"
 
 
 def _drop_inherited_tag():
@@ -55,7 +52,7 @@ def _drop_inherited_tag():
         return
     env = {k: v for k, v in os.environ.items() if k != procs.ENV}
     try:
-        as_cli = bool(sys.argv) and Path(sys.argv[0]).resolve() == SCRIPT
+        as_cli = bool(sys.argv) and Path(sys.argv[0]).resolve() == paths.PLUGIN_ROOT / "bin" / "orche.py"
     except OSError:
         as_cli = False
     if as_cli:

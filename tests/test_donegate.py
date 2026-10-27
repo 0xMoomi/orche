@@ -317,6 +317,16 @@ class RunTest(GateCase):
         self.assertEqual(self.run_("blocked", self.before, self.before), ())
 
 
+class GatedTest(unittest.TestCase):
+    def test_only_build_and_feature_agents_are_gated(self):
+        M = roster.Member
+        self.assertTrue(donegate.gated(M("div-acme-build", "acme", "div", "build", "build")))
+        self.assertTrue(donegate.gated(M("feat-acme-x", "acme", "feat", "x", "build")))
+        self.assertFalse(donegate.gated(M("main-acme", "acme", "main", "main", None)))
+        self.assertFalse(donegate.gated(M("div-acme-rnd", "acme", "div", "rnd", "rnd")))
+        self.assertFalse(donegate.gated(None))
+
+
 class ImportClosureTest(unittest.TestCase):
     def fresh(self, code):
         return subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, check=True,

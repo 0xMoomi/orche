@@ -381,7 +381,7 @@ class PaneGateTest(ReconcileCase):
                         {"state": "user-typing", "at": "2026-10-16T00:30:00+00:00"})
         calls = []
 
-        def run(argv, **kw):            # osascript shows it; launchctl: no Main waker loaded
+        def run(argv, **kw):            # osascript shows it
             calls.append(argv)
             return shell.Result(0 if argv[0] == "osascript" else 113, "", "", argv)
         with mock.patch.object(notify, "PLATFORM", "darwin"), mock.patch.object(shell, "run", run):
@@ -429,7 +429,7 @@ class StatusHintTest(ReconcileCase):
 
 class OwnerNoticeTest(ReconcileCase):
     """S6: the owner notification goes through notify.send, obeys `notify` (`inbox.notify` is gone) and
-    has no sound in quiet hours; the waker class: a loaded com.orche.main-waker is told once a day."""
+    has no sound in quiet hours."""
 
     def notes(self, cfg=None, quiet=False):
         self.now += dt.timedelta(minutes=10)          # past the per-project gap (flow.owner.NOTIFY_GAP_S)
@@ -451,19 +451,6 @@ class OwnerNoticeTest(ReconcileCase):
         self.assertNotIn("sound", " ".join(hushed[:-2]))
         self.assertEqual(self.notes({"notify": False}), [])
         self.assertEqual(len(self.notes({"inbox": {"wake": True, "quiet_s": 0, "notify": False}})), 1)  # ignored
-
-    def test_a_loaded_main_waker_is_told_once_a_day(self):
-        calls = []
-        with mock.patch.object(notify, "PLATFORM", "darwin"), \
-                mock.patch.object(shell, "run",
-                                  lambda argv, **kw: calls.append(argv) or shell.Result(0, "", "", argv)):
-            got = [self.run_at(m)[1] for m in (0, 5, 10)] + [self.run_at(24 * 60)[1]]
-        notes = [c for c in calls if c[0] == "osascript"]
-        self.assertEqual(len(notes), 2)                            # day 1 once, day 2 once
-        self.assertIn("com.orche.main-waker is still loaded", notes[0][-2])
-        self.assertEqual(got[0], ["notify the owner: com.orche.main-waker is loaded (once a day)"])
-        self.assertEqual(got[1:3], [[], []])
-        self.assertTrue(any("action=notify" in e for e in self.events()))
 
 
 class ClosedMainTest(ReconcileCase):

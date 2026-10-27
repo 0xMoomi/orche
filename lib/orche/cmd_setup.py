@@ -9,7 +9,7 @@ Each step is idempotent and printed under its own `== step ==` header:
    skips the step;
 3. init — `orche init PATH --no-intake` per `--project` (a repo Orca or the registry does not know
    yet is added and registered by init itself);
-4. heartbeat — the reconcile job's first pass (`cmd_install.first_pass_check`: the macOS privacy
+4. heartbeat — the reconcile job's first pass (`privacy.first_pass_check`: the macOS privacy
    guidance when the job cannot read a project), only when the install loaded the job (macOS, real
    home) and not under --dry-run;
 5. doctor — `orche doctor`.
@@ -21,8 +21,9 @@ import argparse
 import sys
 from pathlib import Path
 
-from . import cmd_auth, cmd_init, cmd_install, oauth, units
+from . import cmd_auth, cmd_init, cmd_install, install, oauth, privacy, units
 from .cli import EXIT_OK, EXIT_USER
+from .install import launchd
 
 
 def register(subparsers):
@@ -61,8 +62,8 @@ BLOCKED_LINE = ("setup: one step left — switch on Full Disk Access in the wind
 def cmd_setup(args):
     home = ["--home", args.home] if args.home else []
     target = Path(args.home).expanduser() if args.home else Path.home()
-    mode = cmd_install.installed_mode(target)
-    hint = ["--no-plugin-hint"] if mode == "plugin" and cmd_install.plugin_enabled(target) else []
+    mode = install.installed_mode(target)
+    hint = ["--no-plugin-hint"] if mode == "plugin" and install.plugin_enabled(target) else []
     failed = []
     print("== install ==", flush=True)
     if _run(args, ["install", "--mode", mode, "--no-jev", *hint, *home], first_pass=False):
@@ -78,12 +79,12 @@ def cmd_setup(args):
         if _run(args, ["init", "--no-intake", "--", path], first_pass=False, close_window=False):   # step 4 checks once
             failed.append(f"init {path}")
     blocked = False
-    if not args.dry_run and cmd_install.job_loaded(target):
+    if not args.dry_run and launchd.job_loaded(target):
         print("== heartbeat ==", flush=True)
         try:
-            first = cmd_install.first_pass_check(units.now())
+            first = privacy.first_pass_check(units.now())
         except KeyboardInterrupt:
-            return cmd_install.interrupted()
+            return privacy.interrupted()
         print("\n".join(first["lines"]), flush=True)
         if not first["ok"]:
             failed.append("heartbeat")

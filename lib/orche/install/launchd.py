@@ -7,6 +7,7 @@ launchctl only runs when `home` is the user's real home, so `orche install --hom
 the file and never loads it.
 """
 import os
+import sys
 from pathlib import Path
 from xml.sax.saxutils import escape
 
@@ -113,3 +114,8 @@ def reconcile_plist(every_s) -> str:
     data = plistlib.loads(text.encode("utf-8"))
     data["EnvironmentVariables"]["CLAUDE_CONFIG_DIR"] = extra
     return plistlib.dumps(data).decode("utf-8")
+
+
+def job_loaded(home=None) -> bool:
+    """macOS, `home` the real home, and the reconcile job loaded (`launchctl print`)."""
+    return sys.platform == "darwin" and _live(home) and loaded(RECONCILE)

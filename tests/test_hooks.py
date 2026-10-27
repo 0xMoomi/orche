@@ -495,6 +495,9 @@ class DispatchRelayTest(HookCase):
 
     def _retire_build_after_one_unit(self):
         self.send(DISPATCH_OK)
+        # Retire only after the detached deliverer wrote its events line: a deliverer that reads the
+        # retired target exits `retired-target` with no line, and tearDown waits its full 10 s for one.
+        self.delivered()
         unit = self.only_unit()
         reg = json.loads((self.home / "registry.json").read_text())
         reg["projects"]["acme"]["divisions"]["build"]["status"] = "retired"
@@ -962,17 +965,16 @@ class OwnerVoiceHookTest(HookCase):
         return json.loads(path.read_text()) if path.exists() else None
 
     @unittest.skipUnless(sys.platform == "darwin", "the notification is macOS only")
-    def test_main_owner_line_records_the_ask_and_notifies_under_stop_hook_active(self):
+    def test_main_owner_line_records_the_ask_and_does_not_notify_under_stop_hook_active(self):
+        """Orca shows its own notification when Main's turn ends: ORCHE records the ask and sends none."""
         line = 'OWNER: 決済キー "STRIPE" \\ を入れてください (既定: 保留)'
         res = self.stop(f"Research done.\n\n{line}\n", stop_hook_active=True)
         self.assertEqual((res.returncode, res.stderr), (0, ""))
         ask = self.ask()
         self.assertEqual((ask["text"], ask["kind"], ask["source"]), (line[len("OWNER: "):], "owner", "main"))
-        [note] = self.notes()                       # the stub joins its argv: the body arrives verbatim
-        self.assertTrue(note.startswith(f"-title ORCHE acme -message {line} "), note)
-        self.assertTrue(note.endswith(f"-activate com.stablyai.orca -execute {support.ROOT / 'bin' / 'orche'} focus acme"),
-                        note)
+        self.assertEqual(self.notes(), [])
         self.assertFalse((self.home / support.OSASCRIPT_CALLS).exists())
+        self.assertIn("owner recorded project=acme kind=owner by=orca", self.events())
         self.assertNotIn("決済", self.events())
 
     def test_a_tag_stamps_the_turns_start_from_the_prompt_hooks_record(self):

@@ -112,8 +112,7 @@ def stage_gate(names, stage, key=None) -> None:
 
 def freeze(reg, by, reason) -> None:
     """The global creation cap was reached: set `frozen` and record it (by hr-limits)."""
-    reg["frozen"] = True
-    book.record(reg, f"freeze by hr-limits ({reason}; requested by {by})",
+    book.record(reg, f"freeze by hr-limits ({reason}; requested by {by})", change=lambda r: r.update(frozen=True),
                 event={"type": "freeze", "project": "*", "unit": "hr", "by": "hr-limits"},
                 note="HR freeze: global feature-agent creation cap reached")
 
@@ -123,9 +122,8 @@ def set_frozen(reg, frozen, *, dry_run=False) -> tuple:
     verb = "freeze" if frozen else "unfreeze"
     changed = reg["frozen"] != frozen
     if changed and not dry_run:
-        reg["frozen"] = frozen
         by = roster.actor()
-        book.record(reg, f"{verb} by {by}", event={"type": verb, "project": "*", "unit": "hr", "by": by},
+        book.record(reg, f"{verb} by {by}", change=lambda r: r.update(frozen=frozen), event={"type": verb, "project": "*", "unit": "hr", "by": by},
                     note=f"HR {verb}: feature-agent creation {'stopped' if frozen else 'allowed'}")
     state = "frozen" if frozen else "unfrozen"
     line = f"already {state}" if not changed else f"would {verb} (dry-run)" if dry_run else state

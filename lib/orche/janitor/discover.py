@@ -89,7 +89,7 @@ def orca_terminals():
 
 def git_porcelain(root):
     """Lines of `git status --porcelain` for `root`, or None if git failed."""
-    res = shell.run(["git", "-C", root, "status", "--porcelain"], timeout=60)
+    res = shell.git(root, "status", "--porcelain", timeout=60)
     if not res.ok:
         return None
     return [line for line in res.out.splitlines() if line.strip()]
@@ -97,7 +97,7 @@ def git_porcelain(root):
 
 def git_tracked(root, rel):
     """True if git tracks anything under `rel`, False if not, None if git failed."""
-    res = shell.run(["git", "-C", root, "ls-files", "--", rel], timeout=60)
+    res = shell.git(root, "ls-files", "--", rel, timeout=60)
     if not res.ok:
         return None
     return bool(res.out.strip())

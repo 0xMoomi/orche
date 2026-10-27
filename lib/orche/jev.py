@@ -67,7 +67,7 @@ URGENCY_LEVELS = ("1: can wait for days", "2: this week", "3: today", "4: within
 OTHER = "other"
 
 # Test seam: an `(request, timeout) -> bytes | file-like` callable used by the module-level
-# helpers (`classify_*`, `match_scope`, ...). None means `urllib.request.urlopen`.
+# helpers (`classify_pointers`, ...). None means `urllib.request.urlopen`.
 OPENER = None
 
 
@@ -472,10 +472,6 @@ def prob(answer):
     return _number(answer.get("value"), 0.0, 1.0)
 
 
-def _min_conf(answers):
-    return min(a["confidence"] for a in answers.values()) if answers else 0.0
-
-
 # ---- placement questions (shared with `orche jev eval run`) ---------------
 
 def drain_request(pointers):
@@ -507,27 +503,6 @@ def intake_questions(units=()):
 
 # ---- public helpers --------------------------------------------------------
 
-def classify_prompt(text, units=(), *, deadline=None):
-    """{"target","needs_plan","irreversible","urgency","routine_kind","confidence"} or None."""
-    try:
-        units = [str(u) for u in units or ()]
-        a = _ask(text, intake_questions(units) + routine_questions(), deadline)
-        if not a:
-            return None
-        urgency = (a.get("urgency") or {}).get("value")
-        return {
-            "target": (a.get("target") or {}).get("value"),
-            "needs_plan": prob(a.get("needs_plan")),
-            "irreversible": prob(a.get("irreversible")),
-            "urgency": urgency if isinstance(urgency, (int, float)) and not isinstance(urgency, bool) else None,
-            "routine_kind": (a.get("routine_kind") or {}).get("value"),
-            "confidence": _min_conf(a),
-        }
-    except Exception as exc:  # noqa: BLE001
-        log.log("jev", f"ms=0 q=0 error:{type(exc).__name__}")
-        return None
-
-
 def _pointer(p):
     if isinstance(p, (tuple, list)) and len(p) == 2:
         p = p[1]
@@ -552,42 +527,6 @@ def classify_pointers(pointers, *, deadline=None):
             row["wake_now"] = max(row["wake_now"], wake or 0.0)
             row["user_now"] = max(row["user_now"], user or 0.0)
         return out or None
-    except Exception as exc:  # noqa: BLE001
-        log.log("jev", f"ms=0 q=0 error:{type(exc).__name__}")
-        return None
-
-
-def match_scope(request, features, *, deadline=None):
-    """{"match": feature name|"other", "new_justified": p, "confidence"} or None."""
-    try:
-        names, lines = [], []
-        for f in features or ():
-            name = f.get("name") if isinstance(f, dict) else str(f)
-            if not name:
-                continue
-            names.append(str(name))
-            scope = ", ".join(f.get("scope") or []) if isinstance(f, dict) else ""
-            lines.append(f"feature {name}: {scope}".rstrip(": "))
-        state = f"request: {request}\n" + "\n".join(lines)
-        a = _ask(state, [choice("match", "Which existing unit fits this request best?", names + [OTHER]),
-                         noul("new_justified", "Is a new agent justified for this request?")], deadline)
-        if not a or "match" not in a:
-            return None
-        return {"match": a["match"]["value"], "new_justified": prob(a.get("new_justified")),
-                "confidence": _min_conf(a)}
-    except Exception as exc:  # noqa: BLE001
-        log.log("jev", f"ms=0 q=0 error:{type(exc).__name__}")
-        return None
-
-
-def card_needs_refresh(commit_messages, *, deadline=None):
-    """Probability that these commits contain a user-visible change, or None."""
-    try:
-        state = "\n".join(str(m) for m in commit_messages or ())
-        if not state.strip():
-            return None
-        a = _ask(state, [noul("user_visible", "Do these commits contain a user-visible change?")], deadline)
-        return prob((a or {}).get("user_visible"))
     except Exception as exc:  # noqa: BLE001
         log.log("jev", f"ms=0 q=0 error:{type(exc).__name__}")
         return None

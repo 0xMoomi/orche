@@ -8,7 +8,7 @@
   orche queue approve <p> (#N ...|--all)          land: owner projects, Main only
   orche queue run <p>                             the integrator (the driver starts it detached)
 """
-from . import brief, cli, config, github, publish, queue, registry, roster, units
+from . import brief, cli, config, donegate, github, publish, queue, registry, roster, units
 from .queue import facts, repo
 
 ACTIONS = ("add", "drop", "pause", "resume", "approve", "run", "status")
@@ -112,7 +112,7 @@ def cmd_add(args, words):
         target = roster.Roster(reg).member(b.to)
         if not _caller(reg, project, target=target):
             raise queue.Refused(cli.EXIT_BLOCKED, "only Build, Main or the unit's head may queue")
-        if target is None or not (target.kind == "feat" or (target.kind == "div" and target.name == "build")):
+        if not donegate.gated(target):
             raise queue.Refused(cli.EXIT_BLOCKED, f"{unit}: target {b.to or '?'} is not a feature agent or Build")
         where = target.worktree
         if where is None or not where.is_dir():

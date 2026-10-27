@@ -6,7 +6,7 @@ branch differs from the base, a reviewer of another vendor reads the change read
 and answers PASS or RETURN. RETURN → the writer reworks in the same run (Appendix A.8 appended to
 the brief; a mechanical unit at the standard rung), ORCHE publishes again when HEAD moved (a
 rebut-only rework goes straight on), and the next round runs. At most `review.rounds` (2) RETURNs
-per unit revision; then the done goes to the Build pane with the open findings. No AMEND: G1/G3
+per unit revision; then the done goes to Build (waking) with the open findings. No AMEND: G1/G3
 never count review rounds (R12). A STOP between stages files `info` "stopped by Main"; G4 is
 checked before every paid call (this run's calls included).
 
@@ -359,7 +359,7 @@ def _passed(done, rnd, rounds) -> Done:
 
 
 def exception(done, rnd, rounds, reason=None) -> Done:
-    """Appendix A.11 "an exception": the done goes to the Build pane (waking) with the open findings."""
+    """Appendix A.11 "an exception": the done goes to Build (waking) with the open findings."""
     acts = rnd.acts if rnd.word == "return" else ()
     first = reason or (acts[0] if acts else rnd.why or rnd.word)
     lines = [f"PR #{done.pr['number']} @{str(done.head)[:7]} needs you: pre-review {rnd.word} ({rnd.model}, "
@@ -382,7 +382,7 @@ def earlier_text(rounds_done) -> str:
 
 def in_run(ctx, done, *, rework, publish_again, stopped, capped, resume=None) -> Done:
     """PRE-REVIEW round k → PASS | RETURN, k < rounds → REWORK → publish (HEAD moved) → round k+1 |
-    RETURN at the cap or error → the Build pane (design §3.1). Every reviewer held → `held` (§8.5).
+    RETURN at the cap or error → Build, waking (design §3.1). Every reviewer held → `held` (§8.5).
     `resume` "rework": this run resumes one whose REWORK hit a usage limit at this HEAD (§8.5): the
     revision's last RETURN is reworked first, without a new round.
 
@@ -404,7 +404,7 @@ def in_run(ctx, done, *, rework, publish_again, stopped, capped, resume=None) ->
             reused = _reused(ctx, done.pr["number"], done.head)
             if reused is not None:
                 return _passed(done, reused, rounds)
-            if k > rounds:        # this revision already had its RETURNs (a re-run): the pane decides
+            if k > rounds:        # this revision already had its RETURNs (a re-run): Build decides
                 return exception(done, history[-1][0], rounds)
             if stopped():
                 return replace(done, status="info", summary=STOPPED, stopped=True)

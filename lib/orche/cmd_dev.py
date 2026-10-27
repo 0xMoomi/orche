@@ -9,7 +9,7 @@ import json
 import re
 import sys
 
-from . import registry
+from . import cli, registry
 from .secrets import SecretError, backends_gcp, parse_envs, share, store
 
 EXIT_OK, EXIT_USER, EXIT_NOT_FOUND, EXIT_BLOCKED = 0, 1, 2, 3
@@ -41,13 +41,6 @@ def _guard(func):
     return wrapped
 
 
-def _emit(args, data, lines):
-    if args.json:
-        print(json.dumps(data, indent=2, ensure_ascii=False))
-    else:
-        print("\n".join(lines))
-
-
 def cmd_add(args):
     if not EMAIL_RX.match(args.email):
         raise SecretError(f"not an email: {args.email!r}")
@@ -72,7 +65,7 @@ def cmd_add(args):
         store.audit("iam-add", key, "-", env, "gcp", None, args.email)
     lines = [f"would run: {ln}" for ln in ex.planned] + lines
     lines.append(f"{'would add' if args.dry_run else 'added'} {args.email} to {key} ({env})")
-    _emit(args, {"email": args.email, **rec, "dry_run": args.dry_run, "planned": ex.planned}, lines)
+    cli.out(args, {"email": args.email, **rec, "dry_run": args.dry_run, "planned": ex.planned}, lines)
     return EXIT_OK
 
 
@@ -90,5 +83,5 @@ def cmd_remove(args):
     share.mark_dev_removed(args.email, dry_run=args.dry_run)
     lines = [f"would run: {ln}" for ln in ex.planned]
     lines.append(f"{'would remove' if args.dry_run else 'removed'} {args.email} (share history kept)")
-    _emit(args, {"email": args.email, "dry_run": args.dry_run, "planned": ex.planned}, lines)
+    cli.out(args, {"email": args.email, "dry_run": args.dry_run, "planned": ex.planned}, lines)
     return EXIT_OK

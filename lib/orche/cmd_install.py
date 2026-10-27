@@ -28,11 +28,9 @@ from pathlib import Path
 
 from . import jev_setup, paths, privacy, reconcile, registry, units, util
 from .cli import EXIT_OK, EXIT_USER, fail, out
-from .install import (Ctx, backup, agents, apply_all, codex, doctor, fable, launchd, settings, skills,
+from .install import (RECONCILE_STEP, STATE_FILE, Ctx, StateUnreadable, backup, agents,
+                      apply_all, codex, doctor, fable, installed_mode, launchd, load_state, settings, skills,
                       statusline)
-
-STATE_FILE = "install-state.json"
-LEGACY_STATE_FILE = "install.json"  # read (and migrated) for one version
 
 
 def register(subparsers):
@@ -79,60 +77,10 @@ def _state_path():
     return paths.orche_home() / STATE_FILE
 
 
-class StateUnreadable(Exception):
-    """install-state.json (or the legacy install.json) exists but cannot be read as an object."""
-
-    def __init__(self, path, reason):
-        super().__init__(f"{path.name}: {reason}")
-        self.path = path
-
-
-def _load_state() -> dict:
-    """install-state.json, else the legacy install.json (migrated on the next state write).
-
-    Missing -> {}. Present but unreadable -> StateUnreadable (never treated as empty).
-    """
-    for name in (STATE_FILE, LEGACY_STATE_FILE):
-        path = paths.orche_home() / name
-        if not path.exists():
-            continue
-        try:
-            state = util.read_json(path, default=None)
-        except util.JsonError as exc:
-            raise StateUnreadable(path, f"invalid JSON ({exc.reason})") from None
-        except OSError as exc:
-            raise StateUnreadable(path, exc.strerror or str(exc)) from None
-        if not isinstance(state, dict):
-            raise StateUnreadable(path, "not a JSON object")
-        return state
-    return {}
-
-
-def plugin_enabled(home) -> bool:
-    """The ORCHE plugin is enabled in `home`'s ~/.claude/settings.json (unreadable: no)."""
-    try:
-        data = util.read_json(settings.settings_path(Ctx(home)), default={})
-    except (OSError, util.JsonError):
-        return False
-    return settings.plugin_enabled(data)
-
-
-def installed_mode(home) -> str:
-    """The mode the last install used (install-state.json `mode`), else `plugin` when the ORCHE plugin
-    is enabled, else `settings`: what `orche setup` installs with and what the --grant refusal names."""
-    try:
-        mode = _load_state().get("mode")
-    except StateUnreadable:
-        mode = None
-    if mode in ("plugin", "settings"):
-        return mode
-    return "plugin" if plugin_enabled(home) else "settings"
-
-
 def _state_or_error(ctx, phase, consequence):
     """The state, or None after backing up the unreadable file and recording a step error."""
     try:
-        return _load_state()
+        return load_state()
     except StateUnreadable as exc:
         try:
             backup(ctx, "state", exc.path)
@@ -144,14 +92,11 @@ def _state_or_error(ctx, phase, consequence):
 
 
 def _save_state(ctx, state) -> None:
-    """Write install-state.json (dropping the legacy file); a failure is reported once per run."""
+    """Write install-state.json; a failure is reported once per run."""
     if ctx.dry_run or getattr(ctx, "state_save_failed", False):
         return
     try:
         util.write_json(_state_path(), state)
-        legacy = paths.orche_home() / LEGACY_STATE_FILE
-        if legacy.is_file():
-            legacy.unlink()
     except OSError as exc:
         ctx.state_save_failed = True
         ctx.note("state", "error", None, f"{STATE_FILE}: {exc.strerror or exc}")
@@ -183,7 +128,6 @@ def _orche_home(ctx) -> None:
     ctx.note("orche_home", "create", home, f"dirs {','.join(missing)}")
 
 
-RECONCILE_STEP = "reconcile job"
 OFF_MACOS = "not macOS: run `orche reconcile` every 5 min (cron/systemd)"
 
 
@@ -195,7 +139,7 @@ def _reconcile_job(ctx, args, new_state) -> None:
     if args.no_reconcile:
         ctx.note(RECONCILE_STEP, "skip", None, "--no-reconcile; run `orche reconcile` every 5 min yourself")
         return
-    every = int(reconcile.settings().get("every_s", 300))
+    every = reconcile.every_s(reconcile.settings())
     res = launchd.install(launchd.RECONCILE, launchd.reconcile_plist(every), ctx.home, ctx.dry_run)
     if not ctx.dry_run:
         new_state["reconcile_plist"] = res["plist"]
@@ -207,37 +151,6 @@ def _reconcile_job(ctx, args, new_state) -> None:
     ctx.job_loaded = bool(res["loaded"])
     if res["error"]:
         ctx.note(RECONCILE_STEP, "warn", None, f"launchctl bootstrap failed: {res['error']}; see orche doctor")
-
-
-def job_loaded(home=None) -> bool:
-    """macOS, `home` the real home, and the reconcile job loaded (`launchctl print`)."""
-    return sys.platform == "darwin" and launchd._live(home) and launchd.loaded(launchd.RECONCILE)
-
-
-def interrupted() -> int:
-    """Ctrl-C during a wait: one line, exit 130, no traceback."""
-    print(privacy.INTERRUPTED, file=sys.stderr, flush=True)
-    return privacy.EXIT_INTERRUPTED
-
-
-def first_pass_check(started, live=True, progress=None) -> dict:
-    """After the job was (re)loaded: wait privacy.FIRST_PASS_S for a pass of its own (heartbeat.json
-    `job_at` at or after `started`, every protected project readable), checked before any kick, then
-    a plain kickstart (a running pass is left alone); the progress line goes to `progress` (default
-    stdout) first. {"ok", "took_s", "hint", "lines"}; on a timeout the lines are privacy.no_pass's: the
-    guidance (Finder and Full Disk Access opened when `live`) when a project is under a protected
-    folder or a recent privacy abort says so, else where to look. Ctrl-C raises KeyboardInterrupt."""
-    print(privacy.FIRST_PASS_WAIT, file=progress or sys.stdout, flush=True)
-    hb = privacy.wait_job_pass(started, privacy.FIRST_PASS_S, kick=lambda: launchd.kickstart(launchd.RECONCILE))
-    if hb is not None:
-        return {"ok": True, "took_s": hb.get("took_s"), "hint": None,
-                "lines": [f"reconcile job: first pass OK ({hb.get('took_s')} s)"]}
-    try:
-        reg = registry.load()
-    except registry.RegistryError:
-        reg = {}
-    hint, lines = privacy.no_pass(reg, live=live)
-    return {"ok": False, "took_s": None, "hint": hint, "lines": lines}
 
 
 def cmd_grant(args) -> int:
@@ -260,7 +173,7 @@ def cmd_grant(args) -> int:
         out(args, {"dry_run": True, "app": str(app)},
             privacy.steps(app) + [f"would run: open -R {app}", f"would run: open {privacy.SETTINGS_URL}"])
         return EXIT_OK
-    if not launchd._live(ctx.home) or not launchd.loaded(launchd.RECONCILE):
+    if not launchd.job_loaded(ctx.home):
         return fail(EXIT_USER, privacy.NOT_LOADED.format(mode=installed_mode(ctx.home)))
     started = units.now()
     kicks = []
@@ -279,7 +192,7 @@ def cmd_grant(args) -> int:
             print(privacy.grant_wait(privacy.GRANT_S), file=progress, flush=True)
             hb = privacy.wait_job_pass(started, privacy.GRANT_S, kick, privacy.KICK_EVERY_S)
     except KeyboardInterrupt:
-        return interrupted()
+        return privacy.interrupted()
     out(args, {"granted": hb is not None, "app": str(app), "took_s": (hb or {}).get("took_s")},
         [privacy.GRANTED if hb is not None else privacy.blocked(app)])
     return EXIT_OK if hb is not None else EXIT_USER
@@ -372,9 +285,9 @@ def cmd_install(args):
         out(args, data, lines)
     if getattr(ctx, "job_loaded", False) and not ctx.dry_run and getattr(args, "first_pass", True):
         try:   # last: the guidance is what the owner acts on next
-            first = first_pass_check(started, progress=sys.stderr if args.json else None)
+            first = privacy.first_pass_check(started, progress=sys.stderr if args.json else None)
         except KeyboardInterrupt:
-            return interrupted()
+            return privacy.interrupted()
         data["reconcile_first_pass"] = {k: v for k, v in first.items() if k != "lines"}
         if not args.json:
             print("\n".join(first["lines"]), flush=True)

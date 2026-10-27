@@ -178,13 +178,6 @@ class PublishTest(PublishCase):
         ok = publish.publish(BUILD, self.repo, self.repo, unit="u", title="t", body="b", cfg={"publish": {"base": "main"}})
         self.assertIsInstance(ok, publish.Published)
 
-    def test_only_gated_members_publish(self):
-        self.assertTrue(publish.gated(BUILD))
-        self.assertTrue(publish.gated(Member("feat-acme-x", "acme", "feat", "x", "build")))
-        self.assertFalse(publish.gated(MAIN))
-        self.assertFalse(publish.gated(Member("div-acme-rnd", "acme", "div", "rnd", "rnd")))
-        self.assertFalse(publish.gated(None))
-
     def test_body_masks_caps_and_carries_the_footer(self):
         body = publish.body_of("x" * 5000, unit="u", rev=2, session="s", verdict="unit-test-verified",
                                verifier="v")

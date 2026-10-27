@@ -11,11 +11,10 @@ first intake (a `--no-intake` project has no stamp and is never swept), and `int
 turns the refresh off.
 Logic lives in `orche.janitor`; this module only parses arguments and prints.
 """
-import json
 import sys
 from pathlib import Path
 
-from . import config, intake, janitor, log, paths, registry, runs, util
+from . import cli, config, intake, janitor, log, paths, registry, runs, util
 from .install import launchd
 from .janitor import archive, trash
 
@@ -47,19 +46,6 @@ def register(subparsers):
     sub.add_parser("uninstall-schedule", help="remove the launchd job").set_defaults(func=cmd_uninstall)
 
 
-def _out(args, data, lines):
-    if args.json:
-        print(json.dumps(data, indent=2, ensure_ascii=False))
-    else:
-        for line in lines:
-            print(line)
-
-
-def _fail(code, msg):
-    print(f"orche: {msg}", file=sys.stderr)
-    return code
-
-
 def cmd_run(args):
     runs.reconcile_cli(registry.load(), args)
     if not args.dry_run:      # ORCHE's own run logs: pruned whether or not the janitor is enabled
@@ -74,16 +60,16 @@ def cmd_run(args):
         refreshed = intake.refresh_all(registry.load(), config.load())
         data["intake"] = refreshed
         lines += [r["line"] for r in refreshed]
-    _out(args, data, lines)
+    cli.out(args, data, lines)
     return EXIT_USER if any(c.error for c in cands) else EXIT_OK
 
 
 def cmd_report(args):
     path = janitor.report_path()
     if not path.is_file():
-        return _fail(EXIT_NOT_FOUND, "no janitor report yet; run `orche janitor run`")
+        return cli.fail(EXIT_NOT_FOUND, "no janitor report yet; run `orche janitor run`")
     text = path.read_text(encoding="utf-8")
-    _out(args, {"report": str(path), "text": text}, [text.rstrip("\n")])
+    cli.out(args, {"report": str(path), "text": text}, [text.rstrip("\n")])
     return EXIT_OK
 
 
@@ -91,11 +77,11 @@ def cmd_undo(args):
     try:
         m = trash.undo(args.id, dry_run=args.dry_run)
     except trash.TrashError as exc:
-        return _fail(exc.code, str(exc))
+        return cli.fail(exc.code, str(exc))
     verb = "would restore" if args.dry_run else "restored"
     if not args.dry_run:
         log.log("janitor", f"undo {args.id} -> {m['path']}")
-    _out(args, {"id": args.id, "path": m["path"], "dry_run": args.dry_run}, [f"{verb} {m['path']}"])
+    cli.out(args, {"id": args.id, "path": m["path"], "dry_run": args.dry_run}, [f"{verb} {m['path']}"])
     return EXIT_OK
 
 
@@ -103,11 +89,11 @@ def cmd_restore(args):
     try:
         restored = archive.restore(args.unit, dry_run=args.dry_run)
     except archive.ArchiveError as exc:
-        return _fail(exc.code, str(exc))
+        return cli.fail(exc.code, str(exc))
     if not args.dry_run:
         log.log("janitor", f"restore {args.unit}: {len(restored)} files")
     verb = "would restore" if args.dry_run else "restored"
-    _out(args, {"unit": args.unit, "files": restored, "dry_run": args.dry_run},
+    cli.out(args, {"unit": args.unit, "files": restored, "dry_run": args.dry_run},
          [f"{verb} {len(restored)} files of {args.unit}"] + [f"  {p}" for p in restored])
     return EXIT_OK
 
@@ -116,7 +102,7 @@ def cmd_enable(args):
     flag = janitor.enabled_flag()
     if not args.dry_run:
         util.atomic_write(flag, f"enabled {util.now_iso()}\n")
-    _out(args, {"enabled": True, "flag": str(flag), "dry_run": args.dry_run},
+    cli.out(args, {"enabled": True, "flag": str(flag), "dry_run": args.dry_run},
          [("would enable" if args.dry_run else "janitor enabled") + f" ({flag})"])
     return EXIT_OK
 
@@ -125,7 +111,7 @@ def cmd_disable(args):
     flag = janitor.enabled_flag()
     if not args.dry_run and flag.exists():
         flag.unlink()
-    _out(args, {"enabled": False, "flag": str(flag), "dry_run": args.dry_run},
+    cli.out(args, {"enabled": False, "flag": str(flag), "dry_run": args.dry_run},
          [("would disable" if args.dry_run else "janitor disabled (dry-run only)")])
     return EXIT_OK
 
@@ -146,12 +132,12 @@ def cmd_install(args):
     target, argv = res["plist"], res["argv"]
     data = {"plist": target, "argv": argv, "dry_run": args.dry_run}
     if args.dry_run:
-        _out(args, {**data, "content": text},
+        cli.out(args, {**data, "content": text},
              [f"would write {target}"] + ["would run: " + " ".join(a) for a in argv])
         return EXIT_OK
     if res["error"]:
-        return _fail(EXIT_USER, f"launchctl bootstrap failed: {res['error']}")
-    _out(args, data, [f"installed {target}", "janitor runs daily at 04:00"])
+        return cli.fail(EXIT_USER, f"launchctl bootstrap failed: {res['error']}")
+    cli.out(args, data, [f"installed {target}", "janitor runs daily at 04:00"])
     return EXIT_OK
 
 
@@ -160,11 +146,11 @@ def cmd_uninstall(args):
     target, argv = res["plist"], res["argv"]
     data = {"plist": target, "argv": argv, "dry_run": args.dry_run}
     if args.dry_run:
-        _out(args, data, ["would run: " + " ".join(a) for a in argv] + [f"would remove {target}"])
+        cli.out(args, data, ["would run: " + " ".join(a) for a in argv] + [f"would remove {target}"])
         return EXIT_OK
     if res["missing"]:
-        return _fail(EXIT_NOT_FOUND, f"not installed: {target}")
+        return cli.fail(EXIT_NOT_FOUND, f"not installed: {target}")
     if res["error"]:
         print(f"orche: warning: launchctl bootout failed: {res['error']}", file=sys.stderr)
-    _out(args, data, [f"removed {target}"])
+    cli.out(args, data, [f"removed {target}"])
     return EXIT_OK

@@ -6,7 +6,6 @@ order. `env.CLAUDE_CODE_SUBAGENT_PROMPT_CACHE_TTL` is deliberately left untouche
 """
 import copy
 import json
-import re
 from pathlib import Path
 
 from .. import util
@@ -34,21 +33,6 @@ def plugin_hooks(plugin_root) -> list:
                 cmd = hook["command"].replace("${CLAUDE_PLUGIN_ROOT}", str(plugin_root))
                 out.append((event, entry.get("matcher"), cmd))
     return out
-
-
-RUN_SH = re.compile(r'/hooks/run\.sh"? ([a-z_]+)$')
-
-
-def legacy_command(plugin_root, command):
-    """The pre-run.sh shape (`python3 "<root>/hooks/<hook>.py"`) of a `run.sh <hook>` command, else None."""
-    m = RUN_SH.search(command)
-    return f'python3 "{plugin_root}/hooks/{m.group(1)}.py"' if m else None
-
-
-def current_command(plugin_root, command):
-    """The `run.sh` shape of a legacy `python3 "<root>/hooks/<hook>.py"` command, else None."""
-    m = re.fullmatch(r'python3 "(.*)/hooks/([a-z_]+)\.py"', command or "")
-    return f'"{m.group(1)}/hooks/run.sh" {m.group(2)}' if m and m.group(1) == str(plugin_root) else None
 
 
 def iter_commands(data):
@@ -155,16 +139,12 @@ def install(ctx, mode, state) -> None:
     replaced = []
     if mode == "plugin":
         # The plugin's hooks.json registers the hooks: settings-mode entries left by an earlier
-        # `--mode settings` install (either shape) would run every hook twice.
+        # `--mode settings` install would run every hook twice.
         replaced = remove_commands(new, orche_hook_pairs(ctx.plugin_root, state))
         changes += [f"remove hook {event} {command} (plugin mode: the plugin registers the hooks)"
                     for event, command in replaced]
     else:
-        hooks = plugin_hooks(ctx.plugin_root)
-        legacy = {(event, legacy_command(ctx.plugin_root, command)) for event, _, command in hooks}
-        replaced = remove_commands(new, legacy)
-        changes += [f"replace hook {event} {command} (now hooks/run.sh)" for event, command in replaced]
-        for event, matcher, command in hooks:
+        for event, matcher, command in plugin_hooks(ctx.plugin_root):
             if has_command(new, event, command):
                 ctx.note(STEP, "ok", None, f"hook {event} already registered: {command}")
                 continue
@@ -182,55 +162,34 @@ def install(ctx, mode, state) -> None:
         return
     state.setdefault("originals", originals)
     known = state.get("added_hooks") if isinstance(state.get("added_hooks"), list) else []
-    # Keep a recorded hook only while its exact command is still in settings.json. A recorded shape
-    # that is gone but whose other shape is present (old python3 record, run.sh entry kept) is
-    # re-recorded in the present shape, so `orche uninstall` still finds it.
+    # Keep a recorded hook only while its exact command is still in settings.json.
     present = []
     for h in [*known, *added]:
-        if not isinstance(h, dict):
-            continue
-        event, command = h.get("event"), h.get("command") or ""
-        if not has_command(new, event, command):
-            other = legacy_command(ctx.plugin_root, command) or current_command(ctx.plugin_root, command)
-            if not (other and has_command(new, event, other)):
-                continue
-            h = {"event": event, "command": other}
-        if h not in present:
+        if isinstance(h, dict) and has_command(new, h.get("event"), h.get("command") or "") and h not in present:
             present.append(h)
     known[:] = present
     state["added_hooks"] = known
 
 
 def orche_hook_pairs(plugin_root, state=None) -> set:
-    """(event, command) of every settings-mode ORCHE hook entry: the six plugin hooks in both shapes
-    (`"<root>/hooks/run.sh" <hook>` and the older `python3 "<root>/hooks/<hook>.py"`), plus the
-    recorded `added_hooks` in both shapes."""
-    pairs = set()
-    for event, _, command in plugin_hooks(plugin_root):
-        pairs |= {(event, command), (event, legacy_command(plugin_root, command))}
-    for event, command in _added_pairs(state or {}, plugin_root):
-        if command:
-            pairs.add((event, command))
-    return pairs
+    """(event, command) of every settings-mode ORCHE hook entry: the six plugin hooks
+    (`"<root>/hooks/run.sh" <hook>`) plus the recorded `added_hooks`."""
+    pairs = {(event, command) for event, _, command in plugin_hooks(plugin_root)}
+    return pairs | {(event, command) for event, command in _added_pairs(state or {}) if command}
 
 
 def settings_hooks(data, plugin_root) -> list:
-    """[(event, command)] ORCHE hook entries present in settings.json (either shape)."""
+    """[(event, command)] ORCHE hook entries present in settings.json."""
     pairs = orche_hook_pairs(plugin_root)
     return [(event, command) for event, command in iter_commands(data) if (event, command) in pairs]
 
 
-def _added_pairs(state, plugin_root) -> set:
-    """Recorded hook commands, each in both shapes (`python3 "<root>/hooks/x.py"` and `run.sh x`).
-    A gstack careful entry an older ORCHE recorded is skipped: ORCHE no longer owns it."""
+def _added_pairs(state) -> set:
+    """Recorded hook commands. A gstack careful entry an older ORCHE recorded is skipped: ORCHE no
+    longer owns it."""
     hooks = state.get("added_hooks") if isinstance(state.get("added_hooks"), list) else []
-    pairs = {(h.get("event"), h.get("command")) for h in hooks
-             if isinstance(h, dict) and CAREFUL_MARKER not in str(h.get("command"))}
-    for event, command in list(pairs):
-        other = legacy_command(plugin_root, command or "") or current_command(plugin_root, command)
-        if other:
-            pairs.add((event, other))
-    return pairs
+    return {(h.get("event"), h.get("command")) for h in hooks
+            if isinstance(h, dict) and CAREFUL_MARKER not in str(h.get("command"))}
 
 
 def _restore_one(container, key, label, orig, ours, changes, kept) -> None:
@@ -276,7 +235,7 @@ def uninstall(ctx, state) -> None:
         ctx.note(STEP, "error", path, f"{err}; left untouched")
         return
     new = copy.deepcopy(data)
-    removed = remove_commands(new, _added_pairs(state, ctx.plugin_root))
+    removed = remove_commands(new, _added_pairs(state))
     originals = state.get("originals") if isinstance(state.get("originals"), dict) else {}
     restored, kept = _restore(new, originals)
     for item in kept:

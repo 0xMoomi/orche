@@ -12,7 +12,7 @@ correct: append the next numbered standing order to `<repo>/.orche/STANDING.md` 
 """
 import json
 
-from . import cmd_intake, config, hr, intake, paths, procs, registry
+from . import config, hr, intake, paths, procs, registry
 from .cli import EXIT_NOT_FOUND, EXIT_OK, EXIT_USER, fail
 
 
@@ -137,7 +137,7 @@ def _intake(args, key, proj, name):
         return None, "covered"
     if args.dry_run:
         return f"would run: orche intake {key}", "dry-run"
-    procs.spawn_detached(cmd_intake.background_argv(key), paths.orche_home() / "logs" / "intake" / f"{key}.log")
+    procs.spawn_orche(["intake", key], paths.orche_home() / "logs" / "intake" / f"{key}.log")
     return f"intake: started in the background (orche intake status {key})", "started"
 
 
