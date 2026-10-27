@@ -1788,6 +1788,105 @@ class CorrectTest(FeatCase):
         self.assertNotIn(canary, hr.log_path().read_text())
 
 
+class MistakesTest(FeatCase):
+    """c79: `orche hr audit <project>` mines mistake classes from head-review returns, queue returns and
+    reverts, and `--apply` keeps the Enforcement table of STANDING.md."""
+
+    def review(self, pr, unit, *lines, days=3):
+        from orche import ledger
+        ev = self.home / "reviews" / f"pr{pr}.md"
+        ev.parent.mkdir(parents=True, exist_ok=True)
+        ev.write_text("\n".join([f"# head review · PR #{pr} @ abc1234", "", "verdict: return", f"unit: {unit}", "",
+                                 *lines, "", "## Facts", "- 3: not a finding"]) + "\n")
+        ledger.append_review("acme-shop", ledger.make_review_row(
+            pr, "abc1234", "build", "return", "div-acme-shop-build (review)", "claude-opus-5-5", unit,
+            evidence=str(ev), ts=ago(days=days)))
+
+    def revert(self, pr, unit):
+        from orche.queue import store
+        store.log("acme-shop", "merged", {"id": f"e{pr}", "pr": pr, "unit": unit})
+        (self.repo / f"f{pr}.txt").write_text("x\n")
+        git("add", ".", cwd=self.repo)
+        git("commit", "-q", "-m", f"feat: change {pr} (#{pr})", cwd=self.repo)
+        git("revert", "--no-edit", "HEAD", cwd=self.repo)
+
+    def fixture(self):
+        from orche.queue import store
+        self.review(11, "acme-shop-a-20261020-1", "- 3: outside the scope: src/a.py", "- 7: pane review: high risk")
+        self.review(12, "acme-shop-b-20261021-1", "- 3: Outside the scope: `lib/b.py`, lib/c.py",
+                    "- 3: outside the scope: lib/d.py")
+        self.review(13, "acme-shop-c-20261022-1", "- 1: ACCEPT line 2 has no evidence")
+        self.review(14, "acme-shop-old-20260901-1", "- 1: ACCEPT line 2 has no evidence", days=40)
+        store.log("acme-shop", "returned", {"id": "e4", "pr": 4, "unit": "acme-shop-d-20261023-1"},
+                  reason="red", step="npm test")
+        git_repo(self.repo)
+        bare = self.home / "origin.git"
+        git("init", "-q", "--bare", "-b", "main", str(bare), cwd=self.home)
+        git("remote", "add", "origin", str(bare), cwd=self.repo)
+        self.revert(7, "acme-shop-e-20261024-1")
+        self.revert(8, "acme-shop-f-20261025-1")
+        git("push", "-q", "origin", "main", cwd=self.repo)
+        git("fetch", "-q", "origin", cwd=self.repo)
+        git("remote", "set-head", "origin", "main", cwd=self.repo)
+
+    def test_classes_order_level_and_draft(self):
+        self.fixture()
+        code, out, err = self.orche("--json", "hr", "audit", "acme")
+        self.assertEqual((code, err), (0, ""))
+        found = json.loads(out)["classes"]
+        self.assertEqual([(c["key"], c["count"], c["level"]) for c in found],
+                         [("outside the scope", 3, "hook or gate"), ("revert of a landed pr", 2, "test")])
+        self.assertEqual(found[0]["units"], ["acme-shop-a-20261020-1", "acme-shop-b-20261021-1"])
+        self.assertEqual(found[1]["sources"], ["revert"])
+        self.assertEqual(found[1]["units"], ["acme-shop-e-20261024-1", "acme-shop-f-20261025-1"])
+        self.assertEqual(found[0]["draft"], 'Before you report done, check that the change does not repeat '
+                                            '"outside the scope" (seen 3 times in 30 days).')
+        code, out, _ = self.orche("hr", "audit", "acme")
+        self.assertIn("mistake class: outside the scope x3 (units acme-shop-a-20261020-1, acme-shop-b-20261021-1; ", out)
+        self.assertIn("  level: hook or gate: the mistake is a process step, so a hook or gate can refuse it", out)
+        found = json.loads(self.orche("--json", "hr", "audit", "acme", "--days", "60")[1])["classes"]
+        self.assertIn(("accept line has no evidence", 2), [(c["key"], c["count"]) for c in found])   # 40 days old
+
+    def test_queue_returns_and_keys(self):
+        from orche.hr import mistakes
+        from orche.queue import store
+        for pr, unit in ((4, "u1"), (5, "u2")):
+            store.log("acme-shop", "returned", {"id": f"e{pr}", "pr": pr, "unit": unit}, reason="red", step="npm test")
+        found = json.loads(self.orche("--json", "hr", "audit", "acme")[1])["classes"]
+        self.assertEqual([(c["key"], c["level"], c["sources"]) for c in found],
+                         [("queue return red npm test", "test", ["queue"])])
+        self.assertEqual(mistakes.class_key('Type error in "src/x.ts": 3 unused imports\nmore'),
+                         "type error in unused imports")
+        self.assertEqual(mistakes.level_of("type error in unused imports")[0], "structural change")
+        self.assertEqual(mistakes.level_of("the docs miss a section")[0], "standing order")
+
+    def test_apply_is_idempotent_and_keeps_numbered_orders(self):
+        self.fixture()
+        path = self.repo / ".orche" / "STANDING.md"
+        path.parent.mkdir(exist_ok=True)
+        path.write_text("# STANDING\n\n1. Never push\n")
+        code, out, _ = self.orche("hr", "audit", "acme", "--apply")
+        self.assertEqual(code, 0)
+        self.assertIn("Enforcement: 2 new, 0 updated", out)
+        text = path.read_text()
+        self.assertEqual(text, "# STANDING\n\n1. Never push\n\n## Enforcement (proposed by the audit)\n\n"
+                               "| class | seen | proposed level | status |\n|---|---|---|---|\n"
+                               "| outside the scope | 3 | hook or gate | proposed |\n"
+                               "| revert of a landed pr | 2 | test | proposed |\n")
+        text = text.replace("| test | proposed |", "| test | enforced |")
+        path.write_text(text)
+        self.assertIn("0 new, 2 updated", self.orche("hr", "audit", "acme", "--apply")[1])
+        self.assertEqual(path.read_text(), text)
+        self.assertEqual(self.orche("hr", "correct", "acme", "--text", "Run the tests")[:2], (0, "2\n"))
+        self.assertTrue(path.read_text().startswith("# STANDING\n\n1. Never push\n2. Run the tests\n\n"
+                                                    "## Enforcement (proposed by the audit)\n"))
+        self.assertEqual(path.read_text().count("| outside the scope |"), 1)
+
+    def test_no_events(self):
+        self.assertEqual(self.orche("hr", "audit", "acme"), (0, "no mistake classes in the last 30 days\n", ""))
+        self.assertEqual(self.orche("hr", "audit", "nope")[0], 2)
+
+
 # ---- models (0.8.0 T1): one model string per division, a recommended model per kind -------------
 
 class ModelsTest(HrCase):

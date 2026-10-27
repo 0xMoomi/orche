@@ -10,6 +10,11 @@ file is updated by the Stop/UserPromptSubmit hooks, relay delivery, `orche repor
 Repeated corrections (R-STANDING-1 escalation): a STANDING.md line added twice or more in the
 last 7 days (git history plus uncommitted additions; duplicate lines when not a git checkout),
 and DECISIONS.tsv rows of the last 7 days whose decision/why contains `rev `.
+
+Mistake classes (hr/mistakes.py): per project, what head reviews, the merge queue and reverts sent back
+twice in the last `days` days, with the proposed enforcement level; `--apply` also writes each project's
+Enforcement table in STANDING.md (the rules map of SPEC §5.10). `orche hr audit <project>` is that part
+alone, for one project (`run_mistakes`), and sleeps nothing.
 """
 import datetime as _dt
 import re
@@ -20,6 +25,7 @@ from .. import janitor, log, metrics, paths, registry, roster, shell, units, uti
 from . import book, limits, transitions
 
 WINDOW = _dt.timedelta(days=7)
+AUDIT_DAYS = 30     # the mistake classes' window (hr/mistakes.py)
 _NUM = re.compile(r"^\s*\d+\.\s*")
 
 
@@ -184,19 +190,37 @@ def render(data) -> str:
     lines += ["", "## Candidates for structural enforcement", ""]
     lines += [f"- {c['project']} {c['source']}: {c['text']}" + (f" (x{c['count']})" if c["count"] > 1 else "")
               for c in data["corrections"]] or ["- none"]
+    lines += ["", f"## Mistake classes (last {data['days']} days)", ""]
+    lines += [f"- {key} {c['key']} x{c['count']} ({', '.join(c['units'])}): {c['level']}"
+              for key, found in sorted(data["mistakes"].items()) for c in found] or ["- none"]
     if data.get("applied"):
         lines += ["", "## Applied", ""]
         lines += [f"- {a['unit']}: {a.get('result') or 'ERROR: ' + a['error']}" for a in data["applied"]]
     return "\n".join(lines) + "\n"
 
 
-def run(reg, *, now=None, do_apply=False, dry_run=False) -> dict:
+def run_mistakes(reg, key, *, now=None, days=AUDIT_DAYS, do_apply=False, dry_run=False) -> dict:
+    """{project, days, classes[, table]}: `key`'s mistake classes; `do_apply` writes its Enforcement table.
+    mistakes.py is imported here: it reads the ledger and the queue, which orche.hr itself never loads."""
+    from . import mistakes
+    proj = reg["projects"][key]
+    found = mistakes.classes(key, proj, now or units.now(), days)
+    data = {"project": key, "days": days, "classes": found}
+    if do_apply and found:
+        data["table"] = mistakes.apply(key, proj, found, dry_run=dry_run)
+    return data
+
+
+def run(reg, *, now=None, do_apply=False, dry_run=False, days=AUDIT_DAYS) -> dict:
     now = now or units.now()
     props = proposals(reg, now)
     count, limit = limits.awake(reg)
+    found = {key: run_mistakes(reg, key, now=now, days=days, do_apply=do_apply, dry_run=dry_run)
+             for key in sorted(reg.get("projects", {}))}
     data = {"date": now.date().isoformat(), "awake": count,
             "limit": limit, "metrics": metrics_line(now), "proposals": props,
-            "overlaps": overlaps(reg), "corrections": corrections(reg, now), "applied": []}
+            "overlaps": overlaps(reg), "corrections": corrections(reg, now), "days": days,
+            "mistakes": {key: m["classes"] for key, m in found.items() if m["classes"]}, "applied": []}
     if do_apply and props:
         data["applied"] = apply(reg, props, dry_run=dry_run)
     path = report_path(now)

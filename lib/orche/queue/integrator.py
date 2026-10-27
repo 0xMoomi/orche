@@ -10,7 +10,9 @@ lost gate's own processes are stopped) → take the first waiting owner_ok entry
 only `--first` while main is red, none while a failed proof closed the queue) → memory guard → the
 clone's stale git locks removed → fetch, the PR's facts and the drops → main's health when the base moved
 outside the queue (§5.8) → the candidate (the head merged --no-ff onto the fetched base) → the gate →
-land with --match-head-commit → prove → ledger rows and pointers (§5.6); or a return (§5.7).
+land with --match-head-commit → prove → ledger rows and pointers (§5.6); or a return (§5.7). An entry the
+head review found user-visible (`surface: user`) lands only when the gate's check script said live-ui-verified;
+less returns it (R-REVIEW-12).
 
 Entry states: waiting → testing → merged | returned | dropped (the entry leaves queue.json), or back
 to waiting at the front: restarted (the base moved during the gate), lost, main red, a GitHub
@@ -41,6 +43,8 @@ MAX_FILES = 10
 METHOD = "squash"        # gh pr merge --squash (github.merge), the `landed` record's method
 MAX_RETURNS = 3         # a unit's returns inside W before its head gets `blocked`
 MAX_STOPS = 3           # passes in a row stopped by git/gh before the queue pauses
+LIVE = "live-ui-verified"
+LIVE_REASON = "user-visible change: live verification required (the check script's verdict was {level})"
 IDENT = ["-c", "user.name=ORCHE queue", "-c", "user.email=queue@orche.invalid", "-c", "commit.gpgsign=false",
          "-c", "core.hooksPath=/dev/null"]
 
@@ -224,12 +228,15 @@ def _tail_block(tail) -> str:
 
 
 def amend_text(reason, *, unit, rev, pr, head, base_branch, base, files=(), step="", code=None, minutes=0,
-               tail="", log="") -> str:
+               tail="", log="", level="") -> str:
     """Appendix A.10: the RETURN AMEND (the note is its prose; every key is kept)."""
     h7, b7 = head[:7], (base or "")[:7]
     if reason == "conflict":
         sup = f"it conflicts with origin/{base_branch} at {b7}"
         body = templates.load("queue/conflict.md", BASE=base_branch, FILES=", ".join(files) or "(git named none)")
+    elif reason == "live":
+        sup = LIVE_REASON.format(level=level)
+        body = templates.load("queue/live.md", BASE=base_branch, LEVEL=level, LOG=log)
     else:
         what = f"failed (exit {code})" if reason == "red" else f"did not finish within {minutes} minutes"
         sup = f"`{step}` {what} on the merge with origin/{base_branch} at {b7}"
@@ -489,7 +496,15 @@ class Pass:
             if current is not None:
                 queue.remove(self.project, self.id, "dropped", reason="dropped", by=VERIFIER)
             return _res(0, "dropped", self.pr, f"PR #{self.pr} was dropped during its gate; nothing landed")
+        if self.not_live(g):
+            return self.returned("live", gate_=g)
         return self.land(g)
+
+    def not_live(self, g) -> bool:
+        """R-REVIEW-12: a user-visible entry whose gate ran the check script and got less than live-ui-verified.
+        No check script in the gate: no level, nothing to hold it to."""
+        ran = gate.CI in str(g.get("gate") or "").split(" + ")
+        return self.entry.get("surface") == "user" and ran and g.get("verdict") != LIVE
 
     # §5.5
     def land(self, g) -> dict:
@@ -632,7 +647,8 @@ class Pass:
         prior = [ln for ln in store.read_log(self.project) if self.unit and ln.get("event") == "returned"
                  and ln.get("unit") == self.unit and _after(ln.get("at"), since)]
         k, mx = len(prior) + 1, MAX_RETURNS
-        queue.remove(self.project, self.id, "returned", reason=reason, base=self.base, candidate=self.cand, n=k)
+        queue.remove(self.project, self.id, "returned", reason=reason, base=self.base, candidate=self.cand, n=k,
+                     step=g.get("step"))
         _ev(f"queue returned project={self.project} pr={self.pr} reason={reason} n={k}")
         tail = gate.tail(self.logp) if self.logp else ""
         extra = {"report_path": str(self.logp) if self.logp else "", "tail": tail or None}
@@ -640,6 +656,8 @@ class Pass:
             detail = f"it conflicts with origin/{self.base_branch}: {', '.join(files) or '(git named none)'}"
         elif reason == "red":
             detail = f"`{g.get('step')}` failed (exit {g.get('code')})"
+        elif reason == "live":
+            detail = LIVE_REASON.format(level=g.get("verdict"))
         else:
             detail = f"`{g.get('step')}` did not finish within {max(1, round(self.timeout_s / 60))} minutes"
         line = f"PR #{self.pr} returned ({reason})"
@@ -664,7 +682,8 @@ class Pass:
         n = b.rev + 1
         text = amend_text(reason, unit=self.unit, rev=n, pr=self.pr, head=self.sha, base_branch=self.base_branch,
                           base=self.base, files=files, step=g.get("step") or "", code=g.get("code"),
-                          minutes=max(1, round(self.timeout_s / 60)), tail=tail, log=str(self.logp or ""))
+                          minutes=max(1, round(self.timeout_s / 60)), tail=tail, log=str(self.logp or ""),
+                          level=g.get("verdict") or "")
         try:
             out = dispatch.relay_outcome(roster.Roster(self.reg), [text], self.head, by=VERIFIER)
             refused = [str(t).removeprefix(brief.REFUSE) for t in out.refused]

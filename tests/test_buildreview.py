@@ -50,7 +50,7 @@ class BuildReviewCase(support.TempHomeCase):
                    mock.patch.object(build, "_gather", lambda where, **kw: dict(self.facts)),
                    mock.patch.object(build, "_diff", lambda *a: "diff --git a/src/cart.py b/src/cart.py"),
                    mock.patch.object(jobmod, "adapter", lambda call: SimpleNamespace(run=self.fake_call)),
-                   mock.patch.object(build, "_checkout", lambda *a, **k: contextlib.nullcontext(self.home)),
+                   mock.patch.object(build, "_checkout", lambda project, pr, sha, root: contextlib.nullcontext(self.home)),
                    mock.patch.object(queue, "checks", lambda *a, **kw: []),
                    mock.patch.object(queue, "add", self.fake_add),
                    mock.patch.object(queue, "start", lambda project: True),
@@ -183,6 +183,49 @@ class Decisions(BuildReviewCase):
         self.assertEqual(out["status"], "pane")
         (ptr,) = self.pointers()
         self.assertIn("the queue refused it", ptr["summary"])
+
+
+class Surface(BuildReviewCase):
+    """R-REVIEW-12: the head review says whether the change is user-visible; its record keeps it and the entry
+    carries it to the queue."""
+
+    def test_a_user_visible_answer_is_recorded_and_queued_as_user(self):
+        self.pre("pass")
+        self.reply = answer("VERDICT: PASS\nSURFACE: user\n")
+        self.assertEqual(self.review()["status"], "queued")
+        (_project, entry, _by), = self.added
+        self.assertEqual(entry["surface"], "user")
+        text = build.record_path("acme", 7, HEAD).read_text()
+        self.assertIn("\nsurface: user\n", text)
+        self.assertEqual(build.record("acme", 7, HEAD), {"surface": "user"})
+        (_call, prompt), = self.calls
+        self.assertIn("SURFACE is `user` when the change alters what a user sees or does", prompt)
+
+    def test_without_a_surface_line_the_change_is_internal(self):
+        self.pre("pass")
+        self.assertEqual(self.review()["status"], "queued")
+        (_project, entry, _by), = self.added
+        self.assertEqual(entry["surface"], "internal")
+        self.assertEqual(build.record("acme", 7, HEAD), {"surface": "internal"})
+
+    def test_the_answer_line_and_the_record_reader(self):
+        self.assertEqual(build.surface_of("VERDICT: PASS\n  surface: User \n"), "user")
+        self.assertEqual(build.surface_of("VERDICT: PASS\nSURFACE: internal\nSURFACE: user\n"), "user")
+        self.assertEqual(build.surface_of("VERDICT: PASS\nthe surface: user is fine\n"), "internal")
+        self.assertEqual(build.surface_of(""), "internal")
+        self.pre("pass")
+        self.reply = answer("VERDICT: RETURN\n- 1: ACCEPT not met\n")
+        self.review()
+        path = build.record_path("acme", 7, HEAD)
+        path.write_text(path.read_text() + "\n## Answer (data, masked)\nsurface: user\n")
+        self.assertEqual(build.record("acme", 7, HEAD), {"surface": "internal"})     # data below a section
+        build.pane_record("acme", 7, HEAD, reviewer=f"{BUILD} (pane)", model="claude-opus-5-5",
+                          writer="feat-acme-checkout", surface="user", accept="checked by hand")
+        self.assertEqual(build.record("acme", 7, HEAD), {"surface": "user"})           # the pane's overrides
+        row = self.build_row()
+        self.assertEqual((row["verdict"], row["reviewer"], row["model"]), ("pass", f"{BUILD} (pane)",
+                                                                           "claude-opus-5-5"))
+        self.assertIn("accept: checked by hand", Path(row["evidence"]).read_text())
 
 
 class Reviewer(BuildReviewCase):
@@ -475,7 +518,7 @@ class BuildsOwnPr(BuildReviewCase):
         self.view = {**VIEW, "headRefName": "div/build"}
         self.asked = []
         for p in (mock.patch.object(build, "_pr", lambda where, pr: dict(self.view)),
-                  mock.patch.object(build, "_checkout", lambda *a: contextlib.nullcontext(self.home)),
+                  mock.patch.object(build, "_checkout", lambda project, pr, sha, root: contextlib.nullcontext(self.home)),
                   mock.patch.object(pre, "package", lambda ctx, **kw: "the package"),
                   mock.patch.object(pre, "ask", self.fake_ask),
                   mock.patch.object(pre.vendors, "available", lambda cfg: SimpleNamespace(ok=True, state="ok"))):
@@ -512,6 +555,19 @@ class BuildsOwnPr(BuildReviewCase):
         self.pre("pass")
         self.assertEqual(build.for_pr("acme", 7, reg=self.reg, cfg=config.load())["status"], "queued")
         self.assertEqual(self.asked, [])
+
+    def test_with_cross_vendor_off_only_a_deep_head_is_pre_reviewed_by_its_panel(self):
+        """R-REVIEW-13: `orche review --pr N` runs the panel on a deep head whatever the mode says."""
+        self.write_cfg({"review": {"build": True, "cross_vendor": "off"}})
+        with mock.patch.object(pre, "deep_of", lambda ctx: ""):
+            self.assertEqual(build.for_pr("acme", 7, reg=self.reg, cfg=config.load())["status"], "queued")
+        self.assertEqual((self.asked, ledger.review_for("acme", 7, HEAD, "pre")), ([], None))
+        self.view = {**self.view, "headRefOid": "d" * 40}         # a new head, a deep one
+        with mock.patch.object(pre, "deep_of", lambda ctx: "high risk (src/auth/x.py)"):
+            self.assertEqual(build.for_pr("acme", 7, reg=self.reg, cfg=config.load())["status"], "queued")
+        self.assertEqual(sorted(self.asked), ["claude-opus-5-5", "codex"])
+        row = ledger.review_for("acme", 7, "d" * 40, "pre")
+        self.assertEqual((row["model"], row["note"]), ("codex+claude-opus-5-5", "panel: high risk (src/auth/x.py)"))
 
 
 class ReviewBTest(BuildReviewCase):
@@ -626,7 +682,9 @@ class TeamsHead(BuildReviewCase):
         self.assertEqual(self.pointers(), [])                               # Build hears nothing
         row = self.build_row()
         self.assertEqual((row["verdict"], row["reviewer"]), ("return", f"{DESIGN} (review)"))
-        self.assertIn("reviewer: design", (self.home / "reviews" / "acme" / "pr7-aaaaaaa-build.md").read_text())
+        evidence = (self.home / "reviews" / "acme" / "pr7-aaaaaaa-build.md").read_text()
+        self.assertIn("reviewer: design", evidence)
+        self.assertRegex(evidence, r"\nunit: \S+\n")      # c79: the audit's mistake classes count units
 
     def test_a_pr_without_a_worker_is_still_reviewed_by_build(self):
         with mock.patch.object(build, "_pr", lambda where, pr: {**VIEW, "headRefName": "someone/else"}):

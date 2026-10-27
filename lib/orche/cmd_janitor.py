@@ -8,7 +8,9 @@ line in the output, not a failed run). That refresh is deliberately not gated on
 either, although it is a paid model call that rewrites the intake block of the user's
 PROJECT_CARD.md and the division CONTEXT.md files: the user opted in per project by running the
 first intake (a `--no-intake` project has no stamp and is never swept), and `intake.enabled: false`
-turns the refresh off.
+turns the refresh off. Then, once a week (`--weekly`: now), the weekly pass (janitor/weekly.py): the audit's
+new mistake classes into STANDING.md with one pointer to Main, and one verify-skill drift unit per project
+to Build; not on `--dry-run`.
 Logic lives in `orche.janitor`; this module only parses arguments and prints.
 """
 import sys
@@ -32,6 +34,7 @@ def register(subparsers):
     sp.add_argument("--apply-removed", action="store_true",
                     help="retire units whose worktree Orca no longer lists")
     sp.add_argument("--claude-projects", help="Claude transcript root (default ~/.claude/projects)")
+    sp.add_argument("--weekly", action="store_true", help="run the weekly pass now (audit, verify-skill drift)")
     sp.set_defaults(func=cmd_run)
     sub.add_parser("report", help="print the last run's report").set_defaults(func=cmd_report)
     sp = sub.add_parser("undo", help="move a trashed path back")
@@ -60,6 +63,12 @@ def cmd_run(args):
         refreshed = intake.refresh_all(registry.load(), config.load())
         data["intake"] = refreshed
         lines += [r["line"] for r in refreshed]
+        from .janitor import weekly     # the dispatch relay and the audit: only for a run
+        state = janitor.load_state()
+        week = weekly.run(registry.load(), state, force=args.weekly)
+        if week:
+            janitor.save_state(state)
+        data["weekly"], lines = week, lines + week
     cli.out(args, data, lines)
     return EXIT_USER if any(c.error for c in cands) else EXIT_OK
 

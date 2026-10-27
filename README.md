@@ -56,6 +56,7 @@ Say it to Main in your own words; Main runs the command.
 | "how much did this cost?" | `orche metrics` |
 | "check the setup", "what else can ORCHE do?" | `orche doctor`, ending with the next steps |
 | "continue" | after a cut-off or /clear, Main picks the work up from `orche status <project>` |
+| "enforce <class>" | Every week ORCHE mines the last 30 days of review returns for repeated mistakes and proposes where to enforce each; say "enforce <class>". Main sends Build the class's row of the Enforcement table in `.orche/STANDING.md` |
 
 Every action is also an `orche` command, for scripts (`orche --help`).
 

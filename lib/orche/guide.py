@@ -82,14 +82,16 @@ def scale_line(cfg, reg):
                                        "Main runs `orche hr scale 30`")
 
 
-def gate_lines(cfg, reg) -> list:
-    """One line per registered project whose base branch lacks `scripts/verify/ci.sh` (the doctor's
-    `queue gate` rows) and that has no PR adding it (verifygate.pending): init could not push the script.
-    Merged into one line past MAX_GATES."""
+def gate_lines(cfg, reg, project=None) -> list:
+    """One line per registered project (only `project` when given) whose base branch lacks
+    `scripts/verify/ci.sh` (the doctor's `queue gate` rows) and that has no PR adding it
+    (verifygate.pending): init could not push the script. Merged into one line past MAX_GATES."""
     from . import verifygate
     from .install import doctor
     missing = []
     for key, root in doctor._roots(reg):
+        if project not in (None, key):
+            continue
         if (root / ".git").exists() and not verifygate.pending(root):
             base, ok = publish.gate(root, cfg, key)
             if not ok:
@@ -105,12 +107,13 @@ def gate_lines(cfg, reg) -> list:
             for key, base in missing]
 
 
-def lines(cfg, reg, home) -> list:
-    """The "Any time" lines: off first, then on, then the always-present ones (<= MAX_LINES)."""
+def lines(cfg, reg, home, project=None) -> list:
+    """The "Any time" lines: off first, then on, then the always-present ones (<= MAX_LINES); the merge
+    queue lines of `project` only when given (a project's setup report), of every project otherwise."""
     jev_state, janitor_state = jev_line(cfg), janitor_line(cfg, home)
     states = [jev_state, codex_line(cfg), token_line(), janitor_state, scale_line(cfg, reg)]
     states = [s for s in states if not (s[0] and s in (jev_state, janitor_state))]   # on: in Running now
-    states += [(False, line) for line in gate_lines(cfg, reg)]
+    states += [(False, line) for line in gate_lines(cfg, reg, project)]
     off = [line for on, line in states if not on]
     on = [line for is_on, line in states if is_on]
     return (off + on)[:MAX_LINES - len(ALWAYS)] + list(ALWAYS)

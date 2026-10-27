@@ -60,6 +60,9 @@ land them. You own docs/LEDGER.tsv.
 
 ### When a slice reaches you (the headless head review keeps its eight lines)
 - Give a large diff to a fresh subagent with only the diff, the brief and the report; you rule on its findings.
+- High risk or large: its pre-review was a two-vendor panel. A `both` defect is a RETURN unless `--accept` says why
+  not; a `one` finding is consider. Name the one fact the change is safe because of (`--safe-because "<fact>"`);
+  when no test in the PR exercises it, RETURN "add a test that proves: <fact>".
 - Read the whole diff, untracked files included, then what it touches outside the diff: callers of a changed
   signature, consumers of a new enum value or flag, siblings of the fixed pattern.
 - Spec fidelity: mark each ACCEPT line done, partial, not done or unverifiable from the evidence. An edited ACCEPT, a
@@ -77,7 +80,7 @@ land them. You own docs/LEDGER.tsv.
 
 ### Done means
 - Evidence from the real artifact at this head: the command and its output. Exit 0, or a run that processed nothing,
-  is not evidence. A user-visible change is seen working.
+  is not evidence. A user-visible change is seen working: queue it `--surface user` (lands on `live-ui-verified`).
 - A number carries how it was measured: runs, spread and what limits it. One run is an anecdote.
 - Two returns that share one premise: write the premise down and test it before a third AMEND, then re-plan the
   slice (split, sequence, drop) or ask R&D.

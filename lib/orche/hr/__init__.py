@@ -8,7 +8,7 @@ Roster and keep argument parsing and output: a transition returns (data, lines) 
 Refused(code, msg), `code` being the CLI exit code. HR prints, on stderr, only what happens during a
 transition: `[dry-run]` lines, warnings, retire's progress lines.
 """
-from .audit import run as run_audit
+from .audit import run as run_audit, run_mistakes
 from .book import Refused, correct, log_path
 from .create import add_division, create_feature, onboard_project, plan_divisions
 from .models import set_model
@@ -20,7 +20,7 @@ from .retire import retire, retire_gone
 from .transitions import set_stage, sleep, wake
 
 __all__ = ["Refresh", "Refused", "add_division", "awake", "correct", "create_feature", "log_path", "onboard_project",
-           "plan_divisions", "project_pane", "refresh_project", "retire", "retire_gone", "run_audit",
+           "plan_divisions", "project_pane", "refresh_project", "retire", "retire_gone", "run_audit", "run_mistakes",
            "session_name", "session_owner", "set_frozen", "set_model", "set_stage", "sleep", "stage_gate", "stamp_version",
            "wake"]
 

@@ -8,7 +8,9 @@ Codex `-s read-only`, no writable root, no network) in a detached worktree at th
 --porcelain` is compared before and after: a change is the verdict `error` (review.CHANGED). Every
 value of the package is masked and the untrusted ones fenced (review.fence); the evidence file and
 every pointer are masked. The answer's first non-blank line is a lone `VERDICT: PASS` or `VERDICT:
-RETURN`, else `error`; checklist lines (`- N: why`) after a PASS make it a RETURN.
+RETURN`, else `error`; checklist lines (`- N: why`) after a PASS make it a RETURN. A `SURFACE: user` line says
+the change alters what a user sees or does (R-REVIEW-12): the record keeps `surface: user|internal` (internal
+without one) and the queue lands a user-visible change only on the check script's live-ui-verified.
 
 Spend and holds (§7, §8.5): G4 before the call (over a cap → a `skipped` row, Build decides); the
 reviewer's vendor held → no call and no row, one quiet `held: … (stage build-review)` note, and the
@@ -20,6 +22,8 @@ is a history line (`kind: build-review`, its vendor, model and cost).
   pending(project)                       runs whose RUN.json says `review.build: pending`, no build row yet
   may_start(project, item)               the heartbeat's check before start(): not held, < MAX_STARTS (no gh)
   for_pr(project, pr, unit=None)         `orche review --pr N` (R33): the pre-review round, then this
+  record(project, pr, sha)               the head review record's own fields at (pr, head): surface, safe_because
+  pane_record(project, pr, sha, ...)     the pane's PASS (`orche queue add`): its record and a build pass row
 """
 import contextlib
 import os
@@ -32,7 +36,7 @@ from .. import (brief, config, github, inbox, ladder, ledger, log, paths, procs,
                 shell, templates, units, util, vendors)
 from ..flow import usage as holds
 from ..queue import facts as _facts_mod, repo
-from . import Verdict, ask, call_for, fence, masked, one_line, pre
+from . import RISK, Verdict, ask, call_for, fence, masked, one_line, pre
 
 TEMPLATE = templates.TEMPLATES_ROOT / "review" / "build.md"
 MAX_TURNS = 12
@@ -40,10 +44,10 @@ MAX_STARTS = 3           # heartbeat starts of one (pr, head) before Build is to
 BUILD_TIMEOUT_S = 240    # one head-review call
 PRE_OK = ("pass", "skipped")
 STAGE = "build-review"
-RISK = re.compile(r"(^|/)(payments?|billing|auth|oauth|migrations?|deploy|wallets?|keys?|secrets?)(/|\.|_|-|$)",
-                  re.IGNORECASE)
 _VERDICT = re.compile(r"VERDICT:\s*(PASS|RETURN)", re.IGNORECASE)
 _FINDING = re.compile(r"^\s*-\s*([1-8])\s*:\s*(.+?)\s*$")
+_SURFACE = re.compile(r"^\s*SURFACE\s*:\s*(user|internal)\s*$", re.IGNORECASE | re.MULTILINE)
+_FIELD = re.compile(r"^(surface|safe_because): (.+)$")
 sleep, clock = time.sleep, time.monotonic   # test seams
 
 
@@ -150,6 +154,13 @@ def parse(text):
     if m.group(1).upper() == "PASS" and not found:
         return "pass", []
     return "return", found or [(0, "returned without a checklist line")]
+
+
+def surface_of(text) -> str:
+    """R-REVIEW-12: `user` when the answer has a `SURFACE: user` line (the change alters what a user sees or
+    does), else `internal`."""
+    found = {m.lower() for m in _SURFACE.findall(str(text or ""))}
+    return "user" if "user" in found else "internal"
 
 
 def _prompt(f, b, pre_row, diff, build_session, unit, cfg_rv) -> str:
@@ -314,10 +325,9 @@ def _decide(reg, cfg, rv, project, pr, unit, view, sha, base, h7, root, where, h
     pre_model = pre_row.get("model") if pre_row else "-"
     pre_round = pre_row.get("round") if pre_row else "-"
     who = unit or f"pr{pr}"
-    folder = _folder(project)
-    folder.mkdir(parents=True, exist_ok=True)
-    evidence = folder / f"pr{pr}-{h7}-build.md"
-    error, model, answer, findings = None, "facts", "", []
+    evidence = record_path(project, pr, sha)
+    evidence.parent.mkdir(parents=True, exist_ok=True)
+    error, model, answer, findings, surface = None, "facts", "", [], "internal"
     try:
         f = _gather(where, project=project, pr=pr, head=sha, base=base, tier=tier, scope=scope,
                     docs_paths=queue.DOCS_PATHS, entry_id=queue.entry_id(pr, sha))
@@ -348,7 +358,7 @@ def _decide(reg, cfg, rv, project, pr, unit, view, sha, base, h7, root, where, h
                 if a.verdict is None:
                     verdict, error = "error", a.why
                 else:
-                    verdict, findings = a.verdict.verdict, list(a.verdict.findings)
+                    verdict, findings, surface = a.verdict.verdict, list(a.verdict.findings), surface_of(answer)
                 try:
                     history.attempt(project, b.rev if b is not None else 1, unit=who, to=head.session, model=model,
                                     effort=getattr(call, "effort", None), res=res, started=a.started, finished=a.finished, status=verdict, kind=STAGE,
@@ -363,7 +373,8 @@ def _decide(reg, cfg, rv, project, pr, unit, view, sha, base, h7, root, where, h
         except Exception as exc:   # noqa: BLE001
             verdict, error = "error", masked(f"{type(exc).__name__}: {exc}")
     body = [f"# head review · PR #{pr} @ {h7}", "", f"verdict: {verdict}", f"model: {model}",
-            f"reviewer: {head.name}", f"pre-review: {pre_v} ({pre_model}, round {pre_round})", ""]
+            f"reviewer: {head.name}", f"unit: {who}", f"pre-review: {pre_v} ({pre_model}, round {pre_round})",
+            f"surface: {surface}", ""]
     body += [f"- {n}: {why}" for n, why in findings]
     if error:
         body.append(f"error: {error}")
@@ -378,16 +389,16 @@ def _decide(reg, cfg, rv, project, pr, unit, view, sha, base, h7, root, where, h
     except ledger.LedgerError as exc:
         log.log("hooks", f"buildreview: {project} PR #{pr}: ledger row refused: {exc}")
     return _act(project, pr, unit, view, sha, base, h7, where, head, writer, b, verdict, findings, error, pre_v,
-                pre_model, pre_round, reg, cfg)
+                pre_model, pre_round, reg, cfg, surface)
 
 
 def _act(project, pr, unit, view, sha, base, h7, where, head, writer, b, verdict, findings, error, pre_v,
-         pre_model, pre_round, reg, cfg):
+         pre_model, pre_round, reg, cfg, surface):
     if verdict == "pass":     # R5: queued as the runner, through the queue's one admission
         try:
             res = queue.admit(project, int(view["number"]), sha, where=where, base=base,
                               branch=view.get("headRefName", ""), unit=unit, b=b, writer=writer.session if writer else "",
-                              by="runner", approved_by=f"{head.session} (review)", reg=reg, cfg=cfg)
+                              by="runner", approved_by=f"{head.session} (review)", surface=surface, reg=reg, cfg=cfg)
         except queue.Refused as exc:
             error, findings = f"the queue refused it: {exc}", []
         else:
@@ -408,6 +419,53 @@ def _act(project, pr, unit, view, sha, base, h7, where, head, writer, b, verdict
     else:                     # high risk or size, a spend-cap skip, a PASS the queue refused
         status = "pane"
     return {"status": status, "head": sha, "verdict": verdict, "findings": findings, "error": error}
+
+
+# ---- the head review record (R-REVIEW-10, R-REVIEW-12) -------------------------------------------
+
+def record_path(project, pr, sha, who="build") -> Path:
+    """The head review record of (pr, head): `pr<N>-<h7>-build.md` from the headless review, `pr<N>-<h7>-pane.md`
+    from the pane's PASS."""
+    return _folder(project) / f"pr{pr}-{str(sha)[:7]}-{who}.md"
+
+
+def record(project, pr, sha) -> dict:
+    """The head review record's own fields at (pr, head) (`surface`: user or internal; `safe_because`, the pane's
+    blast-radius fact): the headless record's, overlaid by the pane's; {} when neither exists. Only the lines above
+    a record's first `## ` section count: the facts and the reviewer's answer below it are data."""
+    out = {}
+    for who in ("build", "pane"):
+        try:
+            lines = record_path(project, pr, sha, who).read_text(encoding="utf-8").splitlines()
+        except OSError:
+            continue
+        for line in lines:
+            if line.startswith("## "):
+                break
+            m = _FIELD.match(line)
+            if m:
+                out[m.group(1)] = m.group(2).strip()
+    return out
+
+
+def pane_record(project, pr, sha, *, reviewer, model, writer, surface, safe_because="", accept=None) -> Path:
+    """The pane's PASS (`orche queue add`): its record `pr<N>-<h7>-pane.md` and a `build` row with verdict pass,
+    so the head is decided once (R-REVIEW-10). A refused row is logged; the record stays."""
+    path = record_path(project, pr, sha, "pane")
+    lines = [f"# head review · PR #{pr} @ {str(sha)[:7]} (pane)", "", "verdict: pass", f"reviewer: {reviewer}",
+             f"surface: {surface}"]
+    if safe_because:
+        lines.append(f"safe_because: {one_line(safe_because)}")
+    if accept:
+        lines.append(f"accept: {one_line(accept)}")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    util.atomic_write(path, masked("\n".join(lines)) + "\n")
+    try:
+        ledger.record_review(project, "build", pr, sha, "pass", str(path), reviewer, model or "pane",
+                             writer=writer or "unknown")
+    except ledger.LedgerError as exc:
+        log.log("hooks", f"buildreview: {project} PR #{pr}: pane row refused: {exc}")
+    return path
 
 
 # ---- Build's own PRs (design §3.8, R33) ---------------------------------------------------------
@@ -435,7 +493,8 @@ def _checkout(project, pr, sha, root):
 
 def _pre_round(reg, cfg, project, pr, unit, view, root) -> dict | None:
     """One pre-review round of the PR's head (pre.one_round: a reviewer of another vendor than the
-    writer's model, row kind pre). None on PASS or skipped, else the result."""
+    writer's model, row kind pre; a deep head's panel). None on PASS or skipped, else the result. With
+    review.cross_vendor off, only a deep head is reviewed (R-REVIEW-13): None for any other."""
     from ..runs import history
     sha = view["headRefOid"]
     head, writer, b = _members(reg, project, view.get("headRefName", ""), unit)
@@ -451,20 +510,23 @@ def _pre_round(reg, cfg, project, pr, unit, view, root) -> dict | None:
                         effort=getattr(a.call, "effort", None), res=a.res, started=a.started,
                         finished=a.finished, status=a.word, kind="review", cfg=cfg, stop_reason=a.why or None)
 
+    off = pre.mode_of(cfg) == "off"      # the head review reports a missing base or head itself
     base = publish.base(root, cfg, project=project)
     if not base:
-        return {"status": "pre-error", "head": sha, "error": publish.no_base(root)}
-    hit = history.spend_hit(project, b.unit if b is not None else None, cfg, tag=f"buildreview: {project}")
-    if hit:                   # G4 before the paid pre-review call
-        return {"status": "pre-error", "head": sha, "error": f"spend cap: pre-review not run ({hit})"}
-    with _checkout(project, pr, sha, root, view.get("headRefName", "")) as wt:
+        return None if off else {"status": "pre-error", "head": sha, "error": publish.no_base(root)}
+    with _checkout(project, pr, sha, root) as wt:
         if wt is None:
-            return {"status": "pre-error", "head": sha,
-                    "error": f"head {sha[:7]} is not in {root}: git fetch origin, then orche review --pr {pr} again"}
+            return None if off else {"status": "pre-error", "head": sha, "error": f"head {sha[:7]} is not in "
+                                     f"{root}: git fetch origin, then orche review --pr {pr} again"}
         ctx = pre.Ctx(cfg=cfg, project=project, unit=unit_id, rev=rev, unit_dir=unit_dir, worktree=wt,
                       base=base, writer=writer.session,
                       writer_model=vendors.of(reg, writer), fields=dict(b.fields) if b is not None else {},
                       tag=procs.run_id(f"review-pr{pr}", time.time_ns()), record=record)
+        if off and not pre.deep_of(ctx):
+            return None
+        hit = history.spend_hit(project, b.unit if b is not None else None, cfg, tag=f"buildreview: {project}")
+        if hit:                   # G4 before the paid pre-review call
+            return {"status": "pre-error", "head": sha, "error": f"spend cap: pre-review not run ({hit})"}
         prior = pre.returns(unit_dir, rev)
         report = ""
         if b is not None and (b.folder / "REPORT.md").is_file():
@@ -493,7 +555,7 @@ def for_pr(project, pr, unit=None, *, tell=None, reg=None, cfg=None) -> dict:
     if str(view.get("state") or "OPEN").upper() != "OPEN" or not sha:
         return {"status": "closed", "head": sha, "state": view.get("state")}
     row = ledger.review_for(project, pr, sha, "pre")
-    if pre.mode_of(cfg) != "off" and (row is None or row.get("verdict") == "error"):
+    if row is None or row.get("verdict") == "error":     # off: _pre_round reviews a deep head only
         out = _pre_round(reg, cfg, project, pr, unit, view, root)
         if out is not None:
             if tell and out["status"] != "no-head":

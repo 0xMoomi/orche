@@ -10,16 +10,15 @@ edits code — a rulebook rule; `scope_gate` protects unit scopes, not the main 
 
 <!-- inject:start -->
 ORCHE Main rules (rulebook: skill orche-main; division/model setup: skill orche-apply)
-- First line on every request: `Understood: source = <project>, output = <project>`.
-- Never edit code. Assign work only via `orche dispatch <<'EOF'`: TO GOAL SCOPE CONTEXT ACCEPT VERIFY TIMEBOX FORBID REPORT TIER (+ROLLBACK to deploy); redo refusals now. Corrections/halts: `AMEND <unit> rev N`, `STOP <unit>`.
-- Build only after the user confirms the plan.
+- First line per request: `Understood: source = <project>, output = <project>`.
+- Never edit code; build only after the user confirms the plan. Assign work only via `orche dispatch <<'EOF'`: TO GOAL SCOPE CONTEXT ACCEPT VERIFY TIMEBOX FORBID REPORT TIER (+ROLLBACK to deploy); redo refusals now. Correct/halt: `AMEND <unit> rev N`, `STOP <unit>`.
 - Write briefs from the request, PROJECT_CARD.md and unit STATUS files; never inspect the repo or run VERIFY yourself.
 - TIER mechanical: brief ≤ 12 lines, one ACCEPT line, one VERIFY command, TIMEBOX ≤ 30m.
 - `orche` is on PATH; state in ~/.claude/orche. Other project: `orche card <p>`, then `orche ask <p> "…"`.
-- When a report arrives: lineage closed, nothing to dispatch ⇒ full report (outcome · landed · failed · decisions · next); else dispatch + one progress line. Owner items first. Never only acknowledge.
-- End every reply with one line: `RUNNING: <what runs>`, `OWNER: <decision or step, default>` or `DONE: <result>`.
-- Ask only product/taste questions (recommend + default); prototype facts; a hard design call → one brief to two divisions on different models, a third reconciles. Say what failed; no ledger row = unverified.
-- Owner's plain words in any language, matched by intent: you run `orche`, never the owner.
+- When a report arrives: lineage closed, none left ⇒ full report (outcome, landed, failed, decisions, next); else dispatch + progress line. Owner items first. Never only acknowledge.
+- Last line of every reply: `RUNNING: <what runs>`, `OWNER: <decision or step, default>` or `DONE: <result>`.
+- Ask only product/taste questions (recommend + default); prototype facts; a hard design call → one brief to two divisions on different models, a third scores both on your judge-only rubric, grafts onto a base. Say what failed; no ledger row = unverified.
+- Owner's plain words, any language, by intent: you run `orche`, never the owner.
 - Always-pause: force-push to a shared branch, deploy, data deletion, customer messages, external publication, payments.
 <!-- inject:end -->
 
@@ -171,6 +170,11 @@ pointers.
   proceeds on the default.
 - Hard design call: one brief (same GOAL/ACCEPT/CONTEXT) to two divisions on different models (vendors, when `orche
   depts` shows two); once both report, a third reconciles: CONTEXT = both REPORT.md paths as A and B, no model names.
+  Before the two briefs go out, write a judge-only rubric of 3 to 6 criteria (what a good answer must do,
+  measurable where possible) into the decision log with `orche decide` (phase `rubric`, the criteria in `why`),
+  never into the briefs. The reconciling unit receives the rubric, scores A and B against it, picks a base and
+  lists the grafts (which parts of the other candidate, and why). The final brief to Build names the base and the
+  grafts.
 
 ## Other projects
 
@@ -214,6 +218,7 @@ When an `orche` command refuses or fails, relay its line and stop; never redo it
 | A standing rule ("from now on always …") | `orche hr correct <p> --text "<the rule>"` | the rule as recorded |
 | Freeze or unfreeze hiring of workers | `orche hr freeze` / `orche hr unfreeze` | one line |
 | HR log, weekly HR report, who is idle | `orche hr log` / `orche hr audit` | at most five plain lines |
+| Enforce a repeated mistake ("enforce <class>", after the weekly `audit:` note) | its row in `.orche/STANDING.md` "Enforcement"; a brief to Build that adds the proposed level (a structural change, a test, a hook or gate), then the row's status set to `enforced`; a standing-order level: `orche hr correct <p> --text "<the draft>"` (`orche hr audit <p>` prints it) | one line: the class and what enforces it now |
 | Approve the waiting PRs (the `land: owner` question) | ask once for every waiting PR, default merge; yes → `orche queue approve <p> --all`; refuse one → `orche queue drop <p> #N --reason owner`; pause or resume the queue → `orche queue pause <p>` / `orche queue resume <p>` | what lands, what was dropped |
 | Reopen Main, a pane was closed | `orche wake main-<p>` (it reopens with its conversation) | one line |
 | Put a unit to sleep, wake it | `orche sleep <unit>` / `orche wake <unit>` | one line |

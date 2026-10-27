@@ -3,6 +3,22 @@
 All notable changes to ORCHE are listed here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow semantic versioning.
 
+## 0.16.0 — 2026-10-27
+
+### Added
+
+- A hard design call now has Main write a judge-only rubric before the two competing briefs go out; the reconciling unit scores both answers against it and builds on the better one with named parts of the other, and R&D compares UI variants live behind one switcher in the same prototype.
+- `orche hr audit <project>` mines the last 30 days of head-review returns, merge-queue returns and reverts for mistakes seen twice, proposes where to enforce each (a structural change, a test, a hook or gate, or a standing order last) with a draft standing order, and with `--apply` keeps them in an Enforcement table in STANDING.md.
+- The janitor runs a weekly pass that writes new mistake classes into that table and tells Main in one line, and files one drift unit to Build for a project with a verify skill, never while the last one is still open.
+- A change that alters what a user sees or does (the head review's `surface: user`, or `orche queue add --surface user`) lands only when the check script ends with `verdict: live-ui-verified`; a lower verdict returns it to its worker with the reason.
+- A high-risk change, or one over `review.panel_min_lines` (400) changed lines, is pre-reviewed by two models of different vendors at once, even with `review.cross_vendor` off, and their findings are grouped by agreement: a defect both raise returns the change, while one raised by a single reviewer is only to consider.
+- The same changes need the one fact they are safe because of (`orche queue add --safe-because "<fact>"`) and a test in the pull request that exercises it before the queue takes them.
+
+### Fixed
+
+- When the merge queue's check script cannot be pushed, the reason shown is the push's failing line instead of the first line a pre-push hook printed.
+- A project's setup report lists only its own merge-queue line in "Any time", not the lines of other projects.
+
 ## 0.15.1 — 2026-10-27
 
 ### Fixed

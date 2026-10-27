@@ -376,7 +376,7 @@ def relay_outcome(r, bodies, frm, deadline=None, by=None, skip=None) -> Outcome:
                             model=vendors.of(r.reg, r.member(plan.to)))
             if block.kind == "brief" and frm.kind != "div" and line_of is None:
                 line_of = b.lineage
-                if by != "triage":
+                if by not in lineage.AUTOMATED:
                     lineage.started(frm, b.lineage)
             plan.unit, rev = b.unit, b.rev
             goal = mask.redact(b.fields.get("GOAL", "").split("\n")[0])[0]

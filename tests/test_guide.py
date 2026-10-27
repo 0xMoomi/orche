@@ -124,6 +124,18 @@ class GuideTest(support.TempHomeCase):
         self.assertIn("- Merge queue: lands approved pull requests by itself after its checks pass. "
                       "a-very-long-project-name-3 and 2 more projects lack the check script", lines[5])
 
+    def test_a_project_filter_keeps_only_its_own_gate_line(self):
+        """c79: a project's setup report lists only its own merge-queue line; the doctor lists every one."""
+        self.project("acme")
+        self.project("other")
+        with mock.patch.object(guide.shutil, "which", lambda name: None):
+            every = guide.lines(self.cfg, self.reg, self.user)
+            own = guide.lines(self.cfg, self.reg, self.user, "acme")
+        self.assertEqual([ln[:22] for ln in every if "Merge queue" in ln],
+                         ["- Merge queue for acme", "- Merge queue for othe"])
+        self.assertEqual([ln[:22] for ln in own if "Merge queue" in ln], ["- Merge queue for acme"])
+        self.assertEqual(guide.gate_lines(self.cfg, self.reg, "nope"), [])
+
     def test_the_more_agents_line_shows_a_custom_number(self):
         self.cfg["runner"]["max_parallel"] = 7
         self.assertIn(". Up to 7 at once (custom). ", self.line("More agents"))

@@ -14,6 +14,11 @@ reviewer changed files". The headless Build review (build.py) uses the same call
 Verdict: the first non-blank line `VERDICT: PASS|RETURN`; finding lines `- [act] …`,
 `- [consider] …`, `- [noted] …`; any `[act]` line makes it RETURN whatever the first line says
 (structure over prose). No parsable first line → no verdict (the caller tries the next reviewer once).
+
+Depth (R-REVIEW-13, R-REVIEW-14): a change with a high-risk path (the head review's line 7, RISK) or more than
+`review.panel_min_lines` added and removed lines against origin/<base> is deep, never in a mechanical unit (deep):
+its pre-review runs as a two-vendor panel and its head review names the one fact it is safe because of, which a
+test in the PR must exercise (proves).
 """
 import re
 import time
@@ -23,6 +28,9 @@ from pathlib import Path
 from .. import codex, headless, intake, mask, shell, util, vendors
 
 MAX_TURNS = 40
+RISK = re.compile(r"(^|/)(payments?|billing|auth|oauth|migrations?|deploy|wallets?|keys?|secrets?)(/|\.|_|-|$)",
+                  re.IGNORECASE)        # the head review's line 7: payments, auth, migrations, deploy, wallets, keys
+TESTS = re.compile(r"(^|/)(tests|__tests__)/|\.test\.|_test\.|\.spec\.")    # the test layouts a fact's proof is in
 TOOLS = intake.TOOLS          # Read, Glob, Grep: no Bash (R10)
 DENIED = intake.DENIED        # Bash, every writing and web tool, the secret reads
 CHANGED = "the reviewer changed files"
@@ -58,6 +66,24 @@ def parse(text):
 
 def masked(text) -> str:
     return mask.redact(str(text or ""))[0]
+
+
+def deep(cfg, changed, tier="standard") -> str:
+    """Why the change `changed` ([(path, added, removed)] against origin/<base>) is reviewed in depth: `high risk
+    (<paths>)` or `size (+A -R)` over review.panel_min_lines; "" for an ordinary one and for a mechanical unit."""
+    if str(tier or "").strip().lower() == "mechanical":
+        return ""
+    risky = [p for p, _a, _r in changed if RISK.search(p)]
+    if risky:
+        return f"high risk ({', '.join(risky[:3])})"
+    added, removed = sum(c[1] for c in changed), sum(c[2] for c in changed)
+    return f"size (+{added} -{removed})" if added + removed > int(cfg["review"]["panel_min_lines"]) else ""
+
+
+def proves(changed) -> bool:
+    """Whether the change adds lines to a test (tests/, __tests__/, *.test.*, *_test.*, *.spec.*): where the
+    proof of a deep change's blast-radius fact lives (R-REVIEW-14)."""
+    return any(added > 0 and TESTS.search(path) for path, added, _r in changed)
 
 
 def fence(text, label="data") -> str:

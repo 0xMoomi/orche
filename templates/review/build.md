@@ -8,9 +8,13 @@ Answer with exactly this shape. The first line is `VERDICT: PASS` or `VERDICT: R
 before it and nothing else on it (anything else is an error and goes to the pane):
 
     VERDICT: RETURN
+    SURFACE: internal
     - <checklist number>: <why it fails and what would pass>
 
-PASS has no lines. RETURN has one line per failing checklist item; a checklist line makes it a RETURN.
+PASS has no checklist lines. RETURN has one line per failing checklist item; a checklist line makes it a RETURN.
+SURFACE is `user` when the change alters what a user sees or does (a screen, a flow, copy users read, an API
+response a client renders, CLI output users read), else `internal`. A user-visible change lands only when the check
+script drives it on its real surface (`verdict: live-ui-verified`).
 
 ## Checklist
 

@@ -3,13 +3,18 @@
   orche queue [<p>]                               status
   orche queue add <unit> [--first] [--accept WHY] queue the unit's open PR at its worktree's HEAD
   orche queue add --pr N --project <p>            queue a PR by number
+      [--surface user]                            the change alters what a user sees or does: it lands only
+                                                  on the check script's live-ui-verified
+      [--safe-because FACT]                       a high-risk or large change: the one fact it is safe because
+                                                  of; a test in the PR must exercise it
   orche queue drop <p> <id|#N> [--reason R]
   orche queue pause <p> [--reason R] · resume <p>
   orche queue approve <p> (#N ...|--all)          land: owner projects, Main only
   orche queue run <p>                             the integrator (the driver starts it detached)
 """
-from . import brief, cli, config, donegate, github, publish, queue, registry, roster, units
+from . import brief, cli, config, donegate, github, publish, queue, registry, roster, units, vendors
 from .queue import facts, repo
+from .review import build as review_build
 
 ACTIONS = ("add", "drop", "pause", "resume", "approve", "run", "status")
 
@@ -20,6 +25,12 @@ def register(subparsers):
     p.add_argument("words", nargs="*", metavar="[action] args", help=f"one of {', '.join(ACTIONS)}, or a project")
     p.add_argument("--first", action="store_true", help="add: put it at the front (after a testing entry)")
     p.add_argument("--accept", metavar="WHY", help="add: accept a held/capped pre-review or a [skip ci] head")
+    p.add_argument("--surface", choices=("user", "internal"),
+                   help="add: user when the change alters what a user sees or does (it then lands only on the "
+                        "check script's live-ui-verified); default: the head review's, else internal")
+    p.add_argument("--safe-because", metavar="FACT",
+                   help="add: the one fact a high-risk or large change is safe because of (required there); "
+                        "a test in the PR must exercise it")
     p.add_argument("--pr", type=int, help="add: the PR number (with --project)")
     p.add_argument("--project", help="add --pr: the project")
     p.add_argument("--reason", help="drop/pause: why")
@@ -83,7 +94,8 @@ def cmd_add(args, words):
         if words:
             raise queue.Refused(cli.EXIT_USER, "add --pr N --project <p> takes no unit")
         project = _project(reg, args.project)
-        if not _caller(reg, project):
+        me = _caller(reg, project)
+        if not me:
             raise queue.Refused(cli.EXIT_BLOCKED, "only Build or Main may queue")
         root = units.project_root(reg, project)
         base = publish.base(root, cfg, project=project)
@@ -110,7 +122,8 @@ def cmd_add(args, words):
             raise queue.Refused(cli.EXIT_NOT_FOUND, f"unknown unit {unit!r}")
         project = b.project
         target = roster.Roster(reg).member(b.to)
-        if not _caller(reg, project, target=target):
+        me = _caller(reg, project, target=target)
+        if not me:
             raise queue.Refused(cli.EXIT_BLOCKED, "only Build, Main or the unit's head may queue")
         if not donegate.gated(target):
             raise queue.Refused(cli.EXIT_BLOCKED, f"{unit}: target {b.to or '?'} is not a feature agent or Build")
@@ -132,8 +145,11 @@ def cmd_add(args, words):
             raise queue.Refused(cli.EXIT_BLOCKED, f"PR #{pr}'s head is {str(prs[0].get('headRefOid'))[:7]}, the "
                                             f"worktree's is {head[:7]}: report done again to publish")
         writer = b.to
+    surface = args.surface or review_build.record(project, pr, head).get("surface") or "internal"
+    fact = " ".join(str(args.safe_because or "").split())
     res = queue.admit(project, pr, head, where=where, base=base, branch=branch, unit=unit, b=b, writer=writer,
-                      accept=args.accept, first=args.first, by=by, dry_run=args.dry_run, reg=reg, cfg=cfg)
+                      accept=args.accept, first=args.first, by=by, surface=surface, safe_because=fact,
+                      dry_run=args.dry_run, reg=reg, cfg=cfg)
     if args.dry_run:
         f = facts.gather(where, project=project, pr=pr, head=head, base=base, tier=b.tier if b else "standard",
                          scope=b.fields.get("SCOPE", "") if b else "",
@@ -143,6 +159,9 @@ def cmd_add(args, words):
     if res["status"] == "already":
         cli.out(args, res, f"already queued, position {res['position']}")
         return cli.EXIT_OK
+    # the pane's PASS is its head review: the record (surface, the fact) and a build row
+    review_build.pane_record(project, pr, head, reviewer=f"{by} (pane)", model=vendors.of(reg, me), writer=writer,
+                             surface=surface, safe_because=fact, accept=args.accept)
     started, owner_ok = res.pop("started"), res["entry"]["owner_ok"]
     line = (f"queued PR #{pr} ({branch} @ {head[:7]}) — position {res['position']} of {res['total']}; "
             f"integrator {'running' if started else 'idle'}")

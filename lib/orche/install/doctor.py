@@ -444,13 +444,16 @@ def janitor_rows(home) -> list:
     """The janitor's daily LaunchAgent: OK when its plist is there (on, or report only); WARN only when it
     is missing after an install (install writes it); OK before any install."""
     from .. import janitor
+    from ..janitor import weekly
     from . import StateUnreadable, launchd, load_state
     name = "janitor"
     if sys.platform != "darwin":
         return [("OK", name, "not macOS: run `orche janitor run` daily (cron/systemd)")]
     if launchd.plist_path(launchd.JANITOR, home).is_file():
         how = "on" if janitor.enabled_flag().exists() else "report only (orche janitor enable lets it act)"
-        return [("OK", name, f"daily at {launchd.daily_at()}, {how}")]
+        week = weekly.last(janitor.load_state())
+        return [("OK", name, f"daily at {launchd.daily_at()}, weekly pass {week.date().isoformat() if week else 'never'}, "
+                             f"{how}")]
     try:
         installed = bool(load_state())
     except StateUnreadable:

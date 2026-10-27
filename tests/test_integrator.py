@@ -90,14 +90,15 @@ class IntegratorCase(support.TempHomeCase):
         git(self.origin, "update-ref", "refs/heads/main", new, tip)
 
     def queue_pr(self, number, head, branch, *, unit=None, parent="", rev=1, first=False, owner_ok=True,
-                 writer="feat-acme-checkout", **pr):
+                 writer="feat-acme-checkout", surface="internal", **pr):
         self.prs.append({"number": number, "headRefName": branch, "baseRefName": "main", "headRefOid": head,
                          "isDraft": False, "state": "OPEN", "title": f"pr {number}", "reviewDecision": "APPROVED", **pr})
         self.spec()
         e = {"id": queue.entry_id(number, head), "pr": number, "head": head, "branch": branch, "unit": unit,
              "writer": writer, "parent": parent, "rev": rev, "verify": [],
              "approved_by": "div-acme-build (review)", "accept": None, "first": first, "owner_ok": owner_ok,
-             "at": "2026-10-24T00:00:00Z", "state": "waiting", "restarts": 0, "drop": False, "test": None}
+             "surface": surface, "at": "2026-10-24T00:00:00Z", "state": "waiting", "restarts": 0, "drop": False,
+             "test": None}
         queue.add("acme", e, first=first, by="div-acme-build", base="main")
         return e
 
@@ -254,7 +255,7 @@ class ReturnTest(IntegratorCase):
         self.queue_pr(5, h, "feat/checkout", unit=u.unit)
         self.assertEqual(integrator.run_once("acme")["event"], "returned", self.queue_log())
         line = [ln for ln in store.read_log("acme") if ln["event"] == "returned"][0]
-        self.assertEqual(line["reason"], "timeout")
+        self.assertEqual((line["reason"], line["step"]), ("timeout", "scripts/verify/ci.sh"))   # c79: the audit reads it
         text = self.brief_text(u.unit)
         self.assertIn("`scripts/verify/ci.sh` did not finish within 1 minutes", text)
         self.assertIn("Make it finish within the gate's time", text)
@@ -290,6 +291,60 @@ class ReturnTest(IntegratorCase):
         integrator.run_once("acme")
         failed = [p["summary"] for p in self.notes() if p["status"] == "failed"]
         self.assertEqual(failed, ["returned PR #3 (red): `scripts/verify/ci.sh` failed (exit 3)"])
+
+
+class LiveTest(IntegratorCase):
+    """R-REVIEW-12: an entry the head review found user-visible lands only on the check script's live-ui-verified."""
+
+    LIVE_CI = CI_SH.replace("unit-test-verified", "live-ui-verified")
+
+    def test_a_user_visible_change_with_a_unit_test_verdict_returns_to_its_worker(self):
+        u = self.unit()
+        h = self.branch("feat/checkout", {"src/pay.txt": "pay\n"})
+        self.queue_pr(5, h, "feat/checkout", unit=u.unit, surface="user")
+        self.assertEqual(integrator.run_once("acme")["event"], "returned", self.queue_log())
+        reason = "user-visible change: live verification required (the check script's verdict was unit-test-verified)"
+        b = self.newest(u.unit)
+        self.assertEqual((b.rev, b.to), (2, "feat-acme-checkout"))
+        text = self.brief_text(u.unit)
+        self.assertIn(f"the merge queue returned PR #5 at {h[:7]}: {reason}", text)
+        self.assertIn("ends with `verdict: live-ui-verified`", text)
+        line = [ln for ln in store.read_log("acme") if ln["event"] == "returned"][0]
+        self.assertEqual(line["reason"], "live")
+        self.assertIn(f"returned PR #5 (live) → AMEND {u.unit} rev 2 (return 1 of 3 in this window)",
+                      [p["summary"] for p in self.notes()])
+        self.assertEqual(self.merges(), [])
+        self.assertFalse(any(r["sha"] == h for r in ledger.read("acme")))
+
+    def test_a_user_visible_pr_entry_returns_to_build_with_the_reason(self):
+        h = self.branch("feat/a", {"src/a.txt": "a\n"})
+        self.queue_pr(3, h, "feat/a", surface="user")
+        integrator.run_once("acme")
+        failed = [p["summary"] for p in self.notes() if p["status"] == "failed"]
+        self.assertEqual(failed, ["returned PR #3 (live): user-visible change: live verification required (the check "
+                                  "script's verdict was unit-test-verified)"])
+
+    def test_a_user_visible_change_with_a_live_verdict_lands(self):
+        h = self.branch("feat/a", {"src/a.txt": "a\n", "scripts/verify/ci.sh": self.LIVE_CI})
+        self.queue_pr(1, h, "feat/a", surface="user")
+        self.assertEqual(integrator.run_once("acme")["event"], "merged", self.queue_log())
+        rows = {(r["pr"], r["sha"], r["verdict"], r["verifier"]) for r in ledger.read("acme")}
+        self.assertIn(("1", h, "live-ui-verified", "queue"), rows)
+
+    def test_an_internal_change_with_a_unit_test_verdict_lands(self):
+        h = self.branch("feat/a", {"src/a.txt": "a\n"})
+        self.queue_pr(1, h, "feat/a", surface="internal")
+        self.assertEqual(integrator.run_once("acme")["event"], "merged", self.queue_log())
+
+    def test_without_a_check_script_there_is_no_level_to_hold_it_to(self):
+        e = {"pr": 1, "head": "a" * 40, "id": "pr1-aaaaaaa", "surface": "user"}
+        p = integrator.Pass("acme", e, {"base": "main", "green_main": None, "closed": None})
+        self.assertFalse(p.not_live({"gate": "scripts/verify/unit.sh", "verdict": "type-check-only"}))
+        self.assertTrue(p.not_live({"gate": "scripts/verify/ci.sh + scripts/verify/unit.sh",
+                                    "verdict": "type-check-only"}))
+        self.assertFalse(p.not_live({"gate": "scripts/verify/ci.sh", "verdict": "live-ui-verified"}))
+        p.entry = {**e, "surface": "internal"}
+        self.assertFalse(p.not_live({"gate": "scripts/verify/ci.sh", "verdict": "unit-test-verified"}))
 
 
 class TeamsHeadTest(IntegratorCase):

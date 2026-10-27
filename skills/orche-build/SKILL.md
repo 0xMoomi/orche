@@ -85,6 +85,19 @@ The headless head review and you use the same eight lines; RETURN on any failure
    "pane review: high risk").
 8. Size: more than `review.pane_lines` (400) changed lines, or TIER hard: the pane decides.
 
+Review depth, on top of the eight lines:
+- Surface: on PASS add `--surface user` when the change alters what a user sees or does (a screen, a flow, copy
+  users read, an API response a client renders, CLI output users read); the headless head review sets it too. The
+  queue then lands it only on the check script's `verdict: live-ui-verified` and otherwise returns it to the worker:
+  "user-visible change: live verification required (the check script's verdict was <level>)".
+- Panel: a high-risk path or more than `review.panel_min_lines` (400) changed lines is pre-reviewed by two models of
+  different vendors from `review.order` at once, even with `review.cross_vendor` off, never in a mechanical unit.
+  Read its report by group: `both` findings first (a defect there is a RETURN unless `--accept "<why not>"` says
+  why), then `one` findings (consider). A panel costs two reviews; it runs only on that trigger.
+- Blast radius: on the same trigger, on PASS add `--safe-because "<the one fact the change is safe because of>"`.
+  A test in the PR must exercise it (a path under `tests/` or `__tests__/`, or `*.test.*`, `*_test.*`,
+  `*.spec.*`); with none, RETURN "add a test that proves: <fact>".
+
 ## Scale
 
 - Many agents share one Claude subscription window; a usage limit holds that vendor until its reset and ORCHE re-runs

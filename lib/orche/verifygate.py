@@ -62,6 +62,16 @@ def awaiting(proj) -> str:
     return f"PR #{pr['number']} ({pr['url']})" if pr.get("number") else f"the PR from {BRANCH}"
 
 
+_FAILING = re.compile(r"error|fail|refused|rejected", re.IGNORECASE)
+
+
+def reason(res) -> str:
+    """Why a push failed: the first stderr line naming an error, a failure, a refusal or a rejection, else
+    the last non-empty one (a pre-push hook prints progress first), else `exit N`."""
+    lines = [ln.strip() for ln in str(res.err or res.out or "").splitlines() if ln.strip()]
+    return next((ln for ln in lines if _FAILING.search(ln)), lines[-1] if lines else f"exit {res.code}")[:160]
+
+
 def _waiting(why) -> dict:
     return {"state": "waiting", "reason": mask.redact(str(why).removeprefix("gh: "))[0]}
 
@@ -97,7 +107,7 @@ def ensure(root, key, cfg=None) -> dict:
         if res.ok:
             res = github.push(wt, BRANCH)
         if not res.ok:
-            return _waiting(github.first_line(res))
+            return _waiting(reason(res))
         url = github.create(root, base=base, head=BRANCH, title=TITLE, body=body(detect.verify_command(wt))).strip()
     except github.GhError as exc:
         return _waiting(exc)

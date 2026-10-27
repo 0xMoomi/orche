@@ -6,8 +6,9 @@ model:   move a division to another model (hr/models.set_model).
 choices: the division kinds, models and the owner's questions (design 2026-10-23 §10.3; lib/orche/hr/choices.py).
 scale:   print the scale presets and the current one, or set one (lib/orche/scale.py; `--dry-run` writes nothing).
 
-audit:   weekly HR report (hr/audit.py); `--apply` sleeps the proposed units, `--quiet` prints
-         nothing when there is nothing to propose.
+audit:   weekly HR report (hr/audit.py); `--apply` sleeps the proposed units and writes each project's
+         Enforcement table, `--quiet` prints nothing when there is nothing to propose. With a project:
+         only its mistake classes of the last `--days` days (hr/mistakes.py); `--apply` writes its table.
 correct: append the next numbered standing order to `<repo>/.orche/STANDING.md` (R-STANDING-1).
 """
 import json
@@ -15,6 +16,7 @@ import os
 
 from . import config, hr, intake, paths, procs, registry
 from .cli import EXIT_NOT_FOUND, EXIT_OK, EXIT_USER, fail
+from .hr.audit import AUDIT_DAYS
 
 
 def register(subparsers):
@@ -25,8 +27,13 @@ def register(subparsers):
     p.set_defaults(func=cmd_log)
     sub.add_parser("freeze", help="stop feature-agent creation").set_defaults(func=cmd_freeze)
     sub.add_parser("unfreeze", help="allow feature-agent creation again").set_defaults(func=cmd_unfreeze)
-    p = sub.add_parser("audit", help="weekly HR report: idle units, awake limit, overlaps, corrections")
-    p.add_argument("--apply", action="store_true", help="sleep the proposed units")
+    p = sub.add_parser("audit", help="weekly HR report: idle units, awake limit, overlaps, corrections, "
+                                     "mistake classes")
+    p.add_argument("project", nargs="?", help="only this project's mistake classes")
+    p.add_argument("--days", type=int, default=AUDIT_DAYS, metavar="N",
+                   help=f"mistake classes of the last N days (default {AUDIT_DAYS})")
+    p.add_argument("--apply", action="store_true",
+                   help="sleep the proposed units; write the Enforcement table in STANDING.md")
     p.add_argument("--quiet", action="store_true", help="print nothing when there is nothing to propose")
     p.set_defaults(func=cmd_audit)
     p = sub.add_parser("correct", help="append a numbered standing order to the project's STANDING.md")
@@ -85,9 +92,41 @@ def cmd_unfreeze(args):
     return _set_frozen(args, False)
 
 
+def _classes(found):
+    for c in found:
+        print(f"mistake class: {c['key']} x{c['count']} (units {', '.join(c['units'])}; {', '.join(c['dates'])})")
+        print(f"  level: {c['level']}: {c['why']}")
+        print(f"  draft: {c['draft']}")
+
+
+def cmd_audit_project(args):
+    reg = registry.load()
+    found = registry.project(reg, args.project)
+    if found is None:
+        return fail(EXIT_NOT_FOUND, f"unknown project: {args.project}")
+    data = hr.run_mistakes(reg, found[0], days=args.days, do_apply=args.apply, dry_run=args.dry_run)
+    if args.json:
+        print(json.dumps(data, indent=2, ensure_ascii=False))
+        return EXIT_OK
+    if not data["classes"]:
+        if not args.quiet:
+            print(f"no mistake classes in the last {args.days} days")
+        return EXIT_OK
+    _classes(data["classes"])
+    t = data.get("table")
+    if t:
+        verb = "would write" if args.dry_run else "wrote"
+        print(f"{verb} {t['path']} Enforcement: {len(t['new'])} new, {len(t['updated'])} updated")
+    return EXIT_OK
+
+
 def cmd_audit(args):
-    data = hr.run_audit(registry.load(), do_apply=args.apply, dry_run=args.dry_run)
-    if args.quiet and not data["proposals"] and not data["corrections"]:
+    if args.days < 1:
+        return fail(EXIT_USER, "--days must be 1 or more")
+    if args.project:
+        return cmd_audit_project(args)
+    data = hr.run_audit(registry.load(), do_apply=args.apply, dry_run=args.dry_run, days=args.days)
+    if args.quiet and not data["proposals"] and not data["corrections"] and not data["mistakes"]:
         return EXIT_OK
     if args.json:
         print(json.dumps(data, indent=2, ensure_ascii=False))
@@ -102,9 +141,12 @@ def cmd_audit(args):
     for c in data["corrections"]:
         times = f" x{c['count']}" if c["count"] > 1 else ""
         print(f"candidate for structural enforcement: {c['project']} {c['source']}: {c['text']}{times}")
+    for key, found in sorted(data["mistakes"].items()):
+        print(f"{key}:")
+        _classes(found)
     for a in data["applied"]:
         print(f"applied: {a.get('result') or 'refused ' + a['unit'] + ': ' + a['error']}")
-    if not data["proposals"] and not data["corrections"]:
+    if not data["proposals"] and not data["corrections"] and not data["mistakes"]:
         print("nothing to propose")
     return EXIT_OK
 

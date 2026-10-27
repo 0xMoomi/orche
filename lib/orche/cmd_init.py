@@ -517,7 +517,7 @@ def write_report(reg, key, root, intake_line=None, detected=(), created=(), gate
                       "Main plans and decides; divisions do the work; you only get decisions.",
                       "", "## Running now", "", *_running_lines(reg, key, root, cfg, gate),
                       "", "## Any time", "",
-                      *guide.lines(cfg, reg, Path.home()), "",
+                      *guide.lines(cfg, reg, Path.home(), key), "",
                       'Say "what else can ORCHE do?" to see this list again (Main runs `orche doctor`).', ""])
     util.atomic_write(path, text)
     return path

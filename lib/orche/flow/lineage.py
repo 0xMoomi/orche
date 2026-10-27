@@ -89,9 +89,12 @@ def fields(b):
     return {"lineage": b.lineage, "parent": b.parent or None}
 
 
+AUTOMATED = ("triage", "janitor")   # relayers whose briefs start their own lineage, outside Main's turn
+
+
 def assign(reg, frm, by=None):
     """(lineage, parent) for a new brief from Member `frm`: lineage None = start one with the new unit."""
-    if by == "triage":
+    if by in AUTOMATED:
         return None, None
     if frm.kind == "div":
         p = brief.newest(reg, frm.project, frm.session)

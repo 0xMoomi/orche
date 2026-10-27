@@ -141,14 +141,14 @@ class JanitorDefaultTest(InstallCase):
         when = plistlib.loads(self.plist().read_bytes())["StartCalendarInterval"]
         self.assertEqual((when["Hour"], when["Minute"]), (4, 0))
         self.assertEqual(launchd.daily_at(), "04:00")
-        self.assertEqual(doctor.janitor_rows(self.h), [("OK", "janitor", "daily at 04:00, on")])
+        self.assertEqual(doctor.janitor_rows(self.h), [("OK", "janitor", "daily at 04:00, weekly pass never, on")])
         self.assertEqual(self.orche("janitor", "disable")[0], 0)
         out = self.install("--mode", "settings", "--yes")   # orche update re-runs install
         self.assertNotIn("janitor: set", out)
         self.assertFalse(janitor.enabled_flag().exists())
         self.assertTrue(self.plist().is_file())
         self.assertEqual(doctor.janitor_rows(self.h)[0][2],
-                         "daily at 04:00, report only (orche janitor enable lets it act)")
+                         "daily at 04:00, weekly pass never, report only (orche janitor enable lets it act)")
         self.plist().unlink()
         self.assertEqual(doctor.janitor_rows(self.h), [("WARN", "janitor", "daily schedule missing: run orche install")])
         self.install("--mode", "settings", "--yes")

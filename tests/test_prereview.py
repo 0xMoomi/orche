@@ -9,13 +9,15 @@ Every `orche run` files exactly one pointer (one_pointer).
 import json
 import os
 import subprocess
+import threading
+import time
 from pathlib import Path
 from unittest import mock
 
 import support
 from types import SimpleNamespace
 
-from orche import config, inbox, ledger, procs, reconcile, registry, runs, units, vendors
+from orche import config, headless, inbox, ledger, procs, reconcile, registry, review, runs, units, util, vendors
 from orche.flow import lineage, usage
 from orche.review import build
 from orche.review import CHANGED, DENIED, TOOLS, fence, parse
@@ -359,6 +361,26 @@ class InRunTest(PreReviewCase):
         self.assertEqual((row["verdict"], row["note"]), ("skipped", "fallback: same vendor (codex not installed)"))
         self.assertEqual((self.fake / "n").read_text().strip(), "1")     # the worker only
 
+    def test_a_deep_change_gets_a_two_vendor_panel_inside_the_run(self):
+        """R-REVIEW-13 end to end: cross_vendor off, a high-risk path: the fake codex and the fake claude review the
+        same head at once (two history lines), the row names both."""
+        self.configure(mode="off")
+        self.claude_calls(("work", STATUS_DONE), ("say", "VERDICT: PASS\n- [noted] guarded"))
+        (self.fake / "do1.sh").write_text(
+            "mkdir -p src/auth && echo login >> src/auth/login.py && git add src/auth/login.py\n"
+            "git -c user.name=t -c user.email=t@example.com -c commit.gpgsign=false commit -q -m auth\n"
+            + ROW.format(verdict="unit-test-verified"))
+        self.codex_answers("VERDICT: PASS\n- [noted] guarded")
+        self.run_unit()
+        ptr = self.one_pointer()
+        self.assertIn(f"pre-review PASS by codex+{OPUS} (round 1 of 2)", ptr["summary"])
+        [row] = self.rows()
+        self.assertEqual((row["verdict"], row["model"], row["note"]),
+                         ("pass", f"codex+{OPUS}", "panel: high risk (src/auth/login.py)"))
+        self.assertEqual([h["kind"] for h in self.history()], ["work", "review", "review"])
+        self.assertIn("+login", self.claude_stdin(2))
+        self.assertIn("+login", self.codex_calls()[0]["stdin"])
+
     def test_off_runs_no_review(self):
         self.configure(mode="off")
         self.claude_calls(("work", STATUS_DONE))
@@ -501,6 +523,188 @@ class GrammarTest(support.TempHomeCase):
         self.assertEqual(pre.choose(cfg, "claude-haiku-5-5", absent).model, OPUS)
         self.assertIsNone(pre.choose({"review": {**config.DEFAULTS["review"], "cross_vendor": "optional"}}, OPUS, absent).model)
         self.assertEqual(CHANGED, "the reviewer changed files")
+
+
+HEAD = "c" * 40
+OK, ABSENT = vendors.Availability("ok", "", ""), vendors.Availability("absent", "", "")
+
+
+class PanelTest(support.TempHomeCase):
+    """R-REVIEW-13: a deep head (high risk or large, never mechanical) is pre-reviewed by two vendors at once,
+    their findings weighted by agreement, even with review.cross_vendor off (the test home's default)."""
+
+    def setUp(self):
+        super().setUp()
+        self.changed = [("src/payments/charge.py", 10, 2)]
+        self.answers, self.asked, self.avail = {}, [], OK
+        self.opus_started, self.together, self.meet = threading.Event(), None, False
+        for p in (mock.patch.object(pre.repo, "changed", lambda where, frm, to: list(self.changed)),
+                  mock.patch.object(pre, "package", lambda ctx, **kw: f"package for {kw['reviewer']}"),
+                  mock.patch.object(pre, "ask", self.fake_ask),
+                  mock.patch.object(pre, "has_diff", lambda where, ref: True),
+                  mock.patch.object(pre.vendors, "available", lambda cfg=None: self.avail)):
+            p.start()
+            self.addCleanup(p.stop)
+
+    def fake_ask(self, model, package, **kw):
+        self.asked.append((model, kw.get("tag")))
+        if model == OPUS:
+            self.opus_started.set()
+        elif model == "codex" and self.meet:     # both in flight at once: codex (this thread) sees opus start
+            self.together = self.opus_started.wait(5)
+        text = self.answers.get(model, "VERDICT: PASS")
+        verdict = parse(text)
+        res = headless.Result(0, {"result": text}, None, None, False)
+        return review.Answer(model, None, res, util.now_iso(), util.now_iso(), verdict,
+                             "" if verdict else "no VERDICT line", text)
+
+    def ctx(self, tier="standard"):
+        return pre.Ctx(cfg=config.load(), project="acme", unit="u1", rev=1, unit_dir=self.home / "u1",
+                       worktree=self.home, base="main", writer="feat-acme-checkout", writer_model=OPUS,
+                       fields={"TIER": tier}, tag="u1@1")
+
+    def round(self, tier="standard"):
+        return pre.one_round(self.ctx(tier), 1, pr=7, head=HEAD, report="r", earlier="")
+
+    def test_risk_or_size_makes_a_change_deep_never_a_mechanical_one(self):
+        cfg = config.load()
+        self.assertEqual(review.deep(cfg, [("src/payments/charge.py", 3, 1)]), "high risk (src/payments/charge.py)")
+        self.assertEqual(review.deep(cfg, [("db/migrations/0042.sql", 1, 0), ("src/a.py", 1, 0)]),
+                         "high risk (db/migrations/0042.sql)")
+        self.assertEqual(review.deep(cfg, [("src/a.py", 300, 101)]), "size (+300 -101)")
+        self.assertEqual(review.deep(cfg, [("src/a.py", 300, 100)]), "")          # review.panel_min_lines: 400
+        self.assertEqual(review.deep(cfg, [("src/auth/login.py", 900, 0)], "mechanical"), "")
+        lower = {"review": {**cfg["review"], "panel_min_lines": 10}}
+        self.assertEqual(review.deep(lower, [("src/a.py", 11, 0)]), "size (+11 -0)")
+
+    def test_the_pair_is_the_first_two_vendors_of_the_order_that_are_up(self):
+        cfg = config.DEFAULTS
+        self.assertEqual(pre.pair(cfg, OK), (("codex", OPUS), ""))
+        claude_first = {"review": {**cfg["review"], "order": [OPUS, SONNET, "codex"]}}
+        self.assertEqual(pre.pair(claude_first, OK), ((OPUS, "codex"), ""))
+        self.assertEqual(pre.pair(cfg, ABSENT), ((), "codex not installed"))
+        self.assertEqual(pre.pair({"review": {**cfg["review"], "order": [OPUS, SONNET]}}, OK),
+                         ((), "review.order names one vendor"))
+        usage.hit("codex", "You've hit your usage limit", {}, project="acme", unit="x", stage="work")
+        models, why = pre.pair(cfg, OK)
+        self.assertEqual(models, ())
+        self.assertRegex(why, r"^codex held: usage limit until \d\d:\d\d$")
+
+    def test_a_deep_head_is_reviewed_by_both_vendors_at_once_even_with_cross_vendor_off(self):
+        self.assertEqual(pre.mode_of(config.load()), "off")
+        self.answers = {
+            "codex": "VERDICT: RETURN\n- [act] src/payments/charge.py:12: the refund runs twice; guard it\n"
+                     "- [consider] src/payments/charge.py:40: name the constant",
+            OPUS: "VERDICT: RETURN\n- [act] `src/payments/charge.py:10-14`: a retry refunds again; make it idempotent\n"
+                  "- [act] src/payments/api.py:3: the timeout is unbounded; cap it"}
+        self.meet = True
+        rnd = self.round()
+        self.assertTrue(self.together)
+        self.assertEqual(sorted(m for m, _tag in self.asked), sorted(["codex", OPUS]))
+        tags = dict(self.asked)
+        self.assertEqual(tags["codex"], "u1@1")                              # the first: the run's own tag
+        self.assertTrue(tags[OPUS].startswith("u1-panel@"))                  # the second: its own tag sweep
+        self.assertEqual((rnd.word, rnd.model), ("return", f"codex+{OPUS}"))
+        self.assertEqual(rnd.findings, (
+            "[act] both: src/payments/charge.py:12: the refund runs twice; guard it",
+            "[consider] one (codex): src/payments/charge.py:40: name the constant",
+            f"[consider] one ({OPUS}): src/payments/api.py:3: the timeout is unbounded; cap it"))
+        self.assertEqual(rnd.acts, rnd.findings[:1])
+        [row] = ledger.read_reviews("acme")
+        self.assertEqual((row["verdict"], row["model"], row["reviewer"], row["note"]),
+                         ("return", f"codex+{OPUS}", f"review:pre:codex+{OPUS}",
+                          "panel: high risk (src/payments/charge.py)"))
+        text = Path(row["evidence"]).read_text()
+        self.assertIn("- [act] both: src/payments/charge.py:12", text)
+        self.assertIn(f"### codex: return", text)
+        self.assertIn(f"### {OPUS}: return", text)
+        self.assertEqual([r.findings for r in pre.returns(self.home / "u1", 1)], [rnd.findings])
+
+    def test_findings_one_reviewer_raises_alone_are_consider_and_the_round_passes(self):
+        self.changed = [("src/a.py", 500, 0)]
+        self.answers = {"codex": "VERDICT: RETURN\n- [act] src/a.py:3: off by one; use <=",
+                        OPUS: "VERDICT: PASS\n- [noted] small and tested"}
+        rnd = self.round()
+        self.assertEqual(rnd.word, "pass")
+        self.assertEqual(rnd.findings, ("[consider] one (codex): src/a.py:3: off by one; use <=",
+                                        f"[noted] one ({OPUS}): small and tested"))
+        self.assertEqual(ledger.read_reviews("acme")[0]["note"], "panel: size (+500 -0)")
+
+    def test_findings_match_by_overlapping_lines_or_the_same_words(self):
+        models = ("codex", OPUS)
+        self.assertEqual(pre.group(["[consider] a.py:5-9: x"], ["[act] a.py:9: y"], models), ("[act] both: a.py:9: y",))
+        self.assertEqual(pre.group(["[act] a.py:5: x"], ["[act] a.py:6: x"], models),
+                         ("[consider] one (codex): a.py:5: x", f"[consider] one ({OPUS}): a.py:6: x"))
+        self.assertEqual(pre.group(["[act] b.py:5: x"], ["[act] a.py:5: x"], models)[0], "[consider] one (codex): b.py:5: x")
+        self.assertEqual(pre.group(["[noted] No tests, for the empty cart."], ["[consider] no tests for the EMPTY cart"],
+                                   models), ("[consider] both: no tests for the EMPTY cart",))
+
+    def test_one_vendor_up_is_the_single_review_and_it_says_so(self):
+        self.avail = ABSENT
+        rnd = self.round()
+        self.assertEqual([m for m, _tag in self.asked], [SONNET])
+        self.assertEqual((rnd.word, rnd.model), ("pass", SONNET))
+        [row] = ledger.read_reviews("acme")
+        self.assertEqual(row["note"], "panel: only one vendor up (codex not installed): a single review; "
+                                      "fallback: same vendor (codex not installed)")
+
+    def test_a_panel_half_without_a_verdict_leaves_the_other_review_alone(self):
+        self.answers = {"codex": "Looks fine to me.", OPUS: "VERDICT: RETURN\n- [act] src/payments/charge.py:3: x; y"}
+        rnd = self.round()
+        self.assertEqual((rnd.word, rnd.model, rnd.findings), ("return", OPUS, ("[act] src/payments/charge.py:3: x; y",)))
+        [row] = ledger.read_reviews("acme")                  # the writer's vendor alone: a noted fallback
+        self.assertEqual(row["note"], "panel: high risk (src/payments/charge.py); "
+                                      "fallback: same vendor (codex gave no verdict)")
+
+    def test_a_mechanical_unit_never_gets_a_panel(self):
+        self.write_review(cross_vendor="required")
+        self.round("mechanical")
+        self.assertEqual([m for m, _tag in self.asked], ["codex"])
+        self.asked.clear()
+        self.write_review(cross_vendor="off")
+        done = pre.Done("done", "s", None, {"number": 7, "url": "u", "head": HEAD}, "r", HEAD)
+        out = pre.in_run(self.ctx("mechanical"), done, rework=None, publish_again=None, stopped=lambda: False,
+                         capped=lambda: None)
+        self.assertEqual((out, self.asked), (done, []))
+
+    def test_off_reviews_only_a_deep_head(self):
+        done = pre.Done("done", "s", None, {"number": 7, "url": "u", "head": HEAD}, "r", HEAD)
+        run = lambda: pre.in_run(self.ctx(), done, rework=None, publish_again=None,  # noqa: E731
+                                 stopped=lambda: False, capped=lambda: None)
+        out = run()
+        self.assertEqual(out.field["pre"]["verdict"], "pass")
+        self.assertIn(f"pre-review PASS by codex+{OPUS} (round 1 of 2)", out.summary)
+        self.changed, self.asked = [("src/a.py", 3, 1)], []
+        self.assertEqual((run(), self.asked), (done, []))
+
+    def test_a_panel_row_names_both_and_needs_no_fallback(self):
+        row = ledger.make_review_row(7, HEAD, "pre", "pass", f"review:pre:codex+{OPUS}", f"codex+{OPUS}", "w",
+                                     evidence="r.md", writer_model=OPUS)
+        self.assertEqual(row["model"], f"codex+{OPUS}")
+        with self.assertRaises(ledger.LedgerError):
+            ledger.make_review_row(7, HEAD, "pre", "pass", "r", f"{OPUS}+{SONNET}", "w", evidence="r.md",
+                                   writer_model=OPUS)
+
+    def test_the_first_half_raising_stops_the_second_before_the_join(self):
+        seen = {}
+
+        def ask_(model, package, **kw):
+            if model == "codex":              # the first, in this thread: Ctrl-C once the second runs
+                self.assertTrue(self.opus_started.wait(5))
+                raise KeyboardInterrupt
+            self.opus_started.set()
+            deadline = time.monotonic() + 5
+            while not kw["should_stop"]() and time.monotonic() < deadline:
+                time.sleep(0.01)
+            seen["stopped"] = kw["should_stop"]()
+            return review.Answer(model, None, headless.Result(0, {}, None, None, True), "", "", None, "stopped", "")
+
+        with mock.patch.object(pre, "ask", ask_), self.assertRaises(KeyboardInterrupt):
+            self.round()
+        self.assertEqual((seen, ledger.read_reviews("acme")), ({"stopped": True}, []))
+
+    def write_review(self, **review_):
+        (self.home / "config.json").write_text(json.dumps(support.no_wake({"review": review_})))
 
 
 class ReviewStageHoldTest(PreReviewCase):

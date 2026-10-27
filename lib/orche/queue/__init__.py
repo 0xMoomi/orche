@@ -13,7 +13,7 @@ import statistics
 import time
 
 from .. import cli, config, inbox, ledger, log as _log, paths, procs, publish, registry, roster, runs, units, util
-from . import facts, gate, store
+from . import facts, gate, repo, store
 
 DOCS_PATHS = ("**/*.md", "docs/**", ".orche/**")   # paths a [skip ci] commit may touch
 LAND_AUTO = "land-auto"     # who `approved` an entry that `land: auto` released (never the owner's word)
@@ -58,10 +58,11 @@ def verify_cmds(text) -> list:
     return [c.strip() for c in re.findall(r"`([^`]+)`", str(text or "")) if c.strip()]
 
 
-def _review(cfg, project, pr, head, accept):
-    """§4.3 step 6; returns the accepted reason or None."""
+def _review(cfg, project, pr, head, accept, required=False):
+    """§4.3 step 6; returns the accepted reason or None. `required`: a deep head's pre-review (its panel) is
+    required whatever review.cross_vendor says (R-REVIEW-13)."""
     rv = cfg["review"]
-    mode, rounds = rv["cross_vendor"], int(rv["rounds"])
+    mode, rounds = ("required" if required else rv["cross_vendor"]), int(rv["rounds"])
     if mode == "off":
         return None
     h7 = head[:7]
@@ -86,14 +87,18 @@ def _review(cfg, project, pr, head, accept):
     raise Refused(cli.EXIT_BLOCKED, f"pre-review of {h7} returned it (round {rnd} of {rounds}): fix and review again")
 
 
-def checks(cfg, project, where, *, pr, head, base, verify, accept=None) -> list:
-    """§4.3 steps 5-8 on `head` in the checkout `where` (ledger row, pre-review, gate, [skip ci]):
-    the accepted reasons, else Refused."""
+def checks(cfg, project, where, *, pr, head, base, verify, accept=None, tier="standard", safe_because="") -> list:
+    """§4.3 steps 5-8 on `head` in the checkout `where` (ledger row, pre-review, gate, [skip ci]), then a deep
+    head's blast-radius fact (R-REVIEW-14: named, and exercised by a test in the PR): the accepted reasons, else
+    Refused."""
+    from ..review import deep, proves
     h7, accepted = head[:7], []
     row = ledger.row_for_sha(project, head)
     if not row or row.get("verdict") not in ledger.ORDER:
         raise Refused(cli.EXIT_BLOCKED, f"no ledger row for {h7}")
-    why = _review(cfg, project, pr, head, accept)
+    changed = repo.changed(where, publish.base_ref(where, base), head)
+    why_deep = deep(cfg, changed, tier)
+    why = _review(cfg, project, pr, head, accept, required=bool(why_deep))
     if why:
         accepted.append(why)
     if not gate.steps(where, head, verify):
@@ -104,27 +109,37 @@ def checks(cfg, project, where, *, pr, head, base, verify, accept=None) -> list:
         raise Refused(cli.EXIT_BLOCKED, f"{what} carries [skip ci] on a code change (STANDING 4): add a commit without it")
     if skip:
         accepted.append(accept)
+    if why_deep and not safe_because:
+        raise Refused(cli.EXIT_BLOCKED, f"{why_deep}: name the one fact it is safe because of "
+                                        '(--safe-because "<fact>"); a test in the PR must exercise it')
+    if safe_because and not proves(changed):
+        raise Refused(cli.EXIT_BLOCKED, "no test in the PR exercises the fact it is safe because of; RETURN it: "
+                                        f"add a test that proves: {safe_because}")
     return accepted
 
 
 def admit(project, pr, head, *, where, base, branch, unit=None, b=None, writer="", accept=None, first=False,
-          by="auto", approved_by=None, dry_run=False, reg=None, cfg=None) -> dict:
+          by="auto", approved_by=None, surface="internal", safe_because="", dry_run=False, reg=None,
+          cfg=None) -> dict:
     """§4.3 steps 5-10, the one way a PR becomes an entry (`orche queue add`, the head review): every
     check on `head` in the checkout `where` (Refused when one fails), then the entry pinned to `head` is
     queued (add); a new one waiting for the owner's word (land: owner) asks Main once, and the
     integrator is started. `b`: the unit's Brief (its parent, rev and VERIFY), None for a PR alone.
-    add's result plus `started`; dry_run: {"entry"}, nothing written."""
+    `surface`: the head review's (R-REVIEW-12; `user` lands only on the check script's live-ui-verified);
+    `safe_because`: the head's blast-radius fact (R-REVIEW-14). add's result plus `started`; dry_run:
+    {"entry"}, nothing written."""
     reg = reg if reg is not None else registry.load()
     cfg = cfg if cfg is not None else config.load()
     verify = verify_cmds(b.fields.get("VERIFY")) if b is not None else []
-    accepted = checks(cfg, project, where, pr=pr, head=head, base=base, verify=verify, accept=accept)
+    accepted = checks(cfg, project, where, pr=pr, head=head, base=base, verify=verify, accept=accept,
+                      tier=b.tier if b is not None else "standard", safe_because=safe_because)
     main = roster.Roster(reg).main(project)
     owner_ok = land_mode(cfg, project) != "owner" or approved_in_log(project, pr, main.session if main else None)
     entry = {"id": entry_id(pr, head), "pr": pr, "head": head, "branch": branch, "unit": unit, "writer": writer,
              "parent": b.parent if b else "", "rev": b.rev if b else 0, "verify": verify,
              "approved_by": approved_by or f"{by} (review)", "accept": "; ".join(accepted) or None,
-             "first": bool(first), "owner_ok": owner_ok, "at": None, "state": "waiting", "restarts": 0,
-             "drop": False, "test": None}
+             "surface": surface, "first": bool(first), "owner_ok": owner_ok, "at": None, "state": "waiting",
+             "restarts": 0, "drop": False, "test": None}
     if dry_run:
         return {"entry": entry}
     entry["at"] = util.now_iso()

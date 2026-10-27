@@ -38,6 +38,8 @@ confirmation; nothing you plan is built before that confirmation.
   lightest page for a visual one. No production framework, no tests, no abstractions.
 - Comparing designs: build two or three variants behind one switch and observe each on the surface the question is
   about (a capture for a look, logged output or timing for a behaviour). The observation is the test.
+- A UI or UX question: build two or three variants behind one switcher in the same prototype so the comparison is
+  live; report the numbers per variant, then delete the losers.
 - Run it where the claim lives (same runtime, version and data size); a run elsewhere is "not confirmed", never
   "ruled out".
 - A spike ends deleted or promoted, never kept by drift. Promotion is a new design through Main and then Build; the

@@ -29,17 +29,28 @@ round=`.
 Pane units (`orche report done`, pane_round): one round, synchronously, within PANE_BUDGET_S;
 RETURN refuses the done (exit 3) with the findings; once the revision has `review.rounds` RETURNs
 the next report files the done with the open findings.
+
+Panel (R-REVIEW-13): a deep head (review.deep: a high-risk path or more than `review.panel_min_lines` changed
+lines, never a mechanical unit) is reviewed as in `required` mode, even with `review.cross_vendor` off. Its round
+is a panel: the first two models of `review.order` of different vendors that are up (pair) read the same package
+at once, the first in this thread exactly as a single reviewer, the second beside it under its own tag. Their
+findings merge by agreement (group): `both` (the same file and overlapping lines, or the same normalised line)
+first at the stronger level, then `one` at most [consider]; only a `both` [act] makes it RETURN. A panel costs two
+calls; with one vendor up the single review runs and its note says so (`panel: only one vendor up (...)`).
 """
 import re
+import threading
 import time
 from dataclasses import dataclass, replace
 from pathlib import Path
 
 from .. import config, ledger, log, procs, publish, shell, templates, util, vendors
 from ..flow import usage as holds
-from . import CHANGED, ask, fence, masked, one_line
+from ..queue import repo
+from . import CHANGED, ask, deep, fence, masked, one_line
 
 MODES = ("required", "optional", "off")
+REQUIRED = MODES[0]      # a deep head's mode, whatever review.cross_vendor says
 STOPPED = "stopped by Main"
 PANE_BUDGET_S = 540      # the pane's round inside the agent's 600000 ms Bash call (publish took the rest)
 MIN_CALL_S = 30          # a hand-over call with less time left is not started
@@ -52,6 +63,8 @@ MAX_DIFF_LINES = 3000   # the package's diff, then it says so
 OPUS, SONNET = "claude-opus-5-5", "claude-sonnet-5-5"
 _WHY = {"codex not installed": "codex is not installed"}
 _HEADER = re.compile(r"^# pre-review r(\d+): (\S+) rev (\d+) ")
+_LEVELS = ("noted", "consider", "act")
+_SPOT = re.compile(r"^`?([^\s:`]+):(\d+)(?:-(\d+))?")
 
 
 def mode_of(cfg) -> str:
@@ -81,10 +94,9 @@ class Choice:
         return f"fallback: same vendor ({self.why})" if self.why else ""
 
 
-def choose(cfg, writer_model, avail=None) -> Choice:
-    """The reviewer of a head written by `writer_model` (R-REVIEW-2, R3; §8.5: held vendors skipped)."""
-    order = [str(m) for m in cfg["review"]["order"] if m]
-    writer_vendor = vendors.vendor_of(writer_model)
+def _probe(cfg, avail):
+    """(up(model), hold_of(model), held, state): whether a model can review now (its vendor not held, §8.5; Codex
+    installed and starting), each vendor's hold read once and Codex probed once, only when asked."""
     state, held = {"avail": avail}, {}
 
     def hold_of(model):
@@ -102,6 +114,25 @@ def choose(cfg, writer_model, avail=None) -> Choice:
             state["avail"] = vendors.available(cfg)
         return state["avail"].ok
 
+    return up, hold_of, held, state
+
+
+def _missing(held, state, vendor) -> str:
+    """Why no model of a vendor other than `vendor` is up: that vendor's hold, else Codex's state."""
+    other = next((v for v, h in held.items() if h is not None and v != vendor), None)
+    if other is not None:
+        return f"{other} held: usage limit until {holds.hhmm(holds.until_of(held[other]))}"
+    avail = state["avail"]
+    return "codex not installed" if avail is None or avail.state == "absent" else "codex does not start"
+
+
+def choose(cfg, writer_model, avail=None, mode=None) -> Choice:
+    """The reviewer of a head written by `writer_model` (R-REVIEW-2, R3; §8.5: held vendors skipped); `mode`
+    overrides review.cross_vendor (a deep head: required)."""
+    order = [str(m) for m in cfg["review"]["order"] if m]
+    writer_vendor = vendors.vendor_of(writer_model)
+    up, hold_of, held, state = _probe(cfg, avail)
+
     def after(model) -> tuple:
         tail = order[order.index(model) + 1:] if model in order else []
         return tuple(m for m in tail if m != writer_model and up(m))
@@ -109,13 +140,8 @@ def choose(cfg, writer_model, avail=None) -> Choice:
     cross = next((m for m in order if vendors.vendor_of(m) != writer_vendor and up(m)), None)
     if cross is not None:
         return Choice(cross, "", after(cross))
-    avail = state["avail"]
-    cross_held = next((v for v, h in held.items() if h is not None and v != writer_vendor), None)
-    if cross_held is not None:
-        why = f"{cross_held} held: usage limit until {holds.hhmm(holds.until_of(held[cross_held]))}"
-    else:
-        why = "codex not installed" if avail is None or avail.state == "absent" else "codex does not start"
-    if mode_of(cfg) == "optional":
+    why = _missing(held, state, writer_vendor)
+    if (mode or mode_of(cfg)) == "optional":
         return Choice(None, why, ())
     same = next((m for m in order if m != writer_model and up(m)), None)
     if same is None:
@@ -124,6 +150,30 @@ def choose(cfg, writer_model, avail=None) -> Choice:
         if blocked is not None or hold_of(same) is not None:
             return Choice(None, why, (), blocked or vendors.vendor_of(same))
     return Choice(same, why if vendors.vendor_of(same) == writer_vendor else "", after(same))
+
+
+def pair(cfg, avail=None) -> tuple:
+    """R-REVIEW-13: (the panel's two models, ""): the first two models of review.order of different vendors that
+    are up; else ((), why only one vendor is up)."""
+    order = [str(m) for m in cfg["review"]["order"] if m]
+    up, _hold_of, held, state = _probe(cfg, avail)
+    first = next((m for m in order if up(m)), None)
+    if first is not None:
+        second = next((m for m in order if vendors.vendor_of(m) != vendors.vendor_of(first) and up(m)), None)
+        if second is not None:
+            return (first, second), ""
+    if len({vendors.vendor_of(m) for m in order}) < 2:
+        return (), "review.order names one vendor"
+    return (), _missing(held, state, vendors.vendor_of(first) if first else "")
+
+
+def deep_of(ctx) -> str:
+    """Why this head is reviewed in depth (review.deep over its diff against origin/<base>, its brief's TIER), else
+    ""."""
+    if not ctx.base:
+        return ""
+    changed = repo.changed(ctx.worktree, publish.base_ref(ctx.worktree, ctx.base), "HEAD")
+    return deep(ctx.cfg, changed, (ctx.fields or {}).get("TIER") or "standard")
 
 
 # ---- the package -----------------------------------------------------------------------------------
@@ -268,14 +318,27 @@ def _why(ctx, choice, first, model) -> str:
 
 def one_round(ctx, k, *, pr, head, report, earlier) -> Round:
     """Round k: the chosen reviewer, the next one once if it gave no verdict; the REVIEW file, the row,
-    the events line. Never raises for what a reviewer does."""
+    the events line. A deep head (deep_of): the panel (_panel), else the single review noting why not.
+    Never raises for what a reviewer does."""
     rounds = rounds_of(ctx.cfg)
-    choice = choose(ctx.cfg, ctx.writer_model)
+    why_deep, avail, degraded = deep_of(ctx), None, ""
+    if why_deep:
+        avail = vendors.available(ctx.cfg)
+        models, missing = pair(ctx.cfg, avail)
+        if models:
+            return _panel(ctx, k, models, why_deep, pr=pr, head=head, report=report, earlier=earlier, rounds=rounds)
+        degraded = f"panel: only one vendor up ({missing}): a single review"
+    mode = REQUIRED if why_deep else mode_of(ctx.cfg)
+
+    def recorded(rnd, answers, second_vendor):
+        rnd.note = "; ".join(x for x in (degraded, rnd.note) if x)
+        return _recorded(ctx, rnd, rounds, pr, answers, second_vendor=second_vendor, mode=mode)
+
+    choice = choose(ctx.cfg, ctx.writer_model, avail, mode)
     if choice.model is None and choice.held:     # §8.5: no reviewer of an unheld vendor; no row
         return Round(k, "held", "none", choice.note, (), head, None, choice.held)
     if choice.model is None:
-        rnd = Round(k, "skipped", "none", choice.note, (), head, None)
-        return _recorded(ctx, rnd, rounds, pr, [], second_vendor=False)
+        return recorded(Round(k, "skipped", "none", choice.note, (), head, None), [], False)
     answers, note = [], choice.note
     for i, model in enumerate((choice.model,) + choice.rest[:1]):
         timeout = float(TIMEOUT_S)
@@ -297,8 +360,8 @@ def one_round(ctx, k, *, pr, head, report, earlier) -> Round:
             break
     last = answers[-1] if answers else None
     if last is None:
-        return _recorded(ctx, Round(k, "error", choice.model, note, (), head, None, "no time left for the review"),
-                         rounds, pr, answers, second_vendor=not choice.why)
+        return recorded(Round(k, "error", choice.model, note, (), head, None, "no time left for the review"),
+                        answers, not choice.why)
     if last.stopped:
         return Round(k, "stopped", last.model, note, (), head, None, "stopped")
     why = "; ".join(f"{a.model}: {a.why}" for a in answers if a.why)
@@ -306,15 +369,129 @@ def one_round(ctx, k, *, pr, head, report, earlier) -> Round:
         rnd = Round(k, "error", last.model, one_line(f"{note + '; ' if note else ''}{why}", 240), (), head, None, why)
     else:
         rnd = Round(k, last.verdict.verdict, last.model, note, last.verdict.findings, head, None)
-    return _recorded(ctx, rnd, rounds, pr, answers, second_vendor=not choice.why)
+    return recorded(rnd, answers, not choice.why)
 
 
-def _recorded(ctx, rnd, rounds, pr, answers, *, second_vendor) -> Round:
+# ---- the panel (R-REVIEW-13) ---------------------------------------------------------------------------
+
+def _stopping(ctx) -> bool:
+    """The panel's second reviewer stops on what stops the first: a SIGTERM to this run, or its STOP."""
+    return bool((ctx.stop is not None and ctx.stop.signum is not None)
+                or (ctx.should_stop is not None and ctx.should_stop()))
+
+
+def _panel(ctx, k, models, why_deep, *, pr, head, report, earlier, rounds) -> Round:
+    """Both `models` read the same package at once: the first in this thread exactly as a single reviewer (the
+    run's stop, tag and on_start), the second in a thread beside it under its own tag, so neither's tag sweep
+    reaches the other. Both calls count in the run; the findings merge by agreement (agreed). The first call
+    raising (Ctrl-C) stops the second before it is joined."""
+    model, note = "+".join(models), f"panel: {why_deep}"
+    timeout = float(TIMEOUT_S)
+    if ctx.deadline is not None:
+        timeout = min(timeout, ctx.deadline - time.monotonic())
+    if timeout < MIN_CALL_S:
+        return _recorded(ctx, Round(k, "error", model, note, (), head, None, "no time left for the review"),
+                         rounds, pr, [], second_vendor=True, mode=REQUIRED)
+    texts = [package(ctx, pr=pr, head=head, k=k, rounds=rounds, reviewer=m, why="", report=report, earlier=earlier)
+             for m in models]
+    got, abort = {}, threading.Event()
+
+    def second():
+        try:
+            got["answer"] = ask(models[1], texts[1], cwd=ctx.worktree, cfg=ctx.cfg, timeout=timeout, effort=EFFORT,
+                                tag=procs.run_id(f"{ctx.unit}-panel", time.time_ns()),
+                                should_stop=lambda: abort.is_set() or _stopping(ctx))
+        except Exception as exc:  # noqa: BLE001 - a failed half is a missing answer, never a lost round
+            got["why"] = one_line(f"{type(exc).__name__}: {exc}", 200)
+
+    beside = threading.Thread(target=second, name=f"panel-{ctx.unit}", daemon=True)
+    beside.start()
+    try:
+        first = ask(models[0], texts[0], cwd=ctx.worktree, cfg=ctx.cfg, timeout=timeout, effort=EFFORT, tag=ctx.tag,
+                    stop=ctx.stop, should_stop=ctx.should_stop, on_start=ctx.on_start)
+    except BaseException:
+        abort.set()
+        raise
+    finally:
+        beside.join()
+    answers = [a for a in (first, got.get("answer")) if a is not None]
+    if ctx.record is not None:
+        for a in answers:
+            ctx.record(a, head)
+    rnd = agreed(ctx, k, models, (first, got.get("answer")), note, head, got.get("why", ""))
+    if rnd.word == "stopped":
+        return rnd
+    return _recorded(ctx, rnd, rounds, pr, answers, second_vendor=True, mode=REQUIRED)
+
+
+def agreed(ctx, k, models, answers, note, head, lost="") -> Round:
+    """The panel's round from its two answers: both verdicts → the findings grouped (group), RETURN only on a
+    `both` [act]; one verdict → that reviewer's review alone, as a single one; a stop, a changed tree or no
+    verdict at all → stopped or error. `lost`: why the second call left no answer."""
+    model = "+".join(models)
+    if any(a is not None and a.stopped for a in answers):
+        return Round(k, "stopped", model, note, (), head, None, "stopped")
+    failed = [(m, a) for m, a in zip(models, answers) if a is None or a.verdict is None]
+    why = "; ".join(f"{m}: {(a.why if a is not None else lost) or 'no answer'}" for m, a in failed)
+    if len(failed) == 2 or any(a is not None and a.why == CHANGED for _m, a in failed):
+        return Round(k, "error", model, one_line(f"{note}; {why}", 240), (), head, None, why)
+    if failed:
+        gone = failed[0][0]
+        a = next(x for x in answers if x is not None and x.verdict is not None)
+        same = vendors.vendor_of(a.model) == vendors.vendor_of(ctx.writer_model)
+        tail = f"fallback: same vendor ({gone} gave no verdict)" if same else f"{gone} gave no verdict"
+        return Round(k, a.verdict.verdict, a.model, one_line(f"{note}; {tail}", 240), a.verdict.findings, head, None)
+    findings = group(answers[0].verdict.findings, answers[1].verdict.findings, models)
+    return Round(k, "return" if any(f.startswith("[act]") for f in findings) else "pass", model, note, findings,
+                 head, None)
+
+
+def _split(finding) -> tuple:
+    level, _, text = str(finding).partition("] ")
+    return level.lstrip("["), text
+
+
+def _spot(text):
+    """(path, first line, last line) a finding starts with (`path:12` or `path:12-20`), else None."""
+    m = _SPOT.match(text)
+    if m is None:
+        return None
+    lo, hi = sorted((int(m.group(2)), int(m.group(3) or m.group(2))))
+    return m.group(1).removeprefix("./"), lo, hi
+
+
+def _same(x, y) -> bool:
+    """Two reviewers name one finding: the same file and overlapping lines, or the same normalised text."""
+    sx, sy = _spot(x), _spot(y)
+    if sx and sy and sx[0] == sy[0] and sx[1] <= sy[2] and sy[1] <= sx[2]:
+        return True
+    return " ".join(re.findall(r"[a-z0-9]+", x.lower())) == " ".join(re.findall(r"[a-z0-9]+", y.lower()))
+
+
+def group(first, second, models) -> tuple:
+    """Two reviewers' findings by agreement: `[<level>] both: …` first (the stronger level, in the stronger one's
+    words), then `[consider] one (<model>): …` (a [noted] stays noted)."""
+    a, b = [_split(f) for f in first], [_split(f) for f in second]
+    both, alone, used = [], [], set()
+    for level, text in a:
+        j = next((j for j, (_lv, other) in enumerate(b) if j not in used and _same(text, other)), None)
+        if j is None:
+            alone.append((models[0], level, text))
+            continue
+        used.add(j)
+        level, text = max((level, text), b[j], key=lambda f: _LEVELS.index(f[0]) if f[0] in _LEVELS else 0)
+        both.append(f"[{level}] both: {text}")
+    alone += [(models[1], level, text) for j, (level, text) in enumerate(b) if j not in used]
+    return tuple(both) + tuple(f"[{'noted' if level == 'noted' else 'consider'}] one ({m}): {text}"
+                               for m, level, text in alone)
+
+
+def _recorded(ctx, rnd, rounds, pr, answers, *, second_vendor, mode=None) -> Round:
     rnd.path = _write(ctx, rnd, rounds, pr, answers)
     try:
         ledger.record_review(ctx.project, "pre", pr, rnd.head, rnd.word, str(rnd.path), f"review:pre:{rnd.model}",
                              rnd.model, writer=ctx.writer, round=rnd.k, note=rnd.note, writer_model=ctx.writer_model,
-                             mode=mode_of(ctx.cfg), second_vendor=second_vendor)
+                             mode=mode or mode_of(ctx.cfg), second_vendor=second_vendor)
     except (ledger.LedgerError, OSError) as exc:
         log.log("hooks", f"pre-review: {ctx.unit}: review row not written: {exc}")
     log.log("events", f"prereview unit={ctx.unit} reviewer={rnd.model} verdict={rnd.word} round={rnd.k}")
@@ -384,12 +561,13 @@ def in_run(ctx, done, *, rework, publish_again, stopped, capped, resume=None) ->
     """PRE-REVIEW round k → PASS | RETURN, k < rounds → REWORK → publish (HEAD moved) → round k+1 |
     RETURN at the cap or error → Build, waking (design §3.1). Every reviewer held → `held` (§8.5).
     `resume` "rework": this run resumes one whose REWORK hit a usage limit at this HEAD (§8.5): the
-    revision's last RETURN is reworked first, without a new round.
+    revision's last RETURN is reworked first, without a new round. With review.cross_vendor off only a
+    deep head is reviewed (R-REVIEW-13).
 
     `done` is the published done; rework(text) → (status, summary, owner, head, result, stopped) of a
     REWORK attempt; publish_again(summary, owner, head, result) → (status, summary, owner, pr, result);
     stopped() → a STOP or SIGTERM between stages; capped() → G4's text before a paid call, else None."""
-    if mode_of(ctx.cfg) == "off" or done.pr is None:
+    if done.pr is None:
         return done
     rounds = rounds_of(ctx.cfg)
     history = [(r, "") for r in returns(ctx.unit_dir, ctx.rev)]
@@ -397,6 +575,8 @@ def in_run(ctx, done, *, rework, publish_again, stopped, capped, resume=None) ->
     k = len(history) + 1
     while True:
         if not ctx.base or not has_diff(ctx.worktree, publish.base_ref(ctx.worktree, ctx.base)):
+            return done
+        if mode_of(ctx.cfg) == "off" and not deep_of(ctx):
             return done
         if again is not None:     # the resumed rework of the last RETURN (round k)
             rnd, again = replace(again, head=done.head), None
@@ -477,7 +657,8 @@ def pane_round(reg, member, worktree, project, b, report_text, summary, publishe
               record=record)
     pr = published.record()
     done = Done("done", summary, None, pr, report_text, published.head)
-    if mode_of(cfg) == "off" or not ctx.base or not has_diff(ctx.worktree, publish.base_ref(ctx.worktree, ctx.base)):
+    if (not ctx.base or not has_diff(ctx.worktree, publish.base_ref(ctx.worktree, ctx.base))
+            or (mode_of(cfg) == "off" and not deep_of(ctx))):
         return Pane(False, "", summary, None)
     rounds = rounds_of(cfg)
     reused = _reused(ctx, pr["number"], published.head)

@@ -82,9 +82,11 @@ DEFAULTS = {
     # (a dead pid at once).
     "queue": {"land": "auto", "timeout_s": 1200, "max_restarts": 2, "lost_after_s": 3600, "per_project": {}},
     # The review table: a cross-vendor reviewer from `order`, at most `rounds`; cross_vendor off (the
-    # default), optional or required (the Codex cross-check runs only when asked).
+    # default), optional or required (the Codex cross-check runs only when asked). panel_min_lines: a change
+    # with more added and removed lines, or a high-risk path, is pre-reviewed by a two-vendor panel (whatever
+    # cross_vendor says) and needs its blast-radius fact proven by a test (lib/orche/review/__init__.py: deep).
     "review": {"cross_vendor": "off", "order": ["codex", "claude-opus-5-5", "claude-sonnet-5-5"],
-               "rounds": 2, "build": True, "pane_lines": 400},
+               "rounds": 2, "build": True, "pane_lines": 400, "panel_min_lines": 400},
     # The tier ladder: a run's model and effort by TIER and vendor ("division": the unit's own model).
     "ladder": {"escalate": True,
                "claude": {"mechanical": {"model": "claude-haiku-5-5", "effort": "low"},

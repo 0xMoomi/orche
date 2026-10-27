@@ -89,6 +89,18 @@ def next_order(text: str) -> int:
     return max((int(m.group(1)) for m in map(_ORDER.match, text.splitlines()) if m), default=0) + 1
 
 
+def _with_order(current, line) -> str:
+    """`current` with the standing-order `line` added after the last one: at the end, or above the audit's
+    Enforcement table (hr/mistakes.HEADING) when the file has one."""
+    from .mistakes import HEADING
+    head, mark, tail = current.partition(f"\n{HEADING}\n")
+    if not mark:
+        sep = "" if not current or current.endswith("\n") else "\n"
+        return f"{current}{sep}{line}\n"
+    head = head.rstrip("\n")
+    return f"{head}\n{line}\n{mark}{tail}"
+
+
 def correct(reg, key, text, *, by=None, dry_run=False) -> tuple:
     """Append the next numbered standing order to `key`'s STANDING.md (R-STANDING-1) and log it.
     Returns (data, number). Raises Refused(1, "--text is empty") when nothing is left after masking."""
@@ -106,7 +118,6 @@ def correct(reg, key, text, *, by=None, dry_run=False) -> tuple:
     if dry_run:
         print(f"[dry-run] append to {path}: {number}. {order}", file=sys.stderr)
     else:
-        sep = "" if not current or current.endswith("\n") else "\n"
-        util.atomic_write(path, f"{current}{sep}{number}. {order}\n")
+        util.atomic_write(path, _with_order(current, f"{number}. {order}"))
         log(f"correct {key} #{number} by {by}: {order}")
     return {"project": key, "number": number, "path": str(path), "dry_run": dry_run}, number

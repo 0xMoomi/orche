@@ -210,13 +210,33 @@ class PersonaTemplatesTest(unittest.TestCase):
         self.assert_craft("division", "build", 60, OWNER_BAR + ("Tracer bullets", "Security basics", "AI-trace",
                           "the headless head review keeps its eight lines", "### Done means"))
 
+    def test_build_names_the_review_depth_rules(self):
+        """c81 (R-REVIEW-12 to 14): Build's craft and rulebook name the surface, the panel's groups and the fact;
+        the rulebook quotes the queue's return reason and the config default."""
+        from orche import config
+        from orche.queue import integrator
+        craft = " ".join(self.craft_of("division", "build").split())
+        for phrase in ("`--surface user`", "`live-ui-verified`", "two-vendor panel", "`both` defect is a RETURN",
+                       "`one` finding is consider", '`--safe-because "<fact>"`',
+                       'RETURN "add a test that proves: <fact>"'):
+            self.assertIn(phrase, craft)
+        skill = " ".join((SKILLS / "orche-build" / "SKILL.md").read_text().split())
+        for phrase in ("`--surface user`", "`verdict: live-ui-verified`",
+                       integrator.LIVE_REASON.format(level="<level>"),
+                       f"`review.panel_min_lines` ({config.DEFAULTS['review']['panel_min_lines']})",
+                       "`both` findings first", "`one` findings (consider)",
+                       "A panel costs two reviews; it runs only on that trigger.", '`--safe-because "<',
+                       'RETURN "add a test that proves: <fact>"'):
+            self.assertIn(phrase, skill)
+
     def test_worker_craft(self):
         self.assert_craft("feature", "checkout", 50, OWNER_BAR + ("Red, green, one vertical slice",
                           "Prove the regression test", "REPORT.md becomes the PR body", "Never widen scope yourself"))
 
     def test_rnd_craft(self):
         self.assert_craft("division", "rnd", 60, ("falsification box", "A spike ends deleted or promoted",
-                                                  "Explain the number", "Design it twice"))
+                                                  "Explain the number", "Design it twice",
+                                                  "behind one switcher in the same prototype", "delete the losers"))
 
     def test_research_craft(self):
         self.assert_craft("division", "research", 60, ("needs two independent sources", "the date of its data",
@@ -335,6 +355,19 @@ class SkillsTest(unittest.TestCase):
         self.assertLessEqual(len(block), 1500)
         for part in ("## Divisions and models", "orche hr add", "Orca notifies the owner when your reply ends"):
             self.assertIn(part, text)
+
+    def test_main_rulebook_keeps_a_judge_only_rubric_and_grafts(self):
+        """c82: the design bakeoff's rubric goes to the decision log and the judge, never to the candidates."""
+        text = (SKILLS / "orche-main" / "SKILL.md").read_text()
+        flat = " ".join(text.split())
+        for part in ("write a judge-only rubric of 3 to 6 criteria", "with `orche decide`", "never into the briefs",
+                     "scores A and B against it, picks a base and lists the grafts",
+                     "The final brief to Build names the base and the grafts"):
+            self.assertIn(part, flat)
+        block = INJECT.findall(text)[0]
+        self.assertIn("a third scores both on your judge-only rubric, grafts onto a base", block)
+        self.assertLessEqual(len(block), 1500)
+        self.assertIn("R-ASK-5 |", (support.ROOT / "SPEC.md").read_text())
 
     def test_hr_agent_names_model_commands(self):
         text = (support.ROOT / "agents" / "hr.md").read_text()

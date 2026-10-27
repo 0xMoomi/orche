@@ -300,6 +300,80 @@ class QueueCmdTest(support.TempHomeCase):
         code, out, _ = self.orche("queue", "acme")
         self.assertIn("queue acme: 1 waiting", out)
 
+    def test_the_panes_add_is_its_head_review_and_records_the_surface(self):
+        """R-REVIEW-12: `--surface user` reaches the entry and the pane's head review record (a build pass row)."""
+        from orche.review import build
+        self.ready()
+        code, _out, err = self.orche("queue", "add", self.unit, "--surface", "user")
+        self.assertEqual(code, 0, err)
+        self.assertEqual(self.queued()[0]["surface"], "user")
+        self.assertEqual(build.record("acme", 12, self.head), {"surface": "user"})
+        row = ledger.review_for("acme", 12, self.head, "build")
+        self.assertEqual((row["verdict"], row["reviewer"], row["writer"]),
+                         ("pass", "div-acme-build (pane)", "feat-acme-checkout"))
+
+    def test_without_the_flag_the_head_reviews_surface_stands_else_internal(self):
+        from orche.review import build
+        self.ready()
+        path = build.record_path("acme", 12, self.head)
+        path.parent.mkdir(parents=True)
+        path.write_text("# head review · PR #12\n\nverdict: return\nsurface: user\n")
+        code, _out, err = self.orche("queue", "add", self.unit)
+        self.assertEqual(code, 0, err)
+        self.assertEqual(self.queued()[0]["surface"], "user")
+        path.unlink()
+        build.record_path("acme", 12, self.head, "pane").unlink()
+        store.queue_path("acme").unlink()
+        code, _out, err = self.orche("queue", "add", self.unit)
+        self.assertEqual(code, 0, err)
+        self.assertEqual(self.queued()[0]["surface"], "internal")
+
+    def commit(self, files):
+        """A commit of `files` on the unit's branch, the PR's head moved to it."""
+        for rel, text in files.items():
+            (self.feat / rel).parent.mkdir(parents=True, exist_ok=True)
+            (self.feat / rel).write_text(text)
+        git(self.feat, "add", "-A")
+        git(self.feat, "commit", "-q", "-m", "work")
+        self.head = git(self.feat, "rev-parse", "HEAD")
+        self.spec({"prs": [self.pr()]})
+
+    def test_a_deep_change_needs_its_panel_its_fact_and_a_test_that_proves_it(self):
+        """R-REVIEW-13, 14: a high-risk path needs the pre-review (cross_vendor off here), the one fact it is safe
+        because of, and a test in the PR; then the pane's record keeps the fact."""
+        from orche.review import build
+        self.commit({"src/payments/charge.py": "def charge(order): pass\n"})
+        self.ready(review=None)
+        code, _, err = self.orche("queue", "add", self.unit)
+        self.assertEqual(code, 3)
+        self.assertIn(f"no pre-review for {self.head[:7]}: `orche review --pr 12`", err)
+        self.ready(ledger_row=False)
+        code, _, err = self.orche("queue", "add", self.unit)
+        self.assertEqual(code, 3)
+        self.assertIn("high risk (src/payments/charge.py): name the one fact it is safe because of "
+                      '(--safe-because "<fact>")', err)
+        fact = "a retry reuses the order's charge id"
+        code, _, err = self.orche("queue", "add", self.unit, "--safe-because", fact)
+        self.assertEqual(code, 3)
+        self.assertIn(f"RETURN it: add a test that proves: {fact}", err)
+        self.assertFalse(self.queued() if (self.home / "queue" / "acme" / "queue.json").exists() else [])
+        self.commit({"tests/test_charge.py": "def test_a_retry_charges_once(): pass\n"})
+        self.ready()
+        code, _, err = self.orche("queue", "add", self.unit, "--safe-because", fact)
+        self.assertEqual(code, 0, err)
+        self.assertEqual(build.record("acme", 12, self.head), {"surface": "internal", "safe_because": fact})
+
+    def test_a_named_fact_needs_its_test_on_any_change(self):
+        from orche import review
+        self.ready()
+        code, _, err = self.orche("queue", "add", self.unit, "--safe-because", "pay() is pure")
+        self.assertEqual(code, 3)
+        self.assertIn("add a test that proves: pay() is pure", err)
+        self.assertTrue(all(review.proves([(p, 1, 0)]) for p in ("tests/a.py", "web/__tests__/a.js", "a.test.ts",
+                                                                  "pkg/a_test.go", "a.spec.ts")))
+        self.assertFalse(any(review.proves([(p, a, 0)]) for p, a in (("src/a.py", 3), ("tests/a.py", 0),
+                                                                      ("src/testing.py", 2))))
+
     def test_dry_run_prints_facts_writes_nothing(self):
         self.ready()
         code, out, err = self.orche("--dry-run", "queue", "add", self.unit)

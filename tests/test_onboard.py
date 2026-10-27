@@ -6,6 +6,7 @@ import copy
 import json
 import os
 import subprocess
+import unittest
 from unittest import mock
 
 import support
@@ -422,3 +423,18 @@ def choices_ok():
 if __name__ == "__main__":
     import unittest
     unittest.main()
+
+
+class PushReasonTest(unittest.TestCase):
+    """c79: a refused push's reason is the hook's failing line, not its first progress line."""
+
+    def test_reason(self):
+        def res(err, code=1):
+            return shell.Result(code, "", err, ["git", "push"])
+        self.assertEqual(verifygate.reason(res("INF 1 commits scanned.\nWRN leaks found: 1\n\n")),
+                         "WRN leaks found: 1")
+        self.assertEqual(verifygate.reason(res("INF 1 commits scanned.\nerror: failed to push some refs\n"
+                                               "hint: pull first\n")), "error: failed to push some refs")
+        self.assertEqual(verifygate.reason(res(" ! [REJECTED] main -> main (fetch first)\nhint: x\n")),
+                         "! [REJECTED] main -> main (fetch first)")
+        self.assertEqual(verifygate.reason(res("", 128)), "exit 128")
