@@ -1,7 +1,7 @@
-"""Lineage and parent (C10 T7): which chain of work every brief and report belongs to.
+"""Lineage and parent: which chain of work every brief and report belongs to.
 
 Each BRIEF.md header carries `lineage: <id>   parent: <unit|->`. A lineage id is the unit that started
-it; a brief without the line (pre-C10) is its own lineage with no parent. Pointers copy both fields
+it; a brief without the line (written before lineages) is its own lineage with no parent. Pointers copy both fields
 from the unit's brief.
 
 Assignment for a new brief (AMEND keeps both):
@@ -14,7 +14,7 @@ Assignment for a new brief (AMEND keeps both):
 The turn record `ORCHE_HOME/sessions/<session>.turn.json` {owner, lineages, at, started} is written
 by the prompt hook for Main and read here.
 
-Close (C10 T8): a member (a brief whose lineage is L) is terminal when the newest report for its
+Close: a member (a brief whose lineage is L) is terminal when the newest report for its
 current rev, from its target to the session its reports go to (roster.recipient), is `done`, `failed`,
 `stop` or a runner `info` without `retry` (stopped); `blocked`/`question` keep it open. Under
 `ORCHE_HOME/flow/<p>/.lock`, a done/stopped report to the project's Main of a lineage with two or more
@@ -69,7 +69,7 @@ def begin_turn(session, owner):
 
 def of_pointer(ptr, reg=None, project=None):
     """The lineage a pointer names: its `lineage` field; without one (ORCHE's own `relayed …`, deliverer
-    and heartbeat notes, a pre-C10 report) the lineage of its unit's brief in `project`, and "" when no
+    and heartbeat notes, a report written before lineages) the lineage of its unit's brief in `project`, and "" when no
     brief holds that unit — such a note never names a lineage after its unit. Never raises."""
     if ptr.get("lineage"):
         return str(ptr["lineage"])
@@ -148,7 +148,7 @@ def _sent(folder_):
     return 0.0
 
 
-# ---- close (C10 T8) --------------------------------------------------------
+# ---- close --------------------------------------------------------
 
 TERMINAL = ("done", "failed", "stopped")
 OPEN = ("blocked", "question", "external-request")

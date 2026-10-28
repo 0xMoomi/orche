@@ -13,7 +13,7 @@ import sys
 import time
 from pathlib import Path
 
-from . import cli, config, jev, jev_setup, jevkey, mask, metrics, paths, registry, units, util
+from . import cli, config, jev, jev_setup, jevkey, mask, metrics, paths, registry, transcript, units, util
 from .janitor import discover
 
 EXIT_OK, EXIT_USER = 0, 1
@@ -42,7 +42,7 @@ def _write_jsonl(path: Path, rows) -> None:
 
 
 def _read_jsonl(path: Path) -> list:
-    return [r for r in metrics._lines(path)] if path.exists() else []
+    return [r for r in transcript.records(path)] if path.exists() else []
 
 
 # ---- extract ---------------------------------------------------------------
@@ -83,13 +83,13 @@ def extract(root=None, days=60, n_prompts=150, n_reports=100, now=None, slugs=No
             continue
         if slugs is not None and path.relative_to(root).parts[0] not in slugs:
             continue
-        for obj in metrics._lines(path):
+        for obj in transcript.records(path):
             if obj.get("type") != "user" or obj.get("isMeta"):
                 continue
-            ts = metrics._timestamp(obj)
+            ts = transcript.timestamp(obj)
             if ts is None or ts < cutoff or ts > now:
                 continue
-            text = metrics._user_text(obj.get("message"))
+            text = transcript.user_text(obj.get("message"))
             if not text:
                 continue
             if metrics.NOTIFICATION_TAG in text:

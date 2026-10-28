@@ -16,7 +16,6 @@ from pathlib import Path
 
 from .. import brief, dispatch, inbox, log, roster, units
 from ..flow import lineage
-from ..hr import mistakes
 
 WEEK = _dt.timedelta(days=7)
 SENDER = "janitor"
@@ -63,6 +62,7 @@ def is_open(reg, key, unit) -> bool:
 
 
 def audit(reg, key, proj, now, r) -> str | None:
+    from ..hr import mistakes      # hr imports janitor: loaded here, not at import
     found = mistakes.classes(key, proj, now)
     known = mistakes.table(proj)
     new = [c for c in found if c["key"] not in known]

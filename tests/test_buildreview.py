@@ -163,7 +163,7 @@ class Decisions(BuildReviewCase):
         self.assertEqual((self.calls, self.pointers()), ([], []))
 
     def test_no_pre_row_runs_the_head_review_at_once(self):
-        """c83: a cross-check runs only on request; without its row the head review decides, never waiting."""
+        """A cross-check runs only on request; without its row the head review decides, never waiting."""
         self.assertEqual(self.review()["status"], "queued")
         self.assertEqual(len(self.calls), 1)
         self.assertIn("auto-queued PR #7 @aaaaaaa: no cross-check, head review PASS", self.pointers()[0]["summary"])
@@ -324,7 +324,7 @@ class Pending(BuildReviewCase):
         self.assertEqual(build.pending("acme", self.reg), [])             # given up: never re-spawned
 
     def test_may_start_asks_gh_nothing_and_the_review_ends_a_closed_pr_or_a_moved_head_quietly(self):
-        """Review B G8a: no gh call inside the heartbeat; the started review reads the PR and ends the marker."""
+        """No gh call inside the heartbeat; the started review reads the PR and ends the marker."""
         self.run_json("u1")
         [item] = build.pending("acme", self.reg)
         with mock.patch.object(build, "_pr", side_effect=AssertionError("gh inside the heartbeat")):
@@ -343,7 +343,7 @@ class Pending(BuildReviewCase):
                          {"pr7-aaaaaaa": "PR merged", "pr8-eeeeeee": "head moved"})
 
     def test_a_heartbeat_pass_with_pending_reviews_makes_no_gh_call(self):
-        """Review B G8a: the 120 s watchdog never waits on gh: the pass only claims and starts."""
+        """The 120 s watchdog never waits on gh: the pass only claims and starts."""
         import time
         from orche import reconcile
         self.run_json("u1")
@@ -391,7 +391,7 @@ class Cli(BuildReviewCase):
         self.assertNotEqual(code, 0)
 
     def test_head_runs_the_head_review_only(self):
-        """c83: `--head` (the publish hook's and the heartbeat's) never starts a pre-review."""
+        """`--head` (the publish hook's and the heartbeat's) never starts a pre-review."""
         with mock.patch.object(registry, "load", lambda: self.reg), \
                 mock.patch.object(pre, "one_round", side_effect=AssertionError("a pre-review")):
             code, out = self.run_cli("review", "--pr", "7", "--project", "acme", "--head")
@@ -524,7 +524,7 @@ class SpendAndHolds(BuildReviewCase):
 
 
 class BuildsOwnPr(BuildReviewCase):
-    """R33, c83: `orche review --pr N` (the request) runs the pre-review first (a pre row) on any head, then the
+    """R33: `orche review --pr N` (the request) runs the pre-review first (a pre row) on any head, then the
     Build review, so `orche queue add --pr N` finds the pre row."""
 
     def setUp(self):
@@ -549,7 +549,7 @@ class BuildsOwnPr(BuildReviewCase):
                              self.verdict)
 
     def test_an_ordinary_head_gets_the_panel_then_the_build_review_queues_it(self):
-        """c83: no deep gating: a small, low-risk head (the facts' cart change) gets both vendors at once."""
+        """No deep gating: a small, low-risk head (the facts' cart change) gets both vendors at once."""
         out = build.for_pr("acme", 7, reg=self.reg, cfg=config.load())
         self.assertEqual(out["status"], "queued")
         row = ledger.review_for("acme", 7, HEAD, "pre")
@@ -595,9 +595,9 @@ class BuildsOwnPr(BuildReviewCase):
         self.assertEqual(self.asked, [])
 
 
-class ReviewBTest(BuildReviewCase):
+class ReviewIsolationTest(BuildReviewCase):
     def test_a_writer_changing_its_live_worktree_during_the_review_is_no_error(self):
-        """Review B G8d: the review reads a detached worktree at the PR head, never the writer's live one."""
+        """The review reads a detached worktree at the PR head, never the writer's live one."""
         import subprocess
         from test_hooks import GIT_ENV
         root, live = self.home / "wt" / "acme", self.home / "wt" / "acme-checkout"
@@ -630,7 +630,7 @@ class ReviewBTest(BuildReviewCase):
         self.assertEqual(list((self.home / "reviews" / "acme").glob("wt-pr7-*")), [])      # removed after
 
     def test_a_gh_outage_in_a_started_review_tells_build_quietly(self):
-        """Review B G8a: the heartbeat no longer filters gh failures, so one start must not wake Build."""
+        """The heartbeat no longer filters gh failures, so one start must not wake Build."""
         with mock.patch.object(build, "_pr", side_effect=build.github.GhError("gh: HTTP 502")):
             out = self.review()
         self.assertEqual(out["status"], "error")
@@ -639,14 +639,14 @@ class ReviewBTest(BuildReviewCase):
         self.assertIn("head review could not read the PR — gh: HTTP 502", ptr["summary"])
 
     def test_a_spend_cap_stops_the_pre_review_round_before_its_paid_call(self):
-        """Review B G7: G4 before the R33 pre-review round."""
+        """G4 before the R33 pre-review round."""
         with mock.patch.object(history, "spend_hit", lambda *a, **k: "acme spent $31.00, cap $30"), \
                 mock.patch.object(build.pre, "one_round", side_effect=AssertionError("a paid call")):
             out = build.for_pr("acme", 7, reg=self.reg, cfg=config.load())
         self.assertEqual((out["status"], out["error"]), ("pre-error", "spend cap: pre-review not run (acme spent $31.00, cap $30)"))
 
     def test_a_gh_failure_says_what_happened_and_tells_nobody(self):
-        """Review B G7: `orche review --pr N` when gh cannot read the PR prints no "the head was told"."""
+        """`orche review --pr N` when gh cannot read the PR prints no "the head was told"."""
         cli, out = load_cli(), io.StringIO()
         with mock.patch.object(build, "_pr", side_effect=build.github.GhError("gh: HTTP 502")), \
                 contextlib.redirect_stdout(out), contextlib.redirect_stderr(io.StringIO()):
@@ -709,7 +709,7 @@ class TeamsHead(BuildReviewCase):
         self.assertEqual((row["verdict"], row["reviewer"]), ("return", f"{DESIGN} (review)"))
         evidence = (self.home / "reviews" / "acme" / "pr7-aaaaaaa-build.md").read_text()
         self.assertIn("reviewer: design", evidence)
-        self.assertRegex(evidence, r"\nunit: \S+\n")      # c79: the audit's mistake classes count units
+        self.assertRegex(evidence, r"\nunit: \S+\n")      # the audit's mistake classes count units
 
     def test_a_pr_without_a_worker_is_still_reviewed_by_build(self):
         with mock.patch.object(build, "_pr", lambda where, pr: {**VIEW, "headRefName": "someone/else"}):

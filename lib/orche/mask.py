@@ -89,7 +89,7 @@ PATTERNS = [
         r"(?i)" + _KEY_START + _SECRET_KEY + r"""[ \t]*:[ \t]*["']?)"""
         + r"""(?:(?<=["'])""" + _SKIP + _VALUE + r"""(?=["'])|(?<!["'])""" + _SKIP + _SHAPED + _VALUE + r")")),
     # Candidate run: >= 12 lowercase 3-8 letter words separated by whitespace/newlines,
-    # optionally numbered. Only BIP39 sub-runs of >= 12 words are redacted (see _redact_mnemonics).
+    # optionally numbered. Only BIP39 sub-runs of >= 12 words are redacted (see redact_mnemonics).
     ("mnemonic", re.compile(
         r"(?<![A-Za-z0-9])" + _NUM + _WORD
         + r"(?:\s+" + _NUM + _WORD + r"){%d,}(?![A-Za-z0-9])" % (MNEMONIC_MIN_WORDS - 1))),
@@ -114,7 +114,7 @@ def _bip39_spans(run: str):
     return spans
 
 
-def _redact_mnemonics(rx, text):
+def redact_mnemonics(rx, text):
     count = 0
 
     def sub(match):
@@ -135,7 +135,7 @@ def redact_counts(text: str):
         return text, counts
     for name, rule in PATTERNS:
         if name == "mnemonic":
-            text, n = _redact_mnemonics(rule, text)
+            text, n = redact_mnemonics(rule, text)
         else:
             text, n = rule.subn(REDACTED, text)
         if n:
@@ -148,6 +148,3 @@ def redact(text: str):
     text, counts = redact_counts(text)
     return text, sum(counts.values())
 
-
-def has_secret(text: str) -> bool:
-    return bool(text) and redact(text)[1] > 0

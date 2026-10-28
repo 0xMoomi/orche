@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """SessionStart hook: on startup/resume/clear/compact, print the unit's role + STANDING, CHARTER, STATUS,
-HANDOFF and the last 20 DECISIONS rows (main worktree: role + STANDING + principles pointer).
+HANDOFF and the last 20 DECISIONS rows (main worktree: role + STANDING + the ten principles).
 The role comes from the Roster's identity: $ORCHE_SESSION when set (never the cwd), else the cwd's unit.
 Right after the role comes a "Role rules" card: the inject-marked block of skills/orche-main (main
 checkout), skills/orche-build (the div-*-build worktree) or skills/orche (every other unit).
@@ -23,7 +23,8 @@ SOURCES = ("startup", "resume", "clear", "compact")
 CARD = "Role rules"
 TRIM_ORDER = ("DECISIONS.tsv (last 20)", "CHARTER.md", "STANDING.md", "HANDOFF.md", "STATUS.md")
 INJECT_START, INJECT_END = "<!-- inject:start -->", "<!-- inject:end -->"
-PRINCIPLES = "Ten principles: SPEC.md §5.7 — name the ones you applied and the decision they changed."
+# The personas' principles part, so Main and the units read the same text (its "## " heading becomes the title).
+PRINCIPLES = os.path.join(ROOT, "templates", "personas", "parts", "principles.md")
 
 
 def _read(path):
@@ -84,7 +85,9 @@ def _project_sections(reg, key, note=None):
     if note:
         return [("ORCHE role", f"{note}\nproject: {key}\nstage: {stage}"), *_role_card("orche"), standing]
     role = f"session: {proj.get('main_session', 'main-' + key)}\nproject: {key}\nstage: {stage}"
-    return [("ORCHE role", role), *_role_card("orche-main"), standing, ("Principles", PRINCIPLES)]
+    principles = (_read(PRINCIPLES) or "").partition("\n")
+    return [("ORCHE role", role), *_role_card("orche-main"), standing,
+            *([(principles[0].lstrip("# "), principles[2])] if principles[2] else [])]
 
 
 def _note(r, who):
@@ -206,8 +209,7 @@ def _with_resume(r, who, source, text):
         from orche import project
         if source == "startup" and not project.has_open(r.reg, m.project):
             return text
-        from orche import cmd_status
-        card = cmd_status.card_text(project.card(r.reg, m.project))
+        card = project.card_text(project.card(r.reg, m.project))
         room = CAP - len(text) - 2
         if len(card) > room:
             tail = f"… orche status {m.project} for the rest"

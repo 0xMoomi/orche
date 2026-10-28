@@ -3,6 +3,24 @@
 All notable changes to ORCHE are listed here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow semantic versioning.
 
+## 0.18.0 — 2026-10-28
+
+### Changed
+
+- The public surface reads as a tool: the README says what ORCHE is, for whom and how to start, in under 100 lines; the specification and the glossary live under `docs/` (`docs/spec.md`, `docs/glossary.md`) without release or round labels, with the real repository layout and without the author's rollout plan; CONTRIBUTING carries a code map; `orche --help` lists commands in three groups (what you say to Main, what Main and the units run, what ORCHE runs by itself).
+- Main receives the ten principles at session start as text (it could not open the specification they were pointed at); the personas and Main share one wording.
+- Internal seams, no behaviour change: each command module loads once at start (`cmd_sleep_wake` ran twice), the test suite collects each test once (76 were collected twice), no eager import cycles, one `secrets/backends.py`, domain code out of the command modules (`card_text`, the publish and report text, the triage status, the setup report in `guide.py`), no calls into other modules' private names, no references to private design notes in public code.
+
+### Removed
+
+- `orche setup` and `orche apply-all` (with `install.sh --all-projects`): two front doors nothing used; `orche init` is the one way in.
+- The author-only install steps (Fable rule patching, the runner agent flip, the codex recovery, `orche install --yes`) that printed skip lines on every machine.
+- Five templates no code or prompt loaded (`brief.md`, `night.md`, `workflow/large-job.js`, `github/ci.yml`, `verify-skill/`), `scripts/dev-test.sh`, the 0.16 janitor LaunchAgent clean-up, three helpers only tests called, and the duplicate `orche feat sleep` (`orche sleep <unit>` remains).
+
+### Fixed
+
+- Real project names in a test fixture replaced by neutral ones; `.gitignore` covers `.orche/`, logs and env files; GitHub Actions pinned by commit; `SECURITY.md` names the supported release, the hooks that run on every prompt and tool call, and the merge gate that runs the repository's own verify script; a gitleaks allowlist for the two masking fixtures.
+
 ## 0.17.1 — 2026-10-28
 
 ### Fixed

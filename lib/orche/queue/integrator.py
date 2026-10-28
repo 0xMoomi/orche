@@ -1,8 +1,8 @@
-"""The integrator (design §5, R-QUEUE-3…11): model-free, one per project, in its own clone
+"""The integrator (R-QUEUE-3…11): model-free, one per project, in its own clone
 ORCHE_HOME/queue/<p>/checkout (never a unit's worktree).
 
-`run_once(p)` takes the integrator lock and makes one pass; `loop(p)` (`orche queue run <p>`, started
-detached by `queue.start`) holds the lock and makes passes until nothing is left to take. A pass:
+`loop(p)` (`orche queue run <p>`, started detached by `queue.start`) takes the integrator lock and makes
+passes until nothing is left to take (`max_passes=1`: one pass). A pass:
 under `land: auto` entries still waiting for the owner's word become plain waiting (queue.release) → an
 entry GitHub merged whose proof could not be fetched is proved again (§5.5) → entries whose integrator
 is gone go back to the front (§5.10: a dead pid at once, a live one after queue.lost_after_s; only the
@@ -780,14 +780,6 @@ def _pass(project) -> dict:
     if entry is None:
         return snap
     return _guarded(project, entry, lambda: Pass(project, entry, snap).run(), back=True)
-
-
-def run_once(project) -> dict:
-    """One pass under the integrator lock: {"code", "event", "pr", "line", "more"}."""
-    with locked(project) as held:
-        if not held:
-            return _res(0, "busy", None, f"queue {project}: an integrator is running", more=False)
-        return _pass(project)
 
 
 def loop(project, max_passes=1000) -> dict:

@@ -5,6 +5,9 @@ Agents only ever see secret NAMES. Values flow human -> dialog/getpass -> backen
 process environment. A value must never reach stdout, stderr, logs, exceptions,
 dry-run output, audit entries or argv; it travels to tools on stdin only.
 """
+import shlex
+
+from .. import mask
 
 ENVS = ("dev", "preview", "prod")
 VALUE_PLACEHOLDER = "<value>"
@@ -32,3 +35,18 @@ def parse_envs(text) -> list:
     if not out:
         raise SecretError("no env given")
     return out
+
+
+def scrub(text, *values) -> str:
+    """`text` with every given value replaced by `<value>`, then masked."""
+    text = str(text or "")
+    for value in values:
+        if value:
+            text = text.replace(value, VALUE_PLACEHOLDER)
+    return mask.redact(text)[0]
+
+
+def failure(result, what, *values) -> SecretError:
+    lines = [ln for ln in scrub(result.err, *values).strip().splitlines() if ln.strip()]
+    tail = f": {lines[-1].strip()[:200]}" if lines else ""
+    return SecretError(f"{what} failed (exit {result.code}): {shlex.join(result.argv)}{tail}")

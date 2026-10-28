@@ -1,4 +1,4 @@
-"""A gated unit's verified `done` publishes its work (design §3.2, §5.11; R6, R7, R28, R29).
+"""A gated unit's verified `done` publishes its work (R6, R7, R28, R29).
 
 ORCHE, not the model, pushes the unit's branch and opens its PR: the runner calls `publish` after the
 done gate passed (outside any Codex sandbox: the runner process holds the credentials), and
@@ -29,10 +29,12 @@ In a team repository (registry.team) a gated done publishes nothing: it is filed
 """
 import re
 from dataclasses import dataclass
+from pathlib import Path
 
 from . import github, mask, shell
 
 FETCH_TIMEOUT = 60
+PROJECT_KEYS = ("base", "branch_prefix", "issues")   # what `orche init` sets per project
 TITLE_MAX = 72
 BODY_MAX = 4000
 FOOTER_QUEUE = "Lands through the merge queue after its checks and the head review; please do not merge by hand."
@@ -88,6 +90,13 @@ def settings(cfg, project) -> dict:
     """config `publish` with `publish.per_project.<project>` laid over it (cfg None: config.load())."""
     from . import config
     return config.for_project(config.load() if cfg is None else cfg, "publish", project)
+
+
+def project_facts(key) -> dict:
+    """The project's {base, branch_prefix, issues} as config names them (None: not set)."""
+    from . import config
+    s = settings(config.load(), key)
+    return {k: s.get(k) for k in PROJECT_KEYS}
 
 
 def base(root, cfg=None, worktree=None, project=None) -> str | None:
@@ -282,6 +291,23 @@ def publish(member, worktree, root, *, unit, title, body, cfg=None):
     if gap:
         return gap
     return _ensure_pr(worktree, name, base_name, head, title, body, unit)
+
+
+def member_done(reg, member, cwd, key, unit, b, report, summary):
+    """A gated pane member's verified done (`orche report done`, `orche queue add` in a team repository):
+    push its branch and ensure the PR. Published, Unchanged or Gap."""
+    from . import donegate      # donegate reads transcripts: loaded here, not at import
+    text = report_text(report, summary)
+    root = (reg.get("projects", {}).get(key) or {}).get("path") or cwd
+    title, body = pr_text(member, root, goal=b.fields.get("GOAL") if b is not None else unit, report=text)
+    return publish(member, donegate.member_root(member, cwd), root, unit=unit, title=title, body=body)
+
+
+def report_text(report, summary) -> str:
+    """The report file's text when it exists, else the summary."""
+    if report and Path(report).is_file():
+        return Path(report).read_text(encoding="utf-8", errors="replace")
+    return summary
 
 
 def _fetch(wt, base_name) -> bool:

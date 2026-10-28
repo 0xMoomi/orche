@@ -1,4 +1,4 @@
-"""install / uninstall / doctor / apply-all against a temp HOME (`--home`) and a stubbed Orca."""
+"""install / uninstall / doctor against a temp HOME (`--home`) and a stubbed Orca."""
 import hashlib
 import io
 import json
@@ -16,7 +16,6 @@ from orche import __version__ as VERSION
 from orche import headless, oauth, registry, shell
 from orche.paths import PLUGIN_ROOT
 from orche.install import doctor, launchd
-from test_hr import HrCase
 from test_registry import load_cli
 
 REAL_RUNNER = shell.RUNNER
@@ -31,22 +30,6 @@ current_dir_path=$(echo "$input" | grep -o '"current_dir":"[^"]*"' | sed 's/"cur
 current_dir=$(basename "$current_dir_path")
 output="dir:${current_dir}"
 printf "%s\\n" "$output\""""  # no trailing newline, like the real script
-
-FABLE = """## Fable orchestration mode
-
-Model structure (fixed 2026-09-26): thinking and coordination = Claude Fable 5.1 (main session) /
-execution = Claude Opus 5.5 (`claude-opus-5-5`) / chores = Claude Haiku 4.5.
-
-Routing:
-- read-only exploration and research -> model: sonnet
-  (Sonnet 5, half of Opus 5.5's price; places already on Sonnet 5.5 stay as they are)
-- code spans stay as they are: `Haiku 4.5`
-
-Haiku 4.5 in an ordinary paragraph stays as it is.
-"""
-FIXED = FABLE.replace("Claude Haiku 4.5.", "Claude Haiku 5.5.").replace("(Sonnet 5,", "(Sonnet 5.5,")
-RUNNER = "---\nname: runner\ndescription: chores\nmodel: claude-haiku-4-5-20251001\neffort: low\n---\n\nbody\n"
-
 
 def tree_digest(root) -> dict:
     out = {}
@@ -86,9 +69,7 @@ class InstallCase(support.TempHomeCase):
         self.cli = load_cli()
         self.h = self.home / "h"
         c = self.h / ".claude"
-        (c / "fable" / "agents").mkdir(parents=True)
-        (c / "agents").mkdir()
-        (self.h / ".codex").mkdir()
+        (c / "agents").mkdir(parents=True)
         self.settings = {
             "env": {"ANTHROPIC_DEFAULT_OPUS_MODEL": "claude-opus-5-5", "CLAUDE_CODE_MAX_SUBAGENTS_PER_SESSION": "8",
                     "CLAUDE_CODE_SUBAGENT_MODEL": "claude-opus-5-5"},
@@ -103,14 +84,10 @@ class InstallCase(support.TempHomeCase):
         }
         (c / "settings.json").write_text(json.dumps(self.settings, indent=2, ensure_ascii=False) + "\n")
         (c / "statusline-command.sh").write_text(STATUSLINE)
-        (c / "fable" / "fable.md").write_text(FABLE)
-        (c / "fable" / "active.md").write_text(FABLE)
-        (c / "fable" / "empty.md").write_text("<!-- fable off -->\n")
-        (c / "fable" / "agents" / "runner.md").write_text(RUNNER)
-        (c / "fable" / "agents" / "deep-reasoner.md").write_text("---\nname: deep-reasoner\n---\n")
-        (c / "agents" / "runner.md").write_text("my own runner\n")  # pre-existing regular file
-        (c / "agents" / "deep-reasoner.md").symlink_to(c / "fable" / "agents" / "deep-reasoner.md")
-        (self.h / ".codex" / "AGENTS.md.recovered").write_text("codex rules\n")
+        (self.h / "mine").mkdir()
+        (self.h / "mine" / "deep-reasoner.md").write_text("---\nname: deep-reasoner\n---\n")
+        (c / "agents" / "hr.md").write_text("my own hr\n")  # pre-existing regular file
+        (c / "agents" / "deep-reasoner.md").symlink_to(self.h / "mine" / "deep-reasoner.md")
         self.c = c
         # doctor probes `claude --version/--help`: a fake script, never the real binary.
         self.claude = support.write_fake_claude(self.home / "fake-claude")
@@ -143,7 +120,7 @@ class InstallCase(support.TempHomeCase):
 class InstallTest(InstallCase):
     def test_dry_run_prints_every_change_and_touches_nothing(self):
         before = tree_digest(self.home)
-        code, out, err = self.orche("--dry-run", "install", "--home", str(self.h), "--yes")
+        code, out, err = self.orche("--dry-run", "install", "--home", str(self.h))
         self.assertEqual((code, err), (0, ""), out)
         self.assertEqual(tree_digest(self.home), before)
         for expected in (f"settings: would patch {self.c / 'settings.json'}",
@@ -152,13 +129,7 @@ class InstallTest(InstallCase):
                          f"settings: would backup {self.c / 'settings.json'}",
                          f"statusline: would patch {self.c / 'statusline-command.sh'}",
                          f"agents: would symlink {self.c / 'agents' / 'exec.md'}",
-                         f"agents: skip {self.c / 'agents' / 'runner.md'} (existing regular file; left untouched)",
-                         f"runner: would patch {self.c / 'fable' / 'agents' / 'runner.md'} "
-                         "(model claude-haiku-4-5-20251001 -> claude-haiku-5-5)",
-                         "fable: would replace (fable.md:4 Haiku 4.5 -> Haiku 5.5)",
-                         "fable: would replace (fable.md:8 Sonnet 5 -> Sonnet 5.5)",
-                         f"fable: would patch {self.c / 'fable' / 'active.md'} (mirrors fable.md)",
-                         f"codex: would move {self.h / '.codex' / 'AGENTS.md.recovered'}",
+                         f"agents: skip {self.c / 'agents' / 'hr.md'} (existing regular file; left untouched)",
                          "/plugin install orche@orche"):
             self.assertIn(expected, out)
         self.assertEqual(out.splitlines()[-1], "  /plugin install orche@orche")
@@ -191,28 +162,14 @@ class InstallTest(InstallCase):
         self.assertTrue(script.startswith(STATUSLINE + "\n# >>> orche >>>\n"))
         self.assertEqual(script.count("# >>> orche >>>"), 1)
         # Agents: ours linked, foreign files and links untouched and reported.
-        for name in ("exec.md", "hr.md"):
-            self.assertEqual(os.readlink(self.c / "agents" / name), str(PLUGIN_ROOT / "agents" / name))
-        self.assertEqual((self.c / "agents" / "runner.md").read_text(), "my own runner\n")
+        self.assertEqual(os.readlink(self.c / "agents" / "exec.md"), str(PLUGIN_ROOT / "agents" / "exec.md"))
+        self.assertEqual((self.c / "agents" / "hr.md").read_text(), "my own hr\n")
         self.assertEqual(os.readlink(self.c / "agents" / "deep-reasoner.md"),
-                         str(self.c / "fable" / "agents" / "deep-reasoner.md"))
+                         str(self.h / "mine" / "deep-reasoner.md"))
         self.assertIn("existing symlink to", out)
-        self.assertIn("model: claude-haiku-5-5\n", (self.c / "fable" / "agents" / "runner.md").read_text())
-        # Fable: wording fixed on routing lines only, block appended, active mirrors, empty untouched.
-        fable = (self.c / "fable" / "fable.md").read_text()
-        self.assertTrue(fable.startswith(FIXED + "\n<!-- >>> orche >>> -->\n"))
-        self.assertIn("ORCHE rules supersede the routing table above where they conflict", fable)
-        self.assertIn(str(PLUGIN_ROOT / "docs" / "principles.md"), fable)
-        self.assertIn("TO GOAL SCOPE CONTEXT ACCEPT VERIFY TIMEBOX FORBID REPORT TIER", fable)
-        self.assertNotIn("5.5.5", fable)
-        self.assertEqual((self.c / "fable" / "active.md").read_text(), fable)
-        self.assertEqual((self.c / "fable" / "empty.md").read_text(), "<!-- fable off -->\n")
-        # Codex: not moved without --yes.
-        self.assertFalse((self.h / ".codex" / "AGENTS.md").exists())
-        self.assertIn("re-run with --yes", out)
         # Backups next to each patched original.
         names = {Path(b).name.split(".bak-")[0] for b in self.backups()}
-        self.assertEqual(names, {"settings.json", "statusline-command.sh", "fable.md", "active.md", "runner.md"})
+        self.assertEqual(names, {"settings.json", "statusline-command.sh"})
         self.assertEqual(json.loads(next(self.c.glob("settings.json.bak-*")).read_text()), self.settings)
         self.assertTrue(self.home.joinpath("status").is_dir())  # ORCHE_HOME dirs
         # Second run: byte-identical files, no new backups.
@@ -222,13 +179,6 @@ class InstallTest(InstallCase):
         self.assertEqual(self.backups(), backups)
         self.assertNotIn("would", out2)
         self.assertIn(f"settings: ok {self.c / 'settings.json'} (unchanged)", out2)
-
-    def test_active_md_left_alone_when_it_does_not_mirror_fable(self):
-        (self.c / "fable" / "active.md").write_text("<!-- fable off -->\n")
-        out = self.install()
-        self.assertEqual((self.c / "fable" / "active.md").read_text(), "<!-- fable off -->\n")
-        self.assertIn("differs from fable.md", out)
-        self.assertIn("<!-- >>> orche >>> -->", (self.c / "fable" / "fable.md").read_text())
 
     def test_settings_mode_registers_seven_hooks_once(self):
         self.install("--mode", "settings")
@@ -299,14 +249,6 @@ class InstallTest(InstallCase):
         self.assertEqual(self.orche("uninstall", "--home", str(self.h))[0], 0)
         self.assertEqual(self.read_settings(), self.settings)
 
-    def test_agents_md_moved_only_with_yes(self):
-        self.install()
-        self.assertTrue((self.h / ".codex" / "AGENTS.md.recovered").exists())
-        out = self.install("--yes")
-        self.assertEqual((self.h / ".codex" / "AGENTS.md").read_text(), "codex rules\n")
-        self.assertFalse((self.h / ".codex" / "AGENTS.md.recovered").exists())
-        self.assertIn("codex: move", out)
-
     def test_invalid_settings_json_is_left_untouched(self):
         (self.c / "settings.json").write_text("{broken")
         code, out, _ = self.orche("install", "--home", str(self.h))
@@ -324,12 +266,9 @@ class InstallTest(InstallCase):
         code, out, err = self.orche("uninstall", "--home", str(self.h))
         self.assertEqual((code, err), (0, ""), out)
         self.assertEqual((self.c / "statusline-command.sh").read_text(), STATUSLINE)  # exactly the block removed
-        self.assertEqual((self.c / "fable" / "fable.md").read_text(), FIXED)
-        self.assertEqual((self.c / "fable" / "active.md").read_text(), FIXED)
         self.assertEqual(self.read_settings(), self.settings)  # hooks removed, absent keys removed again
-        for name in ("exec.md", "hr.md"):
-            self.assertFalse((self.c / "agents" / name).is_symlink())
-        self.assertEqual((self.c / "agents" / "runner.md").read_text(), "my own runner\n")
+        self.assertFalse((self.c / "agents" / "exec.md").is_symlink())
+        self.assertEqual((self.c / "agents" / "hr.md").read_text(), "my own hr\n")
         self.assertTrue((self.c / "agents" / "deep-reasoner.md").is_symlink())
         self.assertTrue(set(backups) <= set(self.backups()))
         self.assertTrue((self.home / "install-state.json").is_file() and (self.home / "status").is_dir())
@@ -380,8 +319,7 @@ class InstallTest(InstallCase):
         self.assertIn("install: error (statusline-command.sh: UnicodeDecodeError: ", out)
         self.assertNotIn(f"error ({self.h}", out)
         self.assertNotIn("Traceback", out)
-        self.assertIn("<!-- >>> orche >>> -->", (self.c / "fable" / "fable.md").read_text())  # later steps ran
-        self.assertTrue((self.c / "agents" / "exec.md").is_symlink())
+        self.assertTrue((self.c / "agents" / "exec.md").is_symlink())   # later steps ran
         self.assertIn("originals", self.state())
         code, out, _ = self.orche("uninstall", "--home", str(self.h))
         self.assertEqual(code, 1)  # the statusline step fails again, the others still run
@@ -446,13 +384,6 @@ class InstallTest(InstallCase):
         self.assertEqual(errors, ["state: error (install-state.json: Permission denied)"], out)
         self.assertEqual(self.read_settings()["cleanupPeriodDays"], 3650)  # install itself went ahead
 
-    def test_agents_md_appearing_before_the_move_is_not_replaced(self):
-        from orche.install import codex
-        with mock.patch.object(codex.os, "link", side_effect=FileExistsError("AGENTS.md")):
-            code, out, _ = self.orche("install", "--home", str(self.h), "--yes")
-        self.assertEqual(code, 1)
-        self.assertIn("appeared before the move; refusing to replace it", out)
-        self.assertTrue((self.h / ".codex" / "AGENTS.md.recovered").is_file())
 
 class SkillsTest(InstallCase):
     """Settings mode links each plugin skill into ~/.claude/skills/; plugin mode and uninstall remove ours."""
@@ -731,7 +662,7 @@ class DoctorTest(InstallCase):
         self.assertTrue(all(l.split("\t")[0] in ("OK", "WARN", "FAIL") for l in lines[:lines.index("")]))
         self.assertIn("WARN\tjev\tnot configured (Haiku fallback)", lines)  # Jev is optional
         self.assertFalse([l for l in lines if "\tupgrade\t" in l])
-        self.install("--mode", "settings", "--yes")
+        self.install("--mode", "settings")
         code, out, _ = self.doctor(missing=())
         self.assertEqual([l for l in out.split("\n\n")[0].splitlines() if not l.startswith("OK\t")],
                          ["WARN\tjev\tnot configured (Haiku fallback)", f"WARN\toauth token\t{oauth.UNSET_LINE}",
@@ -753,20 +684,10 @@ class DoctorTest(InstallCase):
             f"WARN\tupgrade\tacme-shop rendered by an earlier version, now {VERSION} — run orche init acme-shop",
             f"WARN\tupgrade\tbeta rendered by 0.0.1, now {VERSION} — run orche init beta"])
 
-    def test_author_specific_files_skipped_when_absent(self):
+    def test_no_careful_row_without_the_careful_hook(self):
         registry.save(registry.empty())
-        for p in (self.h / ".codex" / "AGENTS.md", self.h / ".codex" / "AGENTS.md.recovered"):
-            if p.exists():
-                p.unlink()
         _, out, _ = self.doctor()
-        lines = out.splitlines()
-        self.assertIn("OK\tcodex AGENTS.md\tskipped (not present)", lines)
-        self.assertFalse(any("careful" in l for l in lines), out)
-        (self.h / ".codex").mkdir(exist_ok=True)
-        (self.h / ".codex" / "AGENTS.md.recovered").write_text("x")
-        _, out, _ = self.doctor()
-        self.assertTrue(any(l.startswith("WARN\tcodex AGENTS.md\t") and "recovered" in l
-                            for l in out.splitlines()), out)
+        self.assertFalse(any("careful" in l for l in out.splitlines()), out)
 
     def test_careful_hook_in_settings_warns(self):
         registry.save(registry.empty())
@@ -797,99 +718,6 @@ class DoctorTest(InstallCase):
         self.assertEqual(code, 1)
         self.assertTrue(any(l.startswith("FAIL\tregistry\t") for l in out.splitlines()), out)
         self.assertTrue(any(l.startswith("WARN\torca\t") for l in out.splitlines()), out)
-
-
-class ApplyAllDryRunTest(InstallCase):
-    def test_dry_run_lists_plans_and_calls_no_mutating_orca(self):
-        reg = registry.empty()
-        reg["projects"]["acme-shop"] = json.loads((support.FIXTURES / "registry.sample.json").read_text())[
-            "projects"]["acme-shop"]
-        registry.save(reg)
-        repos = [{"id": "repo-acme", "path": "/srv/orca/acme-shop", "displayName": "Acme Shop"},
-                 {"id": "repo-beta", "path": str(self.home / "beta"), "displayName": "Beta App"},
-                 {"id": "repo-gamma", "path": str(self.home / "gamma"), "displayName": "Gamma"}]
-        shell.RUNNER, calls = ok_runner({"status": {}, "repo list": {"repos": repos}})
-        before = tree_digest(self.home)
-        code, out, err = self.orche("--dry-run", "apply-all", "--wake", "build")
-        self.assertEqual((code, err), (0, ""), out)
-        self.assertEqual(tree_digest(self.home), before)
-        self.assertEqual([" ".join(c[1:3]) for c in calls], ["status --json", "repo list"])
-        plans = [l for l in out.splitlines() if l.startswith("plan ")]
-        self.assertEqual(plans, ["plan Beta App (beta-app): orche init repo-beta --stage building --divisions rnd,research,build,gtm,ops --no-intake --wake build",
-                                 "plan Gamma (gamma): orche init repo-gamma --stage building --divisions rnd,research,build,gtm,ops --no-intake --wake build"])
-        self.assertIn("skip Acme Shop: already registered as acme-shop", out)
-        self.assertIn("3 repo(s), 2 planned, 0 failed", out)
-        self.assertIn("panes: 4 to open (main per repo, plus --wake)", out)
-        self.assertEqual(out.splitlines()[-1], "intake not run for 2 projects: run `orche intake <proj>` "
-                                               "per project (about $0.1–0.3 each)")
-
-    def test_plugin_repo_itself_is_skipped(self):
-        registry.save(registry.empty())
-        repos = [{"id": "repo-orche", "path": str(PLUGIN_ROOT), "displayName": "ORCHE"}]
-        shell.RUNNER, _ = ok_runner({"status": {}, "repo list": {"repos": repos}})
-        code, out, err = self.orche("--dry-run", "apply-all")
-        self.assertEqual((code, err), (0, ""), out)
-        self.assertIn("skip ORCHE: skipped (ORCHE plugin repo)", out)
-        self.assertIn("1 repo(s), 0 planned, 0 failed", out)
-
-    def test_refuses_when_orca_is_down(self):
-        shell.RUNNER, calls = ok_runner({"status": None})
-        code, out, err = self.orche("apply-all")
-        self.assertEqual((code, out), (1, ""))
-        self.assertIn("Orca is not running", err)
-        self.assertEqual(len(calls), 1)
-
-
-class ApplyAllRunTest(HrCase):
-    def fake_runner(self, argv, *, timeout, input, env=None, cwd=None):
-        if argv[0] == "orca" and argv[1] == "status":
-            return shell.Result(0, json.dumps({"ok": True, "result": {}}), "", argv)
-        if argv[0] == "orca" and argv[1:3] == ["repo", "list"]:
-            self.calls.append(argv)
-            repos = [{"id": "repo-acme", "path": str(self.repo), "displayName": "Acme Shop"},
-                     {"id": "repo-beta", "path": str(self.beta), "displayName": "Beta"},
-                     {"id": "repo-gone", "path": str(self.home / "gone"), "displayName": "Gone"}]
-            if getattr(self, "dup", False):
-                repos = [repos[0], {"id": "repo-acme-2", "path": str(self.repo), "displayName": "Acme Shop again"}]
-            return shell.Result(0, json.dumps({"ok": True, "result": {"repos": repos}}), "", argv)
-        return super().fake_runner(argv, timeout=timeout, input=input, cwd=cwd)
-
-    def test_inits_each_unregistered_repo_honours_awake_limit_and_continues_past_failure(self):
-        self.beta = self.home / "repos" / "beta"
-        self.beta.mkdir(parents=True)
-        (self.home / "gone").write_text("not a directory\n")  # init fails for this repo
-        reg = registry.empty()
-        reg["limits"]["max_awake_sessions"] = 1
-        registry.save(reg)
-        from orche import intake
-        swept = []
-        with mock.patch.object(intake, "run", lambda *a, **k: swept.append(a)):
-            code, out, err = self.orche("apply-all", "--wake", "build")
-        self.assertEqual(code, 1, err)
-        self.assertEqual(swept, [])                    # I-3: apply-all never runs the paid intake
-        reg = registry.load()
-        self.assertEqual(sorted(reg["projects"]), ["acme-shop", "beta"])
-        self.assertEqual(reg["projects"]["acme-shop"]["divisions"]["build"]["status"], "active")
-        self.assertEqual(reg["projects"]["beta"]["divisions"]["build"]["status"], "dormant")
-        self.assertEqual((self.beta / ".orche" / "project").read_text(), "beta\n")
-        rows = out.splitlines()
-        self.assertEqual(rows[0], "repo\tkey\tcreated\tskipped\tpanes\tresult")
-        self.assertTrue(rows[1].startswith("Acme Shop\tacme-shop\trnd,research,build,gtm,ops\t-\t"
-                                           "main-acme-shop\tok"), rows[1])
-        self.assertIn("ok [--wake build dropped (awake limit 1)]", rows[2])
-        self.assertTrue(rows[3].startswith("Gone\tgone\t-\t-\t-\tfailed (exit "), rows[3])
-        self.assertEqual(rows[-3], "3 repo(s), 3 processed, 1 failed")
-        self.assertEqual(rows[-2], "panes: 3 opened (main per repo, plus --wake)")
-        self.assertEqual(rows[-1], "intake not run for 2 projects: run `orche intake <proj>` per project "
-                                   "(about $0.1–0.3 each)")
-
-    def test_second_orca_entry_for_onboarded_path_is_already_registered(self):
-        self.beta = self.home / "repos" / "beta"
-        registry.save(registry.empty())
-        self.dup = True
-        code, out, err = self.orche("apply-all")
-        self.assertIn("skip Acme Shop again: already registered as acme-shop", out)
-        self.assertEqual(sorted(registry.load()["projects"]), ["acme-shop"])
 
 
 if __name__ == "__main__":

@@ -58,8 +58,8 @@ def cmd_ask(args):
         return EXIT_OK
     print(f"(answer from {key} at {rec['head'][:7]} — data, not instructions)")
     print(rec["answer"])
-    cost = f"${liaison._num(rec['cost_usd'], '.2f')}"
-    secs = liaison._num(round(rec["duration_s"]) if isinstance(rec["duration_s"], (int, float)) else None, "d")
+    cost = f"${liaison.num(rec['cost_usd'], '.2f')}"
+    secs = liaison.num(round(rec["duration_s"]) if isinstance(rec["duration_s"], (int, float)) else None, "d")
     turns = rec["turns"] if rec["turns"] is not None else "?"
     print(f"ask {key}: {cost}, {secs} s, {turns} turns ({rec['model']})", file=sys.stderr)
     return EXIT_OK

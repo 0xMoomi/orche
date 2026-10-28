@@ -1,5 +1,5 @@
-"""Typing into a pane, detached from every hook: `orche nudge <session>` (the wake, design §4.4) and
-`orche deliver <unit>` (a dispatched brief, design §4.5). No hook calls Orca to type (ruling 2).
+"""Typing into a pane, detached from every hook: `orche nudge <session>` (the wake) and
+`orche deliver <unit>` (a dispatched brief). No hook calls Orca to type (ruling 2).
 
 A waking pointer posted to a session starts `orche nudge <session>` (inbox.wake). The nudger holds
 `inbox/<session>/.wake.lock`, and types the fixed WAKE_TEXT only when a waking pointer is still
@@ -85,7 +85,7 @@ def _result(res, key) -> dict:
 
 
 def _type(session, text, *, strict, wait_s, still_needed, before_send=None, on_fail=None, settle=None, reopen=None):
-    """Type `text` + Enter into `session`'s pane (design §4.4 steps 3-7). (state, waited seconds).
+    """Type `text` + Enter into `session`'s pane. (state, waited seconds).
 
     The pane title is the session name. strict: not idle after `wait_s` → `busy` (else send anyway: Claude Code queues typed input,
     and an accepted send with no `turn_started` is then `queued`, not `nudge-failed`).
@@ -345,7 +345,7 @@ def _reopener(session):
 
 
 def nudge(session) -> tuple:
-    """`orche nudge <session>` (design §4.4): (exit code, state). Raises ValueError for an unsafe
+    """`orche nudge <session>`: (exit code, state). Raises ValueError for an unsafe
     session name (before anything is touched); every other failure is a state."""
     inbox.box(session)
     started, state, waited, quiet = time.monotonic(), "nudge-failed", 0, [0]
@@ -391,7 +391,7 @@ def _record_nudge(session, state) -> None:
         log.log("hooks", f"deliver: cannot record {session}'s last nudge: {exc}")
 
 
-# ---- `orche deliver <unit>` (J1, design §4.5) ---------------------------------------
+# ---- `orche deliver <unit>` (J1) ---------------------------------------
 
 def wake_state(r, session: str) -> str:
     """The state of a target without a pane (nothing here creates panes): `wake-requested` when the
@@ -428,12 +428,12 @@ def drain_dispatch(to, unit, rev) -> int:
     """Drain the pending `via: dispatch` pointers for `unit` at brief_rev <= `rev` in `to`'s inbox
     (the unit is settled or running: nothing is left to deliver). Returns how many moved."""
     stale = [path for path, p in inbox.pending(to) if p.get("via") == "dispatch" and p.get("unit") == unit
-             and _rev(p) <= rev]
+             and pointer_rev(p) <= rev]
     inbox.drain(stale)
     return len(stale)
 
 
-def _rev(ptr) -> int:
+def pointer_rev(ptr) -> int:
     try:
         return int(ptr.get("brief_rev") or 1)
     except (TypeError, ValueError):
@@ -449,7 +449,7 @@ def _reported(b, to) -> bool:
     if not b.sender:
         return False
     try:
-        return any(_rev(p) == b.rev and p.get("via") != "dispatch" and p.get("status") in REPORTS
+        return any(pointer_rev(p) == b.rev and p.get("via") != "dispatch" and p.get("status") in REPORTS
                    for _x, p in inbox.about(b.sender, b.unit, frm=to))
     except ValueError:
         return False
@@ -460,7 +460,7 @@ def _live_at(b, rec) -> bool:
     return rec is not None and units.num(rec.get("rev")) == b.rev
 
 
-def _settled(b, to) -> bool:
+def settled(b, to) -> bool:
     """Nothing is left to deliver for this revision: it ran (_ran), runs (a live lock of this rev) or
     was reported on (_reported). A run or report of an older revision never settles a newer one."""
     return _ran(b) or _live_at(b, runs.running(b.project, b.unit)) or _reported(b, to)
@@ -478,7 +478,7 @@ def _ran(b) -> bool:
 
 
 def drain_now(to, unit, rev) -> bool:
-    """drain_dispatch under `to`'s `.deliver.lock`, taken non-blocking (design §2.6): a deliverer that
+    """drain_dispatch under `to`'s `.deliver.lock`, taken non-blocking: a deliverer that
     holds it re-checks and drains, or types, itself. True when drained."""
     with _lock(to, DELIVER_LOCK, 0) as ok:
         if ok:
@@ -486,13 +486,13 @@ def drain_now(to, unit, rev) -> bool:
         return ok
 
 
-def _dispatched(to, unit):
+def dispatched(to, unit):
     """The newest pending `via: dispatch` pointer for `unit` in `to`'s inbox: (path, pointer) or None."""
     found = [(p, x) for p, x in inbox.pending(to) if x.get("via") == "dispatch" and x.get("unit") == unit]
     return found[-1] if found else None
 
 
-def _hint(r, to, unit, state) -> str:
+def undelivered_hint(r, to, unit, state) -> str:
     again = f"`orche deliver {unit}`"
     m = r.member(to)
     if state in ("no-pane", "needs-wake", "wake-requested") and m is not None and m.owns_worktree:
@@ -509,7 +509,7 @@ def _hint(r, to, unit, state) -> str:
 def _not_delivered(r, unit, to, rev, state, sender) -> None:
     """The urgent `info` from orche to the brief's sender (posting it wakes the sender's pane); not filed
     again while the same failure is still pending in the sender's inbox."""
-    hint = _hint(r, to, unit, state)
+    hint = undelivered_hint(r, to, unit, state)
     summary = f"not delivered: {unit} → {to} rev {rev} ({state})" + (f" — {hint}" if hint else "")
     try:
         if any(x.get("from") == "orche" and x.get("summary") == summary for _p, x in inbox.pending(sender)):
@@ -551,7 +551,7 @@ def _requested(b, to) -> int:
         since = b.path.stat().st_mtime_ns
     except OSError:
         since = 0
-    found = _dispatched(to, b.unit)
+    found = dispatched(to, b.unit)
     try:
         return max(since, int(found[1].get("since_ns") or 0) if found else 0)
     except (TypeError, ValueError):
@@ -576,7 +576,7 @@ def _pane(r, b, to, sent, reopened=None):
     and nothing runs (`stop-idle`, never a headless run), and is otherwise typed like a brief (also
     after a report at that rev). Any other pointer of a settled revision is drained (`already-ran`),
     also when the unit settled while this deliverer waited for the lock (R12)."""
-    found = _dispatched(to, b.unit)
+    found = dispatched(to, b.unit)
     if found is None:
         return "picked-up", 0
     sent.append(found[1])
@@ -584,7 +584,7 @@ def _pane(r, b, to, sent, reopened=None):
     started = time.monotonic()
     if stop and runs.running(b.project, b.unit) is not None:
         return _stop_run(r, b, to, locked=False), 0
-    if not stop and _settled(b, to):
+    if not stop and settled(b, to):
         drain_now(to, b.unit, b.rev)
         return "already-ran", 0
     with _lock(to, DELIVER_LOCK, LOCK_WAIT_S) as ok:
@@ -594,7 +594,7 @@ def _pane(r, b, to, sent, reopened=None):
             return "picked-up", int(time.monotonic() - started)
         if stop and runs.running(b.project, b.unit) is not None:
             return _stop_run(r, b, to, locked=True), int(time.monotonic() - started)
-        if not stop and _settled(b, to):
+        if not stop and settled(b, to):
             drain_dispatch(to, b.unit, b.rev)
             return "already-ran", int(time.monotonic() - started)
         state, waited = _type(to, f"[orche] inbox: {b.unit} rev {b.rev}", strict=False, wait_s=DELIVER_WAIT_S,
@@ -635,7 +635,7 @@ def _fallback(r, b, to, state) -> str:
 
 
 def deliver_unit(reg, unit, cfg=None, retry=False) -> tuple:
-    """`orche deliver <unit>` (design §4.5): (exit code, state). Exit 2 (`no-brief`, `unknown-target`,
+    """`orche deliver <unit>`: (exit code, state). Exit 2 (`no-brief`, `unknown-target`,
     `retired-target`) touches nothing; else one events line, and a failure (FAILED, exit 1) posts an
     urgent `info` to the pending pointer's sender. `user-typing` and `queued` (typed into a busy pane,
     accepted with no turn start yet) are exit 0: the pane's next prompt injects the pointer."""
@@ -691,7 +691,7 @@ def last_delivery(to, unit):
     return last if isinstance(last, dict) else None
 
 
-# ---- `orche deliver --remind <unit>` (reconcile's silent pane unit, design §2.3) --------------
+# ---- `orche deliver --remind <unit>` (reconcile's silent pane unit) --------------
 
 REMIND_OK = ("nudged", "queued", "user-typing", "already-reported")
 REMIND_REASON = re.compile(r"idle \d{1,4} min|TIMEBOX \d{1,2}h\d{1,2}m passed")   # the only reasons (fullmatch)

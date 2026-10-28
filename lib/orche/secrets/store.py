@@ -21,7 +21,7 @@ from contextlib import contextmanager
 from pathlib import Path
 
 from .. import config, log, mask, notify as notice, paths, registry, roster, shell, util
-from . import ENVS, VALUE_PLACEHOLDER, SecretError, backends_gcp, backends_gh, backends_keychain, backends_vercel
+from . import ENVS, VALUE_PLACEHOLDER, SecretError, backends, failure, scrub
 
 NAME_RX = re.compile(r"^[A-Z][A-Z0-9_]*$")
 BACKENDS = ("gcp", "vercel")
@@ -96,21 +96,6 @@ class Exec:
             self.planned.append(line)
             return shell.Result(0, "", "", argv)
         return shell.run(argv, input=stdin, timeout=timeout)
-
-
-def scrub(text, *values) -> str:
-    """`text` with every given value replaced by `<value>`, then masked."""
-    text = str(text or "")
-    for value in values:
-        if value:
-            text = text.replace(value, VALUE_PLACEHOLDER)
-    return mask.redact(text)[0]
-
-
-def failure(result, what, *values) -> SecretError:
-    lines = [ln for ln in scrub(result.err, *values).strip().splitlines() if ln.strip()]
-    tail = f": {lines[-1].strip()[:200]}" if lines else ""
-    return SecretError(f"{what} failed (exit {result.code}): {shlex.join(result.argv)}{tail}")
 
 
 # ---------------------------------------------------------------- project config
@@ -275,17 +260,17 @@ def put(ex, cfg, name, env, value, *, rotate=False, actor=None, request_id="") -
     project = cfg["project"]
     primary = cfg.get("backend") or "gcp"
     if primary == "gcp":
-        backends_gcp.put(ex, cfg, name, env, value, rotate=rotate)
+        backends.gcp_put(ex, cfg, name, env, value, rotate=rotate)
     elif primary == "vercel":
-        backends_vercel.put(ex, cfg, name, env, value, rotate=rotate)
+        backends.vercel_put(ex, cfg, name, env, value, rotate=rotate)
     else:
         raise SecretError(f"unknown secrets.backend {primary!r}")
     done = [primary]
     if cfg.get("gh_repo"):
-        backends_gh.put(ex, cfg, name, env, value)
+        backends.gh_put(ex, cfg, name, env, value)
         done.append("gh")
     if cfg.get("cache_local"):
-        if backends_keychain.put(ex, project, name, env, value):
+        if backends.keychain_put(ex, project, name, env, value):
             done.append("keychain")
         else:
             log.log("keymaster", f"cache skipped {project}/{env}/{name}")
@@ -301,12 +286,12 @@ def get(ex, cfg, name, env) -> str:
     """The current value (keychain cache first when enabled). `<value>` in dry-run."""
     check_name(name)
     if cfg.get("cache_local"):
-        value = backends_keychain.get(ex, cfg["project"], name, env)
+        value = backends.keychain_get(ex, cfg["project"], name, env)
         if value is not None:
             return VALUE_PLACEHOLDER if ex.dry_run else value
     primary = cfg.get("backend") or "gcp"
     if primary == "gcp":
-        value = backends_gcp.get(ex, cfg, name, env)
+        value = backends.gcp_get(ex, cfg, name, env)
         return VALUE_PLACEHOLDER if ex.dry_run else value
     raise SecretError(f"{name} ({env}): {primary} values cannot be read back; enable secrets.cache_local",
                       code=2)

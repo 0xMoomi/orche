@@ -1,4 +1,4 @@
-"""The owner's voice (C10 T9, lib/orche/flow/owner.py and lib/orche/notify.py): Main's closing line records
+"""The owner's voice (T9, lib/orche/flow/owner.py and lib/orche/notify.py): Main's closing line records
 the ask and sends no notification (Orca shows its own); ask.json; at most one per project per 300 s; a
 parked guard refusal records an ask and notifies; one argv-safe notify path (the text is an osascript
 argument, never script). The Stop-hook path itself is in test_hooks.OwnerVoiceHookTest."""
@@ -221,7 +221,7 @@ class NotifySendTest(OwnerCase):
         self.assertEqual(call[7:], [" -e do shell script", " -t"])
 
     def test_orca_running_wraps_the_line_in_a_tell_to_orca(self):
-        """c62: a click opens Orca, not Script Editor; one `pgrep -xq Orca` decides (never launch Orca)."""
+        """A click opens Orca, not Script Editor; one `pgrep -xq Orca` decides (never launch Orca)."""
         with mock.patch.object(notify, "orca_running", ORCA_RUNNING):
             self.assertTrue(notify.send("ORCHE", "-x", sound=True, kind="t", project="acme"))
         self.assertEqual(self.calls, [["pgrep", "-xq", "Orca"], [

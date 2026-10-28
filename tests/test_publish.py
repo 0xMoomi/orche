@@ -1,5 +1,5 @@
 """publish: a gated unit's verified done pushes its branch and ensures one ready PR to the base
-(design §3.2, §5.11; R6, R7, R28, R29). A temp bare repo is `origin`; the fake gh records calls."""
+(R6, R7, R28, R29). A temp bare repo is `origin`; the fake gh records calls."""
 import os
 import subprocess
 import unittest
@@ -185,7 +185,7 @@ class PublishTest(PublishCase):
 
 
 class TeamFitTest(PublishCase):
-    """c72: per-project base and prefix, the issue key from the worker's name, squash merges, patient push."""
+    """Per-project base and prefix, the issue key from the worker's name, squash merges, patient push."""
 
     def test_issue_of(self):
         for name, key in (("des-47-passkey-copy", "DES-47"), ("DES-47", "DES-47"), ("123-fix-login", "#123"),
@@ -241,7 +241,7 @@ class TeamFitTest(PublishCase):
         config.set_project("publish", "acme", branch_prefix=None)
         self.assertEqual(config.load()["publish"]["per_project"]["acme"], {"base": "develop"})
         self.assertEqual(config.for_project(config.load(), "queue", "acme"), config.load()["queue"])
-        self.assertNotIn("cross_vendor", config.DEFAULTS["review"])        # c83: a cross-check runs only on request
+        self.assertNotIn("cross_vendor", config.DEFAULTS["review"])        # a cross-check runs only on request
         self.assertEqual(config.DEFAULTS["review"]["deep_lines"], 400)
 
     def test_squash_merge_and_patient_push(self):
@@ -303,9 +303,9 @@ class SyncTest(PublishCase):
         self.assertFalse(publish.guard_base(self.repo, None))
 
 
-class ReviewBTest(PublishCase):
+class NothingToPublishTest(PublishCase):
     def test_a_feature_with_no_diff_is_a_gap_and_build_is_unchanged(self):
-        """Review B G4: only Build coordinates without a diff; a feature's empty done never files done."""
+        """Only Build coordinates without a diff; a feature's empty done never files done."""
         self.git(self.repo, "checkout", "-q", "-b", "feat/x")
         feat = Member("feat-acme-x", "acme", "feat", "x", "build", entry={"branch": "feat/x", "worktree": str(self.repo)})
         self.assertEqual(self.run_publish(feat), publish.Gap("nothing to publish: HEAD changes nothing against "
@@ -315,7 +315,7 @@ class ReviewBTest(PublishCase):
         self.assertEqual(self.gh_verbs(), [])
 
     def test_changes_fetches_the_base_first_never_trusting_a_stale_origin(self):
-        """Review B G8c: HEAD already on origin/main (pushed elsewhere) is no change though the local ref lags."""
+        """HEAD already on origin/main (pushed elsewhere) is no change though the local ref lags."""
         stale = self.git(self.repo, "rev-parse", "origin/main")
         head = self.commit(self.repo, "x.txt", "x\n")
         self.git(self.repo, "push", "-q", str(self.bare), "HEAD:refs/heads/main")

@@ -76,7 +76,7 @@ class ReportTest(support.TempHomeCase):
         return [json.loads(p.read_text()) for p in sorted(folder.glob("*.json"))] if folder.exists() else []
 
     def test_owner_flag_sets_the_pointer_field(self):
-        """C10 T9 (§5.1): `--owner` is the pointer's `owner` (masked, one line)."""
+        """T9: `--owner` is the pointer's `owner` (masked, one line)."""
         self.as_session("div-acme-shop-build")
         self.brief("acme-shop-coupon-20261016-1", "div-acme-shop-build")
         code, _, err = self.orche("report", "blocked", "--summary", "needs the key", "--owner",
@@ -374,7 +374,7 @@ class ReportTest(support.TempHomeCase):
         self.assertFalse((self.home / "inbox").exists())
 
     def test_a_feature_with_no_diff_is_a_gap_never_done_without_a_pr(self):
-        """Review B G4: a pane feature whose HEAD changes nothing never files done + PR none (the parent's
+        """A pane feature whose HEAD changes nothing never files done + PR none (the parent's
         all-landed would wait for it forever): the gap and its reason, like every pane publish gap."""
         self.as_session("feat-acme-shop-search")
         self.brief("acme-shop-search-20261016-1", "feat-acme-shop-search")

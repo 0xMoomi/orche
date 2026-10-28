@@ -299,7 +299,7 @@ def build(reg, cfg, key, avail=None, machine=None, here=None) -> dict:
     proj = ((reg or {}).get("projects") or {}).get(key) or {} if key else {}
     divs = proj.get("divisions") or {}
     stage = proj.get("stage") or "building"
-    catalog = vendors._catalog(cfg)
+    catalog = vendors.catalog_config(cfg)
     if avail is None and any(vendors.vendor_of(m) == vendors.CODEX for m in catalog):
         avail = vendors.available(cfg)
     models = _models(t, cfg, catalog, avail)

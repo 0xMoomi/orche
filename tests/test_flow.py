@@ -1,4 +1,4 @@
-"""Relay guards and the owner's pause (C10 T5, lib/orche/flow/guard.py): the autonomy window, G1 revisions,
+"""Relay guards and the owner's pause (T5, lib/orche/flow/guard.py): the autonomy window, G1 revisions,
 G2 blocked twice, G3 rate, G7 refusal streak, G8 pause, and where they show (`orche status`, the heartbeat)."""
 import datetime as _dt
 import json
@@ -12,7 +12,8 @@ from orche.flow import guard, owner, shape
 from orche.runs import history
 import test_cmd_dispatch
 from test_cmd_dispatch import BODY, GIFT
-from test_hooks import DispatchRelayTest, HookCase
+import test_hooks
+from test_hooks import HookCase
 
 from test_reconcile import RepairCase
 from test_runner import RunnerCase
@@ -26,7 +27,7 @@ def amend(unit, rev, goal="Add coupon field only"):
 
 class FlowCase(HookCase):
     orche = test_cmd_dispatch.CmdDispatchTest.orche
-    add_project_b = DispatchRelayTest.add_project_b
+    add_project_b = test_hooks.DispatchRelayTest.add_project_b
 
     def first(self, body=BODY):
         """The unit folder this dispatch made: the new one, not the newest mtime (a later write into an older
@@ -196,7 +197,7 @@ class OwnerSeenTest(FlowCase):
         self.run_hook("report_inject.py", self.payload("prompt.json"), ORCHE_SESSION="main-acme")
         self.assertTrue(self.seen())
 
-    def test_an_owner_prompt_answers_the_open_ask(self):              # C10 T10
+    def test_an_owner_prompt_answers_the_open_ask(self):              # T10
         owner.record("acme", "pick a plan", kind="owner", source="main",
                      now=_dt.datetime.now().astimezone() - _dt.timedelta(minutes=5))
         self.run_hook("report_inject.py", self.payload("prompt.json", prompt="[orche] inbox: 1 report"),
@@ -665,7 +666,7 @@ class ChainTest(FlowCase):
 
 
 class LineageCloseTest(FlowCase):
-    """C10 T8: done/stopped members of a multi-unit lineage post quiet; the report that leaves every member
+    """T8: done/stopped members of a multi-unit lineage post quiet; the report that leaves every member
     terminal writes LINEAGE.md and posts one close pointer to Main."""
 
     def lineage(self, n):

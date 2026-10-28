@@ -27,9 +27,6 @@ with open(home / "fake-calls.log", "a") as fh:
 if sys.argv[1] == "install":
     print("settings.json: write (hooks)")
     print("reconcile job: write /h/Library/LaunchAgents/com.orche.reconcile.plist (every 300s, loaded)")
-    if (home / "old-janitor").exists():
-        print("janitor: remove /h/Library/LaunchAgents/com.orche.janitor.plist (removed the janitor's old schedule; "
-              "the heartbeat runs it now)")
     if (home / "fail-install").exists():
         sys.exit(1)
     state = json.loads((home / "install-state.json").read_text())
@@ -124,15 +121,6 @@ class UpdateTest(support.TempHomeCase):
         self.assertEqual({c["version"] for c in calls}, {"0.8.0"})   # the NEW code ran every step
         self.assertEqual(calls[0]["argv"], ["install", "--mode", "settings", "--no-jev"])
         self.assertEqual([c["argv"] for c in calls[1:]], [["init", "acme", "--refresh"], ["init", "beta", "--refresh"]])
-
-    def test_the_old_janitor_schedule_removal_reaches_the_closing_block(self):
-        """c85: the reinstall removes the janitor's old LaunchAgent; its one line is in the closing block."""
-        (self.home / "old-janitor").touch()
-        self.publish()
-        code, out, err = self.update()
-        self.assertEqual(code, 0, out + err)
-        self.assertIn("janitor: remove /h/Library/LaunchAgents/com.orche.janitor.plist (removed the janitor's old "
-                      "schedule; the heartbeat runs it now)", out.splitlines())
 
     def test_no_restart_line_without_a_session_file_change(self):
         self.publish(skill="old")

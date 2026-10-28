@@ -6,7 +6,7 @@ using shell builtins only, silent on any error.
 """
 import re
 
-from . import _block_re, has_block, insert_block, read_text, remove_block, write_file
+from . import block_re, has_block, insert_block, read_text, remove_block, write_file
 
 STEP = "statusline"
 START, END = "# >>> orche >>>", "# <<< orche <<<"
@@ -34,7 +34,7 @@ def _final_exit(text):
 
 def after_exit(text) -> bool:
     """True when the ORCHE block sits after a final `exit …` line (so it never runs)."""
-    m = _block_re(START, END).search(text)
+    m = block_re(START, END).search(text)
     return bool(m) and _final_exit(text[:m.start()]) is not None
 
 

@@ -1,4 +1,4 @@
-"""`orche queue` — the merge queue (design §4): status, add, drop, pause, resume, approve.
+"""`orche queue` — the merge queue: status, add, drop, pause, resume, approve.
 
   orche queue [<p>]                               status
   orche queue add <unit> [--first] [--accept WHY] queue the unit's open PR at its worktree's HEAD
@@ -89,11 +89,10 @@ def _pr_checkout(reg, project, pr, head, base):
 
 def _team_publish(reg, target, where, unit, b, base) -> list:
     """R-TEAM-2, the owner's "push" in a team repository: publish the unit's branch exactly as its done would
-    have (cmd_report._publish), then start the head review (review.build.after_publish). The one open PR, as
+    have (publish.member_done), then start the head review (review.build.after_publish). The one open PR, as
     github.pr_for_branch lists it; a gap or nothing to publish refuses (exit 3)."""
-    from . import cmd_report
     report = b.folder / "REPORT.md"
-    out = cmd_report._publish(reg, target, str(where), target.project, unit, b,
+    out = publish.member_done(reg, target, str(where), target.project, unit, b,
                               str(report) if report.is_file() else "", b.fields.get("GOAL") or unit)
     if isinstance(out, publish.Gap):
         raise queue.Refused(cli.EXIT_BLOCKED, out.text + (f"\nOWNER: {out.owner}" if out.owner else ""))

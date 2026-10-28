@@ -1,3 +1,4 @@
+import argparse
 import copy
 import importlib.machinery
 import importlib.util
@@ -73,7 +74,7 @@ class ValidateTest(unittest.TestCase):
             self.assertTrue(any(needle in e for e in errors), (needle, errors))
 
     def test_division_effort_is_neither_required_nor_refused(self):
-        reg = sample()   # the sample's records carry no effort (C2 T6); one written before still validates
+        reg = sample()   # the sample's records carry no effort (T6); one written before still validates
         self.assertFalse([d for d, v in reg["projects"]["acme-shop"]["divisions"].items() if "effort" in v])
         self.assertEqual(registry.validate(reg), [])
         reg["projects"]["acme-shop"]["divisions"]["build"]["effort"] = "high"
@@ -94,7 +95,7 @@ class ValidateTest(unittest.TestCase):
                              ["projects.acme-shop.orche_version: must be a version like 0.6.0"], bad)
 
     def test_old_liaison_session_key_is_ignored(self):
-        """C8: a project written before the Liaison left keeps its `liaison_session`; it validates and names no member."""
+        """A project written before the Liaison left keeps its `liaison_session`; it validates and names no member."""
         reg = sample()
         reg["projects"]["acme-shop"]["liaison_session"] = "liaison-x"
         self.assertEqual(registry.validate(reg), [])
@@ -250,7 +251,7 @@ class CliTest(support.TempHomeCase):
         return cp.returncode, cp.stdout, cp.stderr
 
     def test_version(self):
-        self.assertEqual(self.orche("version"), (0, "orche 0.17.1\n", ""))
+        self.assertEqual(self.orche("version"), (0, "orche 0.18.0\n", ""))
 
     def test_projects_json_empty_home(self):
         self.assertEqual(self.orche("projects", "--json"), (0, "[]\n", ""))
@@ -302,6 +303,7 @@ class DiscoveryTest(support.TempHomeCase):
         self.addCleanup(sys.modules.pop, "orche.cmd_probe", None)
 
     def probe(self, body):
+        sys.modules.pop("orche.cmd_probe", None)    # a module is loaded once per process
         (self.lib_dir / "cmd_probe.py").write_text(body)
 
     def test_discovers_cmd_modules(self):
@@ -330,6 +332,21 @@ class DiscoveryTest(support.TempHomeCase):
         with self.assertRaises(RuntimeError) as ctx:
             self.cli.build_parser(self.lib_dir)
         self.assertIn("'zzprobe leaf'", str(ctx.exception))
+
+    def test_help_groups_every_command_once(self):
+        parser = self.cli.build_parser()
+        sub = next(a for a in parser._actions if isinstance(a, argparse._SubParsersAction))
+        grouped = [n for _, names in self.cli.GROUPS for n in names]
+        self.assertEqual(sorted(grouped), sorted(sub.choices))   # each registered command in exactly one group
+        text = parser.format_help()
+        self.assertNotIn("Other:", text)
+        self.assertLess(text.index("What you say to Main"), text.index("What Main and the units run"))
+        self.assertLess(text.index("What Main and the units run"), text.index("What ORCHE runs by itself"))
+        self.assertLess(text.index("What ORCHE runs by itself"), text.index("  nudge "))
+
+    def test_an_ungrouped_command_is_listed_under_other(self):
+        self.probe("def register(sub):\n    sub.add_parser('zzprobe', help='a probe')\n")
+        self.assertIn("Other:\n  zzprobe     a probe", self.cli.build_parser(self.lib_dir).format_help())
 
 if __name__ == "__main__":
     unittest.main()
@@ -360,7 +377,7 @@ class BusyTest(support.TempHomeCase):
 
 
 class LostUpdateTest(support.TempHomeCase):
-    """c69: every registry write applies its change to a registry loaded under `lock()`; a writer holding
+    """Every registry write applies its change to a registry loaded under `lock()`; a writer holding
     an older copy (a heartbeat pass, `orche hr add`) never saves it over a concurrent writer's change."""
 
     def test_a_stale_copy_keeps_a_concurrent_change(self):

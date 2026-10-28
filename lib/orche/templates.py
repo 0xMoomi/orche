@@ -1,4 +1,4 @@
-"""Template files under `<repo>/templates`: unit memory files, project docs, verify-skill, prompt texts.
+"""Template files under `<repo>/templates`: unit memory files, project docs, prompt texts.
 
 `render` substitutes `{{VAR}}` placeholders; unknown placeholders are left as they are.
 Copies never overwrite existing files and go through `util.atomic_write` (umask modes).

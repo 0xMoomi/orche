@@ -1,5 +1,5 @@
 """detect: a repository's team conventions (merged PRs' base, issue-keyed remote branches, Entire), Entire's
-commit linking in a unit's worktree and the doctor's `entire` row (c73). A temp bare repo is origin; the
+commit linking in a unit's worktree and the doctor's `entire` row. A temp bare repo is origin; the
 fake gh answers the merged PRs."""
 import json
 import os

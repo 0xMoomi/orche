@@ -14,18 +14,17 @@ from .. import paths, util
 
 STATE_FILE = "install-state.json"
 RECONCILE_STEP = "reconcile job"    # the install step (and its output lines) of the heartbeat LaunchAgent
-JANITOR_STEP = "janitor"            # ... of the janitor's enabled flag (and the removal of its old LaunchAgent)
+JANITOR_STEP = "janitor"            # ... of the janitor's enabled flag
 MUTATING = {"patch", "create", "backup", "symlink", "relink", "move", "remove", "set", "add", "replace", "write", "restore"}
 
 
 class Ctx:
     """One install/uninstall run: target home, flags, timestamp, and the recorded actions."""
 
-    def __init__(self, home, *, dry_run=False, yes=False, plugin_root=paths.PLUGIN_ROOT, ts=None):
+    def __init__(self, home, *, dry_run=False, plugin_root=paths.PLUGIN_ROOT, ts=None):
         self.home = Path(home)
         self.claude = self.home / ".claude"
         self.dry_run = dry_run
-        self.yes = yes
         self.plugin_root = Path(plugin_root)
         self.ts = ts or _dt.datetime.now().strftime("%Y%m%dT%H%M%S")
         self.actions = []
@@ -135,20 +134,20 @@ def write_file(ctx, step, path, new_text, detail="") -> bool:
     return True
 
 
-def _block_re(start, end):
+def block_re(start, end):
     return re.compile(r"(?:\n|\A)" + re.escape(start) + r"\n.*?" + re.escape(end) + r"[^\n]*(?:\n|\Z)",
                       re.DOTALL)
 
 
 def has_block(text, start, end) -> bool:
-    return bool(_block_re(start, end).search(text))
+    return bool(block_re(start, end).search(text))
 
 
 def insert_block(text, block, start, end) -> str:
     """Append `block` (markers included, ending in a newline) preceded by one newline, or replace
     the existing block in place. Extra copies are dropped. `remove_block` restores the text exactly.
     """
-    pattern = _block_re(start, end)
+    pattern = block_re(start, end)
     found = list(pattern.finditer(text))
     if not found:
         return f"{text}\n{block}"
@@ -165,4 +164,4 @@ def insert_block(text, block, start, end) -> str:
 
 
 def remove_block(text, start, end) -> str:
-    return _block_re(start, end).sub("", text)
+    return block_re(start, end).sub("", text)

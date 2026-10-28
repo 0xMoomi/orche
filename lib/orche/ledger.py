@@ -266,7 +266,7 @@ def save_grader_iteration(state: dict, n: int, rng: str, text: str) -> Path:
     return package
 
 
-# ---- the review table (design §6.1) -----------------------------------------
+# ---- the review table -----------------------------------------
 
 REVIEW_COLUMNS = ("pr", "sha", "kind", "verdict", "reviewer", "model", "writer", "round", "note",
                   "evidence", "ts")

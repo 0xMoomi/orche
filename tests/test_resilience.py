@@ -383,7 +383,7 @@ class ReconcileTest(SweepCase):
                          ("failed", "lost", True, f"runner process {proc.pid} died without filing", lock["started"]))
         [ptr] = self.from_target()
         self.assertEqual((ptr["status"], ptr["via"], ptr["report_path"]), ("failed", "runner", ""))
-        self.assertEqual(ptr["summary"], f"runner died: {unit} (pid {proc.pid}, started {runs._clock(lock['started'])}); "
+        self.assertEqual(ptr["summary"], f"runner died: {unit} (pid {proc.pid}, started {runs.clock(lock['started'])}); "
                                          f"re-run with `orche run {unit}`")
         self.assertIn(f"run unit={unit} to=div-acme-build runner-reconciled pid={proc.pid}", self.events())
         self.assertEqual(self.reconcile(), [])        # settled once
@@ -920,10 +920,10 @@ class ScaleDoctorTest(support.TempHomeCase):
     def fake_gh(self, perm):
         folder = self.home / "fake-gh"
         folder.mkdir(exist_ok=True)
-        (folder / "repo.json").write_text(json.dumps({"nameWithOwner": "DESPELL/PIKIT", "viewerPermission": perm,
+        (folder / "repo.json").write_text(json.dumps({"nameWithOwner": "ACME/WIDGET", "viewerPermission": perm,
                                                       "defaultBranchRef": {"name": "main"}}))
         script = folder / "gh"
-        script.write_text('#!/bin/sh\ncase "$1 $2" in\n  "api user") echo despell-bot ;;\n'
+        script.write_text('#!/bin/sh\ncase "$1 $2" in\n  "api user") echo ci-bot ;;\n'
                           '  "repo view") cat "$(dirname "$0")/repo.json" ;;\n  *) exit 1 ;;\nesac\n')
         script.chmod(0o755)
         os.environ["PATH"] = f"{folder}{os.pathsep}{os.environ['PATH']}"
@@ -937,19 +937,19 @@ class ScaleDoctorTest(support.TempHomeCase):
 
     def test_gh_rows_write_read_and_missing(self):
         from orche.install import doctor
-        root = self.git_repo("pikit", "https://github.com/DESPELL/PIKIT.git")
-        reg = {"projects": {"pikit": {"path": str(root)}, "loose": {"path": str(self.git_repo("loose"))}}}
+        root = self.git_repo("widget", "https://github.com/ACME/WIDGET.git")
+        reg = {"projects": {"widget": {"path": str(root)}, "loose": {"path": str(self.git_repo("loose"))}}}
         self.fake_gh("WRITE")
         self.assertEqual(doctor.gh_rows(reg), [
             ("WARN", "gh", "loose: no origin remote — the merge queue lands PRs on GitHub"),
-            ("OK", "gh", "pikit: gh as despell-bot · WRITE on DESPELL/PIKIT · base main")])
+            ("OK", "gh", "widget: gh as ci-bot · WRITE on ACME/WIDGET · base main")])
         (self.home / "config.json").write_text(json.dumps(support.no_wake(
-            {"publish": {"per_project": {"pikit": {"base": "develop"}}}})))
-        self.assertEqual(doctor.gh_rows(reg)[1][2], "pikit: gh as despell-bot · WRITE on DESPELL/PIKIT · base develop")
+            {"publish": {"per_project": {"widget": {"base": "develop"}}}})))
+        self.assertEqual(doctor.gh_rows(reg)[1][2], "widget: gh as ci-bot · WRITE on ACME/WIDGET · base develop")
         self.fake_gh("READ")
         level, name, detail = doctor.gh_rows(reg)[1]
         self.assertEqual((level, name), ("WARN", "gh"))
-        self.assertIn("pikit: gh account despell-bot has READ on DESPELL/PIKIT — the queue cannot merge: gh auth "
+        self.assertIn("widget: gh account ci-bot has READ on ACME/WIDGET — the queue cannot merge: gh auth "
                       "switch -u <an account with write>, or gh auth login", detail)
         with mock.patch.object(doctor.shutil, "which", return_value=None):
             [(level, _name, detail)] = doctor.gh_rows(reg)
@@ -975,17 +975,17 @@ class ScaleDoctorTest(support.TempHomeCase):
         from orche.flow import usage
         from orche.install import doctor
         from orche.queue import store
-        q = store.empty("pikit")
+        q = store.empty("widget")
         q["entries"] = [{"id": "pr3-bbbbbbb", "pr": 3, "head": "b" * 40, "state": "testing", "owner_ok": True}]
-        store.queue_path("pikit").parent.mkdir(parents=True, exist_ok=True)
-        util.write_json(store.queue_path("pikit"), q)
-        reg = {"projects": {"pikit": {"path": str(self.home)}, "other": {"path": str(self.home)}}, "limits": {}}
+        store.queue_path("widget").parent.mkdir(parents=True, exist_ok=True)
+        util.write_json(store.queue_path("widget"), q)
+        reg = {"projects": {"widget": {"path": str(self.home)}, "other": {"path": str(self.home)}}, "limits": {}}
         [(level, _n, detail)] = doctor.queue_rows(reg)                    # `other` has no queue: no row
         self.assertEqual(level, "WARN")
-        self.assertIn("pikit: open · 0 waiting · 1 testing · integrator idle — an entry is testing with no "
+        self.assertIn("widget: open · 0 waiting · 1 testing · integrator idle — an entry is testing with no "
                       "integrator (lost)", detail)
         self.assertEqual(doctor.usage_rows(), [("OK", "usage", "no usage hold")])
-        usage.hit("claude", "API Error: 429", {}, project="pikit", unit="u1", stage="work")
+        usage.hit("claude", "API Error: 429", {}, project="widget", unit="u1", stage="work")
         [(level, _n, detail)] = doctor.usage_rows()
         self.assertEqual(level, "WARN")
         self.assertTrue(detail.startswith("claude held until ") and detail.endswith("(1 units) — they re-run then"))

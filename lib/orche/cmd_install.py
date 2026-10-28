@@ -1,13 +1,11 @@
-"""`orche install|uninstall|doctor|apply-all` — set up (and take down) ORCHE in the user's home.
+"""`orche install|uninstall|doctor` — set up (and take down) ORCHE in the user's home.
 
 install patches only: `~/.claude/settings.json`, `~/.claude/statusline-command.sh`,
 `~/.claude/agents/<ours>.md` (symlinks), `~/.claude/skills/<ours>` (symlinks, settings mode only;
-a plugin-mode install removes them), `~/.claude/fable/{fable,active}.md`,
-`~/.claude/fable/agents/runner.md`, `~/Library/LaunchAgents/com.orche.reconcile.plist` (macOS; the
+a plugin-mode install removes them), `~/Library/LaunchAgents/com.orche.reconcile.plist` (macOS; the
 heartbeat job, loaded only when the target home is the real one; `--no-reconcile` skips it),
 the janitor's enabled flag (the first install turns it on, `orche janitor disable` turns it off for good;
-the heartbeat runs its daily pass, and an old `com.orche.janitor.plist` is removed), and
-moves `~/.codex/AGENTS.md.recovered` into place (`--yes`). Every changed file is first copied to `<file>.bak-<ts>`; `--dry-run` prints the plan
+the heartbeat runs its daily pass). Every changed file is first copied to `<file>.bak-<ts>`; `--dry-run` prints the plan
 and writes nothing. `--home PATH` targets another home (tests); ORCHE_HOME then defaults to
 `PATH/.claude/orche` unless set.
 
@@ -31,16 +29,15 @@ from pathlib import Path
 from . import jev_setup, paths, privacy, reconcile, registry, units, util
 from .cli import EXIT_OK, EXIT_USER, fail, out
 from .install import (JANITOR_STEP, RECONCILE_STEP, STATE_FILE, Ctx, StateUnreadable, backup, agents,
-                      apply_all, codex, doctor, fable, installed_mode, launchd, load_state, settings, skills,
+                      doctor, installed_mode, launchd, load_state, settings, skills,
                       statusline)
 
 
 def register(subparsers):
-    p = subparsers.add_parser("install", help="patch user settings, status line, agents and Fable rules")
+    p = subparsers.add_parser("install", help="patch user settings, status line and agents")
     p.add_argument("--home", help="home directory to patch (default: $HOME)")
     p.add_argument("--mode", choices=("plugin", "settings"), default="plugin",
                    help="plugin: print /plugin install steps (default); settings: register hooks in settings.json")
-    p.add_argument("--yes", action="store_true", help="also move ~/.codex/AGENTS.md.recovered into place")
     p.add_argument("--no-jev", action="store_true", help="do not ask for a Jev key (add one later: orche jev setup)")
     p.add_argument("--jev-key-stdin", action="store_true", help="read a Jev key from stdin, no prompts")
     p.add_argument("--jev-kind", choices=("gateway", "direct"), default=None,
@@ -62,10 +59,6 @@ def register(subparsers):
     p = subparsers.add_parser("doctor", help="check the installation (OK/WARN/FAIL per line)")
     p.add_argument("--home", help="home directory (default: $HOME)")
     p.set_defaults(func=cmd_doctor)
-    p = subparsers.add_parser("apply-all", help="init every Orca repo that is not registered yet")
-    p.add_argument("--stage", choices=("building", "public"), default="building")
-    p.add_argument("--wake", default="", help="comma-separated divisions to start in each repo (default: none)")
-    p.set_defaults(func=apply_all.run)
 
 
 def _ctx(args, **kw) -> Ctx:
@@ -131,7 +124,6 @@ def _orche_home(ctx) -> None:
 
 
 OFF_MACOS = "not macOS: run `orche reconcile` every 5 min (cron/systemd)"
-OLD_JANITOR = "com.orche.janitor"   # the janitor's old 04:00 LaunchAgent: removed when found
 
 
 def _reconcile_job(ctx, args, new_state) -> None:
@@ -203,8 +195,7 @@ def cmd_grant(args) -> int:
 
 def _janitor_job(ctx, state, new_state) -> None:
     """The janitor, on by default: the first install writes its enabled flag (recorded as
-    `janitor_default`, so an owner's `orche janitor disable` stays); the heartbeat runs its daily pass.
-    An old janitor LaunchAgent is removed once."""
+    `janitor_default`, so an owner's `orche janitor disable` stays); the heartbeat runs its daily pass."""
     from . import janitor
     if not state.get("janitor_default"):
         flag = janitor.enabled_flag()
@@ -212,17 +203,6 @@ def _janitor_job(ctx, state, new_state) -> None:
             util.atomic_write(flag, f"enabled {util.now_iso()} by orche install\n")
             new_state["janitor_default"] = True
         ctx.note(JANITOR_STEP, "set", flag, "on by default; `orche janitor disable` turns it off")
-    _janitor_job_remove(ctx, new_state)
-
-
-def _janitor_job_remove(ctx, state) -> None:
-    """The janitor's old 04:00 LaunchAgent, when its plist is there: unloaded and removed."""
-    res = launchd.uninstall(OLD_JANITOR, ctx.home, ctx.dry_run)
-    if res["missing"]:
-        return
-    ctx.note(JANITOR_STEP, "remove", res["plist"], "removed the janitor's old schedule; the heartbeat runs it now")
-    if state is not None and not ctx.dry_run:
-        state.pop("janitor_plist", None)
 
 
 def _reconcile_job_remove(ctx, state) -> None:
@@ -273,7 +253,7 @@ def cmd_install(args):
     if getattr(args, "grant", False):
         return cmd_grant(args)
     started = units.now()
-    ctx = _ctx(args, yes=args.yes)
+    ctx = _ctx(args)
     state = _state_or_error(ctx, "install", "install refused, settings.json not touched")
     jev_result = None
     if state is not None:
@@ -287,11 +267,8 @@ def cmd_install(args):
             _run_steps(ctx, "install", [("statusline-command.sh", lambda: statusline.install(ctx)),
                                         ("agents", lambda: agents.install(ctx)),
                                         ("skills", lambda: skills.install(ctx, args.mode)),
-                                        ("runner.md", lambda: agents.flip_runner(ctx)),
-                                        ("fable.md", lambda: fable.install(ctx)),
                                         (RECONCILE_STEP, lambda: _reconcile_job(ctx, args, new_state)),
-                                        (JANITOR_STEP, lambda: _janitor_job(ctx, state, new_state)),
-                                        ("AGENTS.md", lambda: codex.install(ctx))])
+                                        (JANITOR_STEP, lambda: _janitor_job(ctx, state, new_state))])
             jev_result = _jev_step(args, state, new_state)
         finally:
             if not ctx.errors:   # a failed install keeps the old version: `orche update` resumes
@@ -327,13 +304,12 @@ def cmd_install(args):
 def cmd_uninstall(args):
     ctx = _ctx(args)
     state = _state_or_error(ctx, "uninstall", "hooks/values not restored")
-    steps = [("statusline-command.sh", lambda: statusline.uninstall(ctx)), ("fable.md", lambda: fable.uninstall(ctx))]
+    steps = [("statusline-command.sh", lambda: statusline.uninstall(ctx))]
     if state is not None:
         steps.append(("settings.json", lambda: settings.uninstall(ctx, state)))
     steps.append(("agents", lambda: agents.uninstall(ctx, state or {})))
     steps.append(("skills", lambda: skills.uninstall(ctx, state or {})))
     steps.append((RECONCILE_STEP, lambda: _reconcile_job_remove(ctx, state)))
-    steps.append((JANITOR_STEP, lambda: _janitor_job_remove(ctx, state)))
     try:
         _run_steps(ctx, "uninstall", steps)
     finally:

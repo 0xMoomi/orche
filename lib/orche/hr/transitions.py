@@ -246,3 +246,17 @@ def _sleep_ops(reg, proj, *, dry_run):
         cli.warn(f"ops not slept: {exc.msg}")
         return f"ops not slept: {exc.msg}"
     return line
+
+
+def run_verb(args, verb, name, reg) -> int:
+    """CLI glue of `orche sleep|wake` and `orche feat wake`: resolve, run, print."""
+    m = roster.Roster(reg).member(name)
+    if m is None or not m.owns_worktree:
+        return cli.fail(cli.EXIT_NOT_FOUND, f"unknown unit: {name} (expected div-<proj>-<division>, "
+                                            "feat-<proj>-<feature> or main-<proj>)")
+    try:
+        data, line = verb(reg, m, dry_run=args.dry_run)
+    except book.Refused as exc:
+        return cli.fail(exc.code, exc.msg)
+    cli.out(args, data, line)
+    return cli.EXIT_OK

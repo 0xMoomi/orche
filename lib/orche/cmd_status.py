@@ -5,7 +5,7 @@ picks the work up from, also shown by SessionStart), `orche status --project <p>
 sub-line, then one `L` line per lineage of the last 24 h or still open) and `orche statusline [--cwd PATH]`.
 The facts come from lib/orche/project.py.
 
-0.9.0 (design §9.1): the project line carries `queue w/t/m` (waiting / testing / merged today, when
+0.9.0: the project line carries `queue w/t/m` (waiting / testing / merged today, when
 the merge queue has any) and `runs n/cap` (live runs / runner.max_parallel); a usage hold of the
 project's units is a `paused:` line."""
 import json
@@ -16,10 +16,6 @@ from . import __version__, config, inbox, project, registry, roster, runs, statu
 from .flow import guard, owner, shape, usage
 
 CAP_LINES = 3      # sub-lines per kind; the rest: `… <n> more: orche status --project <p>`
-STATE_ORDER = ("merged", "queued", "running", "held", "returned", "done", "info", "failed", "blocked", "question",
-               "stopped")
-
-CARD_LINES, CARD_CHARS = 40, 3000   # the card's budget
 EXIT_OK, EXIT_NOT_FOUND = 0, 2
 
 
@@ -79,15 +75,6 @@ def status_row(reg, key, now=None, cfg=None) -> dict:
             "queue": q, "runs": {"live": c["running"], "cap": cap}, "holds": usage_holds(key, now)}
 
 
-def owner_lines(o) -> list:
-    """The open ask (flow.owner.status): `owner: asked HH:MM (<m> min, notified n×[, next HH:MM | waiting
-    for quiet hours to end]) — <ask>`; none without one."""
-    if not o:
-        return []
-    tail = ", waiting for quiet hours to end" if o["quiet"] else f", next {o['next']}" if o["next"] else ""
-    return [f"  owner: asked {o['since']} ({o['minutes']} min, notified {o['notified']}×{tail}) — {o['text']}"]
-
-
 def looping(reg, key, now):
     """G1 holds and quiet repeats in one shape: `[{unit, kind: revisions|repeats, n, since, status, rev}]`."""
     blank = {"since": None, "status": None, "rev": None}
@@ -108,36 +95,16 @@ def overdue_lines(row) -> list:
     while the heartbeat is fresh, else its command (a closed pane: `orche wake`), then the units
     waiting on the owner."""
     from . import reconcile
-    hints = _hints(row)
-    return (owner_lines(row.get("owner"))
+    hints = project.repair_hints(row)
+    return (project.owner_lines(row.get("owner"))
             + [f"  undelivered: {u['unit']} → {u['to']} (rev {u['rev']}, {u['minutes']} min) — "
              + reconcile.overdue_hint("undelivered", u["unit"], *hints) for u in row["undelivered"]]
-            + _unread_lines(row, hints) + _blocked_lines(row)
+            + project.unread_lines(row, hints) + project.blocked_lines(row)
             + [f"  looping: {u['unit']} — revised {u['n']}× without the owner since {u['since']}: the next AMEND "
                f"needs the owner" if u["kind"] == "revisions" else
                f"  looping: {u['unit']} — same report {u['n']}× ({u['status']}, rev {u['rev']}): repeats did not "
                f"wake Main" for u in row.get("looping") or []]
             + _paused_lines(row) + _queue_lines(row))
-
-
-def _hints(row) -> tuple:
-    """(reconcile's live repairs, whether the heartbeat is fresh), read only while a delivery or a report is
-    late."""
-    from . import reconcile
-    reps = reconcile.repairs() if row.get("undelivered") or row["unread"] else {}
-    hb = reconcile.heartbeat_json() if reps else {}
-    return reps, bool(hb.get("enabled")) and not hb.get("stale", True)
-
-
-def _unread_lines(row, hints) -> list:
-    from . import reconcile
-    return [f"  unread: {u['session']} has {u['count']} report(s) waiting (oldest {u['minutes']} min) — "
-            + reconcile.overdue_hint("unread", u["session"], *hints) for u in row["unread"]]
-
-
-def _blocked_lines(row) -> list:
-    return [f"  blocked: {u['unit']} ({u['status']}, since {u['since']}, {u['minutes']} min) — waiting on the "
-            f"owner; answer in main-{row['project']}" for u in row["blocked"]]
 
 
 def _paused_lines(row):
@@ -184,47 +151,9 @@ def capped(lines, project) -> list:
     return out
 
 
-def states_text(r) -> str:
-    """`12 units: 7 merged · 2 queued · …  PRs #41 #43 #44 …` (states in STATE_ORDER)."""
-    order = sorted(r["states"].items(), key=lambda kv: (STATE_ORDER.index(kv[0]) if kv[0] in STATE_ORDER
-                                                        else len(STATE_ORDER), kv[0]))
-    prs = " ".join(f"#{n}" for n in r["prs"][:3]) + (" …" if len(r["prs"]) > 3 else "")
-    return f"{r['units']} units: {' · '.join(f'{n} {s}' for s, n in order)}" + (f"  PRs {prs}" if prs else "")
-
-
 def lineage_line(r) -> str:
     """`L <lineage>  12 units: 7 merged · 2 queued · …  PRs #41 #43 #44 …  $14.20  since 10:12`."""
-    return f"L {r['lineage']}  {states_text(r)}  ${r['spend']:.2f}  since {r['since']}"
-
-
-def card_text(d) -> str:
-    """The card (project.card): `[orche] resume <project>`, then per open lineage its `L` line with the
-    GOAL, its states, its last report and what it waits on; the `owner:`, `unread:` and `blocked:` lines as
-    the status row prints them; `queue: w/t/m`; the closed lineages. At most CARD_LINES lines and CARD_CHARS
-    characters."""
-    p, q = d["project"], d["queue"]
-    out = [f"[orche] resume {p}"] + ([] if d["open"] else ["nothing in flight"])
-    for o in d["open"]:
-        last = o["last"]
-        out += [f"L {o['lineage']}" + (f" — {o['goal']}" if o["goal"] else ""), f"  {states_text(o)}"]
-        if last:
-            out.append(f"  last: {last['unit']} {last['status']}"
-                       + (f" — {last['summary']}" if last["summary"] else ""))
-        out.append(f"  {o['waits']}")
-    if d["open_total"] > len(d["open"]):
-        out.append(f"… {d['open_total'] - len(d['open'])} more open: orche status --project {p}")
-    out += owner_lines(d["owner"]) + _unread_lines(d, _hints(d)) + _blocked_lines(d)
-    out.append(f"queue: {q.get('waiting', 0)}/{q.get('testing', 0)}/{q.get('merged_today', 0)}" if q else "queue: -")
-    out += [f"closed L {c['lineage']}" + (f" — {c['goal']}" if c["goal"] else "")
-            + f"  DONE: {c['units']} unit{'' if c['units'] == 1 else 's'} ("
-            + ", ".join(f"{n} {s}" for s, n in c["statuses"].items()) + ")" for c in d["closed"]]
-    out = [ln if len(ln) <= project.WIDTH + 40 else ln[:project.WIDTH + 39] + "…" for ln in out]
-    more = f"… the rest: orche status --project {p}"
-    if len(out) > CARD_LINES:
-        out = out[:CARD_LINES - 1] + [more]
-    while len("\n".join(out)) > CARD_CHARS:
-        out = out[:-2] + [more]
-    return "\n".join(out)
+    return f"L {r['lineage']}  {project.states_text(r)}  ${r['spend']:.2f}  since {r['since']}"
 
 
 def cmd_status(args):
@@ -242,7 +171,7 @@ def cmd_status(args):
     runs.reconcile_cli(reg, args, keys)      # a lost run is filed (and noted on stderr) before counting
     if want and not detail:
         d = project.card(reg, keys[0])
-        text = card_text(d)
+        text = project.card_text(d)
         print(json.dumps({**d, "text": text}, indent=2, ensure_ascii=False) if args.json else text)
         return EXIT_OK
     cfg = config.load()
@@ -306,19 +235,19 @@ def heartbeat():
 def triage_line():
     """One line when triage is enabled: the backend, the last eval and, on Jev with no Jev eval on
     file, the warning (`orche triage status` has the details). None when triage is off."""
-    from . import cmd_triage, config
+    from . import config, triage
     try:
         cfg = config.load()
         if not (cfg.get("triage") or {}).get("enabled"):
             return None
-        d = cmd_triage.status_data(cfg)
+        d = triage.status_data(cfg)
     except Exception:  # noqa: BLE001 - a status line never fails the command
         return None
     e = d["eval"]
     run = e["last_run"]
     seen = f"last eval {run.get('at', '?')} ({e['last_backend']})" if run else "no eval on file"
     return " · ".join(x for x in (f"triage: enabled, backend {d['resolved_backend']}, {seen}",
-                                  cmd_triage.eval_warning(d)) if x)
+                                  triage.eval_warning(d)) if x)
 
 
 def cmd_statusline(args):

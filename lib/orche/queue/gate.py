@@ -1,4 +1,4 @@
-"""The gate (design §5.4, R-QUEUE-4): `scripts/verify/ci.sh` when the tested commit tracks it as
+"""The gate (R-QUEUE-4): `scripts/verify/ci.sh` when the tested commit tracks it as
 executable, then the entry's committed VERIFY scripts. Each step is an argv (no shell) run in the
 checkout, in its own process group, inside one time budget for the whole gate, its output appended to
 the gate log. The verdict is ci.sh's last `verdict:` line, else type-check-only. Model-free; it never

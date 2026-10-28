@@ -254,8 +254,8 @@ def _env_dump(cmd, args, name) -> bool:
 
 
 def _search_denied(search, tail) -> bool:
-    _patterns, paths, globs = jevgate._search_parts(search, tail)
-    for i, a in enumerate(tail):  # `-g` values `_search_parts` keeps only for rg
+    _patterns, paths, globs = cmdscan.search_parts(search, tail)
+    for i, a in enumerate(tail):  # `-g` values `search_parts` keeps only for rg
         if a in SEARCH_GLOB_OPTS and i + 1 < len(tail):
             globs.append(tail[i + 1])
         elif a.startswith(("--glob=", "--iglob=", "--include=")):
@@ -276,7 +276,7 @@ def _commands_denied(text, depth):
         if _env_dump(cmd, args, name):
             return True
         search = "git-grep" if name == "git" and args[1:2] == ["grep"] else name
-        if search in jevgate.SEARCHERS:
+        if search in cmdscan.SEARCHERS:
             if _search_denied(search, args[2:] if search == "git-grep" else args[1:]):
                 return True
         elif name in READERS and any(secret_path(a[3:] if a.startswith("if=") else a) for a in args[1:]):
@@ -284,7 +284,7 @@ def _commands_denied(text, depth):
         if name in ("echo", "printf", "print") and any(SECRET_EXPANSION.search(a) for a in args[1:]):
             return True
         if jevgate.INTERPRETERS.match(name) and any(code_denied(c, _family(name), depth)
-                                                    for c in jevgate._interpreter_code(name, args, cmd)):
+                                                    for c in cmdscan.interpreter_code(name, args, cmd)):
             return True
         inner = []
         if name in jevgate.SHELLS:

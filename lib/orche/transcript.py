@@ -1,4 +1,6 @@
-"""Read Claude Code transcript JSONL: the last assistant message and the session's first timestamp."""
+"""Read Claude Code transcript JSONL: the last assistant message, the session's first timestamp, and
+every record of a JSONL file with its timestamp and user prompt text."""
+import datetime as _dt
 import json
 import os
 
@@ -72,3 +74,42 @@ def first_timestamp(path):
     except OSError:
         return None
     return None
+
+
+# ---- whole-file readers (`orche metrics`, `orche jev`)
+
+def records(path):
+    """The JSON objects of a JSONL file, one per readable line; nothing when the file cannot be read."""
+    try:
+        with open(path, encoding="utf-8", errors="replace") as fh:
+            for line in fh:
+                try:
+                    obj = json.loads(line)
+                except ValueError:
+                    continue
+                if isinstance(obj, dict):
+                    yield obj
+    except OSError:
+        return
+
+
+def timestamp(obj):
+    """Aware datetime of a line's `timestamp` (naive: UTC), or None."""
+    try:
+        ts = _dt.datetime.fromisoformat(str(obj.get("timestamp")))
+    except ValueError:
+        return None
+    return ts if ts.tzinfo else ts.replace(tzinfo=_dt.timezone.utc)
+
+
+def user_text(message):
+    """Prompt text of a user line, or None for tool results / empty content."""
+    content = message.get("content") if isinstance(message, dict) else None
+    if isinstance(content, str):
+        return content.strip() or None
+    if not isinstance(content, list):
+        return None
+    if any(isinstance(b, dict) and b.get("type") == "tool_result" for b in content):
+        return None
+    text = "\n".join(b.get("text", "") for b in content if isinstance(b, dict) and b.get("type") == "text")
+    return text.strip() or None

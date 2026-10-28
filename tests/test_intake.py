@@ -17,7 +17,7 @@ from unittest import mock
 import support
 import test_hr
 import test_runner
-from orche import cmd_init, inbox, intake, paths, registry, statusline
+from orche import cmd_init, guide, inbox, intake, paths, registry, statusline
 from support import write_fake_claude
 from test_registry import load_cli
 
@@ -655,7 +655,7 @@ class InitClosesItsWindowTest(FakeClaudeMixin, test_hr.HrCase):
         return {"handle": handle, "title": title, "worktreePath": str(self.repo), "connected": True, **extra}
 
     def report(self):
-        return Path(os.path.realpath(self.repo)) / ".orche" / cmd_init.SETUP_REPORT
+        return Path(os.path.realpath(self.repo)) / ".orche" / guide.SETUP_REPORT
 
     def note(self):
         [(_f, ptr)] = inbox.pending("main-acme-shop")
@@ -680,7 +680,7 @@ class InitClosesItsWindowTest(FakeClaudeMixin, test_hr.HrCase):
         self.assertEqual(lines[1], self.INTAKE)
         self.assertTrue(lines[2].startswith("workspaces: ") and lines[2].endswith("/div-<division>; nothing is "
                                                                                  "committed to the repository"))
-        self.assertEqual(lines[3:], [cmd_init.CLOSED, cmd_init.SETUP_ASK])
+        self.assertEqual(lines[3:], [cmd_init.CLOSED, guide.SETUP_ASK])
         self.assertEqual(len(lines), inbox.MAX_LINES)
         text = self.report().read_text()
         self.assertTrue(text.startswith("# ORCHE is set up: acme-shop\n\n- Divisions: build (claude-opus-5-5); "
@@ -819,7 +819,7 @@ class RunnerContextTest(test_runner.RunnerCase):
 
 
 class ReadContextTest(support.TempHomeCase):
-    """intake.read_context: the CONTEXT.md reader the runner frames (C2 T6)."""
+    """intake.read_context: the CONTEXT.md reader the runner frames (T6)."""
 
     def read(self, text, max_chars=None):
         path = self.home / "CONTEXT.md"

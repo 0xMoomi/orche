@@ -1,4 +1,4 @@
-"""The cross-vendor pre-review of an open PR, run only on request (design §3.3, §3.8; R-REVIEW-1, 2, 4, 6, 8, 13;
+"""The cross-vendor pre-review of an open PR, run only on request (R-REVIEW-1, 2, 4, 6, 8, 13;
 rulings R3, R11, R33).
 
 Nothing in ORCHE starts one by itself: `orche review --pr N` (review.build.for_pr) is the request, from Main on the

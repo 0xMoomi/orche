@@ -1,5 +1,5 @@
-"""Reviews of a published PR before it enters the merge queue (design 0.9.0 §3.4-§3.5), and the
-model reviews of a unit's change (design §3.3, §3.5, §6; R-REVIEW-3, R-REVIEW-4): the read-only reviewer
+"""Reviews of a published PR before it enters the merge queue, and the
+model reviews of a unit's change (R-REVIEW-3, R-REVIEW-4): the read-only reviewer
 call, fenced and masked package values, the verdict grammar and the tree check. The pre-review
 (pre.py, run only on request) builds on these; so does the headless Build review.
 

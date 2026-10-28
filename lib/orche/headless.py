@@ -162,7 +162,7 @@ class Result:
 
     @property
     def limit_text(self) -> str:
-        """The text a usage or rate limit shows in (flow/usage.py, design §8.5): the failure line and,
+        """The text a usage or rate limit shows in (flow/usage.py): the failure line and,
         for an is_error result, Claude's result text or Codex's `error_text` (never Codex's final
         message: that is the model's). '' for a call that did not fail, was killed or hit its turn cap."""
         if self.killed or not (self.failure or self.is_error or self.code) \
@@ -189,7 +189,7 @@ def gates(team=None) -> str:
     PreToolUse list of hooks/hooks.json as it is, `${CLAUDE_PLUGIN_ROOT}` in each command replaced
     by the plugin root, then (`team`: the installed team plugin's folder) the team plugin's own
     PreToolUse entries, resolved against its folder. Read on every call, no cache. Headless calls load
-    no user settings, so without this a worker runs no gate (design D8); only PreToolUse is passed,
+    no user settings, so without this a worker runs no gate; only PreToolUse is passed,
     never a lifecycle hook. An unreadable ORCHE hooks.json or a missing PreToolUse list raises (OSError,
     ValueError, KeyError): a project worker without its gates must not start. An unreadable team
     hooks.json leaves ORCHE's gates alone."""
@@ -253,7 +253,7 @@ def base_env(cfg: dict, claude_auth: bool = True) -> dict:
     AUTH_ENV pass. The configured Jev key variable never passes. The plugin's bin/ goes first on
     PATH. claude_auth: CLAUDE_CODE_OAUTH_TOKEN inherited, else the one `orche auth set` stored,
     else none (the run uses the login); reading the store is the only lookup, nothing is written.
-    claude_auth=False (another vendor): no CLAUDE* or ANTHROPIC* name at all and no stored token (C5).
+    claude_auth=False (another vendor): no CLAUDE* or ANTHROPIC* name at all and no stored token.
     Last, config `team.env` (the team's hook switches; config.load refused the owned names)."""
     from . import config, oauth  # lazy: hooks import this module for argv()/env() only
     jev_key_env = str((cfg.get("jev") or {}).get("api_key_env") or "JEV_API_KEY")

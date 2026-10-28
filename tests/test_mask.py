@@ -32,7 +32,7 @@ class RedactPerClassTest(unittest.TestCase):
         self.assertNotIn(secret, out)
         self.assertIn(mask.REDACTED, out)
         self.assertTrue(out.startswith("before ") and out.endswith(" after"), out)
-        self.assertTrue(mask.has_secret(text))
+        self.assertTrue(mask.redact(text)[1])
 
     def test_openai_key(self):
         self.assertRedacted(SAMPLES["openai_key"])
@@ -107,7 +107,7 @@ class LinearTimeTest(unittest.TestCase):
 class LeavesOrdinaryTextTest(unittest.TestCase):
     def assertUntouched(self, text):
         self.assertEqual(mask.redact(text), (text, 0))
-        self.assertFalse(mask.has_secret(text))
+        self.assertFalse(mask.redact(text)[1])
 
     def test_eth_address_is_not_redacted(self):
         self.assertUntouched("send to 0x" + "a1" * 20 + " now")
@@ -140,7 +140,7 @@ class LeavesOrdinaryTextTest(unittest.TestCase):
 
     def test_empty(self):
         self.assertEqual(mask.redact(""), ("", 0))
-        self.assertFalse(mask.has_secret(""))
+        self.assertFalse(mask.redact("")[1])
 
 
 JWT = "eyJ" + "hbGciOiJIUzI1NiJ9" + "." + "eyJ" + "zdWIiOiIxMjM0NTY3ODkwIn0" + "." + "SflKxwRJSMeKKF2QT4fwpM"
@@ -261,7 +261,7 @@ class ReviewTableTest(unittest.TestCase):
         for text, want in REVIEW_TABLE:
             with self.subTest(text=text):
                 self.assertEqual(mask.redact(text)[0], want)
-                self.assertTrue(mask.has_secret(text))
+                self.assertTrue(mask.redact(text)[1])
 
     def test_false_positives(self):
         for text in NOT_SECRETS:

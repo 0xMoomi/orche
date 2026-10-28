@@ -81,17 +81,10 @@ def custom_cells(proj: dict) -> dict:
     return cells
 
 
-def short_label(proj: dict, name: str) -> str:
-    """Status-line name of a division: SHORT for a standard one, else its `custom_cells` entry."""
-    if name in SHORT:
-        return SHORT[name]
-    return custom_cells(proj).get(name) or name.upper()
-
-
 def division_cells(proj: dict, workers: dict, short=False) -> list:
     """One cell per division of the project (`registry.divisions_of`), with its active worker count
     from `workers` ({division: n}, `counts`); a custom division whose record is missing renders as
-    asleep. `short` uses the status-line names (`short_label`)."""
+    asleep. `short` uses the status-line names (SHORT, else `custom_cells`)."""
     cells, names = [], {**custom_cells(proj), **SHORT} if short else {}
     for name in registry.divisions_of(proj):
         div = proj.get("divisions", {}).get(name, {})

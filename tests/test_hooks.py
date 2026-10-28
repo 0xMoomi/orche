@@ -318,7 +318,7 @@ class DispatchRelayTest(HookCase):
         self.assertIn("TIER must be one of mechanical|standard|hard", res.stdout)
         self.assertIn('was read as part of TIER; start each field with its exact KEY.', res.stdout)
 
-    # -- C10: one refused block no longer drops the reply ------------------------------------
+    # -- one refused block no longer drops the reply -----------------------------------------
     def test_two_blocks_second_refused_delivers_the_first_once(self):
         bad = DISPATCH_OK.split("\n\n", 1)[1].replace("Add coupon field", "Add gift card field")
         text = DISPATCH_OK + "\n\n" + bad.replace("VERIFY    scripts/verify-checkout.sh\n", "")
@@ -694,7 +694,7 @@ class DispatchRelayTest(HookCase):
         inbox.write(inbox.make("acme-done-20261021-1", "div-acme-build", "main-acme", "done", via="runner"))
 
     def test_stop_rearms_the_wake_for_a_pending_report(self):
-        """C9 L7: a turn that may end (exit 0) with a waking pointer pending starts `orche nudge main-acme`
+        """A turn that may end (exit 0) with a waking pointer pending starts `orche nudge main-acme`
         (the fake Orca lists no main pane: the nudger ends `no-pane`)."""
         self.wakes = True
         self.wake_on_with_a_report()
@@ -706,7 +706,7 @@ class DispatchRelayTest(HookCase):
         self.assertIn("nudge session=main-acme state=no-pane pending=1", self.events())
 
     def test_refused_dispatch_starts_no_nudger(self):
-        """C9 L7: a blocked Stop (exit 2) keeps Main busy: no re-arm, no `logs/nudge.log`."""
+        """A blocked Stop (exit 2) keeps Main busy: no re-arm, no `logs/nudge.log`."""
         self.wake_on_with_a_report()
         res = self.send(DISPATCH_OK.replace("VERIFY    scripts/verify-checkout.sh\n", ""))
         self.assertEqual(res.returncode, 2)
@@ -734,7 +734,7 @@ class DispatchRelayTest(HookCase):
         self.assertIn("applyCoupon(code)", (self.units_dir() / unit / "BRIEF.md").read_text())
 
     def test_unregistered_and_feature_senders_refused(self):
-        """C8: a leftover liaison-<proj> pane is no registered session (the registry key is ignored)."""
+        """A leftover liaison-<proj> pane is no registered session (the registry key is ignored)."""
         res = self.send(DISPATCH_OK, ORCHE_SESSION="liaison-acme")
         self.assertEqual(res.returncode, 2)
         self.assertIn("only Main or a division may dispatch; liaison-acme is an unknown session", res.stdout)
@@ -899,7 +899,7 @@ class DispatchRelayTest(HookCase):
         self.assertEqual(orca.normalize_title("  ✳ div-acme-build "), "div-acme-build")
 
     def test_slow_orca_writes_pointers_before_any_orca_call(self):
-        """Unit 5 (C9): two pane briefs and a 5 s Orca. `orche dispatch` calls no Orca itself (its deliverers
+        """Unit 5: two pane briefs and a 5 s Orca. `orche dispatch` calls no Orca itself (its deliverers
         wait on the target's delivery lock, held here until the command has returned), and each deliverer
         types its own line afterwards."""
         self.fake_orca({"delay_s": 5, "terminal list": {"terminals": [{"handle": "t-build", "title": "div-acme-build"}]}})
@@ -949,7 +949,7 @@ class DispatchRelayTest(HookCase):
 
 
 class OwnerVoiceHookTest(HookCase):
-    """C10 T9: a Main session's Stop hook hands its closing line to flow.owner, also under
+    """T9: a Main session's Stop hook hands its closing line to flow.owner, also under
     stop_hook_active; the notification reaches the recording `osascript` stub (support) as arguments."""
 
     def stop(self, text, session="main-acme", **over):
@@ -1065,7 +1065,7 @@ class ReportInjectTest(HookCase):
         self.assertIn("## Inbox (1)", self.prompt().stdout)
 
     def test_completions_are_injected_without_a_trigger(self):
-        """C9 L1: every completion reaches the next ordinary prompt; only notes wait for a trigger."""
+        """Every completion reaches the next ordinary prompt; only notes wait for a trigger."""
         cases = [dict(status="done"), dict(status="done", frm="orche", via="runner"),
                  dict(status="info", frm="orche", via="runner"), dict(status="failed"), dict(status="blocked"),
                  dict(status="question"), dict(status="stop"), dict(status="external-request")]
@@ -1092,7 +1092,7 @@ class ReportInjectTest(HookCase):
         self.assertIn("acme-a-20261016-1", left.name)
 
     def test_report_line_ends_every_main_injection(self):
-        """C9 ruling 13: every block injected into Main ends with ORCHE's order; units get none (ruling 16)."""
+        """Every block injected into Main ends with ORCHE's order; units get none (ruling 16)."""
         self.pointer("acme-a-20261016-1")
         out = self.prompt().stdout
         self.assertIn("## Inbox (1)", out)
@@ -1114,7 +1114,7 @@ class ReportInjectTest(HookCase):
         self.assertNotIn(inbox.REPORT_LINE, res.stdout)
 
     def test_report_line_text_is_pinned(self):
-        """C10 design §4.4: the full report when a lineage closes, one progress line otherwise, one closing line."""
+        """The full report when a lineage closes, one progress line otherwise, one closing line."""
         self.assertEqual(inbox.REPORT_LINE,
                          "[orche] Act on the inbox above now: read each report named (Read tool). Where a lineage "
                          "line says closed and you dispatch nothing more for it, write your full report to the user "
@@ -1238,7 +1238,7 @@ class EnvReadGateTest(HookCase):
         self.assertLessEqual(len(line.split("what=", 1)[1]), 80)
 
     def test_transcripts_are_never_read_into_a_session(self):
-        """c63: a Claude Code transcript refills the context; Read, Grep and Bash on one are refused
+        """A Claude Code transcript refills the context; Read, Grep and Bash on one are refused
         (logged like the other denials), while `orche metrics` and other paths pass."""
         def decide(tool, tool_input):
             res = self.run_hook("env_read_gate.py", self.payload("pretool_read.json", tool_name=tool,
@@ -1568,7 +1568,7 @@ class ScopeGateTest(HookCase):
         return folder
 
     def test_own_unit_folder_under_the_project_root(self):
-        """C9 T6: a pane writes its own REPORT.md; never its brief or RUN.json, nor another unit's folder."""
+        """T6: a pane writes its own REPORT.md; never its brief or RUN.json, nor another unit's folder."""
         mine, build = self.unit_folder("acme-mine-20261021-1", "feat-acme-checkout"), \
             self.unit_folder("acme-theirs-20261021-2", "div-acme-build")
         for cwd, folder in (("acme-checkout", mine), ("acme-build", build)):
@@ -1637,7 +1637,8 @@ class SessionStartEndTest(HookCase):
                             ORCHE_SESSION="main-acme").stdout
         self.assertTrue(out.startswith("## ORCHE role\nsession: main-acme"))
         self.assertIn("Never force-push", out)
-        self.assertIn("Ten principles", out)
+        self.assertIn("## Ten principles\n1 Prove with evidence", out)   # the text itself, not a pointer
+        self.assertNotIn("SPEC.md", out)
         res = self.run_hook("session_start.py", self.payload("session_start_clear.json", source="compact",
                                                               cwd=str(self.repo)), ORCHE_SESSION="main-acme")
         self.assertTrue(res.stdout.startswith("## ORCHE role\nsession: main-acme"))
@@ -1661,7 +1662,7 @@ class SessionStartEndTest(HookCase):
         self.assertIn("## Role rules\nORCHE unit rules", feat)
 
     def test_leftover_liaison_pane_is_an_unregistered_session(self):
-        """C8: an old liaison-<proj> pane gets the unregistered-session note and the generic card,
+        """An old liaison-<proj> pane gets the unregistered-session note and the generic card,
         never its old role, its memory or Main's rules."""
         liaison = self.repo / ".orche" / "liaison"
         liaison.mkdir()

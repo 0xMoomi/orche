@@ -12,15 +12,13 @@ candidate counts as direct); `--dry-run` only counts classifier calls and record
 """
 import copy
 import json
-import math
 import sys
 import time
 from pathlib import Path
 
-from . import cli, config, paths, registry, triage, util
+from . import cli, config, registry, triage, util
 
 EXIT_OK, EXIT_USER = 0, 1
-LAST = 20
 EVAL_BACKENDS = ("auto", "jev", "claude-haiku", "heuristics")
 
 
@@ -44,7 +42,8 @@ def _set_enabled(args, value):
     if value:
         cfg = config.load()
         resolved = triage.backend(cfg)[0]
-        warning = eval_warning({"enabled": True, "resolved_backend": resolved, "eval": eval_status(resolved)})
+        warning = triage.eval_warning({"enabled": True, "resolved_backend": resolved,
+                                       "eval": triage.eval_status(resolved)})
         if warning:
             lines.append(warning)
     cli.out(args, {"enabled": value, "dry_run": bool(args.dry_run)}, lines)
@@ -52,56 +51,6 @@ def _set_enabled(args, value):
 
 
 # ---- status ----------------------------------------------------------------
-
-def percentile(values, p):
-    """Nearest-rank percentile of `values` (None when empty)."""
-    ordered = sorted(values)
-    if not ordered:
-        return None
-    return ordered[min(len(ordered) - 1, max(0, math.ceil(p * len(ordered)) - 1))]
-
-
-# ---- eval record (ORCHE_HOME/triage/eval.json) ------------------------------
-
-def eval_path() -> Path:
-    return paths.orche_home() / "triage" / "eval.json"
-
-
-def read_eval() -> dict:
-    """{"last": backend, "runs": {backend: summary}}; empty runs when absent or unreadable."""
-    try:
-        data = util.read_json(eval_path(), default={}) or {}
-    except (util.JsonError, OSError):
-        data = {}
-    runs = data.get("runs") if isinstance(data, dict) else None
-    runs = {k: v for k, v in runs.items() if isinstance(v, dict)} if isinstance(runs, dict) else {}
-    return {"last": data.get("last") if isinstance(data, dict) and data.get("last") in runs else None, "runs": runs}
-
-
-def save_eval(file, model, rep) -> dict:
-    """Record one eval run's summary (no prompts): when, which labelled file, the scores per backend."""
-    r = rep["models"][model]["direct"]
-    summary = {"at": util.now_iso(), "file": str(Path(file).resolve()),
-               **{k: r[k] for k in ("n", "tp", "fp", "fn", "tn", "precision", "recall", "classifier_calls",
-                                    "p50_ms")}}
-    data = read_eval()
-    data["runs"][model] = summary
-    data["last"] = model
-    util.write_json(eval_path(), data)
-    return summary
-
-
-def eval_status(resolved) -> dict:
-    """Whether a labelled eval set is on file and when `orche triage eval` last ran, overall and for
-    the backend triage resolves to (SPEC §7.3 condition 5: Jev needs an offline eval first)."""
-    data = read_eval()
-    last = data["runs"].get(data["last"]) if data["last"] else None
-    mine = data["runs"].get(resolved)
-    return {"last_backend": data["last"], "last_run": last,
-            "set_file": (last or {}).get("file"),
-            "set_exists": bool(last and last.get("file") and Path(str(last["file"])).is_file()),
-            "resolved_evaluated": mine is not None, "resolved_run": mine}
-
 
 def eval_lines(d) -> list:
     """`eval: …` lines for `orche triage status` (and the warning `orche status` repeats)."""
@@ -116,33 +65,8 @@ def eval_lines(d) -> list:
                  f"({'present' if e['set_exists'] else 'missing'})"]
         if not e["resolved_evaluated"]:
             lines.append(f"eval: none on file for the {d['resolved_backend']} backend")
-    warning = eval_warning(d)
+    warning = triage.eval_warning(d)
     return lines + ([warning] if warning else [])
-
-
-def eval_warning(d):
-    """One line when triage is enabled on Jev with no Jev eval on file, else None."""
-    if d["enabled"] and d["resolved_backend"] == "jev" and not d["eval"]["resolved_evaluated"]:
-        return ("warning: triage is enabled on the Jev backend with no Jev eval on file (SPEC §7.3 "
-                "condition 5); run `orche triage eval <file> --backend jev`")
-    return None
-
-
-def status_data(cfg=None) -> dict:
-    cfg = cfg if cfg is not None else config.load()
-    t = triage.settings(cfg)
-    rows = triage.read_samples()
-    calls = [r["model_ms"] for r in rows
-             if r.get("backend") not in (None, "none") and isinstance(r.get("model_ms"), int)]
-    keys = ("at", "decision", "stage", "reason", "confidence", "backend", "ms", "division", "tier", "unit")
-    resolved = triage.backend(cfg)[0]
-    return {"enabled": bool(t.get("enabled")), "backend": t.get("backend") or "auto",
-            "resolved_backend": resolved, "min_confidence": triage.min_confidence(cfg),
-            "max_latency_s": triage.max_latency(cfg), "keep_prompts": bool(t.get("keep_prompts")),
-            "samples": len(rows), "classifier_calls": len(calls),
-            "p50_ms": percentile(calls, 0.5), "p95_ms": percentile(calls, 0.95),
-            "eval": eval_status(resolved),
-            "last": [{k: r.get(k) for k in keys} for r in rows[-LAST:]]}
 
 
 def _status_lines(d) -> list:
@@ -162,7 +86,7 @@ def _status_lines(d) -> list:
 
 
 def cmd_status(args):
-    data = status_data()
+    data = triage.status_data()
     cli.out(args, data, _status_lines(data))
     return EXIT_OK
 
@@ -213,7 +137,7 @@ def report(results, model) -> dict:
         "n": len(results), "tp": tp, "fp": fp, "fn": fn, "tn": tn,
         "precision": round(tp / (tp + fp), 4) if tp + fp else None,
         "recall": round(tp / (tp + fn), 4) if tp + fn else None,
-        "classifier_calls": len(calls), "p50_ms": percentile(calls, 0.5)}}}}
+        "classifier_calls": len(calls), "p50_ms": triage.percentile(calls, 0.5)}}}}
 
 
 def _report_lines(rep) -> list:
@@ -269,9 +193,9 @@ def cmd_eval(args):
         return EXIT_OK
     rep = report(evaluate(rows, cfg, divisions, classifier), model)
     try:
-        save_eval(args.file, model, rep)
+        triage.save_eval(args.file, model, rep)
     except OSError as exc:
-        print(f"orche: cannot record the eval in {eval_path()}: {exc}", file=sys.stderr)
+        print(f"orche: cannot record the eval in {triage.eval_path()}: {exc}", file=sys.stderr)
     cli.out(args, rep, _report_lines(rep))
     return EXIT_OK
 

@@ -15,6 +15,7 @@ would silently overwrite the root value (a dry run could mutate for real), so
 import argparse
 import importlib.util
 import sys
+import textwrap
 from pathlib import Path
 
 LIB = Path(__file__).resolve().parent.parent / "lib"
@@ -25,10 +26,20 @@ from orche import pyguard  # noqa: E402  (before any other orche module)
 pyguard.check_cli()
 
 from orche import __version__, cli, registry  # noqa: E402
+from orche.cli import EXIT_OK, EXIT_USER  # noqa: E402
 
-EXIT_OK, EXIT_USER, EXIT_NOT_FOUND, EXIT_BLOCKED = 0, 1, 2, 3
 GLOBAL_FLAGS = ("--json", "--dry-run")
 GLOBAL_DESTS = {"json", "dry_run"}
+# `orche --help` lists the commands in these groups (registration order is unchanged); a command in no
+# group is listed under "Other".
+GROUPS = (
+    ("What you say to Main (Main runs these for you; you can run them too)",
+     ("init", "status", "projects", "dispatch", "hr", "feat", "sleep", "wake", "stage", "flow", "queue", "review",
+      "secret", "dev", "auth", "jev", "metrics", "update", "install", "uninstall", "doctor", "version")),
+    ("What Main and the units run", ("ask", "card", "decide", "depts", "discard", "report", "ledger")),
+    ("What ORCHE runs by itself",
+     ("nudge", "deliver", "reconcile", "statusline", "run", "janitor", "intake", "triage")),
+)
 
 
 class Parser(argparse.ArgumentParser):
@@ -53,7 +64,10 @@ def cmd_projects(args):
 
 
 def _load_module(path):
+    """Import a command module once: one already imported (by another command module) is returned as is."""
     name = f"orche.{path.stem}"
+    if name in sys.modules:
+        return sys.modules[name]
     spec = importlib.util.spec_from_file_location(name, path)
     module = importlib.util.module_from_spec(spec)
     sys.modules[name] = module
@@ -82,12 +96,28 @@ def _register(subparsers, lib_dir=None):
     _check_global_flags(subparsers)
 
 
+def _grouped(subparsers) -> str:
+    """The command listing of `orche --help`, grouped by who runs each command."""
+    helps = {a.dest: a.help or "" for a in subparsers._choices_actions}
+    rest = [n for n in helps if not any(n in names for _, names in GROUPS)]
+    blocks = []
+    for title, names in (*GROUPS, ("Other", rest)):
+        rows = [textwrap.fill(helps[n], 78, initial_indent=f"  {n:<12}", subsequent_indent=" " * 14)
+                for n in names if n in helps]
+        if rows:
+            blocks.append(f"{title}:\n" + "\n".join(rows))
+    return "\n\n".join(blocks)
+
+
 def build_parser(lib_dir=None):
-    parser = Parser(prog="orche", description="Orchestration layer for Claude Code + Orca.")
+    parser = Parser(prog="orche", usage="%(prog)s [-h] [--json] [--dry-run] <command> ...",
+                    formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--json", action="store_true", help="machine-readable output")
     parser.add_argument("--dry-run", action="store_true", help="print actions instead of mutating")
     subparsers = parser.add_subparsers(dest="command", metavar="<command>", parser_class=Parser)
     _register(subparsers, lib_dir)
+    parser.description = "Orchestration layer for Claude Code + Orca.\n\n" + _grouped(subparsers)
+    subparsers.help = argparse.SUPPRESS   # the grouped description replaces argparse's flat list
     return parser
 
 

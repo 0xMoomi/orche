@@ -1,4 +1,4 @@
-"""Model strings as data (design 2026-10-23 §2, §4.1): the grammar, the vendor of a model, the
+"""Model strings as data: the grammar, the vendor of a model, the
 recommended model of a division kind, and the model a unit runs on.
 
 A model string is a Claude model id (`claude-…`, an alias `sonnet`/`opus`/`haiku`, or an id listed in
@@ -39,7 +39,7 @@ def errors(model, cfg=None) -> list:
         if not rest:
             return ["codex:<model id> needs a model id after `codex:` (or plain `codex` for Codex's default)"]
         return []
-    if model == CODEX or model.startswith("claude-") or model in ALIASES or model in _catalog(cfg):
+    if model == CODEX or model.startswith("claude-") or model in ALIASES or model in catalog_config(cfg):
         return []
     return [f"unknown model {model!r} — Claude ids start with claude- (claude-opus-5-5) or are an alias "
             f"({', '.join(ALIASES)}), Codex is `codex` or `codex:<model id>`"]
@@ -52,7 +52,7 @@ def _cfg(cfg):
     return cfg
 
 
-def _catalog(cfg) -> dict:
+def catalog_config(cfg) -> dict:
     return (_cfg(cfg).get("models") or {}).get("catalog") or {}
 
 
@@ -98,7 +98,7 @@ def kind(cfg, name) -> dict:
 def catalog(cfg, model) -> dict:
     """Model `model` for the owner: label, desc, cost (1..3, None unknown), dots; an id the catalog
     does not list is its own label."""
-    row = _catalog(cfg).get(model)
+    row = catalog_config(cfg).get(model)
     if not isinstance(row, dict):
         return {"model": model, "label": label(model) if model != CODEX else "Codex", "desc": "",
                 "cost": None, "dots": ""}
@@ -200,7 +200,7 @@ def codex_divisions(reg) -> list:
 
 
 def doctor_rows(cfg, reg) -> list:
-    """The `vendors` doctor row (design §9): (level, name, detail)."""
+    """The `vendors` doctor row: (level, name, detail)."""
     avail, divs = available(cfg), codex_divisions(reg or {})
     if avail.ok:
         return [("OK", "vendors", f"codex {avail.detail}; codex divisions: {', '.join(divs) or 'none'}")]

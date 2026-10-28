@@ -225,7 +225,7 @@ class QueueCmdTest(support.TempHomeCase):
         self.assertIn(f"no ledger row for {self.head[:7]}", err)
 
     def test_no_pre_review_admits(self):
-        """c83: a cross-check runs only on request; without its row the PR is admitted."""
+        """A cross-check runs only on request; without its row the PR is admitted."""
         self.ready(review=None)
         code, _, err = self.orche("queue", "add", self.unit)
         self.assertEqual(code, 0, err)
@@ -340,7 +340,7 @@ class QueueCmdTest(support.TempHomeCase):
         self.spec({"prs": [self.pr()]})
 
     def test_a_deep_change_needs_its_fact_and_a_test_that_proves_it(self):
-        """R-REVIEW-14: a high-risk path needs no pre-review (c83: only on request), but the one fact it is safe
+        """R-REVIEW-14: a high-risk path needs no pre-review (only on request), but the one fact it is safe
         because of and a test in the PR; then the pane's record keeps the fact."""
         from orche.review import build
         self.commit({"src/payments/charge.py": "def charge(order): pass\n"})
@@ -537,7 +537,7 @@ class QueueCmdTest(support.TempHomeCase):
         self.assertEqual(code, 2)
 
     def test_add_by_pr_reads_publish_base_never_a_guess(self):
-        """Review B G5: one base resolver — publish.base, else origin/HEAD, else a refusal with the OWNER step."""
+        """One base resolver — publish.base, else origin/HEAD, else a refusal with the OWNER step."""
         self.ready()
         os.environ["ORCHE_SESSION"] = "main-acme"
         git(self.home / "wt" / "acme", "remote", "set-head", "origin", "-d")
@@ -551,7 +551,7 @@ class QueueCmdTest(support.TempHomeCase):
         self.assertEqual(self.queued()[0]["pr"], 12)
 
     def test_a_closed_queue_names_its_reason_and_what_reopens_it(self):
-        """Review B G8e: --first reopens only main-red; a proof closure needs orche queue resume."""
+        """--first reopens only main-red; a proof closure needs orche queue resume."""
         from orche import cmd_status, project, util
         from orche.install import doctor
         for reason, step in (("proof", "check it, then orche queue resume acme"),

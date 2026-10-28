@@ -634,7 +634,7 @@ class ByteIdentityTest(StoreCase):
     """brief.write renders every dispatch fixture byte for byte like the dispatch writer it replaces."""
 
     def snapshot(self):
-        """The old writer predates C10's lineage line, so it is dropped before comparing."""
+        """The old writer predates the lineage line, so it is dropped before comparing."""
         return {f"{d.name}/{f.name}": re.sub(rb"(?m)^lineage: \S+   parent: \S+\n", b"", f.read_bytes())
                 for d in sorted(self.units_dir().iterdir()) for f in sorted(d.iterdir())}
 

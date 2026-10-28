@@ -3,7 +3,7 @@
 Resolution order (`resolve`): env var (`jev.api_key_env`, default JEV_API_KEY) -> stored key -> none.
 Storage (`set_key` / `remove` / `stored`):
 - macOS: the login keychain, generic password service `orche`, account `JEV_API_KEY`. Writes go
-  through `security -i` with the command on stdin (as `secrets/backends_keychain.py` does), so the
+  through `security -i` with the command on stdin (as `secrets/backends.py` does), so the
   key never appears in argv; `status` uses `find-generic-password` WITHOUT `-w`, so the value is
   not even read to report where it is.
 - elsewhere: `ORCHE_HOME/secrets/jev.key`, mode 0600.
@@ -18,8 +18,9 @@ import os
 import sys
 
 from . import paths, shell, util
+from . import secrets
 from .secrets import store
-from .secrets.backends_keychain import _quote
+from .secrets.backends import keychain_quote
 
 SERVICE = "orche"
 ACCOUNT = "JEV_API_KEY"
@@ -49,7 +50,7 @@ def _stored_file(account):
 
 
 def scrub(text, key=None) -> str:
-    return store.scrub(text, key)
+    return secrets.scrub(text, key)
 
 
 SECURITY_TIMEOUT = 15   # seconds; a test patches it
@@ -82,7 +83,8 @@ def set_key(key, account=ACCOUNT) -> str:
     """Store the key; returns the backend name."""
     key = check(key)
     if backend() == "keychain":
-        cmd = f"add-generic-password -U -s {_quote(SERVICE)} -a {_quote(account)} -w {_quote(key)}\n"
+        cmd = (f"add-generic-password -U -s {keychain_quote(SERVICE)} -a {keychain_quote(account)} "
+               f"-w {keychain_quote(key)}\n")
         try:
             result = _security(["-i"], stdin=cmd)
         except OSError as exc:

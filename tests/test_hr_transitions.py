@@ -406,7 +406,7 @@ class CreateFeatureTest(TransitionsCase):
             self.create(**kw)
         return cm.exception
 
-    def test_create_records_in_order(self):  # C1
+    def test_create_records_in_order(self):
         order = []
         save = registry.save
 
@@ -430,7 +430,7 @@ class CreateFeatureTest(TransitionsCase):
                                                             "batch": "b1"})
         self.assertEqual(self.log_lines()[-1], "create feat-acme-shop-pay by div-acme-shop-build: r")
 
-    def test_frozen_refused(self):  # C2
+    def test_frozen_refused(self):
         reg = registry.load()
         reg["frozen"] = True
         self.save(reg)
@@ -439,7 +439,7 @@ class CreateFeatureTest(TransitionsCase):
         self.assertEqual(registry.load()["events"], [])
         self.assertEqual(self.calls, [])
 
-    def test_global_cap_freezes(self):  # C3
+    def test_global_cap_freezes(self):
         self.creates(20, project="docs-site")
         exc = self.refused_create()
         self.assertEqual(exc.code, 3)
@@ -452,19 +452,19 @@ class CreateFeatureTest(TransitionsCase):
         self.assertEqual(self.refresh.call_count, 0)
         self.assertEqual(self.calls, [])
 
-    def test_global_cap_dry_run_does_not_freeze(self):  # C4
+    def test_global_cap_dry_run_does_not_freeze(self):
         before = self.creates(20, project="docs-site")
         exc = self.refused_create(dry_run=True)
         self.assertEqual(exc.code, 3)
         self.assertEqual(registry.load(), before)
         self.assertEqual((self.notes, self.log_lines()), ([], []))
 
-    def test_strict_overlap_refused(self):  # C5
+    def test_strict_overlap_refused(self):
         exc = self.refused_create(scope=("src/checkout/x",), strict=True)
         self.assertEqual((exc.code, exc.msg), (3, "scope src/checkout/x overlaps feature checkout (src/checkout/**)"))
         self.assertEqual(self.calls, [])
 
-    def test_awake_limit_refused(self):  # C6
+    def test_awake_limit_refused(self):
         reg = registry.load()
         reg["limits"]["max_awake_sessions"] = 2
         self.save(reg)
@@ -651,7 +651,7 @@ class RetireGoneTest(TransitionsCase):
 
 
 class StageSetTest(TransitionsCase):
-    """hr.set_stage, hr.set_frozen, book.correct and the audit helpers (C4 T5)."""
+    """hr.set_stage, hr.set_frozen, book.correct and the audit helpers (T5)."""
 
     def add_ops(self, **kw):
         self.edit(lambda p: p["divisions"].__setitem__("ops", {
@@ -767,7 +767,7 @@ class StageSetTest(TransitionsCase):
         self.assertEqual(got, want)
 
     def test_corrections_ignore_a_leftover_liaison_folder(self):  # A1
-        """C8: the Liaison has no memory folder any more; an old .orche/liaison/DECISIONS.tsv is not read."""
+        """The Liaison has no memory folder any more; an old .orche/liaison/DECISIONS.tsv is not read."""
         path = self.repo / ".orche" / "liaison" / "DECISIONS.tsv"
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text("ts\tphase\tdecision\twhy\tevidence\tresult\n"

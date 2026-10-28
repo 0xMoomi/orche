@@ -41,7 +41,7 @@ def price(cfg, model):
         from . import codex
         prices = ((cfg or {}).get("models") or {}).get("prices") or config.DEFAULTS["models"]["prices"]
         mid = vendors.codex_id(model)
-        row = codex._price(prices, mid) if mid else codex._price(prices, vendors.CODEX)
+        row = codex.price_row(prices, mid) if mid else codex.price_row(prices, vendors.CODEX)
         return row[2] if row else None
     from . import metrics
     known = [m for m in metrics.PRICES if model.startswith(m)]
@@ -143,7 +143,7 @@ def audit(unit, tier, text, cfg, ask=None):
                    {"mechanical": "a scoped, rote change with no design decisions",
                     "standard": "an ordinary implementation, fix or test",
                     "hard": "design, deep debugging or a wide change"})
-    answers = (ask or jev._ask)(text, [q])
+    answers = (ask or jev.ask)(text, [q])
     a = (answers or {}).get("tier")
     if not isinstance(a, dict) or a.get("value") not in brief.TIERS:
         return None

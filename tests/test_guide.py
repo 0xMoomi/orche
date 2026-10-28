@@ -1,6 +1,6 @@
-"""c61: `guide.lines`, the "Any time" list of the setup report and of `orche doctor`'s next steps: one line per
+"""`guide.lines`, the "Any time" list of the setup report and of `orche doctor`'s next steps: one line per
 feature, off first, then on, then the always-present lines; at most 12 lines, each under 320 characters.
-c75: each line says what the feature is before its state, with real numbers."""
+Each line says what the feature is before its state, with real numbers."""
 import copy
 import os
 import re
@@ -123,7 +123,7 @@ class GuideTest(support.TempHomeCase):
                       "a-very-long-project-name-3 and 2 more projects lack the check script", lines[5])
 
     def test_a_project_filter_keeps_only_its_own_gate_line(self):
-        """c79: a project's setup report lists only its own merge-queue line; the doctor lists every one."""
+        """A project's setup report lists only its own merge-queue line; the doctor lists every one."""
         self.project("acme")
         self.project("other")
         with mock.patch.object(guide.shutil, "which", lambda name: None):
@@ -140,14 +140,14 @@ class GuideTest(support.TempHomeCase):
         self.assertEqual(guide.parallel(self.cfg, self.reg), (7, "custom"))
 
     def test_running_now_has_the_real_values(self):
-        """c75: the setup report's "Running now": heartbeat interval, janitor rule and rules, the project's queue."""
+        """The setup report's "Running now": heartbeat interval, janitor rule and rules, the project's queue."""
         root = self.project("acme")
         self.cfg["publish"] = {"base": "main"}
         self.cfg["reconcile"] = {"enabled": True, "every_s": 120}
         with mock.patch.object(cmd_init.Path, "home", classmethod(lambda cls: self.user)):
-            off = cmd_init._running_lines(self.reg, "acme", root, self.cfg)
+            off = guide.running_lines(self.reg, "acme", root, self.cfg)
             janitor.enabled_flag().touch()
-            lines = cmd_init._running_lines(self.reg, "acme", root, self.cfg)
+            lines = guide.running_lines(self.reg, "acme", root, self.cfg)
         self.assertEqual(off[1], '- Janitor: off; say "let the janitor clean up" (listed below).')
         self.assertEqual(lines, [
             "- Heartbeat: every 120 s (the reconcile job): wakes Main and the divisions when work waits.",
@@ -160,7 +160,7 @@ class GuideTest(support.TempHomeCase):
             "- Notifications: Orca shows one when Main finishes a reply; ORCHE reminds you after 30 minutes when a "
             "decision still waits."])
         self.cfg["queue"]["land"] = "owner"
-        self.assertIn('lands it when you say "merge"', cmd_init._running_lines(self.reg, "acme", root, self.cfg)[2])
+        self.assertIn('lands it when you say "merge"', guide.running_lines(self.reg, "acme", root, self.cfg)[2])
         for ln in lines:
             self.assertNotRegex(ln, "[\u2013\u2014]")
 

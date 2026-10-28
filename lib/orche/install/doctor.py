@@ -158,9 +158,9 @@ def process_checks(reg) -> list:
     return rows
 
 
-# ---- 0.9.0 scale rows (design §9.2, Appendix C.5): (level, name, detail) ---------------------------
+# ---- 0.9.0 scale rows: (level, name, detail) ---------------------------
 
-def _roots(reg):
+def roots(reg):
     """(key, root) of the registered projects whose path is a directory."""
     for key in sorted(reg.get("projects", {})):
         path = (reg["projects"][key] or {}).get("path")
@@ -181,7 +181,7 @@ def gh_rows(reg) -> list:
     except github.GhError:
         login = "?"
     rows = []
-    for key, root in _roots(reg):
+    for key, root in roots(reg):
         url = shell.git(root, "remote", "get-url", "origin", timeout=10)
         if not url.ok or not url.out.strip():
             rows.append(("WARN", "gh", f"{key}: no origin remote — the merge queue lands PRs on GitHub"))
@@ -209,7 +209,7 @@ def entire_rows(reg, which=shutil.which) -> list:
     command is not on PATH (its workers' commits are then not linked to their sessions); OK when it is;
     no row when no project uses Entire."""
     from .. import detect
-    users = [key for key, root in _roots(reg) if detect.uses_entire(root)]
+    users = [key for key, root in roots(reg) if detect.uses_entire(root)]
     if not users:
         return []
     if which("entire"):
@@ -252,7 +252,7 @@ def gate_rows(reg, cfg) -> list:
     orche/verify-gate branch (verifygate.pending) is the open PR adding the script, named as init recorded it."""
     from .. import publish, queue, verifygate
     rows = []
-    for key, root in _roots(reg):
+    for key, root in roots(reg):
         if not (root / ".git").exists():
             continue
         base, ok = publish.gate(root, cfg, key)
@@ -433,7 +433,7 @@ def privacy_rows(job) -> list:
 
 
 def reconcile_job_rows(home) -> list:
-    """The reconcile LaunchAgent (design c10 §2.4): loaded, and its StartInterval matches every_s."""
+    """The reconcile LaunchAgent: loaded, and its StartInterval matches every_s."""
     import plistlib
     from .. import reconcile
     from . import launchd
@@ -549,15 +549,6 @@ def checks(ctx) -> list:
     add("OK" if days == settings.CLEANUP_DAYS else "WARN", "cleanupPeriodDays",
         f"{days if days is not None else '(absent)'}" + ("" if days == settings.CLEANUP_DAYS
                                                          else f" (want {settings.CLEANUP_DAYS})"))
-    # Author-specific files: absent is normal for most users ("skipped"), not a warning.
-    agents = ctx.home / ".codex" / "AGENTS.md"
-    recovered = agents.with_name("AGENTS.md.recovered")
-    if agents.exists():
-        add("OK", "codex AGENTS.md", f"{agents} present")
-    elif recovered.is_file():
-        add("WARN", "codex AGENTS.md", f"{agents} missing but {recovered.name} exists (run: orche install --yes)")
-    else:
-        add("OK", "codex AGENTS.md", "skipped (not present)")
     if any(settings.CAREFUL_MARKER in cmd for _, cmd in settings.iter_commands(data)):
         add("WARN", "careful hook", "careful hook registered in settings.json — its approval dialogs stall "
                                     "unattended ORCHE panes; remove it or keep it only for your own sessions")

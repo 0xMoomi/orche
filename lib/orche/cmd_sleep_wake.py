@@ -19,20 +19,6 @@ def register(subparsers):
         p.set_defaults(func=func)
 
 
-def run(args, verb, name, reg) -> int:
-    """CLI glue of `orche sleep|wake` and `orche feat sleep|wake`: resolve, run, print."""
-    m = roster.Roster(reg).member(name)
-    if m is None or not m.owns_worktree:
-        return cli.fail(cli.EXIT_NOT_FOUND, f"unknown unit: {name} (expected div-<proj>-<division>, "
-                                            "feat-<proj>-<feature> or main-<proj>)")
-    try:
-        data, line = verb(reg, m, dry_run=args.dry_run)
-    except hr.Refused as exc:
-        return cli.fail(exc.code, exc.msg)
-    cli.out(args, data, line)
-    return cli.EXIT_OK
-
-
 def cmd_sleep(args):
     try:
         with registry.lock():
@@ -46,7 +32,7 @@ def _sleep(args):
     m = roster.Roster(reg).member(args.unit)
     if m is not None and not m.owns_worktree:
         return cli.fail(cli.EXIT_USER, f"{m.session} is a project pane: close it in Orca")
-    return run(args, hr.sleep, args.unit, reg)
+    return hr.run_verb(args, hr.sleep, args.unit, reg)
 
 
 def cmd_wake(args):
@@ -67,4 +53,4 @@ def _wake(args):
             return cli.fail(cli.EXIT_USER, f"could not open or switch to {m.session}: {exc}")
         cli.out(args, data, line)
         return cli.EXIT_OK
-    return run(args, hr.wake, args.unit, reg)
+    return hr.run_verb(args, hr.wake, args.unit, reg)

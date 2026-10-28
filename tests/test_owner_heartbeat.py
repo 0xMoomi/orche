@@ -1,4 +1,4 @@
-"""C10 T10 — the owner's heartbeat (lib/orche/flow/owner.py `heartbeat`, run by `orche reconcile`): an open
+"""T10 — the owner's heartbeat (lib/orche/flow/owner.py `heartbeat`, run by `orche reconcile`): an open
 ask is re-notified 30, 60, 120, 240 min after it, then never; quiet hours (a silent first, none inside, one
 at their end); an owner prompt or the filled secrets answer it (Main hears once which unit to resume); the
 10-minute fallback for a Main that did not tag; Main's closing line is Orca's to notify (ORCHE sends
@@ -14,7 +14,7 @@ from contextlib import redirect_stderr, redirect_stdout
 from unittest import mock
 
 import support
-from orche import cmd_status, inbox, notify, reconcile, registry, shell, units, util
+from orche import inbox, notify, project, reconcile, registry, shell, units, util
 from orche.flow import guard, owner
 from orche.secrets import store
 from test_reconcile import T0 as RT0, WAKE, ReconcileCase
@@ -428,7 +428,7 @@ class BoundaryTest(BeatCase):
 
 class OwnerLineTest(BeatCase):
     def line(self, when):
-        return cmd_status.owner_lines(owner.status(P, when))
+        return project.owner_lines(owner.status(P, when))
 
     def test_the_owner_line(self):
         self.assertEqual(self.line(T0), [])

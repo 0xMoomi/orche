@@ -26,6 +26,7 @@ itself only with `triage.keep_prompts`). Off unless `triage.enabled`; a non-Main
 import hashlib
 import itertools
 import json
+import math
 import os
 import re
 import time
@@ -48,6 +49,7 @@ GOAL_CHARS = 300                                     # a prompt up to this long 
 GOAL_EXCERPT = 200                                   # else GOAL is this long an excerpt of it, plus:
 GOAL_POINTER = "excerpt; the full prompt is quoted in CONTEXT"
 REASON_GOAL = 60                                     # GOAL characters shown in the block reason
+LAST = 20                                            # `orche triage status`: the newest samples shown
 TIMEBOX = "30m"
 FORBID = "push, amend, --no-verify, files outside SCOPE"
 REPORT = "standard"
@@ -654,3 +656,78 @@ def handle(payload, started, r, who) -> Outcome:
     except Exception as exc:  # noqa: BLE001
         log.log("hooks", f"triage: cannot record the decision: {type(exc).__name__}: {exc}")
     return out
+
+
+# ---- `orche triage status` and the eval record (ORCHE_HOME/triage/eval.json)
+
+def percentile(values, p):
+    """Nearest-rank percentile of `values` (None when empty)."""
+    ordered = sorted(values)
+    if not ordered:
+        return None
+    return ordered[min(len(ordered) - 1, max(0, math.ceil(p * len(ordered)) - 1))]
+
+
+def eval_path() -> Path:
+    return paths.orche_home() / "triage" / "eval.json"
+
+
+def read_eval() -> dict:
+    """{"last": backend, "runs": {backend: summary}}; empty runs when absent or unreadable."""
+    try:
+        data = util.read_json(eval_path(), default={}) or {}
+    except (util.JsonError, OSError):
+        data = {}
+    runs = data.get("runs") if isinstance(data, dict) else None
+    runs = {k: v for k, v in runs.items() if isinstance(v, dict)} if isinstance(runs, dict) else {}
+    return {"last": data.get("last") if isinstance(data, dict) and data.get("last") in runs else None, "runs": runs}
+
+
+def save_eval(file, model, rep) -> dict:
+    """Record one eval run's summary (no prompts): when, which labelled file, the scores per backend."""
+    r = rep["models"][model]["direct"]
+    summary = {"at": util.now_iso(), "file": str(Path(file).resolve()),
+               **{k: r[k] for k in ("n", "tp", "fp", "fn", "tn", "precision", "recall", "classifier_calls",
+                                    "p50_ms")}}
+    data = read_eval()
+    data["runs"][model] = summary
+    data["last"] = model
+    util.write_json(eval_path(), data)
+    return summary
+
+
+def eval_status(resolved) -> dict:
+    """Whether a labelled eval set is on file and when `orche triage eval` last ran, overall and for
+    the backend triage resolves to (SPEC §7.3 condition 5: Jev needs an offline eval first)."""
+    data = read_eval()
+    last = data["runs"].get(data["last"]) if data["last"] else None
+    mine = data["runs"].get(resolved)
+    return {"last_backend": data["last"], "last_run": last,
+            "set_file": (last or {}).get("file"),
+            "set_exists": bool(last and last.get("file") and Path(str(last["file"])).is_file()),
+            "resolved_evaluated": mine is not None, "resolved_run": mine}
+
+
+def eval_warning(d):
+    """One line when triage is enabled on Jev with no Jev eval on file, else None."""
+    if d["enabled"] and d["resolved_backend"] == "jev" and not d["eval"]["resolved_evaluated"]:
+        return ("warning: triage is enabled on the Jev backend with no Jev eval on file (SPEC §7.3 "
+                "condition 5); run `orche triage eval <file> --backend jev`")
+    return None
+
+
+def status_data(cfg=None) -> dict:
+    cfg = cfg if cfg is not None else config.load()
+    t = settings(cfg)
+    rows = read_samples()
+    calls = [r["model_ms"] for r in rows
+             if r.get("backend") not in (None, "none") and isinstance(r.get("model_ms"), int)]
+    keys = ("at", "decision", "stage", "reason", "confidence", "backend", "ms", "division", "tier", "unit")
+    resolved = backend(cfg)[0]
+    return {"enabled": bool(t.get("enabled")), "backend": t.get("backend") or "auto",
+            "resolved_backend": resolved, "min_confidence": min_confidence(cfg),
+            "max_latency_s": max_latency(cfg), "keep_prompts": bool(t.get("keep_prompts")),
+            "samples": len(rows), "classifier_calls": len(calls),
+            "p50_ms": percentile(calls, 0.5), "p95_ms": percentile(calls, 0.95),
+            "eval": eval_status(resolved),
+            "last": [{k: r.get(k) for k in keys} for r in rows[-LAST:]]}

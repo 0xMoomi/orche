@@ -1,8 +1,6 @@
 """Agent definitions, persona templates, skills, workflow/CI templates and the SessionStart role card."""
 import importlib.util
 import re
-import shutil
-import subprocess
 import unittest
 
 import support
@@ -20,7 +18,7 @@ ALWAYS_PAUSE = ("force-push to a shared branch", "deploy", "data deletion", "cus
 INJECT = re.compile(r"<!-- inject:start -->\n(.*?)\n<!-- inject:end -->", re.S)
 VARS = dict(PROJECT="acme", NAME="build", SESSION="div-acme-build", MODEL="claude-opus-5-5", EFFORT="high",
             LABEL="Design", CHARTER="Owns the visual system.", CRAFT="")   # LABEL/CHARTER/CRAFT: div-custom.md only
-# c77: the owner's engineering rules every Build and worker craft carries.
+# the owner's engineering rules every Build and worker craft carries.
 OWNER_BAR = ("Precedent first", "Installed before new", "maintained library", "Simplest change",
              "No backward-compat layers", "Grow in layers", "clear boundary", "Long-term")
 DESIGN = {"label": "Design", "charter": "Owns the product's interface."}
@@ -44,7 +42,7 @@ def frontmatter(text):
 class AgentFilesTest(unittest.TestCase):
     def test_every_agent_has_valid_frontmatter(self):
         files = sorted(AGENTS.glob("*.md"))
-        self.assertEqual([p.stem for p in files], ["deep-reasoner", "exec", "hr", "runner"])
+        self.assertEqual([p.stem for p in files], ["deep-reasoner", "exec", "hr"])
         for path in files:
             fm = frontmatter(path.read_text())
             self.assertIsNotNone(fm, path.name)
@@ -63,13 +61,11 @@ class AgentFilesTest(unittest.TestCase):
         self.assertNotIn("autoCompactWindow", fm["exec"])
         self.assertEqual((fm["hr"]["model"], fm["hr"]["effort"], fm["hr"]["memory"]), ("claude-sonnet-5-5", "low", "user"))
         self.assertEqual((fm["deep-reasoner"]["model"], fm["deep-reasoner"]["effort"]), ("claude-opus-5-5", "max"))
-        self.assertEqual((fm["runner"]["model"], fm["runner"]["effort"], fm["runner"]["tools"]),
-                         ("claude-haiku-5-5", "low", "Bash, Read, Grep, Glob"))
 
 
 class PersonaTemplatesTest(unittest.TestCase):
     def test_seven_personas_with_placeholder_frontmatter(self):
-        """No `main.md`: Main's rules are the orche-main card (C9 ruling 15)."""
+        """No `main.md`: Main's rules are the orche-main card."""
         names = sorted(p.name for p in PERSONAS.glob("*.md") if p.name not in PROMPTS)
         self.assertEqual(names, sorted(["div-rnd.md", "div-research.md", "div-build.md",
                                         "div-gtm.md", "div-ops.md", "div-custom.md", "feature.md"]))
@@ -108,7 +104,7 @@ class PersonaTemplatesTest(unittest.TestCase):
             self.assertIn(part, text)
 
     def test_agents_never_wait_on_a_long_intake(self):
-        """C7 A2c: the apply skill runs init (intake included) in one call with a 10-minute Bash
+        """The apply skill runs init (intake included) in one call with a 10-minute Bash
         timeout and no two-step `--no-intake` path."""
         apply_text = (SKILLS / "orche-apply" / "SKILL.md").read_text()
         for part in ("Apply with one call: `orche init <name> --setup-file <path>`",
@@ -117,7 +113,7 @@ class PersonaTemplatesTest(unittest.TestCase):
                      "Do not act as Main: never set `ORCHE_SESSION`, never run `orche dispatch`"):
             self.assertIn(part, apply_text)
         self.assertNotIn("--setup-file <path> --no-intake", apply_text)
-        # C7 A4: a bare `orche init` runs at once on the current repository, defaults, no questions.
+        # a bare `orche init` runs at once on the current repository, defaults, no questions.
         for part in ("says `orche init` (or `/orche-apply`) with no project named",
                      "Run `orche init` at once, with no argument:\n" "no checklist, no dry-run, no question",
                      "`Main is open in the main-<proj> tab with the setup summary; from here on, talk to Main there.`",
@@ -200,7 +196,7 @@ class PersonaTemplatesTest(unittest.TestCase):
         return re.search(r"(?ms)^## Craft\n.*?(?=\n\n## )", text).group(0)
 
     def assert_craft(self, role, name, budget, phrases, custom=None):
-        """c77: each division and the worker carry a distilled craft section within its line budget (60, worker 50)."""
+        """Each division and the worker carry a distilled craft section within its line budget (60, worker 50)."""
         craft = self.craft_of(role, name, custom)
         self.assertLessEqual(len(craft.splitlines()), budget, name)
         for phrase in phrases:
@@ -211,7 +207,7 @@ class PersonaTemplatesTest(unittest.TestCase):
                           "the headless head review keeps its eight lines", "### Done means"))
 
     def test_build_names_the_review_depth_rules(self):
-        """c81 (R-REVIEW-12 to 14), c83: Build's craft and rulebook name the surface, the requested cross-check's
+        """R-REVIEW-12 to 14: Build's craft and rulebook name the surface, the requested cross-check's
         groups and the fact; the rulebook quotes the queue's return reason and the config default."""
         from orche import config
         from orche.queue import integrator
@@ -271,7 +267,7 @@ class PersonaTemplatesTest(unittest.TestCase):
         self.assertNotIn("\n\n\n", text)
 
     def test_no_persona_names_an_installed_skill(self):
-        """c77: a persona carries its craft itself, never a pointer to an installed skill: no slash command but
+        """A persona carries its craft itself, never a pointer to an installed skill: no slash command but
         `/clear` and no skill pack's name, in a template or a rendered persona."""
         texts = {p.name: p.read_text() for p in PERSONAS.rglob("*.md")}
         for role, name, custom in ([("division", n, None) for n in ("build", "rnd", "research", "gtm", "ops")]
@@ -288,13 +284,13 @@ class SkillsTest(unittest.TestCase):
     def test_skills_have_frontmatter_and_a_short_inject_block(self):
         self.assertEqual(sorted(p.name for p in SKILLS.iterdir() if p.is_dir()),
                          ["orche", "orche-apply", "orche-build", "orche-main"])
-        # orche-apply is a procedure skill, not a role card: frontmatter, no inject block, never apply-all.
+        # orche-apply is a procedure skill, not a role card: frontmatter, no inject block, only named projects.
         apply_text = (SKILLS / "orche-apply" / "SKILL.md").read_text()
         apply_fm = frontmatter(apply_text)
         self.assertEqual(apply_fm["name"], "orche-apply")
         self.assertTrue(apply_fm["description"].startswith("Apply ORCHE to one project on request. Use"))
         self.assertEqual(INJECT.findall(apply_text), [])
-        self.assertIn("Do not run `orche apply-all`", apply_text)
+        self.assertIn("Do not apply to a project the user did not name", apply_text)
         self.assertIn("Do not commit the generated files", apply_text)
         # Setup wave S3: the chat procedure goes through --print-setup, a setup file and a dry-run preview.
         for part in ("`orche init --print-setup <name>`", "\"defaults\" keeps it", "\"without ops\"",
@@ -340,7 +336,7 @@ class SkillsTest(unittest.TestCase):
         self.assertIn("## Dispatch effort\n\nTarget one API response per brief.", text)
 
     def test_main_card_says_a_report_is_an_order(self):
-        """C9 T9: Main has no persona file; the card carries the echo-back and the report order."""
+        """T9: Main has no persona file; the card carries the echo-back and the report order."""
         block = INJECT.findall((SKILLS / "orche-main" / "SKILL.md").read_text())[0]
         for part in ("Understood: source = <project>, output = <project>", "When a report arrives",
                      "Never only acknowledge"):
@@ -358,7 +354,7 @@ class SkillsTest(unittest.TestCase):
             self.assertIn(part, text)
 
     def test_main_rulebook_keeps_a_judge_only_rubric_and_grafts(self):
-        """c82: the design bakeoff's rubric goes to the decision log and the judge, never to the candidates."""
+        """The design bakeoff's rubric goes to the decision log and the judge, never to the candidates."""
         text = (SKILLS / "orche-main" / "SKILL.md").read_text()
         flat = " ".join(text.split())
         for part in ("write a judge-only rubric of 3 to 6 criteria", "with `orche decide`", "never into the briefs",
@@ -368,7 +364,7 @@ class SkillsTest(unittest.TestCase):
         block = INJECT.findall(text)[0]
         self.assertIn("a third scores both on your judge-only rubric, grafts onto a base", block)
         self.assertLessEqual(len(block), 1500)
-        self.assertIn("R-ASK-5 |", (support.ROOT / "SPEC.md").read_text())
+        self.assertIn("R-ASK-5 |", (support.ROOT / "docs" / "spec.md").read_text())
 
     def test_hr_agent_names_model_commands(self):
         text = (support.ROOT / "agents" / "hr.md").read_text()
@@ -401,20 +397,20 @@ class SkillsTest(unittest.TestCase):
         self.assertLessEqual(len(block), 1500)
 
     def test_spec_numbers_the_model_rules(self):
-        spec = (support.ROOT / "SPEC.md").read_text()
+        spec = (support.ROOT / "docs" / "spec.md").read_text()
         self.assertGreaterEqual(spec.count("R-MODEL-"), 11)
         for n in range(1, 12):
             self.assertIn(f"R-MODEL-{n} ", spec)
 
     def test_spec_numbers_the_queue_review_ladder_and_scale_rules(self):
-        spec = (support.ROOT / "SPEC.md").read_text()
+        spec = (support.ROOT / "docs" / "spec.md").read_text()
         for prefix, least in (("R-QUEUE", 12), ("R-REVIEW", 9), ("R-LADDER", 6), ("R-SCALE", 6)):
             for n in range(1, least + 1):
                 self.assertIn(f"| {prefix}-{n} |", spec)
             self.assertGreaterEqual(len(set(re.findall(prefix + r"-(\d+) \|", spec))), least, prefix)
 
     def test_old_integration_rules_are_gone(self):
-        spec = (support.ROOT / "SPEC.md").read_text()
+        spec = (support.ROOT / "docs" / "spec.md").read_text()
         section = spec[spec.index("### 2.2"):spec.index("### 2.3")]
         texts = {"SPEC §2.2": section}
         for path in list(SKILLS.glob("*/SKILL.md")) + list(PERSONAS.rglob("*.md")):
@@ -430,7 +426,7 @@ class SkillsTest(unittest.TestCase):
         self.assertIn("## Landing your work", (PERSONAS / "feature.md").read_text())
 
     def test_readme_quick_start_is_one_short_paste_and_lists_what_to_say_any_time(self):
-        """c61: the quick start paste is at most four lines; the "Any time" table has one row per guide feature."""
+        """The quick start paste is at most four lines; the "Any time" table has one row per guide feature."""
         readme = (support.ROOT / "README.md").read_text()
         paste = re.search(r"## Quick start\n.*?```text\n(.*?)\n```", readme, re.S).group(1).splitlines()
         self.assertLessEqual(len(paste), 4)
@@ -532,7 +528,7 @@ class SkillsTest(unittest.TestCase):
         self.assertIn(f"`review.pane_lines` ({lines})", skill[8])
 
     def test_no_card_template_or_readme_names_the_removed_owner_notification(self):
-        """C10 T11: `inbox.notify` and the per-pointer owner notification are gone (0.7.0)."""
+        """T11: `inbox.notify` and the per-pointer owner notification are gone (0.7.0)."""
         files = sorted(SKILLS.rglob("*.md")) + sorted((support.ROOT / "templates").rglob("*.md"))
         files.append(support.ROOT / "README.md")
         for path in files:
@@ -592,45 +588,7 @@ class RoleCardTest(test_hooks.HookCase):
 
 
 class FileTemplatesTest(unittest.TestCase):
-    def test_ci_yaml_is_well_formed(self):
-        ci = support.ROOT / "templates" / "github" / "ci.yml"
-        text = ci.read_text()
-        for part in ("cancel-in-progress: true", "[skip ci]", "lint", "unit", "type-check", "build"):
-            self.assertIn(part, text)
-        self.assertNotIn("secrets.", text)
-        self.assertEqual(re.findall(r"^\s+- run: (.+)$", text, re.M), ["./scripts/verify/ci.sh"])
-        self.assertIn("lint -> unit tests -> type-check -> build", text)
-        self.assertIn("contents: read", text)
-        ruby = shutil.which("ruby")
-        if ruby is None:
-            self.skipTest("ruby not on PATH; YAML well-formedness not checked")
-        res = subprocess.run([ruby, "-ryaml", "-e", "YAML.load_file(ARGV[0])", str(ci)],
-                             capture_output=True, text=True, timeout=20)
-        self.assertEqual(res.returncode, 0, res.stderr)
-
-    def test_large_job_meta_is_a_pure_literal(self):
-        text = (support.ROOT / "templates" / "workflow" / "large-job.js").read_text()
-        self.assertTrue(text.startswith("export const meta = {"))
-        meta = text[len("export const meta = "):text.index("\n}\n") + 2]
-        self.assertNotIn("(", meta)
-        self.assertNotIn("${", meta)
-        self.assertNotIn("`", meta)
-        bare = re.sub(r"'[^'\n]*'", "''", meta)
-        bare = re.sub(r"\b[A-Za-z_]\w*\s*:", "", bare)
-        self.assertIsNone(re.search(r"[A-Za-z_$]", bare), bare)
-        for part in ("pipeline(", "parallel(", "agent(", "phase: 'Verify'", "schema:", "return {"):
-            self.assertIn(part, text)
-
-    def test_brief_night_standing(self):
-        brief = (support.ROOT / "templates" / "brief.md").read_text()
-        self.assertTrue(brief.startswith("rev: 1\nunit: <unit id>\nto: <session>   from: <sender session>\n"
-                                         "worktree: <absolute path of the target's worktree>   branch: <branch>\n"))
-        self.assertIn("Work only inside `worktree`. SCOPE paths are relative to it.\n", brief)
-        keys = re.findall(r"^([A-Z]+) {2,}", brief, re.M)
-        self.assertEqual(keys, ["TO", "GOAL", "SCOPE", "CONTEXT", "ACCEPT", "VERIFY", "TIMEBOX", "FORBID",
-                                "REPORT", "TIER", "ROLLBACK"])
-        night = (support.ROOT / "templates" / "night.md").read_text()
-        self.assertEqual(re.findall(r"^## (.+)$", night, re.M), ["GOAL", "FINISH-PREDICATE", "PERMISSIONS", "ESCAPE"])
+    def test_standing_and_principles(self):
         standing = (support.ROOT / "templates" / "project" / ".orche" / "STANDING.md").read_text()
         self.assertTrue(standing.startswith("# STANDING ORDERS: {{PROJECT}}"))
         self.assertEqual([int(n) for n in re.findall(r"^(\d+)\. ", standing, re.M)], [1, 2, 3, 4, 5, 6])

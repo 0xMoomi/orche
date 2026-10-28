@@ -1,5 +1,5 @@
-"""`orche nudge <session>` and `orche deliver <unit>` — typing into a pane (lib/orche/deliver.py,
-design §4.4 and §4.5).
+"""`orche nudge <session>` and `orche deliver <unit>` — typing into a pane
+(lib/orche/deliver.py).
 
 `orche nudge` types the inbox wake line. ORCHE starts it detached whenever a waking pointer is posted
 (inbox.wake); run it by hand to wake a pane whose reports wait (`orche status` names it). Prints the

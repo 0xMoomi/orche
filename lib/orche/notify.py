@@ -1,4 +1,4 @@
-"""The one macOS notification path (C10 §5.3, §7): `send(title, body, sound=False, *, kind="-", project=None)`.
+"""The one macOS notification path: `send(title, body, sound=False, *, kind="-", project=None)`.
 
 osascript with fixed words: `on run argv`, a `display notification` that reads its body and title from
 `item 1` and `item 2 of argv` (plus the constant ` sound name "Glass"` when asked), `end run`; body and

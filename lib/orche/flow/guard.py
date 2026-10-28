@@ -1,4 +1,4 @@
-"""Relay guards (C10 T5): what ORCHE refuses to relay while the owner is away.
+"""Relay guards: what ORCHE refuses to relay while the owner is away.
 
 The autonomy window W(p) starts at the later of local midnight and the owner's last prompt in Main
 (`ORCHE_HOME/flow/<p>/owner-seen`, touched by hooks/report_inject.py). Every counter counts inside W

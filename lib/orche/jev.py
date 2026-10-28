@@ -458,7 +458,7 @@ def probe(c):
     return {"ok": False, "ms": ms, "kind": c.kind, "error": jevkey.scrub(detail, c._key)}
 
 
-def _ask(state, questions, deadline=None):
+def ask(state, questions, deadline=None):
     c = client()
     if c is None:
         return None
@@ -515,7 +515,7 @@ def classify_pointers(pointers, *, deadline=None):
         state, questions, ptrs = drain_request(pointers)
         if not ptrs:
             return None
-        a = _ask(state, questions, deadline)
+        a = ask(state, questions, deadline)
         if not a:
             return None
         out = {}

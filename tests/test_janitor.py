@@ -623,7 +623,7 @@ class RulesTest(support.TempHomeCase):
 
 
 class DailyTest(JanitorCase):
-    """c85: the heartbeat's rule (janitor.due) reads the report's mtime; one pass at a time (`.pass.lock`)."""
+    """The heartbeat's rule (janitor.due) reads the report's mtime; one pass at a time (`.pass.lock`)."""
 
     def test_due_reads_the_report_age(self):
         report = janitor.report_path()

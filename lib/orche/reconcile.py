@@ -1,9 +1,9 @@
-"""The heartbeat pass (`orche reconcile`, design c10 §2.1): one bounded, idempotent pass, no daemon.
+"""The heartbeat pass (`orche reconcile`): one bounded, idempotent pass, no daemon.
 
 A pass takes a non-blocking flock on ORCHE_HOME/reconcile/.lock (held -> exit 0), settles lost runs
 (runs.reconcile), observes the repair classes, plans the due attempts (pure: plan()) and applies
 them through the existing paths only, saving reconcile/state.json after each action and writing
-reconcile/heartbeat.json last. Classes (design §2.2):
+reconcile/heartbeat.json last. Classes:
 
 - unread <session>: a waking pointer pending >= inbox.LATE, the pane present and quiet (no output
   for QUIET_MS), not nudged within inbox.NUDGED_TTL, its `.deliver.lock` free -> `orche nudge`;
@@ -20,14 +20,14 @@ reconcile/heartbeat.json last. Classes (design §2.2):
 - busy <unit>: RUN.json of the current revision says `stop_reason: busy`, no run live ->
   `orche run <unit>` once (cap 1, no escalation); while its project (or all projects) is at the slot
   cap the restart waits and spends nothing, and a restart that came back busy again is a fresh try (R34);
-- held <unit> (0.9.0, design §8.5): RUN.json says `held` or `usage_limit`, no run live, no STOP since,
+- held <unit> (0.9.0): RUN.json says `held` or `usage_limit`, no run live, no STOP since,
   its vendor's usage hold is over -> `orche run <unit>` once per held record, oldest first, at most
   runner.max_parallel_total a pass;
 - queue <project> (§5.10, R19): no integrator running: `land: auto` releases entries awaiting the owner,
   a lost `testing` entry goes back to the front (integrator.recover), then an entry the integrator may
   test or a pending proof (queue.startable), neither the queue nor the project paused -> queue.start (no
   git, no gh in the pass; quiet hours and usage holds do not stop it);
-- usage <vendor>: an active hold nobody told yet -> the owner notice (Appendix A.15) once; a hold past
+- usage <vendor>: an active hold nobody told yet -> the owner notice once; a hold past
   its `until` -> `usage resume` logged once;
 - review <project>: a pending Build review (review/build.py: a run's RUN.json `review.build: pending`)
   not running that may_start() lets start -> started detached (`orche review --pr N --head --unit U`,
@@ -276,7 +276,7 @@ def timebox_s(b) -> float:
     """The brief's TIMEBOX in seconds, uncapped (the runner caps a run at 4 h; a pane is not capped);
     absent or unreadable: the runner's default."""
     from .runs import job
-    raw = job._timebox_raw(b.fields.get("TIMEBOX", ""))
+    raw = job.timebox_raw(b.fields.get("TIMEBOX", ""))
     return float(job.DEFAULT_TIMEBOX_S if raw is None else max(60, raw))
 
 
@@ -300,13 +300,13 @@ def _open_child(reg, r, b, to, since) -> bool:
         if child is None or not child.rev or child.sender != to:
             continue
         ct = r.resolve_to(child.to, child.project)
-        if ct is not None and ct.status != "retired" and not deliver._settled(child, ct.session):
+        if ct is not None and ct.status != "retired" and not deliver.settled(child, ct.session):
             return True
     return False
 
 
 def _silent(reg, r, now, keys, terms, cfg_all) -> list:
-    """silent conditions (design §2.2): see the module docstring. Age: since the revision's BRIEF.md."""
+    """silent conditions: see the module docstring. Age: since the revision's BRIEF.md."""
     from . import deliver
     out = []
     for key, root in _projects(reg, keys):
@@ -332,7 +332,7 @@ def _silent(reg, r, now, keys, terms, cfg_all) -> list:
             idle_due = idle is not None and idle >= SILENT_IDLE_S
             if not idle_due and elapsed < SILENT_TIMEBOX * tb:
                 continue
-            if deliver._dispatched(t.session, b.unit) is not None or deliver._settled(b, t.session):
+            if deliver.dispatched(t.session, b.unit) is not None or deliver.settled(b, t.session):
                 continue
             newest = brief.newest(reg, key, t.session)
             if newest is None or newest.unit != b.unit or _open_child(reg, r, b, t.session, mtime):
@@ -350,7 +350,7 @@ def _silent(reg, r, now, keys, terms, cfg_all) -> list:
 
 def _dispatches(reg, m, session, late, now) -> list:
     """undelivered / drain conditions of `session`'s late dispatch pointers, the newest per unit. A
-    revision is drained only when it is settled (deliver._settled: ran, runs or reported at that
+    revision is drained only when it is settled (deliver.settled: ran, runs or reported at that
     rev); a STOP never is (its deliverer stops the run, drops it or types it)."""
     from . import deliver
     newest = {}
@@ -360,10 +360,10 @@ def _dispatches(reg, m, session, late, now) -> list:
             newest[unit] = (t, p)
     out = []
     for unit, (t, p) in sorted(newest.items()):
-        rev, age = deliver._rev(p), (now - t).total_seconds()
+        rev, age = deliver.pointer_rev(p), (now - t).total_seconds()
         b = brief.find(reg, unit)
         if (p.get("status") != "stop" and b is not None and b.rev and rev <= b.rev
-                and deliver._settled(b, session)):
+                and deliver.settled(b, session)):
             out.append(Condition("drain", f"drain:{unit}:{b.rev}", m.project, unit, age,
                                  ready=deliver.lock_free(session), rev=b.rev, to=session))
             continue
@@ -573,8 +573,8 @@ def _gone(reg, key, e, deliver) -> bool:
         name = key.split(":", 2)[2] if key.count(":") >= 2 else ""
         return not name or not (inbox.box(target) / name).is_file()
     if cls == "undelivered":
-        found = deliver._dispatched(to, target) if to else None
-        return found is None or deliver._rev(found[1]) != units.num(e.get("rev"))
+        found = deliver.dispatched(to, target) if to else None
+        return found is None or deliver.pointer_rev(found[1]) != units.num(e.get("rev"))
     if cls == "held":
         b = brief.find(reg, target, project=e.get("project"))
         if b is None or b.rev != e.get("rev"):
@@ -588,7 +588,7 @@ def _gone(reg, key, e, deliver) -> bool:
     if b is None or b.rev != e.get("rev"):
         return True
     if cls == "silent":
-        return bool(to) and deliver._settled(b, to)
+        return bool(to) and deliver.settled(b, to)
     rec = runs.last(b.folder, strict=True)
     return rec is None or rec.get("stop_reason") != "busy"
 
@@ -626,7 +626,7 @@ def _escalate(reg, action, now) -> None:
         from . import deliver
         last = deliver.last_delivery(c.to, c.target)
         state = str((last or {}).get("state") or "no delivery on file")
-        hint = (deliver._hint(roster.Roster(reg), c.to, c.target, state) if last
+        hint = (deliver.undelivered_hint(roster.Roster(reg), c.to, c.target, state) if last
                 else f"retry with `orche deliver {c.target}`")
         _post(c.target, c.sender, f"not delivered after {cap} tries: {c.target} → {c.to} ({state}, pending "
                                   f"{minutes} min)" + (f" — {hint}" if hint else ""), rev=c.rev)
@@ -1069,12 +1069,12 @@ def _pass(cfg_all, cfg, now, started, dry_run, out, keys=None, as_json=False) ->
         except Exception as exc:  # noqa: BLE001 - lost runs never stop the pass
             if not denied(exc):
                 log.log("hooks", f"reconcile: runs: {type(exc).__name__}: {exc}")
-    # C10 T8: a lineage close a crash or a busy lock missed (never raises; dry-run takes no lock)
+    # a lineage close a crash or a busy lock missed (never raises; dry-run takes no lock)
     _phase("lineage")
     shut = [{"action": "lineage-close", "class": "lineage", "project": p, "target": lin, "rev": None,
              "attempt": 1, "cap": 1, "line": f"{'would close' if dry_run else 'closed'} lineage {lin} ({p})",
              "failed": None} for p, lin in lineage.repair(reg, dry_run, now=now, keys=scope())]
-    # C10 T10: answered asks, missed secret resumes, the fallback, held notices, re-notifications
+    # answered asks, missed secret resumes, the fallback, held notices, re-notifications
     _phase("owner")
     notes = list(owner.heartbeat(reg, now, dry_run, scope()))
     _phase("queue")        # 0.9.0: the merge queue's integrator, started when an entry waits
@@ -1214,7 +1214,7 @@ def stalled(project) -> list:
 
 
 def stalled_line(s) -> str:
-    """One `stalled:` line (design §6)."""
+    """One `stalled:` line."""
     if s["cls"] == "lineage":
         return f"  stalled: lineage {s['target']} waiting on {s.get('detail') or '?'}"
     rev = f" rev {s['rev']}" if s.get("rev") is not None else ""
@@ -1244,7 +1244,7 @@ def repairs() -> dict:
 
 
 def overdue_hint(kind, target, reps, fresh) -> str:
-    """The tail of an `unread:` (target: session) or `undelivered:` (target: unit) line (design §6):
+    """The tail of an `unread:` (target: session) or `undelivered:` (target: unit) line:
     ORCHE's live repair while the heartbeat is fresh, else the command; a pane the last pass found
     closed names `orche wake` (or when ORCHE reopens it)."""
     e = reps.get((kind, target))
@@ -1359,7 +1359,7 @@ def kick_path() -> Path:
 
 
 def kick(now=None) -> bool:
-    """The hook kick (design c10 §2.4): when reconcile is on, the heartbeat is missing or older than
+    """The hook kick: when reconcile is on, the heartbeat is missing or older than
     KICK_INTERVALS × every_s and `reconcile/.kicked` is older than every_s, touch `.kicked` and start
     `orche reconcile` detached. True when a pass was started. Cheap: one config read, one stat."""
     cfg = settings()

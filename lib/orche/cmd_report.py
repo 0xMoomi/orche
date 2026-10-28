@@ -54,20 +54,6 @@ def unidentified_message(r, place) -> str:
             "(ORCHE panes set it automatically) or run inside a unit worktree")
 
 
-def _publish(reg, member, cwd, key, unit, b, report, summary):
-    """A gated pane member's verified done: push its branch and ensure the PR. Published or Gap."""
-    text = _report_text(report, summary)
-    root = (reg.get("projects", {}).get(key) or {}).get("path") or cwd
-    title, body = publish.pr_text(member, root, goal=b.fields.get("GOAL") if b is not None else unit, report=text)
-    return publish.publish(member, donegate._root(member, cwd), root, unit=unit, title=title, body=body)
-
-
-def _report_text(report, summary) -> str:
-    if report and Path(report).is_file():
-        return Path(report).read_text(encoding="utf-8", errors="replace")
-    return summary
-
-
 def cmd_report(args):
     if os.environ.get("ORCHE_RUNNER"):
         print("orche: report refused: this unit runs under `orche run`, which files your pointer from "
@@ -122,7 +108,7 @@ def cmd_report(args):
         ready = publish.ready_line(unit, publish.own_branch(who.member))   # kept whole: the owner's next word
         summary = "\n".join(summary.splitlines()[:inbox.MAX_LINES - 1] + [ready])
     elif args.status == "done" and donegate.gated(who.member) and not args.dry_run:
-        out = _publish(reg, who.member, cwd, key, unit, b, report, summary)
+        out = publish.member_done(reg, who.member, cwd, key, unit, b, report, summary)
         if isinstance(out, publish.Gap):
             print(f"orche: done not filed: {out.text}" + (f"\nOWNER: {out.owner}" if out.owner else ""),
                   file=sys.stderr)

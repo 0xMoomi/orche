@@ -1,5 +1,5 @@
 """The runner: execute one unit headless in its worktree (`orche run <unit>`): `claude -p`, or
-`codex exec` when the target's model is a Codex one (design C11 §5).
+`codex exec` when the target's model is a Codex one.
 
 resolve() reads the unit's BRIEF.md and the registry (the ceiling: vendors.of; Main: OPUS) and picks the
 model and effort from the TIER's rung (ladder.py; a MODEL pin replaces the model); call_for()
@@ -141,7 +141,7 @@ class Preview:
 
 # ---- resolve ---------------------------------------------------------------
 
-def _timebox_raw(text):
+def timebox_raw(text):
     """Seconds named by TIMEBOX (`30m`, `2h`, `1h30m`, `1.5 hours`), uncapped; None when absent."""
     s = str(text or "")
     m = _TIMEBOX.search(s)
@@ -161,7 +161,7 @@ def _timebox_raw(text):
 
 def timebox_seconds(text) -> int:
     """TIMEBOX -> seconds: default 30 minutes, at least 1 minute, at most MAX_TIMEBOX_S (4 h)."""
-    raw = _timebox_raw(text)
+    raw = timebox_raw(text)
     return DEFAULT_TIMEBOX_S if raw is None else min(MAX_TIMEBOX_S, max(60, raw))
 
 
@@ -311,7 +311,7 @@ def team_rules(plugin) -> str:
 def prompt(job, cfg) -> str:
     """The worker's stdin: BRIEF.md, the intake context block, in a team repository whose plugin is installed
     its `## Team rules` (team_rules), `## Runner` with templates/run/footer.md. A Codex worker
-    (Appendix A.2) first gets the persona body under `## Your role` (Claude reads the file through
+    first gets the persona body under `## Your role` (Claude reads the file through
     --append-system-prompt-file; AGENTS.md would dirty the tree) and, unless its sandbox is
     danger-full-access, templates/run/codex-sandbox.md after the footer."""
     text = job.text.rstrip("\n")
@@ -736,7 +736,7 @@ def _hold_of(job, cfg, tries) -> tuple:
 def _run_locked(reg, job, call, cfg, lock, since, stop) -> tuple:
     """(record, the STOP marker's mtime_ns this run consumed, else None). A mechanical attempt that
     fails or ends unverified re-runs once at the standard rung (ladder.escalate), in this run."""
-    raw = _timebox_raw(job.timebox)
+    raw = timebox_raw(job.timebox)
     if raw is not None and raw > MAX_TIMEBOX_S:
         log.log("hooks", f"runner: {job.unit}: TIMEBOX {job.timebox!r} capped at {MAX_TIMEBOX_S // 3600}h")
     head_before = shell.git_head(job.worktree)

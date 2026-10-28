@@ -99,7 +99,7 @@ class MainResumesTest(support.TempHomeCase):
         self.addCleanup(p.stop)
 
     def test_pane_command_carries_no_autocompact_window(self):
-        """c63: `--autocompact 200000` with the installer's 50 % compacted every pane at about 100K."""
+        """`--autocompact 200000` with the installer's 50 % compacted every pane at about 100K."""
         for resume in (True, False):
             with contextlib.redirect_stderr(io.StringIO()):
                 command = panes.pane_command("u-1", resume=resume)

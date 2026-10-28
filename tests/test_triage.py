@@ -275,7 +275,7 @@ class BypassTest(TriageCase):
         self.assertEqual(self.spawned, [])
 
     def test_wake_line_is_not_triaged(self):
-        """C9 L4: ORCHE's own wake line goes to Main untouched: no sample row, no `triage` events line."""
+        """ORCHE's own wake line goes to Main untouched: no sample row, no `triage` events line."""
         for prompt in (inbox.WAKE_TEXT, "[orche] inbox: acme-a-20261016-1 rev 2"):
             out = self.handle(prompt, classifier=stub(DIRECT))
             self.assertEqual((out.block, out.note, self.spawned), (None, "", []), prompt)
@@ -689,7 +689,7 @@ class ActionTest(TriageCase):
         [(argv, kw)] = self.spawned
         self.assertEqual(argv, SPAWN + [unit])
         self.assertTrue(kw["start_new_session"])
-        self.assertEqual(self.pointers("div-acme-build"), [])     # C9 ruling 6: a runner unit gets no target pointer
+        self.assertEqual(self.pointers("div-acme-build"), [])     # a runner unit gets no target pointer
         self.assertEqual([p["summary"] for p in self.pointers("main-acme")],
                          [f"routed {unit} → div-acme-build (runner-started)"])
         self.assertIn(f"unit={unit} rev=1 to=div-acme-build by=triage delivery=runner-started", self.events())
@@ -906,7 +906,7 @@ class HookTest(TriageCase):
         self.assertIn("triage session=main-acme decision=main stage=3", self.events())
 
     def test_a_routed_prompt_rearms_the_wake(self):
-        """C9 L8: Main spends no turn on a routed prompt, so the hook re-arms the wake for reports that
+        """Main spends no turn on a routed prompt, so the hook re-arms the wake for reports that
         are pending; a prompt that reaches Main does not (its own prompt injects them)."""
         import importlib.util
         import io
@@ -1073,7 +1073,7 @@ class CommandTest(TriageCase):
             line = self.orche_ok("status").splitlines()[-2]
             self.assertTrue(line.startswith("triage: enabled, backend jev, no eval on file · " + warning), line)
             from orche import cmd_triage
-            cmd_triage.save_eval(self.labelled(), "jev", cmd_triage.report(
+            triage.save_eval(self.labelled(), "jev", cmd_triage.report(
                 [{"label": True, "direct": True, "model_ms": 5, "called": True}], "jev"))
             self.assertNotIn(warning, self.orche_ok("triage", "status"))
             self.assertNotIn(warning, self.orche_ok("triage", "enable"))

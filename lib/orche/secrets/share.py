@@ -9,7 +9,7 @@ import os
 from pathlib import Path
 
 from .. import log, mask, paths, util
-from . import SecretError, store
+from . import SecretError, failure, store
 
 
 def load() -> dict:
@@ -81,7 +81,7 @@ def share(ex, cfg, who, env, names, out_path) -> dict:
                     shown_stdin=f"<dotenv: {','.join(names)}>")
     values = None
     if not result.ok:
-        raise store.failure(result, "age")
+        raise failure(result, "age")
     entry = {"to": email, "project": cfg["project"], "env": env, "secrets": list(names),
              "at": util.now_iso(), "file": str(out_path)}
     if not ex.dry_run:
@@ -146,7 +146,7 @@ def redact_counts(text):
     counts = {}
     for name, rx in mask.PATTERNS:
         if name == "mnemonic":
-            text, n = mask._redact_mnemonics(rx, text)
+            text, n = mask.redact_mnemonics(rx, text)
         else:
             text, n = rx.subn(mask.REDACTED, text)
         if n:
@@ -223,7 +223,7 @@ def redact_transcripts(ex, root) -> dict:
         archive.mkdir(parents=True, exist_ok=True)
     result = ex.run(["tar", "czf", str(backup), str(root)], timeout=600)
     if not result.ok:
-        raise store.failure(result, "transcript backup")
+        raise failure(result, "transcript backup")
     if not ex.dry_run:
         try:
             os.chmod(backup, 0o600)

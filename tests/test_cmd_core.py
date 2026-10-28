@@ -75,7 +75,7 @@ NEVER = "heartbeat: never — install the job with orche install"
 
 
 class ScaleStatusTest(CoreCase):
-    """0.9.0 T4 (design §9.1): one line per project whatever the number of features, the queue and runs
+    """0.9.0 T4: one line per project whatever the number of features, the queue and runs
     cells, a usage hold's `paused:` line, sub-lines capped per kind, `--project` and the JSON shapes."""
 
     def thirty(self):
@@ -187,7 +187,7 @@ class StatusTest(CoreCase):
         self.assertEqual(self.orche("statusline", "--cwd", "/srv/orca/acme-shop")[1].count("upgrade"), 0)
 
     def test_status_names_undelivered_units_and_unread_reports(self):
-        """C9 L15: pointers pending >= 10 min under the project line; younger ones and held notes never."""
+        """Pointers pending >= 10 min under the project line; younger ones and held notes never."""
         def at(minutes):
             return (NOW - dt.timedelta(minutes=minutes)).isoformat()
         self.write("inbox/div-acme-shop-build/a.json", {"unit": "acme-shop-x-20261016-1", "from": "main-acme-shop",
@@ -447,7 +447,7 @@ class CustomDivisionTest(CoreCase):
         for label, cell in (("QA", "QA"), ("Brand & Docs", "BRA"), ("デザイン チーム", "デザイ"), ("--", "DES"),
                             ("Opsy", "OPSY"), ("Builders", "BUI"), ("R2D2", "RD")):
             proj["custom_divisions"]["design"]["label"] = label
-            self.assertEqual(statusline.short_label(proj, "design"), cell, label)
+            self.assertEqual(statusline.custom_cells(proj)["design"], cell, label)
 
     def test_statusline_cells_are_unique_and_never_a_standard_cell(self):
         """M1: 3, then 4, then 5 letters, then the 3-letter form plus a digit; first added keeps its cell."""
@@ -687,7 +687,7 @@ class ProjectPaneTest(CoreCase):
         self.assertEqual(self.calls_of("switch"), [["orca", "terminal", "switch", "--terminal", "t-main", "--json"]])
 
     def test_wake_liaison_is_an_unknown_unit(self):
-        """C8: the Liaison has no pane any more."""
+        """The Liaison has no pane any more."""
         code, out, err = self.orche("wake", "liaison-acme-shop")
         self.assertEqual((code, out), (2, ""))
         self.assertIn("unknown unit: liaison-acme-shop", err)

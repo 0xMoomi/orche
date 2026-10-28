@@ -10,7 +10,7 @@ import re
 import sys
 
 from . import cli, registry
-from .secrets import SecretError, backends_gcp, parse_envs, share, store
+from .secrets import SecretError, backends, parse_envs, share, store
 
 EXIT_OK, EXIT_USER, EXIT_NOT_FOUND, EXIT_BLOCKED = 0, 1, 2, 3
 EMAIL_RX = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
@@ -56,8 +56,8 @@ def cmd_add(args):
         if len({v for v in cfg["gcp_project"].values() if v}) == 1:
             raise SecretError("prod and dev share one GCP project; per-secret IAM is not implemented — "
                               "split projects or grant manually", code=EXIT_BLOCKED)
-        gcp_project, _ = backends_gcp.locate(cfg, "X", env)
-        backends_gcp.iam(ex, gcp_project, args.email, add=True)
+        gcp_project, _ = backends.gcp_locate(cfg, "X", env)
+        backends.gcp_iam(ex, gcp_project, args.email, add=True)
     else:
         lines.append(f"no GCP project configured for {key}; IAM binding skipped")
     rec = share.record_dev(args.email, key, env, gcp_project, args.age_pubkey, dry_run=args.dry_run)
@@ -77,7 +77,7 @@ def cmd_remove(args):
         return EXIT_NOT_FOUND
     ex = store.Exec(args.dry_run)
     if rec.get("gcp_project"):
-        backends_gcp.iam(ex, rec["gcp_project"], args.email, add=False)
+        backends.gcp_iam(ex, rec["gcp_project"], args.email, add=False)
         if not args.dry_run:
             store.audit("iam-remove", rec.get("project"), "-", rec.get("env"), "gcp", None, args.email)
     share.mark_dev_removed(args.email, dry_run=args.dry_run)

@@ -1,4 +1,4 @@
-"""The merge queue's check script, `scripts/verify/ci.sh` (c74): rendered from `templates/verify/ci.sh` with the
+"""The merge queue's check script, `scripts/verify/ci.sh`: rendered from `templates/verify/ci.sh` with the
 repository's own commands (detect.toolchain), part of the first commit of a repository `orche init --new` makes,
 and offered to an existing repository as one pull request by `orche init` and `orche init --refresh`, so
 `orche update` (`ensure`).

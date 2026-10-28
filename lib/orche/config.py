@@ -67,7 +67,7 @@ DEFAULTS = {
     # re-nudges unread sessions and re-delivers undelivered briefs (tries and backoff are constants in
     # reconcile.py), then one escalation. false: the pass only writes the heartbeat.
     "reconcile": {"enabled": True, "every_s": 300},
-    # Flow guarantees (C10): the autonomy window's quiet hours and the headless spend caps.
+    # Flow guarantees: the autonomy window's quiet hours and the headless spend caps.
     # The guards' caps: revisions (G1) and briefs_per_hour (G3) inside W, runs_per_unit (G5), a lineage's
     # depth and fanout (G6).
     "flow": {"enabled": True, "quiet_hours": "23:00-08:00", "max_unit_cost_usd": 10, "max_project_cost_usd": 30,

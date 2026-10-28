@@ -51,21 +51,10 @@ class TemplatesTest(support.TempHomeCase):
         self.assertIn("| date | what | why | recovery | actor |", graveyard)
         self.assertEqual(templates.copy_project(repo), [])
 
-    def test_rubric_and_verify_skill_templates(self):
+    def test_rubric_template(self):
         root = templates.TEMPLATES_ROOT
         rubric = (root / "project" / "docs" / "RUBRIC.md").read_text()
         self.assertEqual(len(re.findall(r"^- \[ \] ", rubric, re.M)), 5)
-        skill = (root / "verify-skill" / "SKILL.md").read_text()
-        self.assertTrue(skill.startswith("---\nname: verify-{{APP}}\ndescription: "))
-        for section in ("## Launch", "## Doctor", "## Drive", "## Evidence", "## Cleanup"):
-            self.assertIn(f"\n{section}\n", skill)
-        for rule in ("Never edit product code.", "Cleanup never deletes Evidence.",
-                     "At most one PR per maintenance run."):
-            self.assertIn(rule, skill)
-        features = (root / "verify-skill" / "features" / "README.md").read_text()
-        for section in ("## Entry", "## Steps", "## Expected", "## Evidence"):
-            self.assertIn(section, features)
-        self.assertTrue((root / "verify-skill" / "references" / "rubric.example.md").is_file())
         for path in root.rglob("*"):
             if path.is_file():
                 self.assertNotIn("/" + "Users/", path.read_text(), str(path))

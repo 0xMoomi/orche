@@ -1,4 +1,4 @@
-"""The heartbeat pass (`orche reconcile`, C10 T1): observe -> plan -> bounded repairs, the heartbeat file,
+"""The heartbeat pass (`orche reconcile`, T1): observe -> plan -> bounded repairs, the heartbeat file,
 the lock, dry-run, off, and the status / doctor wording. No process is started: procs.spawn_detached is
 replaced by a recorder (nudger, deliverer and the escalation's wake all go through it)."""
 import copy
@@ -454,7 +454,7 @@ class OwnerNoticeTest(ReconcileCase):
 
 
 class ClosedMainTest(ReconcileCase):
-    """C10 T4: a Main with waiting reports and no pane is reopened in place, REOPEN_CAP a day."""
+    """T4: a Main with waiting reports and no pane is reopened in place, REOPEN_CAP a day."""
 
     def orca_calls(self):
         path = self.home / "logs" / "fake-orca.jsonl"
@@ -521,7 +521,7 @@ class ClosedMainTest(ReconcileCase):
 class SilentUnitTest(RepairCase):
     """A delivered pane unit, its target's newest, not reported on at this rev, with no open child: one
     reminder when its pane idled SILENT_IDLE_S or the rev is 1.5 × TIMEBOX old, then one urgent info to
-    the sender 30 min later or at 2 × TIMEBOX, whichever first (design §2.2; review B1, S4)."""
+    the sender 30 min later or at 2 × TIMEBOX, whichever first."""
 
     def setUp(self):
         super().setUp()
@@ -764,7 +764,7 @@ class HeartbeatWordingTest(ReconcileCase):
 
 
 class LineageCloseRepairTest(RepairCase):
-    """C10 T8: the heartbeat posts a lineage close a crash missed, once; a stale lineage is left alone."""
+    """T8: the heartbeat posts a lineage close a crash missed, once; a stale lineage is left alone."""
 
     def lineage(self, n):
         made = [self.brief() for _ in range(n)]
@@ -1049,7 +1049,7 @@ class ScaleHeartbeatTest(RepairCase):
 
 
 class JanitorHeartbeatTest(ReconcileCase):
-    """c85: the heartbeat starts the janitor's daily pass, detached, when the last pass is a day old and none runs."""
+    """The heartbeat starts the janitor's daily pass, detached, when the last pass is a day old and none runs."""
 
     def age(self, seconds):
         at = time.time() - seconds

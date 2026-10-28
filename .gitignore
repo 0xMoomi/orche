@@ -6,3 +6,10 @@ __pycache__/
 .DS_Store
 tests/.tmp/
 !tests/fixtures/transcripts/*.jsonl
+/.orche/
+*.log
+.env
+.env.*
+!templates/project/.env.example
+.venv/
+*.egg-info/

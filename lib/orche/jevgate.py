@@ -72,14 +72,8 @@ SHELLS = ("sh", "bash", "zsh", "dash", "ksh")
 PYTHON = re.compile(r"^python[0-9.]*$")
 INTERPRETERS = re.compile(r"^(?:python[0-9.]*|perl[0-9.]*|ruby[0-9.]*|node|nodejs|php[0-9.]*|osascript|"
                           r"[gmn]?awk)$")
-CODE_OPTS = ("-c", "-e", "-E", "-r", "-l", "-p", "--eval", "--print")
 READERS = ("cat", "head", "tail", "less", "more", "xxd", "od", "strings", "base64", "cp", "mv", "tee", "dd",
            "open", "source", ".", "bat", "hexdump", "nl")
-SEARCHERS = {"rg": "efgtTmABCjMrE", "grep": "efmABCdD", "egrep": "efmABCdD", "fgrep": "efmABCdD",
-             "ag": "GgmABC", "ack": "mABC", "git-grep": "efmABC"}
-SEARCH_LONG_VALUES = ("--glob", "--iglob", "--type", "--type-not", "--regexp", "--file", "--max-count",
-                      "--context", "--after-context", "--before-context", "--replace", "--max-depth",
-                      "--encoding", "--ignore-file")
 
 # Raw-text rules for inline interpreter code (and the anchored key path for any Bash text).
 FIND_PASSWORD = re.compile(r"find-(?:generic|internet)-password")
@@ -229,18 +223,6 @@ def code_denied(code, python=False) -> bool:
     return bool(SECURITY_I.search(code) or KEY_API.search(code) or ENV_KEY.search(code))
 
 
-def _interpreter_code(name, args, cmd):
-    code = [args[i + 1] for i, a in enumerate(args[:-1]) if a in CODE_OPTS]
-    code += [a.split("=", 1)[1] for a in args if a.startswith("--eval=")]
-    if name.endswith("awk"):
-        rest = [a for a in args[1:] if not a.startswith("-")]
-        code += rest[:1]
-    code += cmd.stdin
-    if cmd.pipe_in is not None:
-        code.append(cmd.pipe_in.text())
-    return code
-
-
 # ---- commands ---------------------------------------------------------------------------------
 
 def _security_reads(args) -> bool:
@@ -302,55 +284,8 @@ def _feeds_key(args) -> bool:
     return False
 
 
-def _search_parts(tool, args):
-    """(pattern words, path args, glob values) of a search tool's argv tail: the `-e`/`--regexp`
-    values, else the first positional, are patterns."""
-    values = SEARCHERS[tool]
-    explicit, positional, globs, patterns = False, [], [], []
-    i = 0
-    while i < len(args):
-        a = args[i]
-        if a == "--":
-            positional += list(range(i + 1, len(args)))
-            break
-        if a.startswith("--"):
-            name = a.split("=", 1)[0]
-            value = a.split("=", 1)[1] if "=" in a else (args[i + 1] if i + 1 < len(args) else "")
-            if name in ("--regexp", "--file"):
-                explicit = True
-                if name == "--regexp":
-                    patterns.append(value)
-            if name in ("--glob", "--iglob", "--include"):
-                globs.append(value)
-            i += 2 if ("=" not in a and name in SEARCH_LONG_VALUES) else 1
-            continue
-        if a.startswith("-") and a != "-":
-            i += 1
-            for k, ch in enumerate(a[1:]):
-                if ch in values:
-                    rest = a[k + 2:]
-                    value = rest if rest else (args[i] if i < len(args) else "")
-                    if not rest:
-                        i += 1
-                    if ch in "ef":
-                        explicit = True
-                    if ch == "e":
-                        patterns.append(value)
-                    if ch == "g" and tool == "rg":
-                        globs.append(value)
-                    break
-            continue
-        positional.append(i)
-        i += 1
-    first = None if explicit or not positional else positional[0]
-    if first is not None:
-        patterns.append(args[first])
-    paths = [args[j] for j in positional if j != first]
-    return patterns, paths, globs
-
-
 def _search_denied(tool, args, cwd):
-    _patterns, paths, globs = _search_parts(tool, args)
+    _patterns, paths, globs = cmdscan.search_parts(tool, args)
     for p in paths:
         path = _resolve(p, cwd)
         if _is_orche_home(path) or _secrets_dir(path) or under_secrets(p, cwd) or KEY_FILE.search(path):
@@ -375,10 +310,10 @@ def _commands_denied(text, depth):
         search = "git-grep" if name == "git" and args[1:2] == ["grep"] else name
         tail = args[2:] if search == "git-grep" else args[1:]
         words = list(cmd.words)
-        if search in SEARCHERS:
+        if search in cmdscan.SEARCHERS:
             if _search_denied(search, tail, cwd):
                 return True
-            for pattern in _search_parts(search, tail)[0]:  # a search pattern, not a path
+            for pattern in cmdscan.search_parts(search, tail)[0]:  # a search pattern, not a path
                 if pattern in words:
                     words.remove(pattern)
         if any(key_path(w, in_secrets) for w in words + cmd.redirects):
@@ -394,7 +329,7 @@ def _commands_denied(text, depth):
         if orche_args is not None and _feeds_key(orche_args):
             return True
         if INTERPRETERS.match(name) and any(code_denied(c, python=bool(PYTHON.match(name)))
-                                            for c in _interpreter_code(name, args, cmd)):
+                                            for c in cmdscan.interpreter_code(name, args, cmd)):
             return True
         inner = []
         if name in SHELLS:

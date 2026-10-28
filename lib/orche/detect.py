@@ -1,4 +1,4 @@
-"""A repository's team conventions, read at `orche init`, `orche init --refresh` and `orche update` (c73).
+"""A repository's team conventions, read at `orche init`, `orche init --refresh` and `orche update`.
 
 `conventions(root, project, cfg)` returns only the keys it is sure about, each from one read with a
 timeout that fails silently to "nothing detected" (never a refusal, never a guess below a threshold):
@@ -17,7 +17,7 @@ cmd_init writes base, branch_prefix and issues into `publish.per_project.<projec
 `entire` is read live from the repository wherever it matters (onboarding.link_entire, the doctor);
 `team` is kept on the project's registry entry (cmd_init._save_team, only when it changes).
 
-Onboarding (c74) reads three more facts, each local and read-only (a failure counts as "no sign"):
+Onboarding reads three more facts, each local and read-only (a failure counts as "no sign"):
 `stage(root)` (`build` or `operations`: the preset `orche hr choices` recommends), `tracked(root)` (an empty
 repository skips the intake) and `toolchain(root)` (the install and check commands of the merge queue's
 check script, `scripts/verify/ci.sh`).

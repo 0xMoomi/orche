@@ -239,13 +239,13 @@ class Brief:
 
     @property
     def lineage(self) -> str:
-        """The header's `lineage:` id; a brief without one (pre-C10) is its own lineage."""
+        """The header's `lineage:` id; a brief without one (written before lineages) is its own lineage."""
         m = _LINEAGE.search(self.text)
         return m.group(1) if m else self.unit
 
     @property
     def parent(self) -> str:
-        """The header's `parent:` unit, or "" for `-` or a brief without the line (pre-C10)."""
+        """The header's `parent:` unit, or "" for `-` or a brief without the line (written before lineages)."""
         m = _LINEAGE.search(self.text)
         return m.group(2) if m and m.group(2) != "-" else ""
 

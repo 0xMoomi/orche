@@ -1,4 +1,4 @@
-"""Re-rendering a registered project's ORCHE-owned unit files at `orche init` (SPEC §8.4, design §15.2).
+"""Re-rendering a registered project's ORCHE-owned unit files at `orche init` (SPEC §8.4).
 
 Ownership is the registry: every live unit's session names its two personas (`.claude/agents/<session>.md`
 in the main checkout and in its worktree) and its worktree's `.claude/settings.local.json`; nothing else

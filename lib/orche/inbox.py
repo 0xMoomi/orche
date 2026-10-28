@@ -205,7 +205,7 @@ LATE = _dt.timedelta(minutes=10)
 
 
 def overdue(r, key, now=None) -> tuple:
-    """(undelivered, unread) for project `key` (`orche status`, design §4.8), from the pending
+    """(undelivered, unread) for project `key` (`orche status`), from the pending
     pointers aged >= LATE in its members' inboxes. undelivered: `via: dispatch`, the newest per unit,
     `[{unit, to, rev, minutes}]`; unread: waking pointers per session, `[{session, count, minutes}]`
     (minutes of the oldest)."""

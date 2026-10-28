@@ -31,6 +31,21 @@ adapter) to return canned JSON for `orca terminal list`, `orca worktree create`,
 Hook tests feed fixture JSON on stdin and assert the exit code and stdout/stderr. Keep test
 output clean: no stray prints or warnings.
 
+## Where things live
+
+```
+bin/                 orche (sh launcher) and orche.py, which discovers lib/orche/cmd_*.py
+lib/orche/cmd_*.py   one module per CLI command, found by file name
+lib/orche/           top-level modules by theme: dispatch, brief, inbox, deliver (work flow);
+                     registry, roster, units, project (who is where); headless, codex, vendors, ladder
+                     (model calls); triage, jev*, envgate, cmdscan, mask (gates); orca, github, shell (tools)
+lib/orche/<package>/ flow, hr, install, janitor, queue, review, runs, secrets: one domain each
+hooks/               hooks.json, run.sh and one .py per Claude Code hook; logic lives in lib/
+skills/, agents/     the plugin's skills and agent definitions
+templates/           files ORCHE writes into projects and prompts it gives to agents
+tests/               unittest suite, support.py and fixtures; no network, no real orca or gh
+```
+
 ## Adding a command
 
 1. Create `lib/orche/cmd_<name>.py` with `register(subparsers)`; `bin/orche.py` (started by the
@@ -40,8 +55,8 @@ output clean: no stray prints or warnings.
 3. Mutating commands honor `args.dry_run` (print the actions, change nothing). Human output is
    English, one line per fact. Exit codes: 0 ok, 1 user error, 2 not found / unverified,
    3 blocked by policy.
-4. Read and write the registry only through `lib/orche/registry.py`; mask anything that may
-   leave the machine with `lib/orche/mask.py`.
+4. Only `lib/orche/hr/` writes the registry; every other module reads it (`lib/orche/registry.py`,
+   `lib/orche/roster.py`). Mask anything that may leave the machine with `lib/orche/mask.py`.
 
 ## Hooks
 
@@ -55,5 +70,5 @@ output clean: no stray prints or warnings.
 
 ## Pull requests
 
-Describe the behavior change, link the SPEC rule (e.g. `R-INBOX-3`) it implements or changes,
-and update SPEC.md with an implementation note when code and spec diverge.
+Describe the behavior change and link the SPEC rule (e.g. `R-INBOX-3`) it implements or changes.
+When code and spec diverge, change the rule in docs/spec.md in place; no implementation notes.

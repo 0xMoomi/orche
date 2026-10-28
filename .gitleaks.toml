@@ -1,0 +1,7 @@
+# tests/test_mask.py and tests/test_secret.py hold fixture keys for the masking tests.
+[extend]
+useDefault = true
+
+[allowlist]
+description = "masking test fixtures"
+paths = ['''^tests/test_mask\.py$''', '''^tests/test_secret\.py$''']

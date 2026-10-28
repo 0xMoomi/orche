@@ -101,8 +101,8 @@ def unit_gate(reg, unit) -> None:
 
 
 def stage_gate(names, stage, key=None) -> None:
-    """Refuse a planned wake of a GATED division while `stage` is building (init and apply-all --wake).
-    `key` adds the run hint (apply-all has no single project)."""
+    """Refuse a planned wake of a GATED division while `stage` is building (init).
+    `key` adds the run hint."""
     gated = [n for n in names if n in GATED]
     if gated and stage == "building":
         hint = f" (run: orche stage set {key} public --yes)" if key else ""

@@ -1,4 +1,4 @@
-"""Post-time shaping (C10 T6), called by inbox.post before the write.
+"""Post-time shaping, called by inbox.post before the write.
 
 Repeat: when the previous pointer from the same sender for the same unit in the same recipient's
 inbox (pending or drained) has the same `brief_rev` and `status`, the new one gets `quiet: true`
@@ -8,7 +8,7 @@ brief are shaped: not orche's own, a dispatch, a STOP, a runner's filing, an ext
 brief-less (`adhoc-`/`xreq-`) unit. Only pointers since the project's window W (guard.window: the owner's
 last prompt or local midnight) count as the previous one, so a re-run the owner asked for wakes again.
 
-Lineage (C10 T8): a done/stopped report to the project's Main of a lineage with two or more members is
+Lineage: a done/stopped report to the project's Main of a lineage with two or more members is
 quiet too (flow.lineage.quiets); failed, blocked and question still wake, and a division recipient always
 wakes. A `lineage_closed` pointer is never shaped.
 """

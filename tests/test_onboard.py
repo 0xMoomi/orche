@@ -1,4 +1,4 @@
-"""c74 onboarding: `orche init --new` makes the repository (git, the first commit, GitHub, Orca) before the setup;
+"""Onboarding: `orche init --new` makes the repository (git, the first commit, GitHub, Orca) before the setup;
 `orche hr choices` asks where the project is when the folder has no repository and recommends a preset from the
 repository (detect.stage); the build preset's standing order; the intake skip of an empty repository; the merge
 queue's check script (verifygate: in a new repository's first commit, else one PR)."""
@@ -372,7 +372,7 @@ class GatePullRequestTest(test_hr.HrCase):
         return row
 
     def test_a_refresh_opens_the_pull_request_once(self):
-        """c78: `orche update` runs `init --refresh` per project, so an existing project gets its one PR there."""
+        """`orche update` runs `init --refresh` per project, so an existing project gets its one PR there."""
         (self.gh / "spec.json").write_text(json.dumps({"fail": "not logged in to any GitHub hosts"}))
         self.assertEqual(self.orche("init", "Acme Shop", "--no-intake")[0], 0)
         self.assertEqual(self.gate_row(), ("WARN", "queue gate", "acme-shop: no check script on origin/main and no "
@@ -426,7 +426,7 @@ if __name__ == "__main__":
 
 
 class PushReasonTest(unittest.TestCase):
-    """c79: a refused push's reason is the hook's failing line, not its first progress line."""
+    """A refused push's reason is the hook's failing line, not its first progress line."""
 
     def test_reason(self):
         def res(err, code=1):

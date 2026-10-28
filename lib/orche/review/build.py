@@ -1,4 +1,4 @@
-"""The headless head review (design §3.5, Appendix A.7): after every publish (and after a requested
+"""The headless head review: after every publish (and after a requested
 pre-review's PASS or skip; a pre row with another verdict leaves the head to that path), a fresh,
 read-only session with Build's persona and model at the standard rung reads the facts and the diff
 against the eight-line checklist. Both PASS → the runner queues the PR (R5) and the done is quiet;
@@ -463,7 +463,7 @@ def pane_record(project, pr, sha, *, reviewer, model, writer, surface, safe_beca
     return path
 
 
-# ---- Build's own PRs (design §3.8, R33) ---------------------------------------------------------
+# ---- Build's own PRs (R33) ---------------------------------------------------------
 
 @contextlib.contextmanager
 def _checkout(project, pr, sha, root):
@@ -532,7 +532,7 @@ def _pre_round(reg, cfg, project, pr, unit, view, root) -> dict | None:
 
 
 def for_pr(project, pr, unit=None, *, tell=None, reg=None, cfg=None) -> dict:
-    """`orche review --pr N` (design §3.8, R33), the request and the only trigger of a pre-review: the
+    """`orche review --pr N` (R33), the request and the only trigger of a pre-review: the
     PR's round at its head unless a pass, skipped or return row is there already (one round; row kind
     pre), then on PASS or skipped the head review (build_review), so `orche queue add --pr N` finds its
     pre row. A pre-review RETURN or error is the result; `tell` (the `--background` caller) hears it as

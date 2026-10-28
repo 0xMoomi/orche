@@ -88,7 +88,7 @@ class RunnerCase(HookCase):
 
     def with_origin(self, folder, branch):
         """A bare `origin` holding `main` (origin/HEAD -> main), `folder` on `branch`, and the fake gh
-        first on PATH: a gated done pushes and opens its PR there (design §5.11)."""
+        first on PATH: a gated done pushes and opens its PR there."""
         env = {**os.environ, **GIT_ENV}
         bare = self.root / f"{folder.name}-origin.git"
         git = ["git", "-C", str(folder)]
@@ -103,7 +103,7 @@ class RunnerCase(HookCase):
         return bare
 
     def published(self, summary, n=1):
-        """A gated done's summary: its own text, then the PR the run pushed and opened (design §5.11)."""
+        """A gated done's summary: its own text, then the PR the run pushed and opened."""
         return f"{summary}\nPR: #{n} https://github.com/acme/acme/pull/{n} head {self.rev(self.wt)}"
 
     def rev(self, folder):
@@ -378,7 +378,7 @@ class StatusTest(RunnerCase):
         self.assertEqual(runner.status_of("STATUS: done|blocked|failed\nSTATUS: failed\nboom")[0], "failed")
 
     def test_owner_of_is_the_last_owner_line_outside_fences(self):
-        """C10 T9 (§5.1)."""
+        """T9."""
         self.assertEqual(runner.owner_of("STATUS: blocked\nneed a key\nOWNER: secret STRIPE_KEY"), "secret STRIPE_KEY")
         self.assertIsNone(runner.owner_of("STATUS: done\n```\nOWNER: in a fence\n```"))
         self.assertIsNone(runner.owner_of(None))
@@ -880,7 +880,7 @@ class RunnerFailureTest(RunnerCase):
         self.assertTrue(all(alive(holder.pid) for holder in busy))
 
     def test_sigterm_before_claude_starts_files_failed_or_stopped_before_start(self):
-        """Round 2: SIGTERM in the `starting` phase (slot taken, the runner held in its `git` before
+        """SIGTERM in the `starting` phase (slot taken, the runner held in its `git` before
         claude): claude never runs; with the STOP marker (runs.stop: a verified real run) "stopped
         by Main before start"."""
         for n, stop in ((1, False), (2, True)):
@@ -907,7 +907,7 @@ class RunnerFailureTest(RunnerCase):
         self.assertIn(f"run unit={unit} to=div-acme-build delivery=runner-stopped", self.events())
 
     def test_sigterm_during_popen_still_kills_the_child_once_it_exists(self):
-        """Round 2: a SIGTERM that lands while claude is being started (here: inside on_start) is
+        """A SIGTERM that lands while claude is being started (here: inside on_start) is
         recorded and kills claude's group the moment its pid is known."""
         unit = self.brief()
         (self.fake / "sleep").write_text("30")
@@ -930,7 +930,7 @@ class RunnerFailureTest(RunnerCase):
             self.assertFalse(alive((self.fake / "pid").read_text().strip()))
 
     def test_sigterm_after_claude_finished_files_the_result_and_drops_a_late_stop(self):
-        """Round 2: STOP lands while the runner records a finished run (held in its `git` after
+        """STOP lands while the runner records a finished run (held in its `git` after
         claude): the real result is filed, nothing else, the marker is removed (`runner-stop-late`)."""
         unit = self.brief()
         gate, entered = self.git_gate()
@@ -995,7 +995,7 @@ class ConcurrencyTest(RunnerCase):
         self.assertEqual((ptr["from"], ptr["status"], ptr["summary"], ptr["report_path"], ptr["via"]),
                          ("div-acme-build", "info", f"runner busy: 4 live runs, retry with `orche run {unit}`",
                           "", "runner"))
-        # C10 §2.3: a busy pointer is a retry, not a run's end: `retry` and `quiet` (it wakes nobody)
+        # a busy pointer is a retry, not a run's end: `retry` and `quiet` (it wakes nobody)
         self.assertEqual((ptr.get("retry"), ptr.get("quiet"), inbox.wakes(ptr)), (True, True, False))
         rec = self.run_record(unit)
         self.assertEqual((rec["status"], rec["stop_reason"], rec["error"]), ("info", "busy", "runner busy: 4 live runs"))
@@ -1245,7 +1245,7 @@ class RelayRunnerTest(RunnerCase):
         self.assertTrue(runs.stop_requested("acme", unit))    # marker written: a queued run gives up
 
     def test_stop_runner_failure_feedback_is_stop_specific(self):
-        """Round-2 M-8: a STOP whose runner delivery raised never advises a re-run; it is urgent."""
+        """A STOP whose runner delivery raised never advises a re-run; it is urgent."""
         unit = self.brief()
         with mock.patch.object(runs, "stop", side_effect=OSError("boom")):
             self.relay(body=f"STOP {unit}")
@@ -1254,7 +1254,7 @@ class RelayRunnerTest(RunnerCase):
         self.assertEqual(self.urgent(), [True])
 
     def test_stop_with_a_recycled_pid_drops_the_lock_and_signals_nothing(self):
-        """Round 2 (deferred M-3): the lock's pid is alive but is not `orche run <unit>`: a lost run
+        """The lock's pid is alive but is not `orche run <unit>`: a lost run
         (resilience R-A): `failed` "runner died" is filed, the locks go, the pid is never signalled."""
         unit = self.brief()
         other = self.sleeper()
@@ -1274,7 +1274,7 @@ class RelayRunnerTest(RunnerCase):
         self.assertTrue(ptr["summary"].startswith(f"runner died: {unit} (pid {other.pid}, started ?)"), ptr)
 
     def test_stop_while_waiting_for_a_slot_never_starts_claude(self):
-        """Round-2 B: a real run waits (4 busy slots); STOP writes the marker (no lock yet); the run
+        """A real run waits (4 busy slots); STOP writes the marker (no lock yet); the run
         gives up on its next poll, files "stopped by Main before start" and never starts claude."""
         self.config({"claude_bin": str(self.claude), "delivery": "runner", "runner": {"queue_wait_s": 60}})
         self.busy_slots()
@@ -1296,7 +1296,7 @@ class RelayRunnerTest(RunnerCase):
         self.assertFalse(runs.stop_requested("acme", unit))
 
     def test_stop_after_the_run_finished_says_already_finished_and_files_nothing_new(self):
-        """Round 2: the run is over; STOP files its pointer to the target, says "already finished",
+        """The run is over; STOP files its pointer to the target, says "already finished",
         and the marker never stops a later run of the unit."""
         unit = self.brief()
         self.reply("STATUS: blocked\nfirst")
@@ -1490,7 +1490,7 @@ class RelayRunnerHookTest(RunnerCase):
 
 
 class GateScopeTest(RunnerCase):
-    """Round-2 A: the strict `done` rule applies only where `orche report done` is gated."""
+    """The strict `done` rule applies only where `orche report done` is gated."""
 
     def add_research(self):
         reg = registry.load()
@@ -1524,8 +1524,8 @@ class GateScopeTest(RunnerCase):
         self.assertEqual(self.outcome(verified)[0], "done")
 
 
-class RoundTwoRunTest(RunnerCase):
-    """Round-2 D: duplicates, one run per target, process-group sweep, env, errors before the run."""
+class RunAdmissionTest(RunnerCase):
+    """Duplicates, one run per target, process-group sweep, env, errors before the run."""
 
     def test_duplicate_of_a_live_run_answers_main_and_never_hides_the_live_result(self):
         """I-A: a real live run + `orche run` of the same unit: the duplicate files `info` (via
@@ -1648,8 +1648,8 @@ class RoundTwoRunTest(RunnerCase):
         self.assertEqual(doctor.runner_lock_checks(registry.load()), [])
 
 
-class RoundThreeTest(RunnerCase):
-    """Round-3 m-2, m-4, m-5, m-7: the unit token, lock ownership, stale-lock trace, recycled pids."""
+class LockOwnershipTest(RunnerCase):
+    """The unit token, lock ownership, stale-lock trace, recycled pids."""
 
     def lock_record(self, unit, pid, to="div-acme-build", **extra):
         folder = self.home / "runs" / "acme"
@@ -1754,11 +1754,11 @@ class RoundThreeTest(RunnerCase):
         self.assertIsNone(other.poll())                          # never signalled
 
 
-class RoundFourTest(RunnerCase):
-    """Round 4: the STOP-marker poll while claude runs, no signal to an unverified pid, flags
+class StopAndSignalTest(RunnerCase):
+    """The STOP-marker poll while claude runs, no signal to an unverified pid, flags
     before the unit id, `release` -> bool, `ps -ww`."""
 
-    lock_record = RoundThreeTest.lock_record
+    lock_record = LockOwnershipTest.lock_record
 
     def failing_ps(self, calls):
         real = runs.shell.RUNNER
@@ -1899,7 +1899,7 @@ def said(text):
 
 class CodexRunTest(RunnerCase):
     """A division on a Codex model runs `codex exec` (support.fake_codex) under the same runner:
-    the call (design C11 §5.2-5.5), the outcome table (§5.6) and its spend (§7). The claude stub
+    the call, the outcome table and its spend. The claude stub
     is never run."""
 
     build_model = DryRunArgvTest.build_model

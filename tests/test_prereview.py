@@ -1,6 +1,6 @@
-"""The cross-vendor pre-review, run only on request (review/pre.py, design §3.3, §3.8; R-REVIEW-1, 13).
+"""The cross-vendor pre-review, run only on request (review/pre.py; R-REVIEW-1, 13).
 
-A gated unit's headless run and a pane member's `orche report done` publish and start no reviewer call (c83);
+A gated unit's headless run and a pane member's `orche report done` publish and start no reviewer call;
 `orche review --pr N` (tests/test_buildreview.py: BuildsOwnPr) is the request. The Build division (gated) runs
 under `orche run` against the fake `claude` (support.write_fake_claude) and the fake `codex` (support.fake_codex);
 the bare origin and the fake gh of test_runner.RunnerCase take the push and the PR. Calls are sequenced by a
@@ -24,7 +24,8 @@ from orche.install import doctor
 from orche.review import build
 from orche.review import CHANGED, DENIED, TOOLS, fence, parse
 from orche.review import pre
-from test_runner import COMMIT, ROW, SECRET, TURN, DryRunArgvTest, RunnerCase
+import test_runner
+from test_runner import COMMIT, ROW, SECRET, TURN, RunnerCase
 
 OPUS, SONNET = "claude-opus-5-5", "claude-sonnet-5-5"
 STATUS_DONE = "coupon field landed\nSTATUS: done"
@@ -33,7 +34,7 @@ DEEP = ("mkdir -p deploy && seq 1 450 > deploy/run.sh && git add deploy/run.sh\n
 
 
 class PreReviewCase(RunnerCase):
-    build_model = DryRunArgvTest.build_model
+    build_model = test_runner.DryRunArgvTest.build_model
 
     def setUp(self):
         super().setUp()
@@ -149,7 +150,7 @@ class StageTest(PreReviewCase):
 
 
 class NoReviewByItselfTest(PreReviewCase):
-    """c83: nothing but the request starts a pre-review: a run's publish and a pane's done start the head review alone."""
+    """Nothing but the request starts a pre-review: a run's publish and a pane's done start the head review alone."""
 
     def test_a_runs_publish_of_a_deep_head_makes_no_reviewer_call(self):
         self.configure(build=True)

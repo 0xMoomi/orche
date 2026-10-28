@@ -738,7 +738,7 @@ class NoPartialChangeTest(OnboardingCase):
 
 
 class UnreadableConfigTest(OnboardingCase):
-    """Round 2: a config.json that is not JSON or not UTF-8 skips Jev with one line, no traceback."""
+    """A config.json that is not JSON or not UTF-8 skips Jev with one line, no traceback."""
 
     BAD = {"invalid JSON": b'{"jev": {"enabled": true,}\n', "not UTF-8": b'\xff\xfe{"jev": {}}\n'}
 
@@ -942,7 +942,7 @@ class GateRulesTest(support.TempHomeCase):
                 'git commit -m "docs: never cat secrets/jev.key"',
                 'git commit -m "fix: jev.key is never printed"',
                 "rg jev.key docs/",  # a bare jev.key outside ORCHE_HOME/secrets is just a word
-                "grep -rn jev.key README.md SPEC.md",
+                "grep -rn jev.key README.md docs/spec.md",
                 'rg "security find-generic-password -w" docs/',
                 'git log --grep "orche jev key set --stdin"',
                 "python3 -m unittest discover -s tests  # security find-generic-password -w",
@@ -977,8 +977,8 @@ KF = "~/.claude/orche/secrets/jev.key"
 SD = "~/.claude/orche/secrets"
 
 
-class GateRound2Test(support.TempHomeCase):
-    """Round 2: inline interpreter code as text, wrappers by basename, fail closed, normalised
+class GateCommandShapesTest(support.TempHomeCase):
+    """Inline interpreter code as text, wrappers by basename, fail closed, normalised
     paths, reads under the secrets dir, search patterns exempt, prefilter."""
 
     def reason(self, command):

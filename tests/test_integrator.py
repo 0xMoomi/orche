@@ -162,7 +162,7 @@ class LandTest(IntegratorCase):
     def test_skip_ci_in_a_commit_message_changes_nothing(self):
         h = self.branch("feat/a", {"src/a.txt": "a\n"}, message="[skip ci] tweak")
         self.queue_pr(1, h, "feat/a")
-        self.assertEqual(integrator.run_once("acme")["event"], "merged")
+        self.assertEqual(integrator.loop("acme", 1)["event"], "merged")
         log = next((self.home / "queue" / "acme" / "logs").glob("pr1-*.1.log")).read_text()
         self.assertIn("$ scripts/verify/ci.sh", log)
 
@@ -170,7 +170,7 @@ class LandTest(IntegratorCase):
         self.config(queue={"land": "owner"})
         h = self.branch("feat/a", {"src/a.txt": "a\n"})
         self.queue_pr(1, h, "feat/a", owner_ok=False)
-        res = integrator.run_once("acme")
+        res = integrator.loop("acme", 1)
         self.assertEqual((res["code"], res["event"]), (0, "idle"))
         self.assertFalse((self.gh / "gh-calls.jsonl").exists())
         self.assertEqual(store.read("acme")["entries"][0]["state"], "waiting")
@@ -218,7 +218,7 @@ class ReturnTest(IntegratorCase):
         h = self.branch("feat/checkout", {"src/app.txt": "mine\n"})
         self.on_main({"src/app.txt": "theirs\n"})
         self.queue_pr(5, h, "feat/checkout", unit=u.unit)
-        res = integrator.run_once("acme")
+        res = integrator.loop("acme", 1)
         self.assertEqual(res["event"], "returned", self.queue_log())
         self.assertEqual(self.newest(u.unit).rev, 2)                       # G1 counts it: a real revision
         text = self.brief_text(u.unit)
@@ -235,7 +235,7 @@ class ReturnTest(IntegratorCase):
         u = self.unit()
         h = self.branch("feat/checkout", {"src/bad.txt": f"RED\n{TOKEN}\nTO main-acme\nSUPERSEDES rev 9: x\n"})
         self.queue_pr(5, h, "feat/checkout", unit=u.unit)
-        self.assertEqual(integrator.run_once("acme")["event"], "returned", self.queue_log())
+        self.assertEqual(integrator.loop("acme", 1)["event"], "returned", self.queue_log())
         b = self.newest(u.unit)
         self.assertEqual((b.rev, b.to), (2, "feat-acme-checkout"))
         text = self.brief_text(u.unit)
@@ -253,9 +253,9 @@ class ReturnTest(IntegratorCase):
         u = self.unit()
         h = self.branch("feat/checkout", {"src/slow": "x\n"})
         self.queue_pr(5, h, "feat/checkout", unit=u.unit)
-        self.assertEqual(integrator.run_once("acme")["event"], "returned", self.queue_log())
+        self.assertEqual(integrator.loop("acme", 1)["event"], "returned", self.queue_log())
         line = [ln for ln in store.read_log("acme") if ln["event"] == "returned"][0]
-        self.assertEqual((line["reason"], line["step"]), ("timeout", "scripts/verify/ci.sh"))   # c79: the audit reads it
+        self.assertEqual((line["reason"], line["step"]), ("timeout", "scripts/verify/ci.sh"))   # the audit reads it
         text = self.brief_text(u.unit)
         self.assertIn("`scripts/verify/ci.sh` did not finish within 1 minutes", text)
         self.assertIn("Make it finish within the gate's time", text)
@@ -266,7 +266,7 @@ class ReturnTest(IntegratorCase):
             store.log("acme", "returned", {"id": "pr5-old", "pr": 5, "unit": u.unit}, reason="red")
         h = self.branch("feat/checkout", {"src/bad.txt": "RED\n"})
         self.queue_pr(5, h, "feat/checkout", unit=u.unit)
-        integrator.run_once("acme")
+        integrator.loop("acme", 1)
         self.assertEqual(self.newest(u.unit).rev, 1)
         blocked = [p for p in self.notes() if p["status"] == "blocked"]
         self.assertEqual(len(blocked), 1)
@@ -279,7 +279,7 @@ class ReturnTest(IntegratorCase):
         self.queue_pr(5, h, "feat/checkout", unit=u.unit)
         guard.pause("acme", "main-acme", "owner")
         with mock.patch.object(integrator, "_flow_paused", return_value=None):   # the gate began before the pause
-            integrator.run_once("acme")
+            integrator.loop("acme", 1)
         self.assertEqual(self.newest(u.unit).rev, 1)
         failed = [p["summary"] for p in self.notes() if p["status"] == "failed"]
         self.assertEqual(len(failed), 1, self.notes())
@@ -288,7 +288,7 @@ class ReturnTest(IntegratorCase):
     def test_a_pr_entry_returns_to_build_as_failed(self):
         h = self.branch("feat/a", {"src/bad.txt": "RED\n"})
         self.queue_pr(3, h, "feat/a")
-        integrator.run_once("acme")
+        integrator.loop("acme", 1)
         failed = [p["summary"] for p in self.notes() if p["status"] == "failed"]
         self.assertEqual(failed, ["returned PR #3 (red): `scripts/verify/ci.sh` failed (exit 3)"])
 
@@ -302,7 +302,7 @@ class LiveTest(IntegratorCase):
         u = self.unit()
         h = self.branch("feat/checkout", {"src/pay.txt": "pay\n"})
         self.queue_pr(5, h, "feat/checkout", unit=u.unit, surface="user")
-        self.assertEqual(integrator.run_once("acme")["event"], "returned", self.queue_log())
+        self.assertEqual(integrator.loop("acme", 1)["event"], "returned", self.queue_log())
         reason = "user-visible change: live verification required (the check script's verdict was unit-test-verified)"
         b = self.newest(u.unit)
         self.assertEqual((b.rev, b.to), (2, "feat-acme-checkout"))
@@ -319,7 +319,7 @@ class LiveTest(IntegratorCase):
     def test_a_user_visible_pr_entry_returns_to_build_with_the_reason(self):
         h = self.branch("feat/a", {"src/a.txt": "a\n"})
         self.queue_pr(3, h, "feat/a", surface="user")
-        integrator.run_once("acme")
+        integrator.loop("acme", 1)
         failed = [p["summary"] for p in self.notes() if p["status"] == "failed"]
         self.assertEqual(failed, ["returned PR #3 (live): user-visible change: live verification required (the check "
                                   "script's verdict was unit-test-verified)"])
@@ -327,14 +327,14 @@ class LiveTest(IntegratorCase):
     def test_a_user_visible_change_with_a_live_verdict_lands(self):
         h = self.branch("feat/a", {"src/a.txt": "a\n", "scripts/verify/ci.sh": self.LIVE_CI})
         self.queue_pr(1, h, "feat/a", surface="user")
-        self.assertEqual(integrator.run_once("acme")["event"], "merged", self.queue_log())
+        self.assertEqual(integrator.loop("acme", 1)["event"], "merged", self.queue_log())
         rows = {(r["pr"], r["sha"], r["verdict"], r["verifier"]) for r in ledger.read("acme")}
         self.assertIn(("1", h, "live-ui-verified", "queue"), rows)
 
     def test_an_internal_change_with_a_unit_test_verdict_lands(self):
         h = self.branch("feat/a", {"src/a.txt": "a\n"})
         self.queue_pr(1, h, "feat/a", surface="internal")
-        self.assertEqual(integrator.run_once("acme")["event"], "merged", self.queue_log())
+        self.assertEqual(integrator.loop("acme", 1)["event"], "merged", self.queue_log())
 
     def test_without_a_check_script_there_is_no_level_to_hold_it_to(self):
         e = {"pr": 1, "head": "a" * 40, "id": "pr1-aaaaaaa", "surface": "user"}
@@ -373,7 +373,7 @@ class TeamsHeadTest(IntegratorCase):
         u = self.unit(sender=self.design)
         h = self.branch("feat/checkout", {"src/bad.txt": "RED\n"})
         self.queue_pr(5, h, "feat/checkout", unit=u.unit)
-        self.assertEqual(integrator.run_once("acme")["event"], "returned", self.queue_log())
+        self.assertEqual(integrator.loop("acme", 1)["event"], "returned", self.queue_log())
         b = self.newest(u.unit)
         self.assertEqual((b.rev, b.to, b.sender), (2, "feat-acme-checkout", self.design))
         self.assertTrue([p for p in self.notes(self.design) if p["summary"].startswith("returned PR #5 (red)")])
@@ -392,7 +392,7 @@ class TeamsHeadTest(IntegratorCase):
     def test_a_pr_entry_without_a_worker_still_goes_to_build(self):
         h = self.branch("feat/a", {"src/bad.txt": "RED\n"})
         self.queue_pr(3, h, "feat/a", writer="")
-        integrator.run_once("acme")
+        integrator.loop("acme", 1)
         self.assertEqual([p["summary"] for p in self.notes() if p["status"] == "failed"],
                          ["returned PR #3 (red): `scripts/verify/ci.sh` failed (exit 3)"])
         self.assertEqual(self.notes(self.design), [])
@@ -403,7 +403,7 @@ class TeamsHeadTest(IntegratorCase):
         self.queue_pr(1, h, "feat/checkout", unit=self.unit(sender=self.design).unit)
         self.spec(fail=StopsTest.LOGGED_OUT)
         for _ in range(3):
-            integrator.run_once("acme")
+            integrator.loop("acme", 1)
         self.assertEqual(store.read("acme")["paused"]["by"], "stops")
         self.assertTrue([p for p in self.notes() if p["urgent"] and p["summary"].startswith("the merge queue")])
         self.assertTrue([p for p in self.notes("main-acme") if p["urgent"] and "gh auth login" in p["summary"]])
@@ -469,7 +469,7 @@ class LandRefusalTest(IntegratorCase):
         h = self.branch("feat/a", {"src/a.txt": "a\n"})
         self.queue_pr(1, h, "feat/a")
         self.spec(merge_other=True)
-        integrator.run_once("acme")
+        integrator.loop("acme", 1)
         q = store.read("acme")
         self.assertEqual(q["closed"]["reason"], "proof")
         self.assertEqual(q["closed"]["main"], git(self.origin, "rev-parse", "main"))
@@ -491,7 +491,7 @@ class HealthTest(IntegratorCase):
         failed = [p["summary"] for p in self.notes() if p["status"] == "failed"]
         self.assertTrue(failed[0].startswith(f"merge queue closed: origin/main {bad[:7]} fails scripts/verify/ci.sh"))
         self.assertTrue([p for p in self.notes("main-acme") if p["urgent"]])
-        self.assertEqual(integrator.run_once("acme")["code"], 3)
+        self.assertEqual(integrator.loop("acme", 1)["code"], 3)
         fix = self.branch("feat/fix", {"src/red.txt": None})
         self.queue_pr(2, fix, "feat/fix", first=True)
         integrator.loop("acme")
@@ -505,10 +505,10 @@ class PauseLostTest(IntegratorCase):
         h = self.branch("feat/a", {"src/a.txt": "a\n"})
         self.queue_pr(1, h, "feat/a")
         queue.pause("acme", by="div-acme-build")
-        self.assertEqual(integrator.run_once("acme")["code"], 3)
+        self.assertEqual(integrator.loop("acme", 1)["code"], 3)
         queue.resume("acme", by="div-acme-build")
         guard.pause("acme", "main-acme", "owner")
-        self.assertEqual(integrator.run_once("acme")["event"], "flow-paused")
+        self.assertEqual(integrator.loop("acme", 1)["event"], "flow-paused")
         self.assertFalse((self.gh / "gh-calls.jsonl").exists())
         self.assertEqual(store.read("acme")["entries"][0]["state"], "waiting")
 
@@ -531,7 +531,7 @@ class PauseLostTest(IntegratorCase):
         h = self.branch("feat/a", {"src/a.txt": "a\n"})
         e = self.queue_pr(1, h, "feat/a")
         queue.mark("acme", e["id"], state="testing", restarts=2, test={"pid": self.dead_pid(), "pgid": None})
-        res = integrator.run_once("acme")
+        res = integrator.loop("acme", 1)
         self.assertEqual((res["code"], res["event"]), (3, "paused"))
         q = store.read("acme")
         self.assertEqual((q["paused"]["by"], q["entries"][0]["restarts"]), ("restarts", 3))
@@ -552,7 +552,7 @@ class PauseLostTest(IntegratorCase):
                 self.assertTrue(held)
                 self.assertTrue(queue.running("acme"))
                 self.assertTrue(queue.start("acme"))
-                self.assertEqual(integrator.run_once("acme")["event"], "busy")
+                self.assertEqual(integrator.loop("acme", 1)["event"], "busy")
             self.assertEqual(spawn.call_count, 1)
             self.assertFalse(queue.running("acme"))
 
@@ -567,7 +567,7 @@ def _wait(cond, timeout=8.0):
 
 
 class LostGateTest(IntegratorCase):
-    """Review A Q1/Q2: a lost take stops only its own gate's processes; a live pid waits lost_after_s."""
+    """A lost take stops only its own gate's processes; a live pid waits lost_after_s."""
 
     def proc(self, argv, **kw):
         p = subprocess.Popen(argv, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
@@ -651,7 +651,7 @@ class LostGateTest(IntegratorCase):
 
 
 class StopsTest(IntegratorCase):
-    """Review A Q3: git/gh failures in a row pause the queue with a notice; a pass that gets through clears them."""
+    """Git/gh failures in a row pause the queue with a notice; a pass that gets through clears them."""
     LOGGED_OUT = "To get started with GitHub CLI, please run:  gh auth login"
 
     def test_gh_logged_out_three_passes_pause_with_a_notice(self):
@@ -659,9 +659,9 @@ class StopsTest(IntegratorCase):
         self.queue_pr(1, h, "feat/a")
         self.spec(fail=self.LOGGED_OUT)
         for n in (1, 2):
-            self.assertEqual(integrator.run_once("acme")["event"], "error")
+            self.assertEqual(integrator.loop("acme", 1)["event"], "error")
             self.assertEqual((store.read("acme")["stops"], store.read("acme")["paused"]), (n, None))
-        self.assertIn("the queue paused", integrator.run_once("acme")["line"])
+        self.assertIn("the queue paused", integrator.loop("acme", 1)["line"])
         q = store.read("acme")
         self.assertEqual((q["paused"]["by"], q["stops"], q["entries"][0]["state"]), ("stops", 3, "waiting"))
         self.assertIn("gh auth login", q["paused"]["reason"])
@@ -671,7 +671,7 @@ class StopsTest(IntegratorCase):
                                              "To get started"), failed)
         self.assertTrue([p for p in self.notes("main-acme") if p["urgent"] and "gh auth login" in p["summary"]])
         self.assertIn("queue paused project=acme by=stops", (self.home / "logs" / "events.log").read_text())
-        self.assertEqual(integrator.run_once("acme")["code"], 3)                     # paused: nothing taken
+        self.assertEqual(integrator.loop("acme", 1)["code"], 3)                     # paused: nothing taken
         self.spec()
         queue.resume("acme", by="div-acme-build")
         self.assertEqual(integrator.loop("acme")["event"], "idle")
@@ -681,10 +681,10 @@ class StopsTest(IntegratorCase):
         h = self.branch("feat/a", {"src/a.txt": "a\n"})
         self.queue_pr(1, h, "feat/a")
         self.spec(fail=self.LOGGED_OUT)
-        integrator.run_once("acme")
-        integrator.run_once("acme")
+        integrator.loop("acme", 1)
+        integrator.loop("acme", 1)
         self.spec()
-        self.assertEqual(integrator.run_once("acme")["event"], "merged")
+        self.assertEqual(integrator.loop("acme", 1)["event"], "merged")
         q = store.read("acme")
         self.assertEqual((q["stops"], q["paused"]), (0, None))
 
@@ -708,10 +708,10 @@ class StaleLockTest(IntegratorCase):
             os.utime(p, (old, old))
         self.queue_pr(1, h, "feat/a")
         with mock.patch.object(integrator, "_unlock"):            # kept: every fetch fails on it
-            res = integrator.run_once("acme")
+            res = integrator.loop("acme", 1)
         self.assertEqual(res["event"], "error", res)
         self.assertIn("git fetch origin failed: error: ", res["line"])   # git's error, not its `From <url>`
-        res = integrator.run_once("acme")
+        res = integrator.loop("acme", 1)
         self.assertEqual(res["event"], "merged", (res, self.queue_log()))
         self.assertFalse(ref.exists() or index.exists())
         self.assertIn("removed stale git locks", self.queue_log())
@@ -726,7 +726,7 @@ class StaleLockTest(IntegratorCase):
 
 
 class ProofTest(IntegratorCase):
-    """Review A Q4/Q5: a fetch error after the merge proves nothing; a proof closure needs a resume."""
+    """A fetch error after the merge proves nothing; a proof closure needs a resume."""
 
     def test_a_failed_fetch_after_the_merge_stays_testing_and_the_next_pass_proves_it(self):
         h = self.branch("feat/a", {"src/a.txt": "a\n"})
@@ -739,7 +739,7 @@ class ProofTest(IntegratorCase):
             return real(where, *argv, **kw)
         with mock.patch.object(shell, "git", side_effect=offline_after_merge), \
                 mock.patch.object(integrator, "PROOF_RETRY_S", 0):
-            res = integrator.run_once("acme")
+            res = integrator.loop("acme", 1)
         self.assertEqual((res["code"], res["event"]), (1, "unknown"), res)
         q = store.read("acme")
         self.assertEqual((q["entries"][0]["state"], q["closed"]), ("testing", None))
@@ -750,7 +750,7 @@ class ProofTest(IntegratorCase):
                       self.queue_log())
         self.assertEqual(integrator.recover("acme"), [])                             # landed: never `lost`
         self.assertTrue(queue.startable("acme"))
-        self.assertEqual(integrator.run_once("acme")["event"], "merged")
+        self.assertEqual(integrator.loop("acme", 1)["event"], "merged")
         self.assertEqual(store.read("acme")["entries"], [])
         self.assertEqual(self.events(), ["added", "testing", "merged"])
         m = git(self.origin, "rev-parse", "main")
@@ -762,7 +762,7 @@ class ProofTest(IntegratorCase):
         h = self.branch("feat/a", {"src/a.txt": "a\n"})
         self.queue_pr(1, h, "feat/a")
         self.spec(merge_other=True)
-        integrator.run_once("acme")
+        integrator.loop("acme", 1)
         self.spec()
         self.queue_pr(2, self.branch("feat/fix", {"src/fix.txt": "f\n"}), "feat/fix", first=True)
         res = integrator.loop("acme")
@@ -784,7 +784,7 @@ class ProofTest(IntegratorCase):
 
 
 class AutoQueueTest(IntegratorCase):
-    """Review A Q6: the runner's auto-queue records the sender session as `parent`; the unit's brief names it."""
+    """The runner's auto-queue records the sender session as `parent`; the unit's brief names it."""
 
     def test_all_children_landed_when_the_entry_parent_is_the_sender_session(self):
         bu = self.unit(to="div-acme-build", sender="main-acme")
@@ -799,12 +799,12 @@ class AutoQueueTest(IntegratorCase):
 
 
 class LandModeTest(IntegratorCase):
-    """Review A Q9: `land: auto` releases entries queued while the project was `land: owner`."""
+    """`land: auto` releases entries queued while the project was `land: owner`."""
 
     def test_switching_to_auto_releases_entries_awaiting_the_owner(self):
         self.config(queue={"land": "owner"})
         self.queue_pr(1, self.branch("feat/a", {"src/a.txt": "a\n"}), "feat/a", owner_ok=False)
-        self.assertEqual(integrator.run_once("acme")["event"], "idle")
+        self.assertEqual(integrator.loop("acme", 1)["event"], "idle")
         self.config(queue={"land": "auto"})
         self.assertEqual(integrator.loop("acme")["event"], "idle")
         self.assertEqual(self.events("merged"), ["merged"])
@@ -815,7 +815,7 @@ class LandModeTest(IntegratorCase):
 
 
 class GateEnvTest(unittest.TestCase):
-    """Review A Q8 (A.13): the gate gets no secrets."""
+    """The gate gets no secrets."""
 
     def test_the_gate_env_drops_every_secret_name(self):
         canary = {"GH_TOKEN": "c", "GITHUB_TOKEN": "c", "OPENAI_API_KEY": "c", "JEV_API_KEY": "c", "JEV_URL": "c",
@@ -834,8 +834,8 @@ class GateEnvTest(unittest.TestCase):
         self.assertNotIn("ORCHE_QUEUE_PR", main_env)
 
 
-class ReviewBTest(IntegratorCase):
-    """Review B G2/G8b: the integrator compares its own ref; an auth pause names the OWNER step."""
+class OwnRefAndAuthPauseTest(IntegratorCase):
+    """The integrator compares its own ref; an auth pause names the OWNER step."""
 
     def test_a_queue_add_fetch_between_the_integrators_fetch_and_compare_changes_nothing(self):
         from pathlib import Path
@@ -854,7 +854,7 @@ class ReviewBTest(IntegratorCase):
                 real(where, "fetch", "--no-tags", "origin", "refs/heads/feat/b")   # any other FETCH_HEAD writer
             return res
         with mock.patch.object(shell, "git", side_effect=add_in_between):
-            res = integrator.run_once("acme")
+            res = integrator.loop("acme", 1)
         self.assertEqual(add_wrote_fetch_head, [False])
         self.assertEqual((res["event"], self.events("dropped")), ("merged", []), res)
 
@@ -863,7 +863,7 @@ class ReviewBTest(IntegratorCase):
         self.queue_pr(1, h, "feat/a")
         self.spec(fail="To get started with GitHub CLI, please run:  gh auth login")
         for _ in range(3):
-            integrator.run_once("acme")
+            integrator.loop("acme", 1)
         paused = [p for p in self.notes() + self.notes("main-acme") if p["urgent"] and "paused" in p["summary"]]
         self.assertEqual(len(paused), 2, paused)
         self.assertEqual({p.get("owner") for p in paused}, {"gh auth login, then orche queue resume acme"})

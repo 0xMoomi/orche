@@ -68,7 +68,7 @@ SWEEP_SUFFIX = ".sweep"     # a filed lost run whose leftovers are not swept yet
 SWEEP_TRIES = 3     # unreadable process tables in a row before a pending sweep is settled by kill -0
 LOST = object()     # _try_acquire: a dead run's lock is left; reconcile() first
 GLOBAL_MUTEX = ".mutex"     # ORCHE_HOME/runs/.mutex: the global cap's count (the per-project mutex stays)
-MEM_POLL_S = 10.0   # a memory wait polls this often (design §8.3)
+MEM_POLL_S = 10.0   # a memory wait polls this often
 MEM_UNREADABLE = ".memory-unreadable"   # the day the unreadable memory reading was last logged
 
 
@@ -213,7 +213,7 @@ def live(proj: str) -> list:
     return out
 
 
-def _clock(iso) -> str:
+def clock(iso) -> str:
     """HH:MM (local) of an ISO timestamp, else '?'."""
     try:
         return _dt.datetime.fromisoformat(str(iso)).astimezone().strftime("%H:%M")
@@ -332,7 +332,7 @@ def _try_acquire(folder: Path, unit: str, info: dict, limit: int, total=None):
                 if stop_requested(folder.name, unit, data.get("started_ns") or 0):
                     return None, f"{unit} is being stopped"   # AMEND: wait for it to release the slot
                 raise Duplicate(f"{unit} is already running (pid {data.get('pid')}, "
-                                f"started {_clock(data.get('started'))})")
+                                f"started {clock(data.get('started'))})")
             busy += 1
         if busy >= limit:
             return None, f"{busy} live runs"
@@ -624,7 +624,7 @@ def _sweep_lost(data: dict, deadline):
     that one's environment is hidden and procs._is_claude proves it by the run's own
     `--mcp-config` path. (pids signalled or None, whether the table was tried and failed: False
     when there was no time to try or the deadline cut the read short (procs.NoTime))."""
-    if procs._budget(deadline) <= 0:
+    if procs.budget(deadline) <= 0:
         return None, False
     child, rid = data.get("child_pid"), data.get("run_id")
     claude = ({"pid": child, "pgid": data.get("pgid"), "started_ns": data.get("started_ns"),
@@ -809,7 +809,7 @@ def reconcile_cli(reg, args, keys=None) -> list:
 
 def describe(act) -> str:
     """One line for a reconcile action (doctor rows, CLI notes)."""
-    unit, pid, at = act.get("unit"), act.get("pid"), _clock(act.get("started"))
+    unit, pid, at = act.get("unit"), act.get("pid"), clock(act.get("started"))
     if act["action"] == "unfiled":
         return (f"{unit}: runner pid {pid} died; filing its `failed` pointer failed ({act.get('error')}); "
                 "the lock stays for the next reconcile")
@@ -893,7 +893,7 @@ def defer(unit) -> None:
             log.log("hooks", f"runner: {unit}: no brief or target to defer the run to")
             return
         found = [(path, p) for path, p in inbox.pending(t.session)
-                 if p.get("via") == "dispatch" and p.get("unit") == unit and deliver._rev(p) == b.rev]
+                 if p.get("via") == "dispatch" and p.get("unit") == unit and deliver.pointer_rev(p) == b.rev]
         mark = {"deferred": "codex-sandbox", "since_ns": time.time_ns()}
         if found:
             path, ptr = found[-1]

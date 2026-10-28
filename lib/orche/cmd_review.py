@@ -1,4 +1,4 @@
-"""`orche review --pr N`: the cross-check of an open PR on request (design §3.5, §3.8; R-REVIEW-1, R33).
+"""`orche review --pr N`: the cross-check of an open PR on request (R-REVIEW-1, R33).
 
   orche review --pr N [--project <p>] [--unit <id>] [--background]
 

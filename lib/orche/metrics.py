@@ -74,41 +74,6 @@ def cost(usage: dict, row: dict) -> float:
             + usage.get("cache_creation_input_tokens", 0) * row["cache_write"]) / 1_000_000
 
 
-def _timestamp(obj):
-    try:
-        ts = _dt.datetime.fromisoformat(str(obj.get("timestamp")))
-    except ValueError:
-        return None
-    return ts if ts.tzinfo else ts.replace(tzinfo=_dt.timezone.utc)
-
-
-def _user_text(message):
-    """Prompt text of a user line, or None for tool results / empty content."""
-    content = message.get("content") if isinstance(message, dict) else None
-    if isinstance(content, str):
-        return content.strip() or None
-    if not isinstance(content, list):
-        return None
-    if any(isinstance(b, dict) and b.get("type") == "tool_result" for b in content):
-        return None
-    text = "\n".join(b.get("text", "") for b in content if isinstance(b, dict) and b.get("type") == "text")
-    return text.strip() or None
-
-
-def _lines(path):
-    try:
-        with open(path, encoding="utf-8", errors="replace") as fh:
-            for line in fh:
-                try:
-                    obj = json.loads(line)
-                except ValueError:
-                    continue
-                if isinstance(obj, dict):
-                    yield obj
-    except OSError:
-        return
-
-
 def is_subagent(path: Path, root: Path) -> bool:
     return "subagents" in path.relative_to(root).parts
 
@@ -127,6 +92,7 @@ def compute(root=None, days=30, now=None, prices=None) -> dict:
     routine = 0
     files = {"main": 0, "subagent": 0}
 
+    from . import transcript       # hr loads metrics; transcript stays out of its imports
     paths = sorted(root.rglob("*.jsonl")) if root.is_dir() else []
     for path in paths:
         try:
@@ -136,8 +102,8 @@ def compute(root=None, days=30, now=None, prices=None) -> dict:
             continue
         sub = is_subagent(path, root)
         files["subagent" if sub else "main"] += 1
-        for obj in _lines(path):
-            ts = _timestamp(obj)
+        for obj in transcript.records(path):
+            ts = transcript.timestamp(obj)
             if ts is None or ts < cutoff or ts > now:
                 continue
             message = obj.get("message") if isinstance(obj.get("message"), dict) else {}
@@ -161,7 +127,7 @@ def compute(root=None, days=30, now=None, prices=None) -> dict:
                                   + u["cache_creation_input_tokens"])
                 by_day[ts.astimezone(now.tzinfo).date().isoformat()][model] += 1
             elif obj.get("type") == "user" and not sub and not obj.get("isMeta"):
-                text = _user_text(message)
+                text = transcript.user_text(message)
                 key = obj.get("uuid") or (str(path), text, obj.get("timestamp"))
                 if text is None or key in seen_users:
                     continue
@@ -247,7 +213,8 @@ def triage_summary(path, days=30, now=None) -> dict:
     now = now or _dt.datetime.now(_dt.timezone.utc).astimezone()
     cutoff = now - _dt.timedelta(days=days)
     counts, ms, model_ms = defaultdict(int), [], []
-    for row in _lines(Path(path)):
+    from . import transcript
+    for row in transcript.records(Path(path)):
         try:
             at = _dt.datetime.fromisoformat(str(row.get("at")))
         except ValueError:

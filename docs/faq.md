@@ -1,6 +1,6 @@
 # ORCHE FAQ
 
-Short answers; [SPEC.md](../SPEC.md) has the rules behind each one.
+Short answers; [spec](spec.md) has the rules behind each one.
 
 ## Is ORCHE a harness or an orchestrator?
 
@@ -96,9 +96,9 @@ it is archived when the unit retires. Existing files are never overwritten.
 
 ## Why did my PR merge without me?
 
-Every PR passes three checks before it lands. First a pre-review by a different vendor, then the head review, then the
+Every PR passes two checks before it lands. First the head review, then the
 merge queue gate: `scripts/verify/ci.sh` plus the brief's VERIFY, run on top of the current main. When all are green the
-queue merges it. Set `queue.land: owner` and each PR waits for your approval instead: tell Main to merge the waiting PRs (it runs
+queue merges it. A second-vendor cross-check runs only when someone asks for one. Set `queue.land: owner` and each PR waits for your approval instead: tell Main to merge the waiting PRs (it runs
 `orche queue approve <p> --all`).
 A merge deploys only if your host deploys main. ORCHE never merges with `--admin` and never force-pushes.
 
@@ -117,3 +117,32 @@ A run waits while free memory is below `min_free_mb` (RAM), and `orche feat new`
 
 With a Claude subscription (Max), many agents share one usage window and soon reach it. ORCHE then holds that vendor
 until the window resets and re-runs the held work. An API key or Codex keeps going meanwhile.
+
+## Which model does each division use?
+
+Each division has its own model: Claude by default, Codex optional (headless only). The recommended models:
+
+| Kind | Model | Why |
+|---|---|---|
+| `rnd` | Opus 5.5 | prototypes and spikes: the strongest reasoning |
+| `research` | Sonnet 5.5 | sourced summaries at half Opus's price |
+| `build` | Opus 5.5 | integration, tests and the ledger: correctness first |
+| `gtm` | Sonnet 5.5 | launch copy and content |
+| `ops` | Sonnet 5.5 | runbooks and checklists (dormant until stage public) |
+| `design` | Opus 5.5 | UI, UX and design calls |
+| `content` | Sonnet 5.5 | blog posts, docs and social copy |
+| your own | Opus 5.5 | an unknown charter: the strongest model |
+
+Tell Main "switch research to Sonnet" and it changes one with `orche hr model`.
+
+## What is team mode?
+
+A repository that declares its team plugin and that plugin's own marketplace in `.claude/settings.json` runs in team mode:
+push, pull request and merge wait for your word. Say "install the team plugin" and Main follows the repository's own setup
+guide. A repository that already follows a team workflow (PRs to develop, `dev/des-47` branches, Entire) is read at setup;
+nothing to configure.
+
+## Can I start in an empty folder?
+
+Yes. ORCHE asks whether to create the repository there (GitHub, private by default) and which preset fits, with the
+recommended answers first.

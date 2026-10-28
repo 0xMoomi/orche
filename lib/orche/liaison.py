@@ -102,7 +102,7 @@ def _card_excerpt(root):
 
 
 def ask_request(key, root, head, today, question, card, lines) -> str:
-    """The user message on the worker's stdin (Appendix C.2), masked whole."""
+    """The user message on the worker's stdin, masked whole."""
     text = "\n".join([
         f"Liaison request: answer one question about {key}.",
         "",
@@ -275,7 +275,7 @@ def _lines(res, limit, more) -> list:
 
 
 def refresh_request(key, root, head, base, today, card, since, stat, history) -> str:
-    """The user message on the worker's stdin (Appendix C.3), masked whole."""
+    """The user message on the worker's stdin, masked whole."""
     parts = [
         f"Liaison request: refresh the project card of {key}.",
         "",
@@ -414,17 +414,17 @@ def refresh(target, cfg) -> dict:
     return rec
 
 
-def _num(value, spec):
+def num(value, spec):
     return format(value, spec) if isinstance(value, (int, float)) else "?"
 
 
 def line(rec) -> str:
-    """The stdout line of a refresh record (design §5.5); notes are printed after it by the caller."""
+    """The stdout line of a refresh record; notes are printed after it by the caller."""
     key, status = rec["project"], rec["status"]
     if status == "fresh":
         return f"card {key}: fresh (base {(rec['base'] or '')[:7]})"
-    cost = f"${_num(rec['cost_usd'], '.2f')}"
-    secs = _num(round(rec["duration_s"]) if isinstance(rec["duration_s"], (int, float)) else None, "d")
+    cost = f"${num(rec['cost_usd'], '.2f')}"
+    secs = num(round(rec["duration_s"]) if isinstance(rec["duration_s"], (int, float)) else None, "d")
     if status == "unchanged":
         return f"card {key}: no user-visible change since {(rec['base'] or '')[:7]} ({cost}, {secs} s, {rec['model']})"
     return (f"card {key}: refreshed ({len(rec['sections'])} sections, base {rec['head'][:7]}), {cost}, {secs} s "

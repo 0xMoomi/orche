@@ -21,3 +21,10 @@ def ensure_dirs() -> Path:
 
 def project_local(repo_root) -> Path:
     return Path(repo_root) / ".orche"
+
+
+def tilde(path: Path) -> str:
+    """`path` with the home folder written `~`."""
+    home = str(Path.home())
+    text = str(path)
+    return "~" + text[len(home):] if text == home or text.startswith(home + os.sep) else text

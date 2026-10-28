@@ -1,5 +1,5 @@
-"""The wake (C9 T2): inbox.post/wake/rearm and `orche nudge <session>` (lib/orche/deliver.py, design §4.4);
-the deliverer (C9 T3): `orche deliver <unit>` (design §4.5).
+"""The wake (T2): inbox.post/wake/rearm and `orche nudge <session>` (lib/orche/deliver.py);
+the deliverer (T3): `orche deliver <unit>`.
 
 In-process against the fake Orca (ORCHE_FAKE_ORCA=1, canned `fake-orca.json`, calls recorded in
 `logs/fake-orca.jsonl`); spawns are mocked (procs.spawn_detached), never a real Orca or nudger.
@@ -631,7 +631,7 @@ class DeliverTest(NudgeCase):
         self.assertEqual([p for _x, p in inbox.pending("div-acme-build") if p["unit"] == b.unit], [])
         self.assertEqual(deliver.last_delivery("div-acme-build", b.unit)["state"], "already-ran")
 
-    # -- STOP and AMEND (review B2) -------------------------------------------------------
+    # -- STOP and AMEND -------------------------------------------------------------------
     def stop_pointer(self, b, to, sender="main-acme"):
         inbox.write(inbox.make(b.unit, sender, to, "stop", report_path=str(b.path), brief_rev=b.rev,
                                summary="STOP requested", via="dispatch"))

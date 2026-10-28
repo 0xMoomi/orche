@@ -6,7 +6,7 @@ description: Apply ORCHE to one project on request. Use when the user names a pr
 # Apply ORCHE to one project
 
 ORCHE is installed once per machine (plugin + `orche` CLI + hooks). A project joins ORCHE only when the
-user names it. `orche apply-all` is never used: some repos are dormant and some will never use ORCHE.
+user names it: some repos are dormant and some will never use ORCHE.
 
 ## What applying does (say this before doing it)
 
@@ -172,7 +172,7 @@ customise. In chat there is no terminal, so the setup goes through a JSON file. 
 
 ## Do not
 
-- Do not run `orche apply-all`, and do not apply to a project the user did not name in this request (a
+- Do not apply to a project the user did not name in this request (a
   bare `orche init` names the repository holding the current directory).
 - Do not wake divisions or create feature agents during apply unless asked.
 - Do not commit the generated files; the user decides whether they belong in the repo.

@@ -227,7 +227,7 @@ def lost(reg, proj, data) -> str:
         util.write_json(folder / "RUN.json", rec)
         history.append(proj, rec, rev)
     if not file_pointer(reg, who, rev, folder, "failed",
-                        f"runner died: {unit} (pid {pid}, started {runs._clock(started)}); "
+                        f"runner died: {unit} (pid {pid}, started {runs.clock(started)}); "
                         f"re-run with `orche run {unit}`", None, link_report=False):
         log.log("events", f"run unit={unit} to={to} runner-unroutable pid={pid} filed=false")
         return "unroutable"

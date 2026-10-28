@@ -1,4 +1,4 @@
-"""git probes the queue's add checks and facts read (design §3.2, §4.3). Read-only."""
+"""git probes the queue's add checks and facts read. Read-only."""
 import re
 
 from .. import shell

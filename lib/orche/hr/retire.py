@@ -135,14 +135,14 @@ def _transcripts(unit, proj):
     return root, files
 
 
-def _pane_problem(unit, key, name):
+def _pane_problem(unit):
     """Refusal text while a pane titled with the session is open (or Orca cannot be listed)."""
     try:
         term = orca.find_terminal_by_title(unit.session)
     except orca.OrcaError as exc:
         return f"cannot list Orca panes to check {unit.session} is closed: {exc}"
     if term is not None:
-        return f"pane open — run `orche feat sleep {key} {name}` first"
+        return f"pane open — run `orche sleep {unit.session}` first"
     return None
 
 
@@ -170,7 +170,7 @@ def retire(reg, unit, *, yes=False, dry_run=False):
         raise book.Refused(EXIT_BLOCKED, problem)
     if dry_run:
         dry(f"check no Orca pane is titled {unit.session}")
-    pane = _pane_problem(unit, key, name)
+    pane = _pane_problem(unit)
     if pane:
         raise book.Refused(EXIT_BLOCKED, pane)
     if not yes and not dry_run:

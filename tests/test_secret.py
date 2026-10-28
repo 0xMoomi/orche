@@ -18,7 +18,7 @@ from unittest import mock
 import support
 from orche import notify, registry, shell
 from orche.flow import owner
-from orche.secrets import SecretError, backends_gcp, backends_gh, backends_keychain, dialog, share, store
+from orche.secrets import SecretError, backends, dialog, share, store
 from test_registry import load_cli
 
 SAMPLE = json.loads((support.FIXTURES / "registry.sample.json").read_text())
@@ -219,17 +219,17 @@ class RegistrySecretsSchemaTest(unittest.TestCase):
 class BackendNamingTest(unittest.TestCase):
     def test_gcp_locate(self):
         cfg = {"project": "p", "gcp_project": {"dev": "a-dev", "prod": "a-prod"}}
-        self.assertEqual(backends_gcp.locate(cfg, "K", "prod"), ("a-prod", "K"))
+        self.assertEqual(backends.gcp_locate(cfg, "K", "prod"), ("a-prod", "K"))
         with self.assertRaises(SecretError):
-            backends_gcp.locate(cfg, "K", "preview")
+            backends.gcp_locate(cfg, "K", "preview")
         single = {"project": "p", "gcp_project": {"dev": "a-all"}}
-        self.assertEqual(backends_gcp.locate(single, "K", "prod"), ("a-all", "K__prod"))
-        self.assertEqual(backends_gcp.locate(single, "K", "dev"), ("a-all", "K__dev"))
+        self.assertEqual(backends.gcp_locate(single, "K", "prod"), ("a-all", "K__prod"))
+        self.assertEqual(backends.gcp_locate(single, "K", "dev"), ("a-all", "K__dev"))
 
     def test_gh_and_keychain_names(self):
-        self.assertEqual(backends_gh.secret_name("K", "prod"), "K")
-        self.assertEqual(backends_gh.secret_name("K", "dev"), "K_DEV")
-        self.assertEqual(backends_keychain.service("acme", "dev", "K"), "orche/acme/dev/K")
+        self.assertEqual(backends.gh_secret_name("K", "prod"), "K")
+        self.assertEqual(backends.gh_secret_name("K", "dev"), "K_DEV")
+        self.assertEqual(backends.keychain_service("acme", "dev", "K"), "orche/acme/dev/K")
 
     def test_parse_answer(self):
         self.assertEqual(dialog.parse_answer("button returned:Enter, text returned:a, b\n"), ("Enter", "a, b"))
@@ -687,7 +687,7 @@ def email_items():
 
 
 class ResumeAndArgvTest(SecretCase):
-    """C10 T10: a fill tells flow.owner (owner.secret_filled: the ask answered, Main told once which unit
+    """T10: a fill tells flow.owner (owner.secret_filled: the ask answered, Main told once which unit
     to resume); the dialog is a fixed script and the request's text one osascript argument."""
 
     def test_a_fill_tells_the_owner_flow(self):

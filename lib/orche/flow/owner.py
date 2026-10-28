@@ -1,4 +1,4 @@
-"""The owner's voice (C10 §5, §3.4): Orca's own notification covers Main's closing line; ORCHE notifies
+"""The owner's voice: Orca's own notification covers Main's closing line; ORCHE notifies
 only what Orca cannot know (the ask's reminders, a parked guard refusal, notices Main never wrote).
 
 Main's Stop hook (dispatch.handle_stop, also under stop_hook_active) reads the closing line — the last
@@ -392,7 +392,7 @@ def announce(project, kind, body, now=None) -> bool:
 
 
 def usage_notice(project, vendor, hhmm, n, now=None) -> bool:
-    """The one owner notice of a usage hold (Appendix A.15), as `project`'s `usage` notice (announce:
+    """The one owner notice of a usage hold, as `project`'s `usage` notice (announce:
     a held-back one is flushed by the heartbeat)."""
     text = USAGE_NOTICE.format(label=VENDOR_LABEL.get(vendor, vendor), hhmm=hhmm, n=n)
     return announce(project, "usage", text, now)

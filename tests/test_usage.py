@@ -1,4 +1,4 @@
-"""Usage-limit holds (0.9.0 T4, design §8.5, R20): detection on both vendors' texts and the reset
+"""Usage-limit holds (0.9.0 T4, R20): detection on both vendors' texts and the reset
 parsers, the backoff ladder, the hold store, a held run start and a run that hits a limit (quiet
 `info`, never `failed`, no wake), and the free-memory reading behind the runner's memory guard."""
 import datetime as dt
@@ -126,7 +126,7 @@ class HoldStoreTest(support.TempHomeCase):
         self.assertFalse(usage.path("claude").exists())
 
     def test_three_holds_without_a_done_run_and_the_unit_is_not_held_again(self):
-        """RUN.json `holds` (the runner's count per held run, Review B G3) decides; history rows do not."""
+        """RUN.json `holds` (the runner's count per held run) decides; history rows do not."""
         root = self.home / "acme"
         folder = root / brief.UNITS / "u1"
         folder.mkdir(parents=True)
@@ -209,7 +209,7 @@ class HeldRunTest(RunnerCase):
 
 class QuotaPatternTest(unittest.TestCase):
     def test_a_disc_quota_error_never_holds_and_the_vendor_quota_texts_still_do(self):
-        """Review B G8f: macOS EDQUOT ("Disc quota exceeded") is a disk error, not a usage limit."""
+        """macOS EDQUOT ("Disc quota exceeded") is a disk error, not a usage limit."""
         for text in ("OSError: [Errno 69] Disc quota exceeded", "write error: Disk quota exceeded"):
             self.assertFalse(usage.is_limit(text, {}), text)
         for text in ("You exceeded your current quota, please check your plan and billing details.",

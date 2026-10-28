@@ -1,4 +1,4 @@
-"""Usage-limit holds (design §8.5; R20): a vendor's usage or rate limit pauses that vendor's new
+"""Usage-limit holds (R20): a vendor's usage or rate limit pauses that vendor's new
 attempts and reviews, across projects, until its reset. The merge queue keeps going (no model).
 
 detect(text, vendor, cfg) reads an attempt's problem text (headless.Result.limit_text): None when it
@@ -271,7 +271,7 @@ def _row(action, project, target, line, failed=None) -> dict:
 
 def heartbeat(now, dry_run) -> list:
     """The heartbeat's class `usage` (reconcile): an active hold nobody told yet -> the owner notice
-    (owner.usage_notice, Appendix A.15) once, marked first; a hold past its `until` -> `usage resume
+    (owner.usage_notice) once, marked first; a hold past its `until` -> `usage resume
     vendor=<v>` once. Rows as owner.heartbeat's."""
     from . import owner
     rows = []

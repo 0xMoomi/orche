@@ -75,7 +75,7 @@ def carries(env, rid) -> bool:
     return _tag(rid).search(env) is not None
 
 
-def _budget(deadline) -> float:
+def budget(deadline) -> float:
     return deadline - time.monotonic() - MARGIN_S
 
 
@@ -89,7 +89,7 @@ TIMED_OUT = 124     # shell.run's code for a command killed at its timeout
 def _ps(argv, deadline):
     """The output; None when `ps` failed or timed out with its full PS_TIMEOUT_S; NoTime when
     the deadline left no time to start it or its shorter timeout ran out."""
-    left = _budget(deadline)
+    left = budget(deadline)
     if left <= 0:
         raise NoTime
     timeout = min(PS_TIMEOUT_S, left)
@@ -195,7 +195,7 @@ def _table_proc(deadline, root=PROC):
     """[Proc] from /proc (Linux), else None (unlistable, or the walk outlasted a full
     PS_TIMEOUT_S); NoTime when the deadline left no time to start it or its shorter timeout ran out
     (the same rules as _ps)."""
-    left = _budget(deadline)
+    left = budget(deadline)
     if left <= 0:
         raise NoTime
     timeout = min(PS_TIMEOUT_S, left)
@@ -267,7 +267,7 @@ def table(timeout=TABLE_S):
 
 
 def _table(deadline):
-    if _budget(deadline) <= 0:
+    if budget(deadline) <= 0:
         raise NoTime
     return _table_proc(deadline) if _linux() else _table_ps(deadline)
 
@@ -453,7 +453,7 @@ def parse_vm_stat(out):
 
 
 def free_mb(run=None):
-    """Free memory in MB, or None when unreadable (design §8.3; the runner's memory guard): macOS the
+    """Free memory in MB, or None when unreadable (the runner's memory guard): macOS the
     kernel's free percentage × RAM (`sysctl`), else `vm_stat`; Linux /proc/meminfo MemAvailable.
     `run(argv)` returns stdout or None (tests pass fixed outputs)."""
     run = run or _stdout

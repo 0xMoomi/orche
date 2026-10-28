@@ -12,7 +12,7 @@ if __package__ in (None, ""):  # run as a script: python3 -I .../dialog.py
     sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from orche import log, registry, shell  # noqa: E402
-from orche.secrets import VALUE_PLACEHOLDER, SecretError, store  # noqa: E402
+from orche.secrets import VALUE_PLACEHOLDER, SecretError, scrub, store  # noqa: E402
 
 PASTE, ENTER, CANCEL = "Paste from clipboard", "Enter", "Cancel"
 MAX_ATTEMPTS = 3
@@ -116,7 +116,7 @@ def handle(rid, req, ui, ex, reg) -> str:
                 store.put(ex, cfg, name, env, value, rotate=req.get("mode") == "rotate",
                           actor="human", request_id=rid)
         except SecretError as exc:
-            msg = store.scrub(str(exc), value)
+            msg = scrub(str(exc), value)
             log.log("keymaster", f"fill {rid} failed: {msg}")
             ui.notify(f"{name}: storing failed")
             return "failed"

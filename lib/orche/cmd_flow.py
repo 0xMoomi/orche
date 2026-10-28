@@ -1,4 +1,4 @@
-"""`orche flow pause <proj> [--reason TEXT]` and `orche flow resume <proj>` (C10 G8, lib/orche/flow/guard.py).
+"""`orche flow pause <proj> [--reason TEXT]` and `orche flow resume <proj>` (G8, lib/orche/flow/guard.py).
 
 A paused project relays no brief or AMEND (STOP still works) and the heartbeat repairs nothing in it but
 drains. Resume needs the owner's word: it removes the pause only when the owner prompted Main after it.

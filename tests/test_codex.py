@@ -1,4 +1,4 @@
-"""Codex adapter (design C11 §5.2-5.6, §7.2, A.1): argv, env, parse, cost, check, run() on a fake."""
+"""Codex adapter: argv, env, parse, cost, check, run() on a fake."""
 import json
 import os
 import subprocess

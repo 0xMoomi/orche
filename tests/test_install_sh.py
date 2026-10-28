@@ -552,14 +552,7 @@ class InstallShTest(unittest.TestCase):
         settings = (self.home / ".claude" / "settings.json").read_text()
         self.assertIn(f"{self.dir}/hooks/run.sh", settings)
 
-    # --- --all-projects and running from a clone ---------------------------------------------
-
-    def test_all_projects_runs_apply_all(self):
-        res = self.install("--all-projects")
-        self.assertOk(res)
-        self.assertIn("==> orche apply-all", res.stdout)
-        self.assertIn("0 repo(s), 0 processed, 0 failed", res.stdout)
-        self.assertIn("repo list --json", (self.fake / "orca-argv.txt").read_text())
+    # --- running from a clone -------------------------------------------------------------------
 
     def test_piped_into_bash_like_curl(self):
         # `curl ... | bash -s -- ...`: the script arrives on stdin, so stdin is no terminal (no Jev

@@ -1,7 +1,7 @@
 """The project read model: the facts `orche status` and Main's SessionStart card read about one
 project. Everything comes from files (briefs, inboxes, run records, the merge queue), never from a
-conversation, so `/clear` loses nothing; lib/orche/cmd_status.py renders them (a row per project, the
-detail view, and the card `orche status <project>` prints and SessionStart shows Main).
+conversation, so `/clear` loses nothing; lib/orche/cmd_status.py renders them (a row per project and the
+detail view); card_text() renders the card `orche status <project>` prints and SessionStart shows Main.
 
 lineages(): one row per lineage, newest first (with `members`: its briefs and newest reports). card(): the
 newest MAX_OPEN open lineages, each with its root brief's GOAL (first sentence), its last report (masked)
@@ -15,6 +15,9 @@ from . import brief, inbox, mask, roster, runs, units
 from .flow import lineage, owner, usage
 
 MAX_OPEN, MAX_CLOSED, WIDTH = 8, 3, 160
+STATE_ORDER = ("merged", "queued", "running", "held", "returned", "done", "info", "failed", "blocked", "question",
+               "stopped")
+CARD_LINES, CARD_CHARS = 40, 3000   # the card's budget
 DETAIL_TTL = _dt.timedelta(hours=24)    # lineages(): closed lineages this recent
 WAITING_TTL = _dt.timedelta(hours=24)   # blocked(): a blocked or question pointer this young
 _SENTENCE = re.compile(r"^(.+?[.!?。])(?:\s|$)")
@@ -193,3 +196,72 @@ def has_open(reg, key) -> bool:
     reads = lineage.Reads(reg)
     return any(s not in lineage.TERMINAL for name in reads.groups(key)
                for _b, _f, s in lineage.members(reg, key, name, reads))
+
+
+# ---- the card's text (`orche status <project>` prints it; SessionStart shows it to Main)
+
+def owner_lines(o) -> list:
+    """The open ask (flow.owner.status): `owner: asked HH:MM (<m> min, notified n×[, next HH:MM | waiting
+    for quiet hours to end]) — <ask>`; none without one."""
+    if not o:
+        return []
+    tail = ", waiting for quiet hours to end" if o["quiet"] else f", next {o['next']}" if o["next"] else ""
+    return [f"  owner: asked {o['since']} ({o['minutes']} min, notified {o['notified']}×{tail}) — {o['text']}"]
+
+
+def repair_hints(row) -> tuple:
+    """(reconcile's live repairs, whether the heartbeat is fresh), read only while a delivery or a report is
+    late."""
+    from . import reconcile
+    reps = reconcile.repairs() if row.get("undelivered") or row["unread"] else {}
+    hb = reconcile.heartbeat_json() if reps else {}
+    return reps, bool(hb.get("enabled")) and not hb.get("stale", True)
+
+
+def unread_lines(row, hints) -> list:
+    from . import reconcile
+    return [f"  unread: {u['session']} has {u['count']} report(s) waiting (oldest {u['minutes']} min) — "
+            + reconcile.overdue_hint("unread", u["session"], *hints) for u in row["unread"]]
+
+
+def blocked_lines(row) -> list:
+    return [f"  blocked: {u['unit']} ({u['status']}, since {u['since']}, {u['minutes']} min) — waiting on the "
+            f"owner; answer in main-{row['project']}" for u in row["blocked"]]
+
+
+def states_text(r) -> str:
+    """`12 units: 7 merged · 2 queued · …  PRs #41 #43 #44 …` (states in STATE_ORDER)."""
+    order = sorted(r["states"].items(), key=lambda kv: (STATE_ORDER.index(kv[0]) if kv[0] in STATE_ORDER
+                                                        else len(STATE_ORDER), kv[0]))
+    prs = " ".join(f"#{n}" for n in r["prs"][:3]) + (" …" if len(r["prs"]) > 3 else "")
+    return f"{r['units']} units: {' · '.join(f'{n} {s}' for s, n in order)}" + (f"  PRs {prs}" if prs else "")
+
+
+def card_text(d) -> str:
+    """The card (project.card): `[orche] resume <project>`, then per open lineage its `L` line with the
+    GOAL, its states, its last report and what it waits on; the `owner:`, `unread:` and `blocked:` lines as
+    the status row prints them; `queue: w/t/m`; the closed lineages. At most CARD_LINES lines and CARD_CHARS
+    characters."""
+    p, q = d["project"], d["queue"]
+    out = [f"[orche] resume {p}"] + ([] if d["open"] else ["nothing in flight"])
+    for o in d["open"]:
+        last = o["last"]
+        out += [f"L {o['lineage']}" + (f" — {o['goal']}" if o["goal"] else ""), f"  {states_text(o)}"]
+        if last:
+            out.append(f"  last: {last['unit']} {last['status']}"
+                       + (f" — {last['summary']}" if last["summary"] else ""))
+        out.append(f"  {o['waits']}")
+    if d["open_total"] > len(d["open"]):
+        out.append(f"… {d['open_total'] - len(d['open'])} more open: orche status --project {p}")
+    out += owner_lines(d["owner"]) + unread_lines(d, repair_hints(d)) + blocked_lines(d)
+    out.append(f"queue: {q.get('waiting', 0)}/{q.get('testing', 0)}/{q.get('merged_today', 0)}" if q else "queue: -")
+    out += [f"closed L {c['lineage']}" + (f" — {c['goal']}" if c["goal"] else "")
+            + f"  DONE: {c['units']} unit{'' if c['units'] == 1 else 's'} ("
+            + ", ".join(f"{n} {s}" for s, n in c["statuses"].items()) + ")" for c in d["closed"]]
+    out = [ln if len(ln) <= WIDTH + 40 else ln[:WIDTH + 39] + "…" for ln in out]
+    more = f"… the rest: orche status --project {p}"
+    if len(out) > CARD_LINES:
+        out = out[:CARD_LINES - 1] + [more]
+    while len("\n".join(out)) > CARD_CHARS:
+        out = out[:-2] + [more]
+    return "\n".join(out)

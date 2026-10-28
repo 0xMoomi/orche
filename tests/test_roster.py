@@ -1,4 +1,4 @@
-"""Roster tables (design §7.1): identity, place, members, recipient and TO resolution."""
+"""Roster tables: identity, place, members, recipient and TO resolution."""
 import copy
 import os
 import subprocess

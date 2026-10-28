@@ -1,4 +1,4 @@
-"""C10 T2: the reconcile LaunchAgent (plist, install/uninstall, doctor row) and the hook kick."""
+"""T2: the reconcile LaunchAgent (plist, install/uninstall, doctor row) and the hook kick."""
 import json
 import os
 import plistlib
@@ -94,7 +94,7 @@ class InstallStepTest(InstallCase):
         return self.h / "Library/LaunchAgents/com.orche.reconcile.plist"
 
     def test_install_with_home_writes_but_never_loads(self):
-        out = self.install("--mode", "settings", "--yes")
+        out = self.install("--mode", "settings")
         self.assertIn("reconcile job", out)
         self.assertEqual(plistlib.loads(self.plist().read_bytes())["StartInterval"], 300)
         self.assertFalse([c for c in self.calls if c and c[0] == "launchctl"])
@@ -104,12 +104,12 @@ class InstallStepTest(InstallCase):
         self.assertFalse(self.plist().exists())
 
     def test_no_reconcile_skips(self):
-        self.install("--mode", "settings", "--yes", "--no-reconcile")
+        self.install("--mode", "settings", "--no-reconcile")
         self.assertFalse(self.plist().exists())
 
     def test_doctor_rows(self):
         self.assertEqual(doctor.reconcile_job_rows(self.h)[0][0:2], ("WARN", "reconcile job"))
-        self.install("--mode", "settings", "--yes")
+        self.install("--mode", "settings")
         level, _, detail = doctor.reconcile_job_rows(self.h)[0]  # the stub launchctl exits 113
         self.assertEqual(level, "WARN")
         self.assertTrue(detail.startswith(f"not loaded: launchctl bootstrap gui/{UID} "), detail)
@@ -125,57 +125,31 @@ class InstallStepTest(InstallCase):
 
 
 class JanitorDefaultTest(InstallCase):
-    """c75/c85: install turns the janitor on once (a re-install, what `orche update` runs, keeps an owner's
-    `orche janitor disable`) and writes no janitor LaunchAgent: the heartbeat runs the daily pass. An old
-    `com.orche.janitor.plist` is unloaded through launchctl and removed, once."""
+    """Install turns the janitor on once (a re-install, what `orche update` runs, keeps an owner's
+    `orche janitor disable`) and writes no janitor LaunchAgent: the heartbeat runs the daily pass."""
 
     def plist(self):
         return self.h / "Library/LaunchAgents/com.orche.janitor.plist"
 
     def test_install_turns_the_janitor_on_and_an_update_keeps_a_disable(self):
-        out = self.install("--mode", "settings", "--yes")
+        out = self.install("--mode", "settings")
         self.assertIn(f"janitor: set {janitor.enabled_flag()} (on by default; `orche janitor disable` turns it off)",
                       out)
-        self.assertNotIn("janitor: remove", out)
         self.assertTrue(janitor.enabled_flag().exists())
         self.assertFalse(self.plist().exists())
         self.assertEqual(self.orche("janitor", "disable")[0], 0)
-        out = self.install("--mode", "settings", "--yes")   # orche update re-runs install
+        out = self.install("--mode", "settings")   # orche update re-runs install
         self.assertNotIn("janitor: set", out)
         self.assertFalse(janitor.enabled_flag().exists())
 
-    def test_install_removes_an_old_janitor_agent_through_launchctl(self):
-        self.plist().parent.mkdir(parents=True)
-        self.plist().write_text("x")
-        ran = []
-
-        def runner(argv, *, timeout, input, env=None):
-            ran.append(argv)
-            return shell.Result(0, "", "", argv)
-        with mock.patch.object(shell, "RUNNER", runner), \
-                mock.patch.object(launchd.Path, "home", classmethod(lambda cls: self.h)):
-            out = self.install("--mode", "settings", "--yes", "--no-reconcile")
-            self.assertIn(f"janitor: remove {self.plist()} (removed the janitor's old schedule; the heartbeat runs "
-                          "it now)", out)
-            self.assertEqual([a for a in ran if a[0] == "launchctl"],
-                             [["launchctl", "bootout", f"gui/{UID}/com.orche.janitor"]])
-            self.assertFalse(self.plist().exists())
-            out = self.install("--mode", "settings", "--yes", "--no-reconcile")   # once
-        self.assertNotIn("janitor: remove", out)
-        self.assertEqual(len([a for a in ran if a[0] == "launchctl"]), 1)
-
     def test_dry_run_writes_nothing(self):
-        self.plist().parent.mkdir(parents=True)
-        self.plist().write_text("x")
-        out = self.install("--mode", "settings", "--yes", "--dry-run")
+        out = self.install("--mode", "settings", "--dry-run")
         self.assertIn("janitor: would set ", out)
-        self.assertIn(f"janitor: would remove {self.plist()}", out)
         self.assertFalse(janitor.enabled_flag().exists())
-        self.assertTrue(self.plist().exists())
 
 
 class JanitorDoctorTest(support.TempHomeCase):
-    """c85: the doctor's janitor row: the heartbeat's daily pass, the last and the weekly pass, on or off."""
+    """The doctor's janitor row: the heartbeat's daily pass, the last and the weekly pass, on or off."""
 
     def test_never_fresh_and_stale(self):
         janitor.report_path().unlink()

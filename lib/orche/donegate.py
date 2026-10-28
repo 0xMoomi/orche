@@ -65,7 +65,7 @@ def gated(m) -> bool:
     return m is not None and (m.kind == "feat" or (m.kind == "div" and m.name == "build"))
 
 
-def _root(m, cwd) -> Path:
+def member_root(m, cwd) -> Path:
     """Where a member's claim is checked: its recorded worktree, else the cwd (realpath)."""
     return Path(os.path.realpath((m.worktree if m is not None else None) or cwd))
 
@@ -94,7 +94,7 @@ def _status_md(m, root, transcript_path) -> list:
 def _stop_proof(c, m, cwd, transcript_path, deadline) -> Proof:
     if c is None or c.word not in DONE_WORDS or not gated(m):
         return Proof(None, None)
-    root = _root(m, cwd)
+    root = member_root(m, cwd)
     left = (deadline - time.monotonic()) if deadline is not None else 2
     head = shell.git_head(root, timeout=min(2, max(left, 0.2)))
     row = ledger.row_for_sha(m.project, head) if head else None
@@ -140,7 +140,7 @@ def may_stop(text, r, who, cwd, transcript_path=None, deadline=None, stop_hook_a
 def for_report(member, cwd, status) -> Proof:
     """`orche report`: HEAD of the member's worktree (else the cwd) and its ledger row; `done` from a
     gated member is missing a row >= type-check-only unless the ledger has one."""
-    root = _root(member, cwd)
+    root = member_root(member, cwd)
     head = shell.git_head(root)
     row = ledger.row_for_sha(member.project, head) if (member is not None and head) else None
     if status != "done" or not gated(member):

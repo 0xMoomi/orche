@@ -1,4 +1,4 @@
-"""The merge queue (design §4): one queue per project, an entry per approved PR pinned to its head.
+"""The merge queue: one queue per project, an entry per approved PR pinned to its head.
 
 store holds the files (private to this package), repo the git probes, facts the A.7 facts block. This
 module is the library the CLI (cmd_queue), the head review and the integrator (T3) call: `admit` is the

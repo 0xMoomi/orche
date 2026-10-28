@@ -23,7 +23,7 @@ ORCHE unit rules (full help: /orche)
 - Report: write `REPORT.md` beside the brief (≤200 words, outcome first, `Decisions needed → default applied`, `memory-save:` line). Your FINAL MESSAGE has the `STATUS: done|blocked|failed|stop` line. Then `orche report <status> --summary "..."` (wakes the sender; never hand-write pointer JSON).
 - Nobody reads your pane: never ask there; apply a default. Owner-only blockers → `STATUS: blocked` + one line `OWNER: <exact step>` (`--owner` on `orche report`; a secret: `orche secret request <NAME>` first, then `OWNER: secret <NAME>`).
 - Before done: update STATUS.md, DECISIONS.tsv (HANDOFF.md if work continues), lessons to memory. Never `/clear` mid-unit.
-- Name the principles you applied (SPEC §5.7). No en or em dash: use a hyphen, comma or colon.
+- Name the principles you applied (in your persona). No en or em dash: use a hyphen, comma or colon.
 <!-- inject:end -->
 
 ## Commands (terminal, 0 tokens)

@@ -59,7 +59,7 @@ def _masked(value):
 
 
 # Private copies of the three RUN.json literals at 3f47850 (runner.py:396-402, 484-490, 602-610), the
-# record before filing.run_record, + `vendor` after `model` (0.8.0, design C11 §7.1), + `pr` last (0.9.0, §5.11); the shapes below
+# record before filing.run_record, + `vendor` after `model` (0.8.0), + `pr` last (0.9.0); the shapes below
 # must serialise byte for byte the same.
 def old_unrun(job, now, status, error, stop_reason, routed):
     return {"unit": job.unit, "project": job.project, "to": job.to, "worktree": str(job.worktree),
@@ -88,7 +88,7 @@ def old_finished(job, call, res, data, model, started, finished, code, error, st
             "started": started, "finished": finished, "timeout_s": call.timeout,
             "exit_code": code, "is_error": res.is_error or (error is not None and not stopped),
             "stop_reason": "stopped" if stopped else _masked(
-                data["subtype"] if str(data.get("subtype") or "").startswith("error")       # C9: an error wins
+                data["subtype"] if str(data.get("subtype") or "").startswith("error")       # an error wins
                 else data.get("stop_reason") or data.get("subtype") or ("error" if error else None)),
             "cost_usd": res.cost_usd, "num_turns": res.turns, "usage": res.usage,
             "result_tail": mask.redact(result[-2000:])[0], "error": error,
@@ -288,7 +288,7 @@ class StartRestartTest(support.TempHomeCase):
 
 
 class ReservationTest(unittest.TestCase):
-    """history.reserve (design C11 §7.3) on fixed times: whole minutes rounded up, at least one,
+    """history.reserve on fixed times: whole minutes rounded up, at least one,
     UNKNOWN_USD_PER_MIN each, at most the cap."""
 
     def test_whole_minutes_rounded_up_at_least_one_at_most_the_cap(self):
@@ -611,7 +611,7 @@ class OnePointerTest(RunnerCase):
 
 
 class GlobalCapTest(support.TempHomeCase):
-    """0.9.0 T4 (design §8.3, R21): runner.max_parallel_total across projects and the memory guard."""
+    """0.9.0 T4 (R21): runner.max_parallel_total across projects and the memory guard."""
 
     def setUp(self):
         super().setUp()

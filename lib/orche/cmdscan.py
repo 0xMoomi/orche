@@ -13,6 +13,9 @@ after a single `|` has `pipe_in`: the command whose output it reads.
 
 Nesting deeper than MAX_DEPTH raises TooDeep: the caller must treat the text as unreadable.
 
+`search_parts(tool, args)` splits a search tool's argv tail (SEARCHERS) into patterns, paths and globs;
+`interpreter_code(name, args, cmd)` returns the code an interpreter command runs.
+
 `argv(command)` drops leading keywords, assignments and wrappers (`sudo`, `timeout 5`, `env -i`,
 `/usr/bin/time`, …, matched by basename) and returns the real command; a wrapper that runs a
 command STRING (`watch`, `script -c`, `flock -c`, `env -S`) comes back as `["sh", "-c", string]`.
@@ -367,6 +370,75 @@ def _skip_options(words, i, short_values, long_values, string_opt):
                     command = value
                 break
     return i, command
+
+
+CODE_OPTS = ("-c", "-e", "-E", "-r", "-l", "-p", "--eval", "--print")
+SEARCHERS = {"rg": "efgtTmABCjMrE", "grep": "efmABCdD", "egrep": "efmABCdD", "fgrep": "efmABCdD",
+             "ag": "GgmABC", "ack": "mABC", "git-grep": "efmABC"}
+SEARCH_LONG_VALUES = ("--glob", "--iglob", "--type", "--type-not", "--regexp", "--file", "--max-count",
+                      "--context", "--after-context", "--before-context", "--replace", "--max-depth",
+                      "--encoding", "--ignore-file")
+
+
+def interpreter_code(name, args, cmd):
+    """The code texts an interpreter command runs: its -c/-e/--eval values, awk's program, its stdin and
+    the command piped into it."""
+    code = [args[i + 1] for i, a in enumerate(args[:-1]) if a in CODE_OPTS]
+    code += [a.split("=", 1)[1] for a in args if a.startswith("--eval=")]
+    if name.endswith("awk"):
+        rest = [a for a in args[1:] if not a.startswith("-")]
+        code += rest[:1]
+    code += cmd.stdin
+    if cmd.pipe_in is not None:
+        code.append(cmd.pipe_in.text())
+    return code
+
+
+def search_parts(tool, args):
+    """(pattern words, path args, glob values) of a search tool's argv tail: the `-e`/`--regexp`
+    values, else the first positional, are patterns."""
+    values = SEARCHERS[tool]
+    explicit, positional, globs, patterns = False, [], [], []
+    i = 0
+    while i < len(args):
+        a = args[i]
+        if a == "--":
+            positional += list(range(i + 1, len(args)))
+            break
+        if a.startswith("--"):
+            name = a.split("=", 1)[0]
+            value = a.split("=", 1)[1] if "=" in a else (args[i + 1] if i + 1 < len(args) else "")
+            if name in ("--regexp", "--file"):
+                explicit = True
+                if name == "--regexp":
+                    patterns.append(value)
+            if name in ("--glob", "--iglob", "--include"):
+                globs.append(value)
+            i += 2 if ("=" not in a and name in SEARCH_LONG_VALUES) else 1
+            continue
+        if a.startswith("-") and a != "-":
+            i += 1
+            for k, ch in enumerate(a[1:]):
+                if ch in values:
+                    rest = a[k + 2:]
+                    value = rest if rest else (args[i] if i < len(args) else "")
+                    if not rest:
+                        i += 1
+                    if ch in "ef":
+                        explicit = True
+                    if ch == "e":
+                        patterns.append(value)
+                    if ch == "g" and tool == "rg":
+                        globs.append(value)
+                    break
+            continue
+        positional.append(i)
+        i += 1
+    first = None if explicit or not positional else positional[0]
+    if first is not None:
+        patterns.append(args[first])
+    paths = [args[j] for j in positional if j != first]
+    return patterns, paths, globs
 
 
 def argv(command):

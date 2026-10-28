@@ -1,18 +1,12 @@
-"""Agent symlinks in `~/.claude/agents/` and the Fable runner model flip.
+"""Agent symlinks in `~/.claude/agents/`.
 
 Only symlinks that point into `<plugin root>/agents/` are ours: anything else with one of our
 names (a regular file, or a symlink elsewhere) is skipped and reported, never overwritten.
 """
 import os
-import re
 from pathlib import Path
 
-from . import read_text, write_file
-
 STEP = "agents"
-RUNNER_STEP = "runner"
-RUNNER_MODEL = "claude-haiku-5-5"
-OLD_RUNNER = re.compile(r"^(model:[ \t]*)(claude-haiku-4-5[\w.-]*)[ \t]*$", re.MULTILINE)
 
 
 def link_target(link) -> str:
@@ -72,22 +66,3 @@ def uninstall(ctx, state) -> None:
     if not found:
         ctx.note(STEP, "ok", dest_dir, "no ORCHE agent symlinks")
 
-
-def flip_runner(ctx) -> None:
-    path = ctx.claude / "fable" / "agents" / "runner.md"
-    if not path.is_file():
-        ctx.note(RUNNER_STEP, "skip", path, "not found")
-        return
-    text = read_text(path)
-    end = text.find("\n---", 4) if text.startswith("---") else -1
-    if end < 0:
-        ctx.note(RUNNER_STEP, "skip", path, "no frontmatter")
-        return
-    front = text[:end]
-    match = OLD_RUNNER.search(front)
-    if not match:
-        current = re.search(r"^model:[ \t]*(\S+)", front, re.MULTILINE)
-        ctx.note(RUNNER_STEP, "ok", path, f"model {current.group(1) if current else '(none)'}; unchanged")
-        return
-    new = OLD_RUNNER.sub(lambda m: m.group(1) + RUNNER_MODEL, front, count=1) + text[end:]
-    write_file(ctx, RUNNER_STEP, path, new, f"model {match.group(2)} -> {RUNNER_MODEL}")

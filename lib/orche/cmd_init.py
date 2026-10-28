@@ -23,10 +23,10 @@ pane in the main checkout when missing -> the two weekly Orca automations
 (printed as dry-run lines unless `--automations`) -> the project intake (`orche intake`, unless
 `--no-intake`; a failure is one "intake skipped: …" line and Ctrl-C one "intake interrupted; …"
 line, never a failed init) -> a switch to the `main-<proj>` tab (live only; a failure is a warning) -> on a
-live run, the setup report `.orche/SETUP.md` (`write_report`: what was made and the "Any time" list of
-`guide.lines`; in `info/exclude`) -> on a first registration, the setup note to Main (`_setup_note`, at most
+live run, the setup report `.orche/SETUP.md` (`guide.write_report`: what was made and the "Any time" list of
+`guide.lines`; in `info/exclude`) -> on a first registration, the setup note to Main (`guide.setup_note`, at most
 `inbox.MAX_LINES` lines, pointing at the report) and, as the very last action, closing the one pane that ran
-init (`_init_window`; never inside `orche setup` or apply-all).
+init (`_init_window`).
 `--base <branch>`, `--branch-prefix <prefix>` and `--issues <KEY>` (with or without `--refresh`) write the
 project's `publish.per_project.<key>.base` / `.branch_prefix` / `.issues` (config.set_project): the branch its
 PRs target and its worktrees start from, the first segment of a feature worker's branch and the issue
@@ -55,33 +55,25 @@ import sys
 import time
 from pathlib import Path
 
-from . import __version__, config, github, hr, intake, mask, orca, paths, privacy, registry, setup_flow, shell, templates, units, util, vendors
+from . import (__version__, config, github, guide, hr, intake, mask, orca, paths, privacy, publish, registry,
+               setup_flow, shell, templates, units, util, vendors)
 from .cli import EXIT_BLOCKED, EXIT_NOT_FOUND, EXIT_OK, EXIT_USER, dry, fail, out, warn
 from .hr import onboarding
 
 EXIT_INTERRUPTED = 130   # a setup given wrongly exits EXIT_USER (1), like argparse usage errors here
 PERSONAS_UPDATED = "personas updated for {names}: read at their next session start"
 SETUP_FLAGS = ("--divisions", "--custom", "--setup-file", "--stage", "--aliases", "--wake")
-SETUP_ASK = ('read the report at report: and tell the owner, in their language, what was set up and the "Any time" '
-             "list as short lines: translate every line, keep the numbers and the quoted owner words; then ask for "
-             "the first request")
-SETUP_REPORT = "SETUP.md"
 CLOSED = "the window that ran init was closed"
 NOT_CLOSED = "could not close the window that ran init: {why}"
 ORCHE_PANES = ("main-", "div-", "feat-")
 BASE_NAME = re.compile(r"^(?!origin/)(?!.*\.\.)(?!.*//)(?!.*\.lock$)[A-Za-z0-9][A-Za-z0-9._/-]*(?<![./])$")
 PREFIX_NAME = re.compile(r"^[a-z][a-z0-9-]*$")
 ISSUES_NAME = re.compile(r"^[A-Z][A-Z0-9]*$")
-PUBLISH_KEYS = ("base", "branch_prefix", "issues")
 VISIBILITY = ("private", "public", "local")
 SPECIALISTS = ("Build's workers are specialists: front (screens, client code, the app's look and interaction), back "
                "(API, data, services, jobs), infra (deploy, CI, environments, secrets, cost). The head names each worker "
                "by its area (front-<topic>, back-<topic>, infra-<topic>), scopes it to that area, and splits a unit "
                "that spans two areas into two workers.")
-PRESET_LINES = {"build": "- Preset: build-focused (Build's workers specialise in front, back and infra).",
-                "operations": "- Preset: operations."}
-
-
 def register(subparsers):
     p = subparsers.add_parser("init", help="register an Orca repo as a project and onboard its divisions")
     p.add_argument("repo", nargs="?", default=None,
@@ -133,7 +125,7 @@ def _publish_error(args):
 def _detect(args, key, root) -> list:
     """The repository's team conventions (detect.conventions) into `publish.per_project.<key>`, each key only
     while it is unset there and no flag of this run names it (never over a flag or an earlier detection). Returns
-    every key whose value now equals the detected one (none a flag of this run names), in PUBLISH_KEYS order,
+    every key whose value now equals the detected one (none a flag of this run names), in publish.PROJECT_KEYS order,
     plus `entire` when the repository uses Entire (read live, never stored) and `team` when it declares a team
     plugin (kept on the registry entry by _save_team). A dry run reads nothing."""
     from . import detect
@@ -141,31 +133,24 @@ def _detect(args, key, root) -> list:
         return []
     found = detect.conventions(root, key, config.load())
     have = ((config.load().get("publish") or {}).get("per_project") or {}).get(key) or {}
-    values = {k: found[k] for k in PUBLISH_KEYS
+    values = {k: found[k] for k in publish.PROJECT_KEYS
               if k in found and have.get(k) in (None, "") and getattr(args, k, None) is None}
     if values:
         config.set_project("publish", key, **values)
     now = {**have, **values}
-    same = [k for k in PUBLISH_KEYS if k in found and now.get(k) == found[k] and getattr(args, k, None) is None]
+    same = [k for k in publish.PROJECT_KEYS if k in found and now.get(k) == found[k] and getattr(args, k, None) is None]
     return same + (["entire"] if found.get("entire") else []) + (["team"] if found.get("team") else [])
 
 
 def _set_publish(args, key) -> None:
     """--base / --branch-prefix / --issues into `publish.per_project.<key>` (a dry run only prints)."""
-    values = {k: getattr(args, k) for k in PUBLISH_KEYS if getattr(args, k) is not None}
+    values = {k: getattr(args, k) for k in publish.PROJECT_KEYS if getattr(args, k) is not None}
     if not values:
         return
     if args.dry_run:
         dry(f"set publish.per_project.{key}: " + ", ".join(f"{k} {v}" for k, v in values.items()))
     else:
         config.set_project("publish", key, **values)
-
-
-def _publish_facts(key) -> dict:
-    """The project's {base, branch_prefix, issues} as config names them (None: not set)."""
-    from . import publish
-    s = publish.settings(config.load(), key)
-    return {k: s.get(k) for k in PUBLISH_KEYS}
 
 
 def _setup_flags(args) -> list:
@@ -233,10 +218,10 @@ def _refresh(args, reg) -> int:
     restart = [] if dry_run else ([proj["main_session"]] if stamped and proj.get("main_session") else []) + ref.restart
     data = {"project": key, "path": root, "dry_run": dry_run, "refreshed": [str(p) for p in refreshed],
             "kept": [{"path": str(p), "why": w} for p, w in ref.kept], "restart": restart,
-            "setup_report": str(report) if report else None, "publish": _publish_facts(key), "merge_queue": gate}
+            "setup_report": str(report) if report else None, "publish": publish.project_facts(key), "merge_queue": gate}
     lines = [f"{'would refresh' if dry_run else 'refreshed'} {key}: "
              + (f"{len(refreshed)} file(s)" if refreshed else "already current")]
-    lines += [f"kept {_tilde(Path(p))}: {why}" for p, why in ref.kept] + gate_lines
+    lines += [f"kept {paths.tilde(Path(p))}: {why}" for p, why in ref.kept] + gate_lines
     if restart:
         lines.append(PERSONAS_UPDATED.format(names=", ".join(restart)))
     out(args, data, lines)
@@ -274,9 +259,9 @@ def _merge_queue(reg, key, root, lines):
 
 
 def _report(reg, key, root, intake_line=None, detected=(), **kw):
-    """write_report, best effort: a failure is one warning, never a failed init."""
+    """guide.write_report, best effort: a failure is one warning, never a failed init."""
     try:
-        return write_report(reg, key, root, intake_line, detected, **kw)
+        return guide.write_report(reg, key, root, intake_line, detected, **kw)
     except (OSError, util.JsonError) as exc:
         warn(f"setup report not written: {exc}")
         return None
@@ -416,140 +401,6 @@ def _init_window(root):
     if len(found) != 1:
         return None, None, f"{len(found)} windows open on this folder" if found else "no window found"
     return found[0].get("handle"), found[0].get("title"), None
-
-
-def _setup_note(proj, key, intake_line, window_line) -> str:
-    """The setup result Main reports to the owner: at most five lines (`inbox.MAX_LINES`); the pointer's
-    `report_path` is the setup report."""
-    count, names, where = _divisions_text(proj)
-    lines = [f"setup done: {key} registered with {count} divisions: {names}",
-             intake_line or "intake: off",
-             f"workspaces: {where}; nothing is committed to the repository",
-             window_line, SETUP_ASK]
-    return "\n".join(line for line in lines if line)
-
-
-def _divisions_text(proj):
-    """(count, `names (model); …` grouped by model, the workspaces folder or "none")."""
-    groups = {}
-    for name in registry.divisions_of(proj):
-        groups.setdefault((proj["divisions"].get(name) or {}).get("model") or "default", []).append(name)
-    names = "; ".join(f"{', '.join(sorted(n))} ({m})" for m, n in groups.items())
-    trees = [units.worktree_path(d["worktree"]) for d in proj["divisions"].values() if d.get("worktree")]
-    where = f"{_tilde(Path(trees[0]).parent)}/div-<division>" if trees else "none"
-    return sum(len(n) for n in groups.values()), names, where
-
-
-def _intake_text(key, root, intake_line):
-    """What the intake did, in plain words: it read the repository (this run or an earlier one, from the
-    stamp), else why it was skipped and what to say to run it."""
-    skipped = intake_line and intake_line.startswith(("intake skipped: ", "intake interrupted"))
-    stamp = None if skipped else intake.read_stamp(root)
-    if stamp:
-        cost = stamp.get("cost_usd")
-        money = f"${cost:.2f}" if isinstance(cost, (int, float)) else "$?"
-        return ("read the repository once and wrote the project card and the division charters "
-                f"({stamp.get('model')}, {money}, {int(round(stamp.get('duration_s') or 0))} s).")
-    why = ("interrupted" if intake_line.startswith("intake interrupted") else
-           intake_line[len("intake skipped: "):].rsplit("; run `orche intake", 1)[0]) if skipped else "not run"
-    return (f'skipped ({why}); say "run the intake" once there is code to read; Main runs `orche intake {key}`.')
-
-
-def _running_lines(reg, key, root, cfg, gate=None) -> list:
-    """The setup report's "Running now": what works without the owner, with this machine's real values; the
-    merge queue's state from `gate` (verifygate.ensure) when this run has one, else read locally."""
-    from . import guide, janitor, publish, queue, reconcile, verifygate
-    rec = reconcile.settings(cfg)
-    beat = (f"every {reconcile.every_s(rec)} s (the reconcile job): wakes Main and the divisions when work waits"
-            if rec.get("enabled", True) else "off (reconcile.enabled false); Main and the divisions wake only "
-            "when you write")
-    st = {**janitor.DEFAULTS, **(cfg.get("janitor") or {})}
-    jan_on, _ = guide.janitor_line(cfg)
-    jan = (f"daily (the heartbeat starts it when the last pass is a day old); moves retired units' workspaces, and build caches of units idle for "
-           f"{st['idle_days']} days, to a trash it empties after {st['trash_days']} days; touches nothing in the "
-           "repository" if jan_on else 'off; say "let the janitor clean up" (listed below)')
-    git = (Path(root) / ".git").exists()
-    base, ok = publish.gate(root, cfg, key) if git else (None, False)
-    if gate is not None:
-        state = verifygate.running(gate)
-    elif ok:
-        state = "on"
-    elif not git:
-        state = "waiting; the check script could not be pushed (the project folder is not a git repository)"
-    elif verifygate.pending(root):
-        state = f"waiting for {verifygate.awaiting(reg['projects'].get(key))} to be merged"
-    else:
-        state = f'waiting; no check script on {base or "the base branch"} and no PR'
-    lands = ("lands it by itself when that passes" if queue.land_mode(cfg, key, reg) == "auto"
-             else 'lands it when you say "merge"')
-    jev_on, _ = guide.jev_line(cfg)
-    plugin = registry.team(reg, key)
-    team = []
-    if plugin:
-        from .hr import panes
-        installed = "yes" if panes.plugin_install_path(plugin) is not None else 'no, say "install the team plugin"'
-        team = [f"- Team: plugin {plugin} (installed for you: {installed}). Push, pull request and merge wait for "
-                'your word: "push <unit>" and "merge <PR>"; the team\'s rules reach every ORCHE session.']
-    return [*team, f"- Heartbeat: {beat}.",
-            f"- Janitor: {jan}.",
-            f"- Merge queue: on when the repository has scripts/verify/ci.sh on {base or 'its base branch'} (runs "
-            f"that script on each approved PR; {lands}); this project: {state}.",
-            "- Jev: " + ("on: sorts incoming requests and checks gates before Main spends tokens." if jev_on
-                         else 'off; say "turn on Jev" (listed below).'),
-            "- Notifications: Orca shows one when Main finishes a reply; ORCHE reminds you after 30 minutes when a "
-            "decision still waits."]
-
-
-def _team_lines(key, root, detected) -> list:
-    """The setup report's team-convention lines: what this run read from the repository, the PR line (only
-    the parts config sets), Entire when the repository uses it, and Linear when Orca lacks the issues team."""
-    from . import detect
-    facts = _publish_facts(key)
-    lines = [f"- Read the repository's team conventions: {', '.join(detected)}."] if detected else []
-    parts = ([f"base {facts['base']}"] if facts["base"] else []) \
-        + ([f"branches {facts['branch_prefix']}/<name>"] if facts["branch_prefix"] else []) \
-        + ([f"issues {facts['issues']}-<N> (name the worker {facts['issues'].lower()}-<N>-<topic>)"]
-           if facts["issues"] else [])
-    lines += [f"- Pull requests: {', '.join(parts)}."] if parts else []
-    if detect.uses_entire(root):
-        lines.append("- Entire: on in this repository; worker commits are linked to their session "
-                     "(commit_linking always in .entire/settings.local.json).")
-    if facts["issues"] and facts["issues"] not in orca.linear_teams():
-        lines.append(f"- Linear: Orca is not connected to the {facts['issues']} team; connect it in Orca to link "
-                     "worktrees to issues (the PR's Fixes line moves the issue either way).")
-    return lines
-
-
-def write_report(reg, key, root, intake_line=None, detected=(), created=(), gate=None) -> Path:
-    """`<root>/.orche/SETUP.md`, the setup report Main gives the owner (untracked: `info/exclude`); `created`:
-    the lines of a repository `--new` made (_created_lines); `gate`: this run's verifygate.ensure answer."""
-    from . import guide
-    proj, cfg = reg["projects"][key], config.load()
-    count, names, where = _divisions_text(proj)
-    most, preset = guide.parallel(cfg, reg)
-    path = paths.project_local(root) / SETUP_REPORT
-    text = "\n".join([f"# ORCHE is set up: {key}", "", *created,
-                      f"- Divisions: {names or 'none'}",
-                      *([PRESET_LINES[proj["preset"]]] if proj.get("preset") in PRESET_LINES else []),
-                      f"- Agents: {count} division agent{'' if count == 1 else 's'}, one Orca tab each, always on. Each unit of work adds one "
-                      f"worker while it runs; up to {most} run at once ({preset}).",
-                      f"- Workspaces: {where}; nothing is committed to the repository; ORCHE's own files are "
-                      "excluded from git",
-                      f"- Intake: {_intake_text(key, root, intake_line)}", *_team_lines(key, root, detected),
-                      f"- Talk to Main in the {proj.get('main_session') or 'main-' + key} tab, in any language. "
-                      "Main plans and decides; divisions do the work; you only get decisions.",
-                      "", "## Running now", "", *_running_lines(reg, key, root, cfg, gate),
-                      "", "## Any time", "",
-                      *guide.lines(cfg, reg, key), "",
-                      'Say "what else can ORCHE do?" to see this list again (Main runs `orche doctor`).', ""])
-    util.atomic_write(path, text)
-    return path
-
-
-def _tilde(path: Path) -> str:
-    home = str(Path.home())
-    text = str(path)
-    return "~" + text[len(home):] if text == home or text.startswith(home + os.sep) else text
 
 
 def _link_card(key, repo_root, *, dry_run):
@@ -933,13 +784,13 @@ def cmd_init(args):
     _set_publish(args, key)
     link, linked = _link_card(key, root, dry_run=dry_run)
     try:
-        proj, panes = hr.onboard_project(reg, key, setup, plan, repo_id=repo["id"], root=root, card=_tilde(link),
+        proj, panes = hr.onboard_project(reg, key, setup, plan, repo_id=repo["id"], root=root, card=paths.tilde(link),
                                          dry_run=dry_run, models=setup.get("models"))
     except hr.Refused as exc:
         return fail(exc.code, exc.msg)
     _apply_preset(reg, key, setup, dry_run)
     ts = time.strftime("%Y%m%dT%H%M%S")
-    try:   # re-render the ORCHE-owned files of the registered units (design §15.2)
+    try:   # re-render the ORCHE-owned files of the registered units
         ref = hr.refresh_project(reg, key, root=root, ts=ts, dry_run=dry_run)
     except onboarding.UnsafeTarget as exc:
         return fail(EXIT_BLOCKED, f"init {key} stopped: {exc} (re-run orche init {key} to resume)")
@@ -967,7 +818,7 @@ def cmd_init(args):
             "card": proj["card"], "summary": summary, "added_to_orca": bool(added) and not dry_run,
             "refreshed": [str(p) for p in refreshed], "kept": [{"path": str(p), "why": w} for p, w in kept],
             "rendered_by": {"before": before, "now": __version__} if upgraded else None, "restart": restart,
-            "publish": _publish_facts(key), "new_repository": created}
+            "publish": publish.project_facts(key), "new_repository": created}
     lines = new_lines + ([f"would add {added} to Orca (orca repo add --path {added})" if dry_run else
                           f"added {added} to Orca"] if added else [])
     if renamed:
@@ -982,10 +833,10 @@ def cmd_init(args):
     lines.append(f"panes: {', '.join(panes) if panes else 'main already open'}")
     lines.append(f"card: {proj['card']}")
     lines.append("automations: " + ("created" if live else "printed only (above); re-run with --automations"))
-    lines += [f"{'would refresh' if dry_run else 'refreshed'} {_tilde(Path(p))}" for p in refreshed]
-    lines += [f"kept {_tilde(Path(p))}: {why}" for p, why in kept]
+    lines += [f"{'would refresh' if dry_run else 'refreshed'} {paths.tilde(Path(p))}" for p in refreshed]
+    lines += [f"kept {paths.tilde(Path(p))}: {why}" for p, why in kept]
     if not dry_run and backups.is_dir():
-        lines.append(f"backups: {_tilde(backups)}")
+        lines.append(f"backups: {paths.tilde(backups)}")
     if upgraded:
         lines.append(f"rendered by {before or 'an earlier version'}, now {__version__}")
     if not dry_run:
@@ -997,7 +848,7 @@ def cmd_init(args):
     if intake_line:
         lines.append(intake_line)
     first = existing is None
-    closing = first and getattr(args, "close_window", True)   # off when init runs inside setup/apply-all
+    closing = first
     data["closed_window"], data["setup_note"], handle = None, False, None
     report = None if dry_run or key not in reg["projects"] else _report(reg, key, root, intake_line, detected,
                                                                          created=_created_lines(created), gate=gate)
@@ -1019,7 +870,7 @@ def cmd_init(args):
             title = proj["main_session"]
             try:
                 inbox.post(inbox.make(title, "orche", title, "info", urgent=True, report_path=str(report or ""),
-                                      summary=_setup_note(proj, key, intake_line, window_line)))
+                                      summary=guide.setup_note(proj, key, intake_line, window_line)))
                 data["setup_note"] = True
             except OSError as exc:   # Main still has the card
                 warn(f"setup note not posted to {title}: {exc}")
@@ -1049,7 +900,7 @@ def cmd_init(args):
 def _first_pass_if_protected(root) -> int:
     """A project registered under a protected folder (macOS privacy) while the heartbeat job is
     loaded: the install's first-pass check, so the owner gets the same guidance now rather than a
-    silent job later. Human output only (apply-all's --json inits never wait)."""
+    silent job later. Human output only (a --json init never waits)."""
     from . import privacy, units
     from .install import launchd
     if not privacy.protected(root) or not launchd.job_loaded():

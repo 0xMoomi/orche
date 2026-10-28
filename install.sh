@@ -5,8 +5,8 @@
 #   bash install.sh [options]          # from a clone: that clone is used as is
 #
 # Steps, in order: OS gate, requirements (git, Python 3.11+, claude, orca), clone or update
-# ORCHE_DIR, PATH line in the login profile, `orche install`, the Claude Code plugin (or the settings.json hooks), optionally
-# `orche apply-all`, then `orche doctor` and a short summary.
+# ORCHE_DIR, PATH line in the login profile, `orche install`, the Claude Code plugin (or the settings.json hooks),
+# then `orche doctor` and a short summary.
 # Safe to re-run: a second run updates the clone and changes nothing else that is already in place.
 # No sudo, no eval. Exit codes: 0 done, 1 user/environment problem, 2 unexpected failure.
 #
@@ -38,9 +38,6 @@ Options:
   --ref REF        branch or tag to install (default: main)
   --mode MODE      plugin (default): hooks via the Claude Code plugin;
                    settings: hooks registered in ~/.claude/settings.json instead
-  --all-projects   afterwards run `orche apply-all` (init every Orca repo not registered yet,
-                   without the paid intake: run `orche intake <proj>` per project afterwards);
-                   without it, apply ORCHE per project with `orche init <project>`
   --no-jev         do not ask for the optional Jev key (add it later: orche jev setup)
   --yes            ask nothing (implies --no-jev)
   --no-profile     do not touch your login profile (print the PATH line instead)
@@ -336,19 +333,6 @@ plugin_failed() {
   "$ORCHE_DIR/bin/orche" install --mode settings --no-jev </dev/null || die "orche install --mode settings reported errors (above)"
 }
 
-apply_all() {
-  if [ "$ALL_PROJECTS" = 0 ]; then
-    return 0
-  fi
-  if [ "$DRY_RUN" = 1 ]; then
-    step "would run: orche apply-all (init every Orca repo not registered yet; no intake)"
-    return 0
-  fi
-  step "orche apply-all"
-  "$ORCHE_DIR/bin/orche" apply-all </dev/null ||
-    warn "orche apply-all did not finish (above); ORCHE is installed: run \`orche apply-all\` again once Orca is running"
-}
-
 doctor() {
   if [ "$DRY_RUN" = 1 ]; then
     step "would run: orche doctor"
@@ -392,7 +376,7 @@ summary() {
 
 parse_args() {
   DIR_ARG=""; REF=main; SOURCE=$ORCHE_REPO_URL; MODE=plugin
-  ALL_PROJECTS=0; DRY_RUN=0; YES=0; NO_JEV=0; NO_PROFILE=0
+  DRY_RUN=0; YES=0; NO_JEV=0; NO_PROFILE=0
   while [ $# -gt 0 ]; do
     case $1 in
       --dir) [ $# -ge 2 ] || die "--dir needs a path"; DIR_ARG=$2; shift ;;
@@ -403,7 +387,6 @@ parse_args() {
       --source=*) SOURCE=${1#*=} ;;
       --mode) [ $# -ge 2 ] || die "--mode needs plugin or settings"; MODE=$2; shift ;;
       --mode=*) MODE=${1#*=} ;;
-      --all-projects) ALL_PROJECTS=1 ;;
       --dry-run) DRY_RUN=1 ;;
       --yes | -y) YES=1 ;;
       --no-jev) NO_JEV=1 ;;
@@ -457,7 +440,6 @@ main() {
   setup_path
   orche_install
   plugin_step
-  apply_all
   doctor
   summary
 }

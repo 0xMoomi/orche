@@ -1,4 +1,4 @@
-"""The merge queue's files (design §4.1), private to the queue package (the others read queue.summary):
+"""The merge queue's files, private to the queue package (the others read queue.summary):
 ORCHE_HOME/queue/<p>/queue.json, read-modify-written under an exclusive flock of queue/<p>/.lock and written atomically (util.write_json), and log.jsonl, one
 O_APPEND line per event. Only waiting/testing entries live in queue.json; one entry per PR."""
 import fcntl

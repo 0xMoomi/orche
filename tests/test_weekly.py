@@ -1,4 +1,4 @@
-"""c80: the janitor's weekly pass (lib/orche/janitor/weekly.py): once per 7 days, the audit's new mistake
+"""The janitor's weekly pass (lib/orche/janitor/weekly.py): once per 7 days, the audit's new mistake
 classes into STANDING.md with one pointer to Main, and one verify-skill drift unit to Build per project."""
 import datetime as dt
 import re

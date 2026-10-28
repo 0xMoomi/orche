@@ -263,7 +263,7 @@ class InitTest(HrCase):
         self.assertEqual(reg["projects"]["shopfront"]["divisions"]["build"]["session"], "div-shopfront-build")
 
     def test_registry_match_without_orca_repo_does_not_fall_through(self):
-        """Review M-1: alias "acme shop" belongs to `shopfront`, whose repo Orca no longer lists; the
+        """M-1: alias "acme shop" belongs to `shopfront`, whose repo Orca no longer lists; the
         Orca repo displayed as "Acme Shop" must not be onboarded in its place."""
         reg = registry.empty()
         reg["projects"]["shopfront"] = {"repo_id": "repo-gone", "path": str(self.home / "gone"),
@@ -1175,7 +1175,7 @@ class FeatSleepWakeTest(FeatCase):
         self.assertEqual((code, out), (0, "feat-acme-shop-search active\n"))
         pane = self.orca_calls("terminal create")[0]
         self.assertEqual(pane[pane.index("--command") + 1], f"{PANE}ORCHE_SESSION=feat-acme-shop-search claude --permission-mode bypassPermissions --name feat-acme-shop-search")
-        code, _, err = self.orche("feat", "sleep", "acme", "search")
+        code, _, err = self.orche("sleep", "feat-acme-shop-search")
         self.assertEqual(code, 3)
         self.assertIn("HANDOFF.md is stale (missing:", err)
         self.assertEqual(self.orche("feat", "wake", "acme", "nope")[0], 2)
@@ -1325,7 +1325,7 @@ class FeatRetireTest(FeatCase):
         code, out, err = self.orche("--dry-run", "feat", "retire", "acme", "checkout")
         self.assertEqual(code, 3)
         self.assertIn("[dry-run] check no Orca pane is titled feat-acme-shop-checkout", err)
-        self.assertIn("pane open — run `orche feat sleep acme-shop checkout` first", err)
+        self.assertIn("pane open — run `orche sleep feat-acme-shop-checkout` first", err)
         code, _, err = self.orche("feat", "retire", "acme", "checkout", "--yes")
         self.assertEqual(code, 3)
         self.assertEqual((self.tags(), self.calls), ([], []))
@@ -1811,7 +1811,7 @@ class CorrectTest(FeatCase):
 
 
 class MistakesTest(FeatCase):
-    """c79: `orche hr audit <project>` mines mistake classes from head-review returns, queue returns and
+    """`orche hr audit <project>` mines mistake classes from head-review returns, queue returns and
     reverts, and `--apply` keeps the Enforcement table of STANDING.md."""
 
     def review(self, pr, unit, *lines, days=3):
@@ -1989,7 +1989,7 @@ class ModelsTest(HrCase):
         self.assertEqual(self.init("--wake", "build")[0], 0)
         self.assertEqual(self.orche("feat", "new", "acme-shop", "checkout", "--scope", "src/c/**",
                                     "--reason", "r")[0], 0)
-        self.assertEqual(self.orche("feat", "sleep", "acme-shop", "checkout")[0], 0)
+        self.assertEqual(self.orche("sleep", "feat-acme-shop-checkout")[0], 0)
         self._on_codex("research")
         code, _, err = self.orche("wake", "div-acme-shop-research")
         self.assertEqual(code, 3, err)
@@ -2025,7 +2025,7 @@ if __name__ == "__main__":
 
 
 class HrAddModelTest(HrCase):
-    """`orche hr add`, `hr model`, `hr choices` (design 2026-10-23 §3.1, §3.2, §10)."""
+    """`orche hr add`, `hr model`, `hr choices`."""
     OK = None
 
     def setUp(self):

@@ -1,11 +1,11 @@
-"""Run history (C10 T6): `ORCHE_HOME/runs/<p>/history.jsonl`, one line per RUN.json written (job,
+"""Run history: `ORCHE_HOME/runs/<p>/history.jsonl`, one line per RUN.json written (job,
 `unrun`, `lost`), each one O_APPEND write:
 `{unit, rev, to, model, vendor, effort, status, stop_reason, cost_usd, num_turns, started, finished, kind}`;
 a run with an escalation writes one line per attempt (`kind` work / escalation; ladder.py).
 Readers: the spend cap (G4) and the run cap (G5) in flow.guard. A corrupt line is skipped.
 
 A run whose worker started but left no cost figure (killed, timed out, crashed, Codex without a
-completed turn, lost) records a reservation instead of nothing (reserve(), design C11 §7.3), so G4
+completed turn, lost) records a reservation instead of nothing (reserve()), so G4
 counts it; a run that never started its worker (busy, duplicate, stopped before start, exit 127, a
 Codex that printed no event) records no cost."""
 import json

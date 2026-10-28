@@ -1,4 +1,4 @@
-"""Every `codex exec` ORCHE starts (design C11 §5.2-5.6, §7.2, Appendix A.1): one call shape, one
+"""Every `codex exec` ORCHE starts: one call shape, one
 environment rule, the process lifecycle of headless.spawn(), one JSONL parser, one cost estimate.
 
 argv() and env() have no side effects: what a dry run prints is what runs. run() starts the call,
@@ -83,7 +83,7 @@ def env(call: Call, cfg: dict) -> dict:
 _MALFORMED = set()   # price keys already logged as malformed (once per process)
 
 
-def _price(prices, key):
+def price_row(prices, key):
     """models.prices[key] as three floats; None when missing or malformed (logged once per key)."""
     entry = prices.get(key) if isinstance(prices, dict) else None
     if entry is None:
@@ -105,7 +105,7 @@ def cost(usage, model: str, cfg: dict):
         return None
     prices = (cfg.get("models") or {}).get("prices") or {}
     model_id = model[6:] if model.startswith("codex:") else ""
-    price = (_price(prices, model_id) if model_id else None) or _price(prices, "codex")
+    price = (price_row(prices, model_id) if model_id else None) or price_row(prices, "codex")
     if not price:
         return None
     p_in, p_cached, p_out = price

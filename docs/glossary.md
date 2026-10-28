@@ -76,7 +76,7 @@ _Avoid_: requester, by (those are field names).
 A member's folder for STATUS.md, HANDOFF.md and DECISIONS.tsv: `.orche/` (Main), `<worktree>/.orche/<div|feat>/<name>/` (division, feature).
 
 **Unit**:
-One dispatched piece of work with a brief, a report and (for code) a ledger row, named `<proj>-<slug>-<yyyymmdd>-<n>` (SPEC §16).
+One dispatched piece of work with a brief, a report and (for code) a ledger row, named `<proj>-<slug>-<yyyymmdd>-<n>`.
 _Avoid_: unit for a division or feature agent (say member); the old `units.Unit` type meant that.
 
 **Headless call**:
@@ -364,6 +364,70 @@ A named set of caps (`default`, `20`, `30`) applied with `orche hr scale`.
 `<project>/.orche/SETUP.md`, written by `orche init` (and `--refresh`): "ORCHE is set up", what was made, and the "Any time" list of optional features with the owner words that switch each on (`lib/orche/guide.py`). Main reports it after the first setup; `orche doctor` ends with the same list.
 _Avoid_: setup note (that is the five-line pointer to Main), onboarding summary.
 
+**Main**: Per-project orchestrator session; decides, never codes
+
+**Division**: Long-lived role session with its own worktree: R&D, Research, Build, GTM, Ops
+
+**HR**: The one module (`lib/orche/hr/`) that performs every unit transition and alone writes the registry; also the `hr` agent that runs its commands
+
+**Transition**: A change of a unit's or project's registry record (§14.12)
+
+**HR record**: Event, registry save, HR-log line, status line, notification, in that order
+
+**Awake limit**: `limits.max_awake_sessions`; active divisions and features count, Main does not
+
+**Stage gate**: Ops stays dormant while the project is `building`
+
+**Revision (rev)**: The number on a brief's first line; each AMEND writes the next one and keeps every revision
+
+**STANDING.md**: Numbered standing orders auto-prepended to every brief
+
+**Inbox pointer**: Small JSON written by a worker on completion; references the report file
+
+**Drain**: Injecting pending inbox pointers at the recipient's next prompt; held notes wait for a drain trigger (R-INBOX-2/3)
+
+**Ledger**: `ORCHE_HOME/ledger/<proj>.tsv` (exported to `docs/LEDGER.tsv`); PR + SHA + verdict rows defining completion
+
+**Verdict**: `live-ui-verified`, `unit-test-verified`, `type-check-only`, `verifier-blocked`, `verifier-failed`
+
+**Rubric**: Per-repo grading criteria used by the separate-context grader
+
+**Memory-save ritual**: Updating STATUS.md and DECISIONS.tsv (and HANDOFF.md) before a unit-end `/clear`
+
+**HANDOFF.md**: Fixed-section note that a resumed session treats as authoritative
+
+**TIER**: `mechanical` / `standard` / `hard`; routes the executor and effort (§4.8); a headless unit worker keeps its registry model and takes effort only (§14.10)
+
+**Finish predicate**: Script that exits 0 when an autonomous run is done
+
+**Escape hatch**: Condition under which an autonomous run stops and reports
+
+**Always-pause**: Actions that always need user approval
+
+**Status card**: Main's report to the owner: one-line outcome, then a fenced card of at most 6 lines with labels in the owner's language and fixed glyphs (⛔ owner action first, 🟢 done · 🟡 verifying · 🔴 failed · ⏸ held counts from this wake's reports, ▶ running, ❓ decision with recommendation and default, ➡ next, 🔗 pointers), then the closing line to the owner; dispatch runs through `orche dispatch` during the turn
+
+**Stage**: `building` or `public`; gates the Ops division
+
+**Project card**: `PROJECT_CARD.md`, ≤2K-token summary for other projects
+
+**Keymaster**: Model-free secrets broker (`orche secret`)
+
+**Janitor**: State-based cleanup tool (`orche janitor`)
+
+**GRAVEYARD**: Ledger of removed things with restore locations
+
+**Jev**: External typed-decision model (Choice/Score/Noul) used only for gating
+
+**Orca**: Desktop multi-agent manager: repos, worktrees, terminals, orchestration mail, automations
+
+**Dormant**: Role exists in registry with no running panel; costs nothing (never started)
+
+**Paused**: Role was put to sleep; its session resumes with `orche wake`
+
+**Onboarding**: Worktree exists but onboarding has not finished; re-running the command resumes it
+
+**Retired**: Role removed; worktree gone; session archived
+
 ## Relationships
 
 - A project has one Main, divisions and (under their heads) workers; each is a **Member**. The **Liaison** is a *sealed* **Headless call**, not a Member.
@@ -379,16 +443,3 @@ _Avoid_: setup note (that is the five-line pointer to Main), onboarding summary.
 - A **Unit** has zero or more **Runs**; each holds one **Run slot** through its **Run lock** and leaves one pointer and one **Run record**.
 - A **STOP marker** stops the Run of its unit that was requested before it.
 - A **Lost run** is filed from its Run lock and may leave a **Pending sweep**.
-
-## Flagged ambiguities
-
-- "unit" meant both dispatched work (SPEC §16) and a division/feature agent (`units.Unit`): unit = dispatched work; agents are members.
-- "unknown session" meant both unidentified and unregistered: two terms now.
-- "runner" meant both `orche run` and the claude it starts. Now the runner is `orche run`, and the claude it starts is the unit worker.
-- "run id" (a lock field) and the worker's `ORCHE_RUN_ID` are the same value: the run tag.
-- "brief" meant both the fenced block and the stored file (SPEC §16): Dispatch block vs Brief. Since Unreleased a fenced block in a reply is plain text; only `orche dispatch` sends.
-- "rev" (`rev:`, `brief_rev`, `AMEND … rev N`) is always a Revision number; the N in an AMEND is the author's guess, the written number is prior + 1.
-- "completion gate", "done gate" and "ledger gate" named one thing in three places: it is the Done gate, and the ledger row is one of its checks.
-- "gated" meant both the ledger gate (`gated_sender`) and the stage gate (`gated_by_stage`): say ledger-gated member.
-- "run" is the noun (one execution), `orche run` the command (the runner), `lib/orche/runs/` the module; the old runner module is gone.
-- "liaison" meant a pane and session (until 0.4.0); now it is the headless role only.

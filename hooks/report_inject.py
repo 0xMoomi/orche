@@ -69,7 +69,7 @@ def main():
         if outcome.block is not None:
             print(json.dumps(outcome.block, ensure_ascii=False))
             if who.session:
-                inbox.unmark(who.session)  # every prompt removes the wake marker (design §4.6)
+                inbox.unmark(who.session)  # every prompt removes the wake marker
                 inbox.rearm(who.session)   # Main spends no turn: pending reports still need their wake
             _kick()
             return 0

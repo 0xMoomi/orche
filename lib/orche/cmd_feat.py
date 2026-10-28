@@ -1,4 +1,4 @@
-"""`orche feat new|sleep|wake|retire <proj> <name>` — feature-agent lifecycle under a division's head
+"""`orche feat new|wake|retire <proj> <name>` — feature-agent lifecycle under a division's head
 (the caller's division, `--by` or $ORCHE_SESSION; Main and the owner staff build; a worker cannot).
 
 new:    session `feat-<proj>-<name>` free registry-wide (hr.session_owner; else exit 1) ->
@@ -8,15 +8,16 @@ new:    session `feat-<proj>-<name>` free registry-wide (hr.session_owner; else 
         settings, persona -> pane -> registry entry + `create` event -> notify, hr-log,
         status line, Orca unread dot. A provisional `onboarding` entry is saved as soon as the
         worktree exists; re-running `feat new` resumes it without a second worktree.
-sleep/wake: the `orche sleep|wake` flow (hr.sleep / hr.wake through cmd_sleep_wake.run).
+wake: the `orche wake` flow (hr.wake through hr.run_verb); a feature agent sleeps with
+      `orche sleep feat-<proj>-<name>`.
 retire: hr.retire (hr/retire.py).
 """
-from . import cmd_sleep_wake, hr, registry, roster
+from . import hr, registry, roster
 from .cli import EXIT_BLOCKED, EXIT_NOT_FOUND, EXIT_OK, EXIT_USER, fail, out
 
 
 def register(subparsers):
-    feat = subparsers.add_parser("feat", help="create, sleep, wake or retire a feature agent")
+    feat = subparsers.add_parser("feat", help="create, wake or retire a feature agent")
     sub = feat.add_subparsers(dest="feat_command", metavar="<feat-command>", required=True)
     p = sub.add_parser("new", help="create a feature agent under the calling division (else build)")
     p.add_argument("project")
@@ -27,8 +28,7 @@ def register(subparsers):
     p.add_argument("--batch-id", help="groups automatic creations from one request")
     p.add_argument("--strict", action="store_true", help="refuse (exit 3) on scope overlap")
     p.set_defaults(func=cmd_new)
-    for name, func, text in (("sleep", cmd_sleep, "pause a feature agent"),
-                             ("wake", cmd_wake, "resume a feature agent"),
+    for name, func, text in (("wake", cmd_wake, "resume a feature agent"),
                              ("retire", cmd_retire, "archive and remove a finished feature agent")):
         p = sub.add_parser(name, help=text)
         p.add_argument("project")
@@ -91,11 +91,7 @@ def _lifecycle_locked(args, verb):
     found, err = _project(reg, args.project)
     if found is None:
         return err
-    return cmd_sleep_wake.run(args, verb, hr.session_name("feat", found[0], args.name), reg)
-
-
-def cmd_sleep(args):
-    return _lifecycle(args, hr.sleep)
+    return hr.run_verb(args, verb, hr.session_name("feat", found[0], args.name), reg)
 
 
 def cmd_wake(args):

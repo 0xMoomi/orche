@@ -9,7 +9,6 @@ changes(cfg, reg, preset): [(key, old, new)] the preset would change ("limits.<k
 apply(preset, by, dry_run): write config keys and limits; returns (data, lines).
 """
 from . import config, registry, util
-from .hr import book
 
 CUSTOM = "custom"
 KEYS = ("runner.max_parallel", "runner.max_parallel_total", "runner.min_free_mb", "runner.queue_wait_s",
@@ -101,6 +100,7 @@ def apply(name, by, *, dry_run=False):
             if not k.startswith("limits."):
                 _put(raw, k, v)
         config.save(raw)
+        from .hr import book      # hr imports scale: loaded here, not at import
         limits = target(cfg, name)[1]
         book.record(reg, f"scale {name} by {by}", change=lambda r: r["limits"].update(limits), event={"type": "scale", "project": "*", "unit": "hr", "by": by},
                     note=f"HR scale {name}: {summary(cfg, name)}")
