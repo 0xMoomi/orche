@@ -190,7 +190,7 @@ def _join(hold, project, unit, stage, now) -> None:
 
 def repeats(project, unit) -> int:
     """The runs of `unit` a usage limit stopped since its last done pointer: its RUN.json `holds` (the
-    runner counts every held run, a resumed review or rework stage too; 0 without one)."""
+    runner counts every held run; 0 without one)."""
     from .. import brief, registry
     from ..runs import filing
     root = units.project_root(registry.load(), project)

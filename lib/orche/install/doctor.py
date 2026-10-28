@@ -282,7 +282,7 @@ def queue_rows(reg) -> list:
 
 
 def review_rows(cfg, reg) -> list:
-    """`review`: the cross-vendor mode, the reviewer of each writer vendor (the first of review.order of
+    """`review`: the cross-check on request, the reviewer of each writer vendor (the first of review.order of
     the other vendor), the Build review, pending Build reviews (review/build.py, when present)."""
     from .. import reconcile
     r = cfg.get("review") or {}
@@ -297,10 +297,11 @@ def review_rows(cfg, reg) -> list:
             pending += len(list(build.pending(key) or []))
         except Exception:  # noqa: BLE001 - a doctor row never fails the command
             continue
-    text = (f"{r.get('cross_vendor', 'required')} · claude → {other('claude')} · codex → {other(vendors.CODEX)} · "
+    text = (f"cross-check on request · claude → {other('claude')} · codex → {other(vendors.CODEX)} · "
             f"head review {'on' if r.get('build', True) else 'off'} · {pending} pending")
-    if shutil.which("codex") is None and r.get("cross_vendor", "required") != "off":
-        return [("WARN", "review", f"{text} — codex is not installed: Claude writers get the same-vendor fallback")]
+    if shutil.which("codex") is None:
+        return [("WARN", "review", f"{text}: codex is not installed: a requested cross-check runs on another "
+                                   "Claude model (same vendor)")]
     return [("OK", "review", text)]
 
 

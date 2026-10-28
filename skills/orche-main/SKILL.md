@@ -228,6 +228,7 @@ When an `orche` command refuses or fails, relay its line and stop; never redo it
 | Cost, usage, wake-ups | `orche metrics` | at most five plain lines |
 | A secret or key to hand over | `orche secret fill --project <p>` (the dialog) | the value never goes into chat |
 | Turn on or connect Jev | `orche jev setup` (its dialog asks for the key) | the probe result in one line |
+| "cross-check PR 12 with Codex" | `orche review --pr 12` | the verdict and its findings in plain words; nothing runs it by itself |
 | Automatic routing of simple requests on or off | `orche triage enable` / `orche triage disable` | one line |
 | Let the janitor clean up, or back to report-only | `orche janitor enable` / `orche janitor disable` | one line |
 | Usage limit, why did it stop | read the `paused … usage limit until …` line | when it resumes and the two ways to keep going (an API key, or Codex); never re-send briefs during a hold |

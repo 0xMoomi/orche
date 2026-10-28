@@ -1,28 +1,29 @@
-"""`orche review --pr N` — the reviews of an open PR before the merge queue (design §3.5, §3.8; R33).
+"""`orche review --pr N`: the cross-check of an open PR on request (design §3.5, §3.8; R-REVIEW-1, R33).
 
   orche review --pr N [--project <p>] [--unit <id>] [--background]
 
-For Build's own PRs (its fixes, its in-session subagents' work): the cross-vendor pre-review of the PR's
-head (one round, a ledger row of kind pre, so `orche queue add --pr N` finds it), then on PASS the
-headless head review — both PASS queue the PR; a pre-review RETURN prints its findings and exits 3
-(fix, push, review again); anything else wakes the Build pane. `--background` starts the same detached
-and tells the caller its pre-review verdict as a waking `review` pointer. A run's own PR is reviewed
-by the run, then (internally, `--wait`) by the head review alone.
+The request: Main runs it on the owner's words, Build on a change it doubts. One pre-review round of the
+PR's head (the two-vendor panel when both vendors are up, else a single reviewer of the other vendor; a
+ledger row of kind pre, so `orche queue add --pr N` finds it), then on PASS the headless head review;
+both PASS queue the PR. A pre-review RETURN prints its findings and exits 3 (fix, push, review again);
+anything else wakes the Build pane. `--background` starts the same detached and tells the caller its
+pre-review verdict as a waking `review` pointer. Nothing in ORCHE starts a cross-check by itself: after
+a publish the run and the heartbeat start the head review alone (internally, `--head`).
 """
 import argparse
 
 from . import cli, config, log, paths, procs, registry, roster
-from .review import build as _build, pre as _pre
+from .review import build as _build
 
 
 def register(subparsers):
-    p = subparsers.add_parser("review", help="the pre-review and the headless head review of an open PR",
+    p = subparsers.add_parser("review", help="cross-check an open PR on request (two vendors), then its head review",
                               description=__doc__.split("\n", 1)[1])
     p.add_argument("--pr", type=int, required=True, help="the PR number")
     p.add_argument("--project", help="the project (default: the calling session's)")
     p.add_argument("--unit", help="the unit whose brief the PR answers")
     p.add_argument("--background", action="store_true", help="start it detached and return")
-    p.add_argument("--wait", action="store_true", help=argparse.SUPPRESS)   # a run's head review (after_publish)
+    p.add_argument("--head", action="store_true", help=argparse.SUPPRESS)   # the head review alone (start())
     p.add_argument("--tell", help=argparse.SUPPRESS)                        # --background's caller
     p.set_defaults(func=run)
 
@@ -30,7 +31,6 @@ def register(subparsers):
 LINES = {"off": "head review is off (review.build: false)",
          "already": "PR #{pr} @{h7} was already reviewed",
          "busy": "PR #{pr} is under review now",
-         "waiting": "PR #{pr}: no pre-review yet at its head",
          "skipped": "PR #{pr}: pre-review {pre}; the pre-review path handles it",
          "held": "PR #{pr}: {vendor} usage limit: the head review runs after the hold (orche review --pr {pr} again)",
          "closed": "PR #{pr} is not open ({state})",
@@ -74,9 +74,8 @@ def run(args):
         return cli.EXIT_OK
     cfg = config.load()
     try:
-        if args.wait:
-            wait = float(_pre.TIMEOUT_S)
-            res = _build.build_review(project, args.pr, args.unit, wait_s=wait, reg=reg, cfg=cfg)
+        if args.head:
+            res = _build.build_review(project, args.pr, args.unit, reg=reg, cfg=cfg)
         else:
             res = _build.for_pr(project, args.pr, args.unit, tell=args.tell, reg=reg, cfg=cfg)
     except Exception as exc:   # noqa: BLE001 — a detached run's log is the only witness

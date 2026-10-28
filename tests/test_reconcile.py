@@ -1010,7 +1010,7 @@ class ScaleHeartbeatTest(RepairCase):
         self.assertEqual(claimed, [9, 11])                                # #7 is running; #9 may_start() refused
         self.assertEqual([a[a.index("--pr") + 1] for a in spawned if "review" in a], ["11"])
         argv = next(a for a in spawned if "review" in a)
-        self.assertEqual(argv[-5:], ["--project", "acme-shop", "--wait", "--unit", "u11"])
+        self.assertEqual(argv[-5:], ["--project", "acme-shop", "--head", "--unit", "u11"])
         self.assertIn("start the head review of acme-shop PR #11 (3 pending)", lines)
         self.assertTrue(any("action=build-review project=acme-shop target=pr-11" in e for e in self.events()))
 

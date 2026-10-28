@@ -10,7 +10,6 @@ import shutil
 
 from . import jev, jevkey, oauth, publish, scale
 from .install import launchd
-from .review import pre
 
 MAX_LINES = 12
 MAX_GATES = 2   # more projects without a gate share one line
@@ -38,15 +37,14 @@ def jev_line(cfg):
                      "On" if on else "Off", "turn on Jev", "Main runs `orche jev setup`")
 
 
-def codex_line(cfg):
-    """(on?, line): on when `codex` is on PATH and `review.cross_vendor` is not off."""
-    installed, mode = shutil.which("codex") is not None, pre.mode_of(cfg)
-    on = installed and mode != "off"
-    state = "On" if on else "Off: Codex is not installed" if not installed else "Off: cross-vendor review is off"
-    runs = ("ORCHE already uses it" if on else "Main sets `review.cross_vendor` to `required` in the config"
-            if installed else "you run `npm install -g @openai/codex` and `codex login`; ORCHE then uses it")
-    return on, _line("Codex cross-check", "a second AI vendor reviews each pull request before a person does", state,
-                     "cross-check PRs with Codex", runs)
+def codex_line():
+    """(on?, line): on when `codex` is on PATH; the cross-check runs only when asked."""
+    on = shutil.which("codex") is not None
+    state = "On: runs when you ask" if on else "Off: Codex is not installed"
+    runs = ("Main runs `orche review --pr 12`: Codex and Claude read the diff at once and only a defect both name "
+            "sends it back" if on else "you run `npm install -g @openai/codex` and `codex login`; ORCHE then uses it")
+    return on, _line("Codex cross-check", "a second AI vendor reviews a pull request when you ask", state,
+                     "cross-check PR 12 with Codex", runs)
 
 
 def token_line():
@@ -111,7 +109,7 @@ def lines(cfg, reg, home, project=None) -> list:
     """The "Any time" lines: off first, then on, then the always-present ones (<= MAX_LINES); the merge
     queue lines of `project` only when given (a project's setup report), of every project otherwise."""
     jev_state, janitor_state = jev_line(cfg), janitor_line(cfg, home)
-    states = [jev_state, codex_line(cfg), token_line(), janitor_state, scale_line(cfg, reg)]
+    states = [jev_state, codex_line(), token_line(), janitor_state, scale_line(cfg, reg)]
     states = [s for s in states if not (s[0] and s in (jev_state, janitor_state))]   # on: in Running now
     states += [(False, line) for line in gate_lines(cfg, reg, project)]
     off = [line for on, line in states if not on]

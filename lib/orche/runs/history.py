@@ -18,8 +18,8 @@ KEYS = ("unit", "rev", "to", "model", "vendor", "effort", "status", "stop_reason
         "started", "finished", "kind")
 # Not a run for G5: busy and held (never started the worker), usage_limit (the vendor refused it; §8.5)
 UNCOUNTED = ("busy", "held", "usage_limit")
-COUNTED = (None, "", "work")   # G5 counts a run's first attempt only: escalation, rework and review lines are
-                               # calls inside that run (G4 counts every line's cost; R-REVIEW-8, R-LADDER-5)
+COUNTED = (None, "", "work")   # G5 counts a run's first attempt only: escalation lines are calls inside that
+                               # run, review lines are review calls (G4 counts every line's cost; R-REVIEW-8, R-LADDER-5)
 UNKNOWN_USD_PER_MIN = 0.25  # what a minute of a run without a cost figure counts (§7.3)
 
 
@@ -51,8 +51,8 @@ def cost(res, started, finished, cfg, ran=True):
 
 
 def attempt(proj, rev, *, unit, to, model, effort, res, started, finished, status, kind, cfg, stop_reason=None, ran=True):
-    """Append the history line of one model call inside a unit's work (`kind`: work, escalation, rework,
-    review, build-review; the run's, a pane's or a head review's), its cost counted by cost(). Logs, never
+    """Append the history line of one model call inside a unit's work (`kind`: work, escalation, review,
+    build-review; the run's, a requested pre-review's or a head review's), its cost counted by cost(). Logs, never
     raises for the write."""
     from .. import vendors
     append(proj, {"unit": unit, "to": to, "model": model, "vendor": vendors.vendor_of(model),
@@ -135,6 +135,6 @@ def spend(proj, since, unit=None):
 
 def runs_of(proj, unit, since):
     """The unit's runs started at or after `since`: busy (never started) lines and the calls inside a run
-    (escalation, rework, review) not counted."""
+    (escalation, review) not counted."""
     return sum(1 for r in read(proj, since, key="started")
                if r.get("unit") == unit and r.get("stop_reason") not in UNCOUNTED and r.get("kind") in COUNTED)

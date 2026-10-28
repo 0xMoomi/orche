@@ -307,8 +307,6 @@ def status_of(p):
     s = p.get("status")
     if s == "stop" or (s == "info" and p.get("via") == "runner" and not p.get("retry")):
         return "stopped"
-    if s == "info" and str(p.get("summary") or "").startswith("verifying "):
-        return "verifying"   # cmd_report's note while a pane done's pre-review runs
     return s if s in TERMINAL + OPEN else "running"
 
 

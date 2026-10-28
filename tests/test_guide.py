@@ -20,7 +20,6 @@ class GuideTest(support.TempHomeCase):
         super().setUp()
         self.user = self.home / "user"
         self.cfg = copy.deepcopy(config.DEFAULTS)
-        self.cfg["review"]["cross_vendor"] = "required"
         self.reg = registry.empty()
         self.codex = None   # shutil.which("codex")
 
@@ -51,7 +50,7 @@ class GuideTest(support.TempHomeCase):
         self.check_shape(lines)
         self.assertEqual(lines[0], '- Jev: a small model that sorts incoming requests and checks gates before Main '
                                    'spends tokens. Off. Say "turn on Jev"; Main runs `orche jev setup`.')
-        self.assertIn("Codex cross-check: a second AI vendor reviews each pull request before a person does. "
+        self.assertIn("Codex cross-check: a second AI vendor reviews a pull request when you ask. "
                       "Off: Codex is not installed. ", lines[1])
         self.assertIn("`npm install -g @openai/codex`", lines[1])
         self.assertIn("Background-run token: lets ORCHE start agents while no Claude window is open. Not set.", lines[2])
@@ -73,9 +72,10 @@ class GuideTest(support.TempHomeCase):
         self.assertIn(". On. ", line)
         self.assertFalse(any(ln.startswith("- Jev") for ln in self.lines()))   # on: the report's Running now
         self.codex = "/usr/local/bin/codex"
-        self.assertIn(". On. ", self.line("Codex cross-check"))
-        self.cfg["review"]["cross_vendor"] = "off"
-        self.assertIn(". Off: cross-vendor review is off. ", self.line("Codex cross-check"))
+        self.assertEqual(self.line("Codex cross-check"),
+                         '- Codex cross-check: a second AI vendor reviews a pull request when you ask. On: runs when '
+                         'you ask. Say "cross-check PR 12 with Codex"; Main runs `orche review --pr 12`: Codex and '
+                         'Claude read the diff at once and only a defect both name sends it back.')
         jevkey.set_key("t-123", account=jevkey.OAUTH_ACCOUNT)
         self.assertIn(". Set. ", self.line("Background-run token"))
         janitor.enabled_flag().touch()
@@ -96,7 +96,7 @@ class GuideTest(support.TempHomeCase):
         self.assertIn(". Up to 20 at once (preset 30). ", self.line("More agents"))
         lines = self.lines()
         self.check_shape(lines)
-        self.assertTrue(lines[0].startswith("- Codex cross-check"), lines)   # the only one still off
+        self.assertTrue(lines[0].startswith("- Codex cross-check"), lines)   # nothing off: the first one on
 
     def test_jev_enabled_without_a_key_is_off(self):
         self.cfg["jev"]["enabled"] = True

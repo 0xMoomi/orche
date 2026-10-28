@@ -30,7 +30,7 @@ reconcile/heartbeat.json last. Classes (design §2.2):
 - usage <vendor>: an active hold nobody told yet -> the owner notice (Appendix A.15) once; a hold past
   its `until` -> `usage resume` logged once;
 - review <project>: a pending Build review (review/build.py: a run's RUN.json `review.build: pending`)
-  not running that may_start() lets start -> started detached (`orche review --pr N --wait --unit U`,
+  not running that may_start() lets start -> started detached (`orche review --pr N --head --unit U`,
   never inline), at most one per project a pass, after the repairs and never past
   BUDGET_S;
 - silent <unit>: the target's newest unit, a pane unit (never Main) whose dispatch was delivered,

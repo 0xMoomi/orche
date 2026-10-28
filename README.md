@@ -43,7 +43,7 @@ Say it to Main in your own words; Main runs the command.
 | Say | What happens |
 |---|---|
 | "turn on Jev" | faster routing of simple requests: `orche jev setup` asks for the key |
-| "cross-check PRs with Codex" | you install Codex once (`npm install -g @openai/codex`, `codex login`); a second vendor then pre-reviews every PR, and Codex can be a division's model (headless only) |
+| "cross-check PR 12 with Codex" | you install Codex once (`npm install -g @openai/codex`, `codex login`); Main then runs `orche review --pr 12`: Codex and Claude read the diff at once and only a defect both name sends it back; nothing runs unless you ask. Codex can still be a division's model (headless only) |
 | "set the token for background runs" | you run `claude setup-token`; Main stores it with `orche auth set` |
 | "let the janitor clean up" | on by default (`orche install` turns it on and schedules it daily); this turns it back on after `orche janitor disable` |
 | "set up the merge queue for <project>" | `orche init --refresh <project>` (also part of every `orche update`) opens one PR adding `scripts/verify/ci.sh`; merging it turns the queue on |

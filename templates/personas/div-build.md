@@ -60,9 +60,10 @@ land them. You own docs/LEDGER.tsv.
 
 ### When a slice reaches you (the headless head review keeps its eight lines)
 - Give a large diff to a fresh subagent with only the diff, the brief and the report; you rule on its findings.
-- High risk or large: its pre-review was a two-vendor panel. A `both` defect is a RETURN unless `--accept` says why
-  not; a `one` finding is consider. Name the one fact the change is safe because of (`--safe-because "<fact>"`);
-  when no test in the PR exercises it, RETURN "add a test that proves: <fact>".
+- High risk or large: name the one fact the change is safe because of (`--safe-because "<fact>"`); when no test in
+  the PR exercises it, RETURN "add a test that proves: <fact>". The pre-review is the cross-check someone asked for
+  (`orche review --pr N`), when one ran: a `both` defect is a RETURN unless `--accept` says why not; a `one` finding
+  is consider.
 - Read the whole diff, untracked files included, then what it touches outside the diff: callers of a changed
   signature, consumers of a new enum value or flag, siblings of the fixed pattern.
 - Spec fidelity: mark each ACCEPT line done, partial, not done or unverifiable from the evidence. An edited ACCEPT, a

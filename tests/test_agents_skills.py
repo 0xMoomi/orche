@@ -211,21 +211,22 @@ class PersonaTemplatesTest(unittest.TestCase):
                           "the headless head review keeps its eight lines", "### Done means"))
 
     def test_build_names_the_review_depth_rules(self):
-        """c81 (R-REVIEW-12 to 14): Build's craft and rulebook name the surface, the panel's groups and the fact;
-        the rulebook quotes the queue's return reason and the config default."""
+        """c81 (R-REVIEW-12 to 14), c83: Build's craft and rulebook name the surface, the requested cross-check's
+        groups and the fact; the rulebook quotes the queue's return reason and the config default."""
         from orche import config
         from orche.queue import integrator
         craft = " ".join(self.craft_of("division", "build").split())
-        for phrase in ("`--surface user`", "`live-ui-verified`", "two-vendor panel", "`both` defect is a RETURN",
+        for phrase in ("`--surface user`", "`live-ui-verified`", "the cross-check someone asked for",
+                       "`both` defect is a RETURN",
                        "`one` finding is consider", '`--safe-because "<fact>"`',
                        'RETURN "add a test that proves: <fact>"'):
             self.assertIn(phrase, craft)
         skill = " ".join((SKILLS / "orche-build" / "SKILL.md").read_text().split())
         for phrase in ("`--surface user`", "`verdict: live-ui-verified`",
                        integrator.LIVE_REASON.format(level="<level>"),
-                       f"`review.panel_min_lines` ({config.DEFAULTS['review']['panel_min_lines']})",
+                       f"`review.deep_lines` ({config.DEFAULTS['review']['deep_lines']})",
                        "`both` findings first", "`one` findings (consider)",
-                       "A panel costs two reviews; it runs only on that trigger.", '`--safe-because "<',
+                       "only when you or the owner ask, never routinely", '`--safe-because "<',
                        'RETURN "add a test that proves: <fact>"'):
             self.assertIn(phrase, skill)
 
@@ -436,7 +437,7 @@ class SkillsTest(unittest.TestCase):
         self.assertIn("install.sh | bash -s -- --yes", paste[0])
         self.assertIn('follow the "Next" lines it prints', paste[1])
         table = readme[readme.index("## Any time"):]
-        for say in ("turn on Jev", "cross-check PRs with Codex", "set the token for background runs",
+        for say in ("turn on Jev", "cross-check PR 12 with Codex", "set the token for background runs",
                     "let the janitor clean up", "set up the merge queue for <project>", "run up to 30 agents",
                     "set up again", "update", "what changed in <project>?", "how much did this cost?",
                     "check the setup", "what else can ORCHE do?"):
@@ -458,7 +459,7 @@ class SkillsTest(unittest.TestCase):
         card = INJECT.search(build).group(1)
         self.assertIn("Tags, releases and deploys need user approval (STANDING 5).", card)
         for phrase in ("You are traffic control", "Never merge by hand", "the merge queue (`orche queue`)",
-                       "cross-vendor pre-review", "headless head review", "`orche queue add <unit>`",
+                       "only when you or the owner ask, never routinely", "headless head review", "`orche queue add <unit>`",
                        "`AMEND <unit> rev N`", "Never wait on the queue", "The verifier is never the writer",
                        "`orche feat new`", "No direct push to main"):
             self.assertIn(phrase, card)

@@ -3,6 +3,20 @@
 All notable changes to ORCHE are listed here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow semantic versioning.
 
+## 0.16.1 — 2026-10-28
+
+### Changed
+
+- The Codex cross-check runs only when someone asks for it (`orche review --pr N`, from Main on the owner's words or from Build on a change it doubts). No run, pane report or heartbeat starts one, whatever the configuration says.
+- The two-vendor panel is the shape of a requested review: when both vendors are up, Codex and Claude read the diff at once on any change, and only a defect both name sends it back.
+- `review.panel_min_lines` is now `review.deep_lines`; a high-risk change or one over it still needs the one fact it is safe because of and a test that proves it.
+
+### Removed
+
+- `review.cross_vendor` and its three modes (off, optional, required).
+- The pre-review and rework rounds inside a headless run, and the run's review and rework stages.
+- The synchronous pre-review round inside `orche report done`; a pane's done is filed at once.
+
 ## 0.16.0 — 2026-10-27
 
 ### Added

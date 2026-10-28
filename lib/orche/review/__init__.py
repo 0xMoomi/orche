@@ -1,7 +1,7 @@
 """Reviews of a published PR before it enters the merge queue (design 0.9.0 §3.4-§3.5), and the
 model reviews of a unit's change (design §3.3, §3.5, §6; R-REVIEW-3, R-REVIEW-4): the read-only reviewer
 call, fenced and masked package values, the verdict grammar and the tree check. The pre-review
-(pre.py) builds on these; so can the headless Build review.
+(pre.py, run only on request) builds on these; so does the headless Build review.
 
 A reviewer reads, never writes. Claude runs sealed (`--restricted --tools Read,Glob,Grep`, no Bash at
 all: `git diff --output=<path>` or `--no-index` would write or read any file; intake's deny rules, no
@@ -15,10 +15,9 @@ Verdict: the first non-blank line `VERDICT: PASS|RETURN`; finding lines `- [act]
 `- [consider] …`, `- [noted] …`; any `[act]` line makes it RETURN whatever the first line says
 (structure over prose). No parsable first line → no verdict (the caller tries the next reviewer once).
 
-Depth (R-REVIEW-13, R-REVIEW-14): a change with a high-risk path (the head review's line 7, RISK) or more than
-`review.panel_min_lines` added and removed lines against origin/<base> is deep, never in a mechanical unit (deep):
-its pre-review runs as a two-vendor panel and its head review names the one fact it is safe because of, which a
-test in the PR must exercise (proves).
+Depth (R-REVIEW-14): a change with a high-risk path (the head review's line 7, RISK) or more than
+`review.deep_lines` added and removed lines against origin/<base> is deep, never in a mechanical unit (deep): its
+admission names the one fact it is safe because of, which a test in the PR must exercise (proves).
 """
 import re
 import time
@@ -70,14 +69,14 @@ def masked(text) -> str:
 
 def deep(cfg, changed, tier="standard") -> str:
     """Why the change `changed` ([(path, added, removed)] against origin/<base>) is reviewed in depth: `high risk
-    (<paths>)` or `size (+A -R)` over review.panel_min_lines; "" for an ordinary one and for a mechanical unit."""
+    (<paths>)` or `size (+A -R)` over review.deep_lines; "" for an ordinary one and for a mechanical unit."""
     if str(tier or "").strip().lower() == "mechanical":
         return ""
     risky = [p for p, _a, _r in changed if RISK.search(p)]
     if risky:
         return f"high risk ({', '.join(risky[:3])})"
     added, removed = sum(c[1] for c in changed), sum(c[2] for c in changed)
-    return f"size (+{added} -{removed})" if added + removed > int(cfg["review"]["panel_min_lines"]) else ""
+    return f"size (+{added} -{removed})" if added + removed > int(cfg["review"]["deep_lines"]) else ""
 
 
 def proves(changed) -> bool:
@@ -145,8 +144,8 @@ def findings(text, res, cfg):
     return verdict, "" if verdict is not None else res.failure or ("no VERDICT line" if text.strip() else "an empty answer")
 
 
-def ask(model, package, grammar=findings, *, cwd, cfg, timeout=None, effort=None, tag=None, stop=None,
-        should_stop=None, on_start=None, call=None) -> Answer:
+def ask(model, package, grammar=findings, *, cwd, cfg, timeout=None, effort=None, tag=None, should_stop=None,
+        call=None) -> Answer:
     """Run reviewer `model` once on `package` (stdin) in `cwd` — its `call`, else call_for's — started by
     job.adapter: the one reviewer call. A call that was stopped or changed the tree has no verdict; otherwise `grammar(text,
     res, cfg)` reads it (findings: the pre-review's; build.checklist: the head review's). Never raises for
@@ -156,7 +155,7 @@ def ask(model, package, grammar=findings, *, cwd, cfg, timeout=None, effort=None
     before = tree(cwd)
     started = util.now_iso()
     try:
-        res = job.adapter(call).run(call, package, cfg, stop=stop, should_stop=should_stop, on_start=on_start)
+        res = job.adapter(call).run(call, package, cfg, should_stop=should_stop)
     except (OSError, ValueError) as exc:
         why = masked(f"could not start: {exc}")
         res = headless.Result(127, {}, why, why, False)

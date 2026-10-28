@@ -58,21 +58,16 @@ def verify_cmds(text) -> list:
     return [c.strip() for c in re.findall(r"`([^`]+)`", str(text or "")) if c.strip()]
 
 
-def _review(cfg, project, pr, head, accept, required=False):
-    """§4.3 step 6; returns the accepted reason or None. `required`: a deep head's pre-review (its panel) is
-    required whatever review.cross_vendor says (R-REVIEW-13)."""
-    rv = cfg["review"]
-    mode, rounds = ("required" if required else rv["cross_vendor"]), int(rv["rounds"])
-    if mode == "off":
-        return None
+def _review(cfg, project, pr, head, accept):
+    """§4.3 step 6: a requested pre-review's row at `head`, if one ran (R-REVIEW-1). None (admitted) without a
+    row or on a pass; a RETURN under review.rounds refuses; a capped row admits only with `accept`, its reason."""
+    rounds = int(cfg["review"]["rounds"])
     h7 = head[:7]
     row = ledger.review_for(project, pr, head, "pre")
     if row is None:
-        if mode == "optional":
-            return None
-        raise Refused(cli.EXIT_BLOCKED, f"no pre-review for {h7}: `orche review --pr {pr}`")
+        return None
     verdict = row["verdict"]
-    if verdict == "pass" or (mode == "optional" and verdict == "skipped"):
+    if verdict == "pass":
         return None
     try:
         rnd = int(row.get("round") or 1)
@@ -88,7 +83,7 @@ def _review(cfg, project, pr, head, accept, required=False):
 
 
 def checks(cfg, project, where, *, pr, head, base, verify, accept=None, tier="standard", safe_because="") -> list:
-    """§4.3 steps 5-8 on `head` in the checkout `where` (ledger row, pre-review, gate, [skip ci]), then a deep
+    """§4.3 steps 5-8 on `head` in the checkout `where` (ledger row, a requested pre-review's row, gate, [skip ci]), then a deep
     head's blast-radius fact (R-REVIEW-14: named, and exercised by a test in the PR): the accepted reasons, else
     Refused."""
     from ..review import deep, proves
@@ -98,7 +93,7 @@ def checks(cfg, project, where, *, pr, head, base, verify, accept=None, tier="st
         raise Refused(cli.EXIT_BLOCKED, f"no ledger row for {h7}")
     changed = repo.changed(where, publish.base_ref(where, base), head)
     why_deep = deep(cfg, changed, tier)
-    why = _review(cfg, project, pr, head, accept, required=bool(why_deep))
+    why = _review(cfg, project, pr, head, accept)
     if why:
         accepted.append(why)
     if not gate.steps(where, head, verify):

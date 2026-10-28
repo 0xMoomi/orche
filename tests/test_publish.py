@@ -241,7 +241,8 @@ class TeamFitTest(PublishCase):
         config.set_project("publish", "acme", branch_prefix=None)
         self.assertEqual(config.load()["publish"]["per_project"]["acme"], {"base": "develop"})
         self.assertEqual(config.for_project(config.load(), "queue", "acme"), config.load()["queue"])
-        self.assertEqual(config.DEFAULTS["review"]["cross_vendor"], "off")
+        self.assertNotIn("cross_vendor", config.DEFAULTS["review"])        # c83: a cross-check runs only on request
+        self.assertEqual(config.DEFAULTS["review"]["deep_lines"], 400)
 
     def test_squash_merge_and_patient_push(self):
         self.assertEqual(github.PUSH_S, 1800)

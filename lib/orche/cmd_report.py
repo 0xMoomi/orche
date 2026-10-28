@@ -14,10 +14,8 @@ The recipient must be a session the registry knows; the summary is masked (mask.
 for that HEAD with a verdict >= type-check-only (donegate.for_report; exit 3 otherwise); that done
 then pushes the member's own branch and ensures its PR (publish.publish), and a publish gap also exits
 3. A HEAD that changes nothing against origin/<base> (a coordination unit, e.g. Build's parent unit)
-publishes nothing: the done is filed with `pr: none` and that note, without a review round. Then one
-cross-vendor pre-review round runs, synchronously (review.pre.pane_round, R32): RETURN exits 3 with the
-findings and files nothing; PASS or skipped files the done with the verdict; once the revision had
-`review.rounds` RETURNs the next report files it with the open findings (the Build pane decides).
+publishes nothing: the done is filed with `pr: none` and that note. A published done is filed at once:
+no review runs inside the report (a cross-check runs only on request, `orche review --pr N`).
 Under the runner (ORCHE_RUNNER set by `orche run`) it refuses with exit 2: the runner files the pointer.
 """
 import json
@@ -26,7 +24,6 @@ import sys
 from pathlib import Path
 
 from . import brief, cli, donegate, inbox, mask, publish, registry, roster, units, util
-from .review import pre
 from .flow import lineage, owner
 
 EXIT_OK, EXIT_USER, EXIT_RUNNER, EXIT_BLOCKED = 0, 1, 2, 3
@@ -61,15 +58,6 @@ def _publish(reg, member, cwd, key, unit, b, report, summary):
     root = (reg.get("projects", {}).get(key) or {}).get("path") or cwd
     title, body = publish.pr_text(member, root, goal=b.fields.get("GOAL") if b is not None else unit, report=text)
     return publish.publish(member, donegate._root(member, cwd), root, unit=unit, title=title, body=body)
-
-
-def _note(unit, me, to, b, text) -> None:
-    """A quiet `info` to the recipient while a done is verified (held: no wake; `last:` and `[drain]`
-    show it). Never fails the report."""
-    try:
-        inbox.post(inbox.make(unit, me, to, "info", brief_rev=b.rev, summary=inbox.clip(mask.redact(text)[0])))
-    except (OSError, ValueError) as exc:
-        print(f"orche: note not posted: {exc}", file=sys.stderr)
 
 
 def _report_text(report, summary) -> str:
@@ -127,7 +115,7 @@ def cmd_report(args):
     if proof.missing:
         print(proof.message, file=sys.stderr)
         return EXIT_BLOCKED
-    pr = review = None
+    pr = None
     if args.status == "done" and donegate.gated(who.member) and not args.dry_run:
         out = _publish(reg, who.member, cwd, key, unit, b, report, summary)
         if isinstance(out, publish.Gap):
@@ -139,24 +127,12 @@ def cmd_report(args):
         else:
             pr = out.record()
             summary = f"{summary}\nPR: #{out.pr} {out.url} head {out.head}"
-        if pr is not None and b is not None:      # one pre-review round, inside the agent's 600000 ms Bash call
-            rv = pre.pane_round(reg, who.member, donegate._root(who.member, cwd), key, b,
-                                _report_text(report, summary), summary, out,
-                                note=lambda text: _note(unit, me, to, b, text))
-            if rv.refused:
-                first = next((ln[2:] for ln in rv.text.splitlines() if ln.startswith("- ")), "")
-                _note(unit, me, to, b, f"returned {out.head[:7]}: pre-review round "
-                                       f"{(rv.field or {}).get('pre', {}).get('round', '?')}: {first[:120]}")
-                print(rv.text, file=sys.stderr)
-                return EXIT_BLOCKED
-            summary, review = rv.summary, rv.field
     try:
         ptr = inbox.make(unit, me, to, args.status, report_path=report, head_sha=proof.head or "",
                          ledger_row=proof.row is not None,
                          brief_rev=b.rev if b else 1,
                          urgent=args.urgent, summary=summary, owner=owner.step(args.owner or ""),
-                         pr=pr["number"] if pr else None,
-                         **({"review": review} if review else {}), **lineage.fields(b))
+                         pr=pr["number"] if pr else None, **lineage.fields(b))
         path = None if args.dry_run else inbox.post(ptr)
         if not args.dry_run:
             units.touch_activity(me)

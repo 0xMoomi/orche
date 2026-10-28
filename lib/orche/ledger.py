@@ -281,9 +281,9 @@ def review_path(proj: str) -> Path:
 
 
 def make_review_row(pr, sha, kind, verdict, reviewer, model, writer, round=1, note="", evidence="",
-                    ts=None, *, writer_model=None, mode="required", second_vendor=True) -> dict:
+                    ts=None, *, writer_model=None, second_vendor=True) -> dict:
     """A validated review row. Refuses an empty field (note excepted), reviewer == writer, and, for a
-    `pre` row in required mode while a second vendor is available, a reviewer model of the writer's
+    `pre` row while a second vendor is available, a reviewer model of the writer's
     vendor (`writer_model`) whose note does not carry a `fallback` reason; a panel's model is its two
     joined by `+` (R-REVIEW-13), of the writer's vendor only when both are. Raises LedgerError."""
     from . import vendors
@@ -303,7 +303,7 @@ def make_review_row(pr, sha, kind, verdict, reviewer, model, writer, round=1, no
         raise LedgerError(f"verdict must be one of {'|'.join(REVIEW_VERDICTS)}, got {row['verdict']!r}")
     if row["reviewer"] == row["writer"]:
         raise WriterIsJudge(f"reviewer {row['reviewer']} wrote the code (writer != judge)")
-    if (row["kind"] == "pre" and mode == "required" and second_vendor and writer_model
+    if (row["kind"] == "pre" and second_vendor and writer_model
             and all(vendors.vendor_of(m) == vendors.vendor_of(writer_model) for m in row["model"].split("+"))
             and "fallback" not in row["note"]):
         raise LedgerError(f"pre-review by {row['model']} is the writer's vendor "
@@ -338,9 +338,9 @@ def review_for(proj, pr, sha, kind):
 
 
 def record_review(proj, kind, pr, head, verdict, findings, reviewer, model, *, writer, round=1, note="",
-                  writer_model=None, mode="required", second_vendor=True) -> dict:
+                  writer_model=None, second_vendor=True) -> dict:
     """make_review_row + append_review; `findings` (the review's report path) is the evidence."""
     row = make_review_row(pr, head, kind, verdict, reviewer, model, writer, round, note, findings,
-                          writer_model=writer_model, mode=mode, second_vendor=second_vendor)
+                          writer_model=writer_model, second_vendor=second_vendor)
     append_review(proj, row)
     return row

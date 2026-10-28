@@ -1,4 +1,5 @@
-"""The headless head review (design §3.5, Appendix A.7): after a pre-review PASS (or skip), a fresh,
+"""The headless head review (design §3.5, Appendix A.7): after every publish (and after a requested
+pre-review's PASS or skip; a pre row with another verdict leaves the head to that path), a fresh,
 read-only session with Build's persona and model at the standard rung reads the facts and the diff
 against the eight-line checklist. Both PASS → the runner queues the PR (R5) and the done is quiet;
 RETURN, disagreement, high risk, size or error → a waking pointer to Build with both verdicts.
@@ -21,7 +22,7 @@ is a history line (`kind: build-review`, its vendor, model and cost).
   after_publish(project, pr, unit)       the run's publish hook: True when a head review decides
   pending(project)                       runs whose RUN.json says `review.build: pending`, no build row yet
   may_start(project, item)               the heartbeat's check before start(): not held, < MAX_STARTS (no gh)
-  for_pr(project, pr, unit=None)         `orche review --pr N` (R33): the pre-review round, then this
+  for_pr(project, pr, unit=None)         `orche review --pr N` (R33), the request: the pre-review round, then this
   record(project, pr, sha)               the head review record's own fields at (pr, head): surface, safe_because
   pane_record(project, pr, sha, ...)     the pane's PASS (`orche queue add`): its record and a build pass row
 """
@@ -48,7 +49,6 @@ _VERDICT = re.compile(r"VERDICT:\s*(PASS|RETURN)", re.IGNORECASE)
 _FINDING = re.compile(r"^\s*-\s*([1-8])\s*:\s*(.+?)\s*$")
 _SURFACE = re.compile(r"^\s*SURFACE\s*:\s*(user|internal)\s*$", re.IGNORECASE | re.MULTILINE)
 _FIELD = re.compile(r"^(surface|safe_because): (.+)$")
-sleep, clock = time.sleep, time.monotonic   # test seams
 
 
 def _folder(project) -> Path:
@@ -259,10 +259,10 @@ def _ended(project, pr, sha, state, reg) -> None:
         util.write_json(_starts_path(project), starts)
 
 
-def build_review(project, pr, unit=None, *, wait_s=0, reg=None, cfg=None) -> dict:
+def build_review(project, pr, unit=None, *, reg=None, cfg=None) -> dict:
     """Decide PR `pr` of `project` at its current head. {"status": off|no-head|error|already|busy|
-    waiting|skipped|held|queued|returned|pane, ...}; every exception path but off/already/busy/skipped/
-    waiting posts a waking pointer to Build (held: a quiet one)."""
+    skipped|held|queued|returned|pane, ...}; every exception path but off/already/busy/skipped posts a
+    waking pointer to Build (held: a quiet one)."""
     reg = reg if reg is not None else registry.load()
     cfg = cfg if cfg is not None else config.load()
     rv = cfg["review"]
@@ -300,7 +300,7 @@ def build_review(project, pr, unit=None, *, wait_s=0, reg=None, cfg=None) -> dic
                 return _not_run(project, pr, sha, unit, head, f"head review not run — head {h7} is not in "
                                                                 f"{root}: git fetch origin, then orche review --pr {pr}")
             return _decide(reg, cfg, rv, project, pr, unit, view, sha, base, h7, root, where, head, writer, b,
-                           timeout, wait_s)
+                           timeout)
     finally:
         try:
             lock.unlink()
@@ -308,16 +308,9 @@ def build_review(project, pr, unit=None, *, wait_s=0, reg=None, cfg=None) -> dic
             pass
 
 
-def _decide(reg, cfg, rv, project, pr, unit, view, sha, base, h7, root, where, head, writer, b, timeout, wait_s):
-    mode = rv["cross_vendor"]
-    pre_row = ledger.review_for(project, pr, sha, "pre")
-    deadline = clock() + wait_s
-    while pre_row is None and mode != "off" and clock() < deadline:
-        sleep(min(10, max(0.0, deadline - clock())))
-        pre_row = ledger.review_for(project, pr, sha, "pre")
-    if pre_row is None and mode == "required":
-        return {"status": "waiting", "head": sha}
-    pre_v = pre_row["verdict"] if pre_row else "off"
+def _decide(reg, cfg, rv, project, pr, unit, view, sha, base, h7, root, where, head, writer, b, timeout):
+    pre_row = ledger.review_for(project, pr, sha, "pre")     # a requested cross-check's, if one ran
+    pre_v = pre_row["verdict"] if pre_row else "none"
     if pre_row is not None and pre_v not in PRE_OK:
         return {"status": "skipped", "head": sha, "pre": pre_v}
     tier = b.tier if b is not None else "standard"
@@ -394,6 +387,7 @@ def _decide(reg, cfg, rv, project, pr, unit, view, sha, base, h7, root, where, h
 
 def _act(project, pr, unit, view, sha, base, h7, where, head, writer, b, verdict, findings, error, pre_v,
          pre_model, pre_round, reg, cfg, surface):
+    none = pre_v == "none"     # no cross-check was asked for at this head
     if verdict == "pass":     # R5: queued as the runner, through the queue's one admission
         try:
             res = queue.admit(project, int(view["number"]), sha, where=where, base=base,
@@ -402,13 +396,14 @@ def _act(project, pr, unit, view, sha, base, h7, where, head, writer, b, verdict
         except queue.Refused as exc:
             error, findings = f"the queue refused it: {exc}", []
         else:
-            text = (f"auto-queued PR #{pr} @{h7}: pre-review {pre_v.upper()} ({pre_model}, round {pre_round}), "
+            said = "no cross-check" if none else f"pre-review {pre_v.upper()} ({pre_model}, round {pre_round})"
+            text = (f"auto-queued PR #{pr} @{h7}: {said}, "
                     f"head review PASS — position {res.get('position')} of {res.get('total')}")
             _notify(project, pr, sha, unit, head, text, quiet=True)
             _event(project, pr, verdict, True)
             return {"status": "queued", "head": sha, "position": res.get("position"), "total": res.get("total")}
-    text = (f"PR #{pr} @{h7} needs you: pre-review {pre_v.upper()} ({pre_model}), head review {verdict.upper()} — "
-            f"{_first_reason(findings, error)}")
+    said = "no cross-check" if none else f"pre-review {pre_v.upper()} ({pre_model})"
+    text = f"PR #{pr} @{h7} needs you: {said}, head review {verdict.upper()} — {_first_reason(findings, error)}"
     extra = [f"- {n}: {why}" for n, why in (findings[:3] if error else findings[1:4])]
     _notify(project, pr, sha, unit, head, "\n".join([text, *extra]), quiet=False)
     _event(project, pr, verdict, False)
@@ -492,9 +487,9 @@ def _checkout(project, pr, sha, root):
 
 
 def _pre_round(reg, cfg, project, pr, unit, view, root) -> dict | None:
-    """One pre-review round of the PR's head (pre.one_round: a reviewer of another vendor than the
-    writer's model, row kind pre; a deep head's panel). None on PASS or skipped, else the result. With
-    review.cross_vendor off, only a deep head is reviewed (R-REVIEW-13): None for any other."""
+    """One pre-review round of the PR's head (pre.one_round: the two-vendor panel when both are up, else a
+    reviewer of another vendor than the writer's model; row kind pre). None on PASS or skipped, else the
+    result."""
     from ..runs import history
     sha = view["headRefOid"]
     head, writer, b = _members(reg, project, view.get("headRefName", ""), unit)
@@ -510,20 +505,17 @@ def _pre_round(reg, cfg, project, pr, unit, view, root) -> dict | None:
                         effort=getattr(a.call, "effort", None), res=a.res, started=a.started,
                         finished=a.finished, status=a.word, kind="review", cfg=cfg, stop_reason=a.why or None)
 
-    off = pre.mode_of(cfg) == "off"      # the head review reports a missing base or head itself
     base = publish.base(root, cfg, project=project)
     if not base:
-        return None if off else {"status": "pre-error", "head": sha, "error": publish.no_base(root)}
+        return {"status": "pre-error", "head": sha, "error": publish.no_base(root)}
     with _checkout(project, pr, sha, root) as wt:
         if wt is None:
-            return None if off else {"status": "pre-error", "head": sha, "error": f"head {sha[:7]} is not in "
-                                     f"{root}: git fetch origin, then orche review --pr {pr} again"}
+            return {"status": "pre-error", "head": sha, "error": f"head {sha[:7]} is not in "
+                    f"{root}: git fetch origin, then orche review --pr {pr} again"}
         ctx = pre.Ctx(cfg=cfg, project=project, unit=unit_id, rev=rev, unit_dir=unit_dir, worktree=wt,
                       base=base, writer=writer.session,
                       writer_model=vendors.of(reg, writer), fields=dict(b.fields) if b is not None else {},
                       tag=procs.run_id(f"review-pr{pr}", time.time_ns()), record=record)
-        if off and not pre.deep_of(ctx):
-            return None
         hit = history.spend_hit(project, b.unit if b is not None else None, cfg, tag=f"buildreview: {project}")
         if hit:                   # G4 before the paid pre-review call
             return {"status": "pre-error", "head": sha, "error": f"spend cap: pre-review not run ({hit})"}
@@ -540,10 +532,11 @@ def _pre_round(reg, cfg, project, pr, unit, view, root) -> dict | None:
 
 
 def for_pr(project, pr, unit=None, *, tell=None, reg=None, cfg=None) -> dict:
-    """`orche review --pr N` (design §3.8, R33): the PR's pre-review at its head unless a pass, skipped
-    or return row is there already (one round; row kind pre), then on PASS or skipped the head review
-    (build_review), so `orche queue add --pr N` finds its pre row. A pre-review RETURN or error is the
-    result; `tell` (the `--background` caller) hears it as a waking `review` pointer."""
+    """`orche review --pr N` (design §3.8, R33), the request and the only trigger of a pre-review: the
+    PR's round at its head unless a pass, skipped or return row is there already (one round; row kind
+    pre), then on PASS or skipped the head review (build_review), so `orche queue add --pr N` finds its
+    pre row. A pre-review RETURN or error is the result; `tell` (the `--background` caller) hears it as
+    a waking `review` pointer."""
     reg = reg if reg is not None else registry.load()
     cfg = cfg if cfg is not None else config.load()
     root = units.project_root(reg, project)
@@ -555,7 +548,7 @@ def for_pr(project, pr, unit=None, *, tell=None, reg=None, cfg=None) -> dict:
     if str(view.get("state") or "OPEN").upper() != "OPEN" or not sha:
         return {"status": "closed", "head": sha, "state": view.get("state")}
     row = ledger.review_for(project, pr, sha, "pre")
-    if row is None or row.get("verdict") == "error":     # off: _pre_round reviews a deep head only
+    if row is None or row.get("verdict") == "error":
         out = _pre_round(reg, cfg, project, pr, unit, view, root)
         if out is not None:
             if tell and out["status"] != "no-head":
@@ -573,7 +566,7 @@ def for_pr(project, pr, unit=None, *, tell=None, reg=None, cfg=None) -> dict:
 
 def after_publish(project, pr, unit) -> bool:
     """The run's publish hook. True when a head review decides this PR — started now (`orche review
-    --pr N --wait`, detached) or left to the heartbeat (inside a sandbox, or the spawn failed: RUN.json
+    --pr N --head`, detached) or left to the heartbeat (inside a sandbox, or the spawn failed: RUN.json
     says `review.build: pending`, which pending() finds) — so the run files its done quiet (Appendix
     A.11: one done; the review's pointer wakes only on an exception). False when none will
     (review.build off, no Build division). Never raises."""
@@ -602,8 +595,9 @@ def _quiet_log(line) -> None:
 
 
 def start(project, pr, unit=None) -> None:
-    """Start `orche review --pr N --wait` detached (the publish hook and the heartbeat)."""
-    argv = ["review", "--pr", str(pr), "--project", project, "--wait"]
+    """Start `orche review --pr N --head` detached (the publish hook and the heartbeat): the head review
+    alone, never a pre-review."""
+    argv = ["review", "--pr", str(pr), "--project", project, "--head"]
     if unit:
         argv += ["--unit", unit]
     procs.spawn_orche(argv, paths.orche_home() / "logs" / "review" / f"{project}-pr{pr}.log")
@@ -687,7 +681,7 @@ def may_start(project, item, reg=None, cfg=None) -> bool:
         entry["end"] = "gave up"
         row = ledger.review_for(project, pr, sha, "pre") or {}
         _notify(project, pr, sha, unit, head,
-                f"PR #{pr} @{sha[:7]} needs you: pre-review {str(row.get('verdict') or 'off').upper()} "
+                f"PR #{pr} @{sha[:7]} needs you: pre-review {str(row.get('verdict') or 'none').upper()} "
                 f"({row.get('model') or '-'}), head review not run — started {n} times without a verdict "
                 f"(log: logs/review/{project}-pr{pr}.log)", quiet=False)
         _event(project, pr, "gave-up", False)

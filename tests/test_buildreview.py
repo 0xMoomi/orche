@@ -59,8 +59,8 @@ class BuildReviewCase(support.TempHomeCase):
             p.start()
             self.addCleanup(p.stop)
 
-    def write_cfg(self, cfg):    # these tests decide on pre rows: the pre-review mode stays the default
-        review = {"cross_vendor": "required", **(cfg.get("review") or {})}
+    def write_cfg(self, cfg):
+        review = cfg.get("review") or {}
         publish = cfg.get("publish") or {"base": "main"}     # the fixture's root has no git: name the base (R12)
         (self.home / "config.json").write_text(json.dumps(support.no_wake({**cfg, "review": review, "publish": publish})))
 
@@ -162,9 +162,12 @@ class Decisions(BuildReviewCase):
         self.assertEqual(self.review(), {"status": "skipped", "head": HEAD, "pre": "return"})
         self.assertEqual((self.calls, self.pointers()), ([], []))
 
-    def test_no_pre_row_waits_in_required_mode(self):
-        self.assertEqual(self.review()["status"], "waiting")
-        self.assertIsNone(self.build_row())
+    def test_no_pre_row_runs_the_head_review_at_once(self):
+        """c83: a cross-check runs only on request; without its row the head review decides, never waiting."""
+        self.assertEqual(self.review()["status"], "queued")
+        self.assertEqual(len(self.calls), 1)
+        self.assertIn("auto-queued PR #7 @aaaaaaa: no cross-check, head review PASS", self.pointers()[0]["summary"])
+        self.assertIn("pre-review: none (-, round -)", (self.home / "reviews" / "acme" / "pr7-aaaaaaa-build.md").read_text())
 
     def test_a_head_is_reviewed_once(self):
         self.pre("pass")
@@ -254,12 +257,12 @@ def registry_member(reg):
 
 
 class Hooks(BuildReviewCase):
-    def test_after_publish_spawns_the_waiting_review_detached(self):
+    def test_after_publish_spawns_the_head_review_alone_detached(self):
         spawned = []
         with mock.patch.object(procs, "spawn_detached", lambda argv, log: spawned.append(argv)):
             build.after_publish("acme", 7, "u1")
         (argv,) = spawned
-        self.assertEqual(argv[2:], ["review", "--pr", "7", "--project", "acme", "--wait", "--unit", "u1"])
+        self.assertEqual(argv[2:], ["review", "--pr", "7", "--project", "acme", "--head", "--unit", "u1"])
 
     def test_after_publish_skips_in_a_sandbox_and_never_raises(self):
         from orche import runs
@@ -317,7 +320,7 @@ class Pending(BuildReviewCase):
         self.assertEqual([build.may_start("acme", item, self.reg) for _ in range(4)], [True, True, True, False])
         (ptr,) = self.pointers()
         self.assertTrue(ptr["urgent"])
-        self.assertIn("PR #7 @aaaaaaa needs you: pre-review OFF (-), head review not run — started 3 times", ptr["summary"])
+        self.assertIn("PR #7 @aaaaaaa needs you: pre-review NONE (-), head review not run — started 3 times", ptr["summary"])
         self.assertEqual(build.pending("acme", self.reg), [])             # given up: never re-spawned
 
     def test_may_start_asks_gh_nothing_and_the_review_ends_a_closed_pr_or_a_moved_head_quietly(self):
@@ -334,7 +337,8 @@ class Pending(BuildReviewCase):
             [item] = build.pending("acme", self.reg)          # unclaimed: GitHub's view may lag a fresh push
             self.assertTrue(build.may_start("acme", item, self.reg))
             build.build_review("acme", 8, "u2", reg=self.reg, cfg=config.load())
-        self.assertEqual((build.pending("acme", self.reg), self.pointers()), ([], []))
+        self.assertEqual((build.pending("acme", self.reg), [p for p in self.pointers() if not p.get("quiet")]),
+                         ([], []))                            # #8 at aaaa… was reviewed: one quiet auto-queued note
         self.assertEqual({k: v["end"] for k, v in build._starts("acme").items()},
                          {"pr7-aaaaaaa": "PR merged", "pr8-eeeeeee": "head moved"})
 
@@ -385,6 +389,16 @@ class Cli(BuildReviewCase):
     def test_unknown_project(self):
         code, _ = self.run_cli("review", "--pr", "7", "--project", "nope")
         self.assertNotEqual(code, 0)
+
+    def test_head_runs_the_head_review_only(self):
+        """c83: `--head` (the publish hook's and the heartbeat's) never starts a pre-review."""
+        with mock.patch.object(registry, "load", lambda: self.reg), \
+                mock.patch.object(pre, "one_round", side_effect=AssertionError("a pre-review")):
+            code, out = self.run_cli("review", "--pr", "7", "--project", "acme", "--head")
+        self.assertEqual(code, 0, out)
+        self.assertIn("queued PR #7", out)
+        self.assertIsNone(ledger.review_for("acme", 7, HEAD, "pre"))
+        self.assertEqual(len(self.calls), 1)
 
 
 SECRET = "sk-ant-api03-" + "Q" * 40
@@ -510,8 +524,8 @@ class SpendAndHolds(BuildReviewCase):
 
 
 class BuildsOwnPr(BuildReviewCase):
-    """R8 / R33: `orche review --pr N` on Build's own PR runs the pre-review first (a pre row), then the
-    Build review, so `orche queue add --pr N` finds the pre row in required mode."""
+    """R33, c83: `orche review --pr N` (the request) runs the pre-review first (a pre row) on any head, then the
+    Build review, so `orche queue add --pr N` finds the pre row."""
 
     def setUp(self):
         super().setUp()
@@ -521,10 +535,11 @@ class BuildsOwnPr(BuildReviewCase):
                   mock.patch.object(build, "_checkout", lambda project, pr, sha, root: contextlib.nullcontext(self.home)),
                   mock.patch.object(pre, "package", lambda ctx, **kw: "the package"),
                   mock.patch.object(pre, "ask", self.fake_ask),
-                  mock.patch.object(pre.vendors, "available", lambda cfg: SimpleNamespace(ok=True, state="ok"))):
+                  mock.patch.object(pre.vendors, "available", lambda cfg: self.avail)):
             p.start()
             self.addCleanup(p.stop)
         self.verdict = "VERDICT: PASS\n- [noted] fine"
+        self.avail = SimpleNamespace(ok=True, state="ok")
 
     def fake_ask(self, model, package, **kw):
         from orche import review
@@ -533,14 +548,37 @@ class BuildsOwnPr(BuildReviewCase):
         return review.Answer(model, None, res, util.now_iso(), util.now_iso(), review.parse(self.verdict), "",
                              self.verdict)
 
-    def test_pre_review_then_build_review_queue_it(self):
+    def test_an_ordinary_head_gets_the_panel_then_the_build_review_queues_it(self):
+        """c83: no deep gating: a small, low-risk head (the facts' cart change) gets both vendors at once."""
         out = build.for_pr("acme", 7, reg=self.reg, cfg=config.load())
         self.assertEqual(out["status"], "queued")
         row = ledger.review_for("acme", 7, HEAD, "pre")
-        self.assertEqual((row["verdict"], row["writer"]), ("pass", BUILD))
-        self.assertEqual(len(self.asked), 1)
-        self.assertEqual(self.asked, ["codex"])                     # Build writes on Claude: the other vendor reviews
+        self.assertEqual((row["verdict"], row["writer"], row["model"], row["note"]),
+                         ("pass", BUILD, "codex+claude-opus-5-5", "panel"))
+        self.assertEqual(sorted(self.asked), ["claude-opus-5-5", "codex"])
         self.assertEqual(self.build_row()["verdict"], "pass")
+        self.assertEqual(len(self.calls), 1)                        # then the head review
+
+    def test_one_vendor_up_is_the_single_cross_vendor_review(self):
+        usage.hit("claude", "You've hit your usage limit", {}, project="acme", unit="x", stage="work")
+        out = build.for_pr("acme", 7, reg=self.reg, cfg=config.load())
+        self.assertEqual(out["status"], "held")                     # the head review's vendor is held too
+        self.assertEqual(self.asked, ["codex"])
+        row = ledger.review_for("acme", 7, HEAD, "pre")
+        self.assertEqual((row["verdict"], row["model"]), ("pass", "codex"))
+        self.assertRegex(row["note"], r"^panel: only one vendor up \(claude held: usage limit until \d\d:\d\d\): "
+                                      r"a single review$")
+
+    def test_without_codex_the_same_vendor_fallback_says_so_then_the_build_review(self):
+        self.avail = SimpleNamespace(ok=False, state="absent")
+        out = build.for_pr("acme", 7, reg=self.reg, cfg=config.load())
+        self.assertEqual(out["status"], "queued")
+        self.assertEqual(self.asked, ["claude-opus-5-5"])           # the fixture's Build model is the alias `opus`
+        row = ledger.review_for("acme", 7, HEAD, "pre")
+        self.assertEqual((row["verdict"], row["model"], row["note"]),
+                         ("pass", "claude-opus-5-5", "panel: only one vendor up (codex not installed): a single "
+                                                        "review; fallback: same vendor (codex not installed)"))
+        self.assertEqual(len(self.calls), 1)
 
     def test_a_pre_review_return_stops_before_the_build_review(self):
         self.verdict = "VERDICT: RETURN\n- [act] a.py:1 — wrong — fix it"
@@ -555,19 +593,6 @@ class BuildsOwnPr(BuildReviewCase):
         self.pre("pass")
         self.assertEqual(build.for_pr("acme", 7, reg=self.reg, cfg=config.load())["status"], "queued")
         self.assertEqual(self.asked, [])
-
-    def test_with_cross_vendor_off_only_a_deep_head_is_pre_reviewed_by_its_panel(self):
-        """R-REVIEW-13: `orche review --pr N` runs the panel on a deep head whatever the mode says."""
-        self.write_cfg({"review": {"build": True, "cross_vendor": "off"}})
-        with mock.patch.object(pre, "deep_of", lambda ctx: ""):
-            self.assertEqual(build.for_pr("acme", 7, reg=self.reg, cfg=config.load())["status"], "queued")
-        self.assertEqual((self.asked, ledger.review_for("acme", 7, HEAD, "pre")), ([], None))
-        self.view = {**self.view, "headRefOid": "d" * 40}         # a new head, a deep one
-        with mock.patch.object(pre, "deep_of", lambda ctx: "high risk (src/auth/x.py)"):
-            self.assertEqual(build.for_pr("acme", 7, reg=self.reg, cfg=config.load())["status"], "queued")
-        self.assertEqual(sorted(self.asked), ["claude-opus-5-5", "codex"])
-        row = ledger.review_for("acme", 7, "d" * 40, "pre")
-        self.assertEqual((row["model"], row["note"]), ("codex+claude-opus-5-5", "panel: high risk (src/auth/x.py)"))
 
 
 class ReviewBTest(BuildReviewCase):

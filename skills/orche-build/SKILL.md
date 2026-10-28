@@ -11,7 +11,7 @@ finished slices, and lets the merge queue land them. Workers write the code; Bui
 <!-- inject:start -->
 ORCHE Build rules (full rulebook: skill orche-build)
 - You are traffic control: feature agents write code; their done pushes the branch and opens the PR. Never merge by hand: the merge queue (`orche queue`) tests each PR on main and lands it when green.
-- Each done gets a cross-vendor pre-review, then a headless head review; both PASS → ORCHE queues it. You see a report on RETURN, disagreement or error: decide in arrival order, one at a time. PASS = `orche queue add <unit>`; RETURN = `AMEND <unit> rev N` with the reasons. Never wait on the queue.
+- Each done gets a headless head review; PASS → queued. A cross-check (`orche review --pr N`) runs only when you or the owner ask, never routinely. You see a report on RETURN or error: decide in arrival order. PASS = `orche queue add <unit>`; RETURN = `AMEND <unit> rev N` with the reasons. Never wait on the queue.
 - Ledger (`orche ledger record|check`): append-only; key (PR, head SHA); a new head voids older rows; no row = unverified. CI green and `[skip ci]` are never evidence. The verifier is never the writer.
 - `STATUS: done` needs a ledger row for HEAD (>= type-check-only); `STATUS: release-ready` (a claim in your final message, filed with `orche report done`) needs >= unit-test-verified from an independent verifier.
 - Report your unit to Main once every entry it queued landed. Feature agents come from HR (`orche feat new`).
@@ -78,7 +78,7 @@ The headless head review and you use the same eight lines; RETURN on any failure
 2. VERIFY: the commands are committed scripts and the report shows them passing at this head.
 3. Scope: every changed file is inside the feature's scope globs.
 4. `[skip ci]`: no commit that changes code carries it (STANDING 4: docs-only commits only).
-5. Pre-review: every [act] finding is fixed, or rebutted with a reason you accept.
+5. Pre-review: when a cross-check ran, every [act] finding is fixed, or rebutted with a reason you accept.
 6. Overlap: no changed file is also changed by a queued or testing PR or owned by another in-flight feature, unless
    the two changes are independent; otherwise RETURN "wait for PR #N".
 7. Risk: payments, auth, migrations, deploy scripts, wallets or keys: the pane decides (the headless review returns
@@ -90,11 +90,12 @@ Review depth, on top of the eight lines:
   users read, an API response a client renders, CLI output users read); the headless head review sets it too. The
   queue then lands it only on the check script's `verdict: live-ui-verified` and otherwise returns it to the worker:
   "user-visible change: live verification required (the check script's verdict was <level>)".
-- Panel: a high-risk path or more than `review.panel_min_lines` (400) changed lines is pre-reviewed by two models of
-  different vendors from `review.order` at once, even with `review.cross_vendor` off, never in a mechanical unit.
-  Read its report by group: `both` findings first (a defect there is a RETURN unless `--accept "<why not>"` says
-  why), then `one` findings (consider). A panel costs two reviews; it runs only on that trigger.
-- Blast radius: on the same trigger, on PASS add `--safe-because "<the one fact the change is safe because of>"`.
+- Cross-check: `orche review --pr N` runs only when you or the owner ask, never routinely (a change you doubt);
+  nothing in ORCHE starts one by itself. With both vendors up it is a panel: two models of different vendors from
+  `review.order` read the diff at once. Read its report by group: `both` findings first (a defect there is a RETURN
+  unless `--accept "<why not>"` says why), then `one` findings (consider). A panel costs two reviews.
+- Blast radius: a high-risk path or more than `review.deep_lines` (400) changed lines, never in a mechanical unit:
+  on PASS add `--safe-because "<the one fact the change is safe because of>"`.
   A test in the PR must exercise it (a path under `tests/` or `__tests__/`, or `*.test.*`, `*_test.*`,
   `*.spec.*`); with none, RETURN "add a test that proves: <fact>".
 
@@ -124,7 +125,7 @@ Review depth, on top of the eight lines:
 ## Review in a fresh session
 
 1. Scripted verification first: the unit's VERIFY scripts in its run, then the gate in the queue.
-2. Model judges in fresh sessions: the cross-vendor pre-review and the headless head review see only the diff, the
+2. Model judges in fresh sessions: a cross-check (when one was asked for) and the headless head review see only the diff, the
    brief's contract, the report and ORCHE's facts, never the writer's conversation; high-risk and large changes come
    to you.
 3. Classify findings Act on / Consider / Noted / Dismissed; filter nit inflation. Act-on findings

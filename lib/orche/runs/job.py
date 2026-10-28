@@ -63,10 +63,9 @@ import traceback
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 
-from .. import (brief, codex, config, donegate, headless, intake, ladder, ledger, log, mask, paths, procs, publish,
+from .. import (brief, codex, config, donegate, headless, intake, ladder, log, mask, paths, procs, publish,
                 roster, runs, shell, templates, units, util, vendors)
 from ..flow import usage as holds
-from ..review import pre
 from . import filing, history
 
 EXIT_OK, EXIT_USER, EXIT_NOT_FOUND, EXIT_BLOCKED, EXIT_DUPLICATE, EXIT_UNFILED = 0, 1, 2, 3, 4, 5
@@ -690,87 +689,10 @@ def _sum(values):
     return round(sum(nums), 4) if nums else None
 
 
-def _review_try(answer, head, cfg) -> _Try:
-    """A reviewer call as one attempt of the run (`kind: review`, R-REVIEW-8): RUN.json, cost, history."""
-    cost = history.cost(answer.res, answer.started, answer.finished, cfg)     # §7.3, as a worker's
-    return _Try("review", answer.call, answer.started, answer.finished, answer.res, answer.stopped, None, False,
-                None, answer.word, answer.why, head, cost, answer.res.usage)
-
-
-def _rework_call(job, cfg, tries):
-    """The writer's last call; a mechanical unit's rework runs at the standard rung (design §7.4)."""
-    last = [x for x in tries if x.kind != "review"][-1]
-    if job.tier != "mechanical" or job.pinned or last.kind not in ("work", "resumed"):
-        return last.call
-    std = ladder.rung(cfg, job.base or job.model, "standard")
-    return replace(last.call, model=std.model, effort=std.effort)
-
-
 def _spend_hit(job, cfg, tries):
-    """G4 before a paid review or rework call: the unit's and the project's spend inside W, this run's
-    calls so far included (history has them only once the run is filed). Fails open."""
+    """G4 before the paid escalation attempt: the unit's and the project's spend inside W, this run's calls so
+    far included (history has them only once the run is filed). Fails open."""
     return history.spend_hit(job.project, job.unit, cfg, _sum(x.cost for x in tries) or 0.0, tag=f"runner: {job.unit}")
-
-
-def _pre_review(reg, job, cfg, lock, since, stop, head_before, base_prompt, tries, done, resume=None) -> pre.Done:
-    """PRE-REVIEW → REWORK → publish rounds of a published done (review.pre.in_run), bound to this run:
-    every call is an attempt in `tries`, the reviewer and the rework run under the run's lock, tag and
-    STOP marker."""
-    b = brief.find(reg, job.unit, project=job.project)
-    writer = [x for x in tries if x.kind != "review"][-1].call
-    is_stopped = lambda: runs.stop_requested(job.project, job.unit, since)   # noqa: E731
-    ctx = pre.Ctx(cfg=cfg, project=job.project, unit=job.unit, rev=job.rev, unit_dir=job.unit_dir,
-                  worktree=job.worktree, base=publish.base(job.root or job.worktree, cfg, job.worktree, job.project), writer=job.to,
-                  writer_model=writer.model, fields=dict(b.fields) if b is not None else {}, tag=writer.tag,
-                  stop=stop, should_stop=is_stopped, on_start=lambda pid: runs.update(lock, child_pid=pid, pgid=pid),
-                  record=lambda answer, head: tries.append(_review_try(answer, head, cfg)))
-
-    def rework(text):
-        call = _rework_call(job, cfg, tries)
-        x = _attempt(reg, job, call, cfg, lock, since, stop, head_before, base_prompt + text, kind="rework")
-        tries.append(x)
-        ctx.writer_model = call.model      # the next round's reviewer differs from the model that wrote the head
-        limited = not x.stopped and holds.is_limit(x.res.limit_text, cfg)    # §8.5: the loop stops here
-        return ("info" if limited else x.status), x.summary, x.owner, x.head, x.res.text, x.stopped
-
-    def publish_again(summary, owner, head, result):
-        return _publish(reg, job, summary, owner, head, result, cfg)
-
-    return pre.in_run(ctx, done, rework=rework, publish_again=publish_again,
-                      stopped=lambda: stop.signum is not None or is_stopped(),
-                      capped=lambda: _spend_hit(job, cfg, tries), resume=resume)
-
-
-RESUME_STAGES = ("review", "rework")      # §8.5: a hold at these stages resumes there on the same HEAD
-
-
-def _resumable(job, head):
-    """§8.5: (stage, the previous REPORT.md) when the unit's last run of this revision (RUN.json as new as
-    BRIEF.md) stopped on a usage limit at a review stage with its done published at `head`, the HEAD
-    now; else None. That run's WORK is not redone: this run resumes at the stage."""
-    rec = runs.last(job.unit_dir, fresh=True)
-    if (rec is None or rec.get("stop_reason") != "usage_limit" or rec.get("stage") not in RESUME_STAGES
-            or not head or rec.get("head_sha") != head or not isinstance(rec.get("pr"), dict)):
-        return None
-    try:
-        report = (job.unit_dir / "REPORT.md").read_text(encoding="utf-8", errors="replace")
-    except OSError:
-        report = ""
-    return rec["stage"], report
-
-
-def _resumed(call, resume, head) -> _Try:
-    """The previous run's WORK as this run's first try (no call, no cost; not an attempt of RUN.json)."""
-    stage, report = resume
-    now = util.now_iso()
-    summary = f"resumed at the {stage} stage after a usage hold: the work at {head[:7]} is the previous run's"
-    res = headless.Result(0, {"result": report}, None, None, False)
-    return _Try("resumed", call, now, now, res, False, None, False, None, "done", summary, head, 0.0, None)
-
-
-def _stage(x) -> str:
-    """The hold's stage of an attempt: work (an escalation is the work stage), rework or review."""
-    return "work" if x.kind == "escalation" else x.kind
 
 
 def _hold_of(job, cfg, tries) -> tuple:
@@ -779,20 +701,10 @@ def _hold_of(job, cfg, tries) -> tuple:
     for x in tries:
         if not x.stopped and holds.is_limit(x.res.limit_text, cfg):
             hold = holds.hit(vendors.vendor_of(x.call.model), x.res.limit_text, cfg, project=job.project,
-                             unit=job.unit, stage=_stage(x))
+                             unit=job.unit, stage="work")
             if hold is not None:
                 return hold, x
     return None, None
-
-
-def _pre_ok(project, pr, head, review) -> bool:
-    """The head review may start: no pre-review ran (off, no diff), or its ledger row at this head is
-    pass/skipped (a RETURN, an error or a spend-cap skip leaves none, and the pane decides)."""
-    if not review:
-        return True
-    from ..review import build as _br
-    row = ledger.review_for(project, pr["number"], head, "pre")
-    return row is not None and row.get("verdict") in _br.PRE_OK
 
 
 def _run_locked(reg, job, call, cfg, lock, since, stop) -> tuple:
@@ -802,9 +714,7 @@ def _run_locked(reg, job, call, cfg, lock, since, stop) -> tuple:
     if raw is not None and raw > MAX_TIMEBOX_S:
         log.log("hooks", f"runner: {job.unit}: TIMEBOX {job.timebox!r} capped at {MAX_TIMEBOX_S // 3600}h")
     head_before = shell.git_head(job.worktree)
-    resume = _resumable(job, head_before) if job.gated else None     # §8.5: on the published, pre-sync HEAD
-    if job.kind == "feat" and resume is None:     # R28: start in sync with the base (a resumed stage keeps its
-        # published head: the queue merges it onto the current base anyway); head_before is read after the merge
+    if job.kind == "feat":     # R28: start in sync with the base; head_before is read after the merge
         job.sync_note = publish.sync(job.worktree, publish.base(job.root or job.worktree, cfg, job.worktree, job.project)) or ""
         head_before = shell.git_head(job.worktree)
     filing.set_aside_report(job.unit_dir)
@@ -814,14 +724,10 @@ def _run_locked(reg, job, call, cfg, lock, since, stop) -> tuple:
         return _not_started(reg, job, since, stop)      # STOP/SIGTERM before claude started
     _audit(job, cfg)
     base_prompt = prompt(job, cfg)
-    if resume is not None:     # §8.5: the previous run's WORK stands; resume at its stage
-        log.log("hooks", f"runner: {job.unit}: resumed at the {resume[0]} stage on {head_before[:7]}")
-        tries = [_resumed(call, resume, head_before)]
-    else:
-        tries = [_attempt(reg, job, call, cfg, lock, since, stop, head_before, base_prompt)]
+    tries = [_attempt(reg, job, call, cfg, lock, since, stop, head_before, base_prompt)]
     t = tries[0]
     limited = holds.is_limit(t.res.limit_text, cfg)      # §8.5: a usage limit holds the unit; no climb
-    if (resume is None and not limited
+    if (not limited
             and ladder.escalate(cfg, job.tier, bool(job.pinned), t.status, t.summary, stopped=t.stopped,
                                 timed_out=t.timed_out, turn_cap=t.res.data.get("subtype") == "error_max_turns",
                                 dead=t.dead)
@@ -846,38 +752,17 @@ def _run_locked(reg, job, call, cfg, lock, since, stop) -> tuple:
     if hold is None and status == "done" and job.gated:   # once, after the final attempt: a failed first attempt never publishes
         status, summary, owner, pr, result = _publish(reg, job, summary, owner, head, result, cfg)
         t.status, t.summary = status, summary
-        if pr is not None:                 # PRE-REVIEW and its REWORK rounds, inside this run (design §3.1)
-            n = len(tries)
-            out = _pre_review(reg, job, cfg, lock, since, stop, head_before, base_prompt, tries,
-                              pre.Done(status, summary, owner, pr, result, head),
-                              resume=resume[0] if resume is not None and resume[0] == "rework" else None)
-            status, summary, owner, pr, result, head = out.status, out.summary, out.owner, out.pr, out.result, out.head
-            review = out.field
-            if out.stopped:
-                stopped, stop_at = True, runs.marker_time(job.project, job.unit)
-            elif out.held:                 # every reviewer's vendor is held: no review started (§8.5)
-                held_vendor, held_stage = out.held, "review"
-                hold = (holds.join(out.held, job.project, job.unit, "review") or holds.read(out.held)
-                        or {"vendor": out.held, "until": util.now_iso()})
-            else:                          # a review or rework call that hit a usage limit (§8.5)
-                hold, hit = _hold_of(job, cfg, tries[n:])
-                if hold is not None and status == "done" and (review or {}).get("pre", {}).get("verdict") in ("pass", "skipped"):
-                    hold, hit = None, None     # a hand-over reviewer answered: the stage is done
-            if (hold is None and status == "done" and pr is not None and not stopped
-                    and _pre_ok(job.project, pr, head, review)):
-                from ..review import build as _br
-                if _br.after_publish(job.project, pr["number"], job.unit):     # A.11: the review's pointer wakes
-                    review, quiet = {**(review or {}), "build": {"verdict": "pending"}}, True
+        if pr is not None:                 # the head review alone; a cross-check runs only on request
+            from ..review import build as _br
+            if _br.after_publish(job.project, pr["number"], job.unit):     # A.11: the review's pointer wakes
+                review, quiet = {"build": {"verdict": "pending"}}, True
     if hold is not None:      # §8.5: never `failed`; the heartbeat re-runs the unit once the hold is over
-        held_vendor = held_vendor or vendors.vendor_of(hit.call.model)
-        held_stage = held_stage or _stage(hit)
+        held_vendor, held_stage = vendors.vendor_of(hit.call.model), "work"
         status, summary = "info", f"{holds.held_text(hold, held_vendor)} (stage {held_stage})"
-        if hit is not None:
-            hit.status, hit.summary = status, summary
+        hit.status, hit.summary = status, summary
     if job.pin_note:
         summary = f"{summary}\n{job.pin_note}".strip()
-    t = [x for x in tries if x.kind != "review"][-1]     # the writer's last attempt: exit code, error, stop reason
-    calls = [x for x in tries if x.kind != "resumed"]       # the model calls: one history line each
+    t = tries[-1]          # the last attempt: exit code, error, stop reason
     call, started, finished, res = t.call, tries[0].started, tries[-1].finished, t.res
     data, code, error = res.data, res.code, res.failure
     w = who(job, call)
@@ -903,7 +788,7 @@ def _run_locked(reg, job, call, cfg, lock, since, stop) -> tuple:
         util.write_json(job.unit_dir / "RUN.json", record)
     except OSError as exc:
         raise filing.FilingError(f"RUN.json: {exc}") from exc
-    for x in calls:
+    for x in tries:       # the model calls: one history line each
         history.attempt(job.project, job.rev, unit=job.unit, to=job.to, model=x.call.model, effort=x.call.effort, res=x.res, started=x.started,
                         finished=x.finished, status=x.status, kind=x.kind, cfg=cfg, stop_reason=record["stop_reason"],
                         ran=not x.dead)

@@ -22,7 +22,8 @@ script drives it on its real surface (`verdict: live-ui-verified`).
 2. VERIFY: the VERIFY commands are committed scripts and the ledger row says they pass at this head.
 3. Scope: every changed path is inside the feature's globs (facts: scope).
 4. [skip ci]: no commit that changes code carries [skip ci] (STANDING 4; facts: skip-ci).
-5. Pre-review: every [act] finding of the pre-review is fixed or rebutted in the diff or the report.
+5. Pre-review: when a cross-check someone asked for ran (Pre-review below), every [act] finding of it is fixed
+   or rebutted in the diff or the report; when none ran (`none`), this line passes.
 6. Overlap: no queued or testing PR, nor another feature, changes the same paths; else RETURN
    "wait for PR #N" (facts: overlap).
 7. Risk: payments, auth, migrations, deploy scripts, wallets or keys changed → RETURN

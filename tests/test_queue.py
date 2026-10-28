@@ -161,11 +161,6 @@ class QueueCmdTest(support.TempHomeCase):
     def queued(self):
         return store.read("acme")["entries"]
 
-    def require_review(self):
-        """review.cross_vendor required (the default is off): the queue then needs a pre-review row."""
-        (self.home / "config.json").write_text(json.dumps({**support.NO_WAKE, "review": {**support.NO_WAKE["review"],
-                                                                                 "cross_vendor": "required"}}))
-
     # ---- refusals (§4.3) -----------------------------------------------------------------
 
     def test_feature_session_cannot_add(self):
@@ -229,16 +224,22 @@ class QueueCmdTest(support.TempHomeCase):
         self.assertEqual(code, 3)
         self.assertIn(f"no ledger row for {self.head[:7]}", err)
 
-    def test_no_pre_review(self):
-        self.require_review()
+    def test_no_pre_review_admits(self):
+        """c83: a cross-check runs only on request; without its row the PR is admitted."""
         self.ready(review=None)
         code, _, err = self.orche("queue", "add", self.unit)
+        self.assertEqual(code, 0, err)
+        self.assertEqual(len(self.queued()), 1)
+
+    def test_a_requested_review_that_returned_it_refuses_under_the_cap(self):
+        self.ready(review="return")
+        code, _, err = self.orche("queue", "add", self.unit)
         self.assertEqual(code, 3)
-        self.assertIn(f"no pre-review for {self.head[:7]}: `orche review --pr ", err)     # a valid command (G7)
-        self.assertNotIn("--unit", err)
+        self.assertIn(f"pre-review of {self.head[:7]} returned it (round 1 of 2): fix and review again", err)
+        code, _, err = self.orche("queue", "add", self.unit, "--accept", "rebutted")
+        self.assertEqual(code, 3)                                  # under the cap --accept does not help
 
     def test_held_review_needs_accept(self):
-        self.require_review()
         self.ready(review="held")
         code, _, err = self.orche("queue", "add", self.unit)
         self.assertEqual(code, 3)
@@ -338,16 +339,12 @@ class QueueCmdTest(support.TempHomeCase):
         self.head = git(self.feat, "rev-parse", "HEAD")
         self.spec({"prs": [self.pr()]})
 
-    def test_a_deep_change_needs_its_panel_its_fact_and_a_test_that_proves_it(self):
-        """R-REVIEW-13, 14: a high-risk path needs the pre-review (cross_vendor off here), the one fact it is safe
-        because of, and a test in the PR; then the pane's record keeps the fact."""
+    def test_a_deep_change_needs_its_fact_and_a_test_that_proves_it(self):
+        """R-REVIEW-14: a high-risk path needs no pre-review (c83: only on request), but the one fact it is safe
+        because of and a test in the PR; then the pane's record keeps the fact."""
         from orche.review import build
         self.commit({"src/payments/charge.py": "def charge(order): pass\n"})
         self.ready(review=None)
-        code, _, err = self.orche("queue", "add", self.unit)
-        self.assertEqual(code, 3)
-        self.assertIn(f"no pre-review for {self.head[:7]}: `orche review --pr 12`", err)
-        self.ready(ledger_row=False)
         code, _, err = self.orche("queue", "add", self.unit)
         self.assertEqual(code, 3)
         self.assertIn("high risk (src/payments/charge.py): name the one fact it is safe because of "
@@ -358,7 +355,7 @@ class QueueCmdTest(support.TempHomeCase):
         self.assertIn(f"RETURN it: add a test that proves: {fact}", err)
         self.assertFalse(self.queued() if (self.home / "queue" / "acme" / "queue.json").exists() else [])
         self.commit({"tests/test_charge.py": "def test_a_retry_charges_once(): pass\n"})
-        self.ready()
+        self.ready(review=None)
         code, _, err = self.orche("queue", "add", self.unit, "--safe-because", fact)
         self.assertEqual(code, 0, err)
         self.assertEqual(build.record("acme", 12, self.head), {"surface": "internal", "safe_because": fact})
