@@ -134,7 +134,8 @@ def _detect(args, key, root) -> list:
     """The repository's team conventions (detect.conventions) into `publish.per_project.<key>`, each key only
     while it is unset there and no flag of this run names it (never over a flag or an earlier detection). Returns
     every key whose value now equals the detected one (none a flag of this run names), in PUBLISH_KEYS order,
-    plus `entire` when the repository uses Entire (read live, never stored). A dry run reads nothing."""
+    plus `entire` when the repository uses Entire (read live, never stored) and `team` when it declares a team
+    plugin (kept on the registry entry by _save_team). A dry run reads nothing."""
     from . import detect
     if args.dry_run:
         return []
@@ -146,7 +147,7 @@ def _detect(args, key, root) -> list:
         config.set_project("publish", key, **values)
     now = {**have, **values}
     same = [k for k in PUBLISH_KEYS if k in found and now.get(k) == found[k] and getattr(args, k, None) is None]
-    return same + (["entire"] if found.get("entire") else [])
+    return same + (["entire"] if found.get("entire") else []) + (["team"] if found.get("team") else [])
 
 
 def _set_publish(args, key) -> None:
@@ -224,6 +225,8 @@ def _refresh(args, reg) -> int:
         return fail(EXIT_USER, f"refresh {key} stopped: {exc}")
     stamped = not dry_run and hr.stamp_version(reg, key, __version__)
     gate_lines = []
+    if not dry_run:
+        _save_team(reg, key, root)
     gate = None if dry_run else _merge_queue(reg, key, root, gate_lines)
     report = None if dry_run else _report(reg, key, root, detected=detected, gate=gate)
     refreshed = list(ref.changed) + ([link] if linked in ("created", "relinked") else [])
@@ -238,6 +241,20 @@ def _refresh(args, reg) -> int:
         lines.append(PERSONAS_UPDATED.format(names=", ".join(restart)))
     out(args, data, lines)
     return EXIT_OK
+
+
+def _save_team(reg, key, root) -> None:
+    """The team plugin the repository declares (detect.team) on the project's registry entry as `team`, saved
+    only when it changes; the field goes when the repository no longer declares one."""
+    from . import detect
+    from .hr import book
+    if key not in reg["projects"]:
+        return
+    found = detect.team(root)
+    if reg["projects"][key].get("team") == found:
+        return
+    book.write(reg, lambda r: r["projects"][key].__setitem__("team", found) if found
+               else r["projects"][key].pop("team", None))
 
 
 def _merge_queue(reg, key, root, lines):
@@ -442,14 +459,13 @@ def _running_lines(reg, key, root, cfg, gate=None) -> list:
     """The setup report's "Running now": what works without the owner, with this machine's real values; the
     merge queue's state from `gate` (verifygate.ensure) when this run has one, else read locally."""
     from . import guide, janitor, publish, queue, reconcile, verifygate
-    from .install import launchd
     rec = reconcile.settings(cfg)
     beat = (f"every {reconcile.every_s(rec)} s (the reconcile job): wakes Main and the divisions when work waits"
             if rec.get("enabled", True) else "off (reconcile.enabled false); Main and the divisions wake only "
             "when you write")
     st = {**janitor.DEFAULTS, **(cfg.get("janitor") or {})}
-    jan_on, _ = guide.janitor_line(cfg, Path.home())
-    jan = (f"daily at {launchd.daily_at()}; moves retired units' workspaces, and build caches of units idle for "
+    jan_on, _ = guide.janitor_line(cfg)
+    jan = (f"daily (the heartbeat starts it when the last pass is a day old); moves retired units' workspaces, and build caches of units idle for "
            f"{st['idle_days']} days, to a trash it empties after {st['trash_days']} days; touches nothing in the "
            "repository" if jan_on else 'off; say "let the janitor clean up" (listed below)')
     git = (Path(root) / ".git").exists()
@@ -464,10 +480,17 @@ def _running_lines(reg, key, root, cfg, gate=None) -> list:
         state = f"waiting for {verifygate.awaiting(reg['projects'].get(key))} to be merged"
     else:
         state = f'waiting; no check script on {base or "the base branch"} and no PR'
-    lands = ("lands it by itself when that passes" if queue.land_mode(cfg, key) == "auto"
+    lands = ("lands it by itself when that passes" if queue.land_mode(cfg, key, reg) == "auto"
              else 'lands it when you say "merge"')
     jev_on, _ = guide.jev_line(cfg)
-    return [f"- Heartbeat: {beat}.",
+    plugin = registry.team(reg, key)
+    team = []
+    if plugin:
+        from .hr import panes
+        installed = "yes" if panes.plugin_install_path(plugin) is not None else 'no, say "install the team plugin"'
+        team = [f"- Team: plugin {plugin} (installed for you: {installed}). Push, pull request and merge wait for "
+                'your word: "push <unit>" and "merge <PR>"; the team\'s rules reach every ORCHE session.']
+    return [*team, f"- Heartbeat: {beat}.",
             f"- Janitor: {jan}.",
             f"- Merge queue: on when the repository has scripts/verify/ci.sh on {base or 'its base branch'} (runs "
             f"that script on each approved PR; {lands}); this project: {state}.",
@@ -517,7 +540,7 @@ def write_report(reg, key, root, intake_line=None, detected=(), created=(), gate
                       "Main plans and decides; divisions do the work; you only get decisions.",
                       "", "## Running now", "", *_running_lines(reg, key, root, cfg, gate),
                       "", "## Any time", "",
-                      *guide.lines(cfg, reg, Path.home(), key), "",
+                      *guide.lines(cfg, reg, key), "",
                       'Say "what else can ORCHE do?" to see this list again (Main runs `orche doctor`).', ""])
     util.atomic_write(path, text)
     return path
@@ -965,6 +988,8 @@ def cmd_init(args):
         lines.append(f"backups: {_tilde(backups)}")
     if upgraded:
         lines.append(f"rendered by {before or 'an earlier version'}, now {__version__}")
+    if not dry_run:
+        _save_team(reg, key, root)
     gate = None if dry_run else _merge_queue(reg, key, root, lines)   # the check script on the base, or its PR
     data["merge_queue"] = gate
     names = list(dict.fromkeys(registry.divisions_of(proj) + list(divisions)))   # a dry run saved none

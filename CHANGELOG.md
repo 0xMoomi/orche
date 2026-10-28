@@ -3,6 +3,22 @@
 All notable changes to ORCHE are listed here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow semantic versioning.
 
+## 0.17.0 — 2026-10-28
+
+### Added
+
+- A repository that declares its team plugin in its committed `.claude/settings.json` runs in team mode: `orche init` and `orche update` record it, and the setup report and `orche doctor` say whether the plugin is installed for you.
+- In team mode nothing is pushed, opened or merged by itself: a finished unit waits at its commit, "push <unit>" makes Main run `orche queue add`, which pushes the branch, opens the pull request and runs the head review, and "merge PR 12" makes Main run `orche queue approve`.
+- The team plugin's rules and its guard reach ORCHE's headless workers, and the new `team.env` config sets the team's hook switches in every ORCHE session, panes and headless runs alike.
+
+### Changed
+
+- The heartbeat runs the janitor's daily pass when the last one is a day old; the 04:00 janitor LaunchAgent is gone, and `orche install` or `orche update` removes an old one.
+
+### Removed
+
+- `orche janitor install-schedule` and `orche janitor uninstall-schedule`.
+
 ## 0.16.1 — 2026-10-28
 
 ### Changed

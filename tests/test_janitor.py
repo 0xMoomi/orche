@@ -1,4 +1,4 @@
-"""Janitor: state-based archive/trash, GRAVEYARD rows, undo/restore, purge, discard, launchd schedule.
+"""Janitor: state-based archive/trash, GRAVEYARD rows, undo/restore, purge, discard, the daily rule.
 
 Synthetic world in a temp dir: an active unit, a retired unit with two transcripts, a dirty
 worktree, a 10-day-old `.next`, a fresh `.next`, a GRAVEYARD `path:` row, and `.env*` / `memory/`
@@ -8,7 +8,6 @@ import datetime as dt
 import io
 import json
 import os
-import plistlib
 import shutil
 import tarfile
 import tempfile
@@ -17,7 +16,7 @@ from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
 
 import support
-from orche import registry, shell
+from orche import janitor, registry, shell
 from orche.janitor import archive, discover, rules, trash
 from test_registry import load_cli
 
@@ -204,6 +203,7 @@ class DryRunTest(JanitorCase):
         self.assertTrue(self.old_next.exists())
 
     def test_report_command(self):
+        janitor.report_path().unlink()   # support's fresh report
         self.assertEqual(self.orche("janitor", "report")[0], 2)
         self.run_json()
         code, out, _ = self.orche("janitor", "report")
@@ -622,37 +622,38 @@ class RulesTest(support.TempHomeCase):
         self.assertFalse(trash.purge_due("junk", today, 30))
 
 
-class ScheduleTest(JanitorCase):
-    def test_install_dry_run_prints_argv_and_path(self):
-        code, out, err = self.orche("--dry-run", "janitor", "install-schedule")
-        self.assertEqual(code, 0, err)
-        plist = self.w / "userhome/Library/LaunchAgents/com.orche.janitor.plist"
-        self.assertIn(f"would write {plist}", out)
-        self.assertIn(f"would run: launchctl bootout gui/{os.getuid()}/com.orche.janitor", out)
-        self.assertIn(f"would run: launchctl bootstrap gui/{os.getuid()} {plist}", out)
-        self.assertFalse(plist.exists())
-        self.assertFalse(any(c[0] == "launchctl" for c in self.calls))
+class DailyTest(JanitorCase):
+    """c85: the heartbeat's rule (janitor.due) reads the report's mtime; one pass at a time (`.pass.lock`)."""
 
-    def test_install_and_uninstall(self):
-        code, out, err = self.orche("janitor", "install-schedule")
-        self.assertEqual(code, 0, err)
-        plist = self.w / "userhome/Library/LaunchAgents/com.orche.janitor.plist"
-        data = plistlib.loads(plist.read_bytes())
-        self.assertEqual(data["ProgramArguments"][1:], ["janitor", "run"])
-        self.assertTrue(data["ProgramArguments"][0].endswith("/bin/orche"))
-        self.assertEqual(data["StartCalendarInterval"], {"Hour": 4, "Minute": 0})
-        self.assertEqual(data["StandardOutPath"], f"{self.home}/logs/janitor.log")
-        self.assertEqual(data["EnvironmentVariables"]["ORCHE_HOME"], str(self.home))
-        self.assertIn(["launchctl", "bootstrap", f"gui/{os.getuid()}", str(plist)], self.calls)
-        self.assertEqual(self.orche("janitor", "uninstall-schedule")[0], 0)
-        self.assertIn(["launchctl", "bootout", f"gui/{os.getuid()}/com.orche.janitor"], self.calls)
-        self.assertFalse(plist.exists())
-        self.assertEqual(self.orche("janitor", "uninstall-schedule")[0], 2)
+    def test_due_reads_the_report_age(self):
+        report = janitor.report_path()
+        report.unlink()
+        self.assertTrue(janitor.due())
+        self.assertEqual(janitor.last_pass_text(), "never")
+        report.write_text("x")
+        self.assertFalse(janitor.due())
+        old = time.time() - janitor.DAILY_S - 60
+        os.utime(report, (old, old))
+        self.assertTrue(janitor.due())
+        self.assertEqual(janitor.last_pass_text(), "1d ago")
 
-    def test_template_has_no_user_paths(self):
-        text = (Path(support.ROOT) / "templates/launchd/com.orche.janitor.plist").read_text()
-        self.assertNotIn("/" + "Users/", text)  # split so the repo hygiene grep stays clean
-        plistlib.loads(text.replace("{{", "").replace("}}", "").encode())
+    def test_a_run_writes_the_report_and_frees_the_lock(self):
+        janitor.report_path().unlink()
+        self.run_json("--dry-run")
+        self.assertFalse(janitor.due())
+        self.assertFalse(janitor.lock_path().exists())
+
+    def test_a_held_lock_refuses_and_a_stale_one_is_taken_over(self):
+        janitor.lock_path().touch()
+        self.assertTrue(janitor.running())
+        code, _out, err = self.orche("janitor", "run", "--dry-run")
+        self.assertEqual(code, 3)
+        self.assertIn("another janitor pass is running", err)
+        old = time.time() - janitor.LOCK_STALE_S - 60
+        os.utime(janitor.lock_path(), (old, old))
+        self.assertFalse(janitor.running())
+        self.run_json("--dry-run")
+        self.assertFalse(janitor.lock_path().exists())
 
 
 class ZstdTest(JanitorCase):

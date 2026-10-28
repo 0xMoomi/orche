@@ -1,6 +1,7 @@
-"""`orche janitor run|report|undo|restore|enable|disable|install-schedule|uninstall-schedule`.
+"""`orche janitor run|report|undo|restore|enable|disable`.
 
-`run` stays a dry run until `ORCHE_HOME/janitor.enabled` exists; `--dry-run` always forces one.
+`run` stays a dry run until `ORCHE_HOME/janitor.enabled` exists; `--dry-run` always forces one. The
+heartbeat starts it daily (janitor.heartbeat); one pass at a time (`janitor/.pass.lock`, exit 3 while held).
 Unless `--dry-run`, `run` first reconciles lost runner runs and prunes `logs/runs/*.log` older than
 `runner.log_keep_days` (ORCHE's own state, so not gated on `janitor.enabled`), and afterwards
 refreshes the intake of every project that has one (`orche intake <proj> --if-stale`; a failure is a
@@ -14,14 +15,11 @@ to Build; not on `--dry-run`.
 Logic lives in `orche.janitor`; this module only parses arguments and prints.
 """
 import sys
-from pathlib import Path
 
-from . import cli, config, intake, janitor, log, paths, registry, runs, util
-from .install import launchd
+from . import cli, config, intake, janitor, log, registry, runs, util
 from .janitor import archive, trash
 
 EXIT_OK, EXIT_USER, EXIT_NOT_FOUND, EXIT_BLOCKED = 0, 1, 2, 3
-LABEL = launchd.JANITOR
 
 
 def register(subparsers):
@@ -45,11 +43,16 @@ def register(subparsers):
     sp.set_defaults(func=cmd_restore)
     sub.add_parser("enable", help="let `janitor run` act (not only report)").set_defaults(func=cmd_enable)
     sub.add_parser("disable", help="back to dry-run only").set_defaults(func=cmd_disable)
-    sub.add_parser("install-schedule", help="install the daily 04:00 launchd job").set_defaults(func=cmd_install)
-    sub.add_parser("uninstall-schedule", help="remove the launchd job").set_defaults(func=cmd_uninstall)
 
 
 def cmd_run(args):
+    with janitor.pass_lock() as held:
+        if not held:
+            return cli.fail(EXIT_BLOCKED, f"another janitor pass is running ({janitor.lock_path()})")
+        return _run(args)
+
+
+def _run(args):
     runs.reconcile_cli(registry.load(), args)
     if not args.dry_run:      # ORCHE's own run logs: pruned whether or not the janitor is enabled
         runs.prune_logs((config.load().get("runner") or {}).get("log_keep_days"))
@@ -124,42 +127,3 @@ def cmd_disable(args):
          [("would disable" if args.dry_run else "janitor disabled (dry-run only)")])
     return EXIT_OK
 
-
-def plist_path() -> Path:
-    return launchd.plist_path(LABEL)
-
-
-def render_plist() -> str:
-    return launchd.render(LABEL)
-
-
-def cmd_install(args):
-    text = render_plist()
-    if not args.dry_run:
-        paths.ensure_dirs()
-    res = launchd.install(LABEL, text, dry_run=args.dry_run)
-    target, argv = res["plist"], res["argv"]
-    data = {"plist": target, "argv": argv, "dry_run": args.dry_run}
-    if args.dry_run:
-        cli.out(args, {**data, "content": text},
-             [f"would write {target}"] + ["would run: " + " ".join(a) for a in argv])
-        return EXIT_OK
-    if res["error"]:
-        return cli.fail(EXIT_USER, f"launchctl bootstrap failed: {res['error']}")
-    cli.out(args, data, [f"installed {target}", f"janitor runs daily at {launchd.daily_at()}"])
-    return EXIT_OK
-
-
-def cmd_uninstall(args):
-    res = launchd.uninstall(LABEL, dry_run=args.dry_run)
-    target, argv = res["plist"], res["argv"]
-    data = {"plist": target, "argv": argv, "dry_run": args.dry_run}
-    if args.dry_run:
-        cli.out(args, data, ["would run: " + " ".join(a) for a in argv] + [f"would remove {target}"])
-        return EXIT_OK
-    if res["missing"]:
-        return cli.fail(EXIT_NOT_FOUND, f"not installed: {target}")
-    if res["error"]:
-        print(f"orche: warning: launchctl bootout failed: {res['error']}", file=sys.stderr)
-    cli.out(args, data, [f"removed {target}"])
-    return EXIT_OK

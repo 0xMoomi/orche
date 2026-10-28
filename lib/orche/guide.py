@@ -1,7 +1,7 @@
 """What ORCHE can switch on any time, as owner words: `orche doctor`'s "Next steps" block and the "Any
 time" list of the setup report (`.orche/SETUP.md`, written by `orche init`).
 
-`lines(cfg, reg, home)` returns one English line per feature, shaped
+`lines(cfg, reg)` returns one English line per feature, shaped
 `- <Feature>: <what it is>. <State>. Say "<owner words>"; <who runs what>.` so a reader needs no
 glossary: the features that are off first, then the ones that are on, then the always-present lines; at
 most MAX_LINES lines. Jev and the janitor drop out once on: the setup report's "Running now" names them. Nothing here reads a stored secret, calls the network or writes a file.
@@ -9,7 +9,6 @@ most MAX_LINES lines. Jev and the janitor drop out once on: the setup report's "
 import shutil
 
 from . import jev, jevkey, oauth, publish, scale
-from .install import launchd
 
 MAX_LINES = 12
 MAX_GATES = 2   # more projects without a gate share one line
@@ -55,15 +54,16 @@ def token_line():
                             "Set" if src else "Not set", "set the token for background runs", runs)
 
 
-def janitor_line(cfg, home):
-    """(on?, line): on when the janitor is enabled and its daily schedule is installed."""
+def janitor_line(cfg):
+    """(on?, line): on when the janitor is enabled (the heartbeat starts its daily pass)."""
     from . import janitor
     st = {**janitor.DEFAULTS, **(cfg.get("janitor") or {})}
-    on = janitor.enabled_flag().exists() and launchd.plist_path(launchd.JANITOR, home).is_file()
-    what = (f"cleans up daily; retired agents' workspaces and build caches or scratch files idle {st['idle_days']} "
-            f"days go to a trash emptied after {st['trash_days']} days")
+    on = janitor.enabled_flag().exists()
+    what = (f"cleans up daily (the heartbeat starts it when the last pass is a day old); retired agents' "
+            f"workspaces and build caches or scratch files idle {st['idle_days']} days go to a trash emptied after "
+            f"{st['trash_days']} days")
     return on, _line("Janitor", what, "On" if on else "Off", "let the janitor clean up",
-                     "Main runs `orche janitor enable` and `orche janitor install-schedule`")
+                     "Main runs `orche janitor enable`")
 
 
 def parallel(cfg, reg) -> tuple:
@@ -105,10 +105,10 @@ def gate_lines(cfg, reg, project=None) -> list:
             for key, base in missing]
 
 
-def lines(cfg, reg, home, project=None) -> list:
+def lines(cfg, reg, project=None) -> list:
     """The "Any time" lines: off first, then on, then the always-present ones (<= MAX_LINES); the merge
     queue lines of `project` only when given (a project's setup report), of every project otherwise."""
-    jev_state, janitor_state = jev_line(cfg), janitor_line(cfg, home)
+    jev_state, janitor_state = jev_line(cfg), janitor_line(cfg)
     states = [jev_state, codex_line(), token_line(), janitor_state, scale_line(cfg, reg)]
     states = [s for s in states if not (s[0] and s in (jev_state, janitor_state))]   # on: in Running now
     states += [(False, line) for line in gate_lines(cfg, reg, project)]

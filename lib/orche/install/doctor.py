@@ -96,6 +96,7 @@ def claude_checks() -> list:
 
 MIN_FREE = 1 << 30          # WARN below 1 GiB free on ORCHE_HOME's filesystem
 MAX_RUN_LOGS = 200 << 20    # WARN above 200 MiB of logs/runs
+JANITOR_STALE_DAYS = 2      # WARN when the janitor's last pass is older (the heartbeat on)
 
 
 def _existing(path):
@@ -217,6 +218,22 @@ def entire_rows(reg, which=shutil.which) -> list:
                                "linked to their sessions") for key in users]
 
 
+def team_rows(reg) -> list:
+    """`team` per team project (registry.team): OK when its plugin is installed for this user (owner-word mode),
+    WARN when it is not (its rules and guard cannot reach ORCHE's headless workers)."""
+    from ..hr import panes
+    rows = []
+    for key in sorted(reg.get("projects", {})):
+        plugin = registry.team(reg, key)
+        if not plugin:
+            continue
+        rows.append(("OK", "team", f"{key}: plugin {plugin} installed, owner-word mode")
+                    if panes.plugin_install_path(plugin) is not None else
+                    ("WARN", "team", f'{key}: plugin {plugin} is not installed for this user: say "install the team '
+                                     'plugin"'))
+    return rows
+
+
 def _deploys(root) -> list:
     found = [n for n in DEPLOY_FILES if (root / n).is_file()]
     for wf in sorted((root / ".github" / "workflows").glob("*.y*ml")):
@@ -246,7 +263,7 @@ def gate_rows(reg, cfg) -> list:
                     ("WARN", "queue gate", f"{key}: no check script on origin/{base} and no PR; "
                                            f"orche init --refresh {key} opens one"))
         found = _deploys(root)
-        if found and queue.land_mode(cfg, key) == "owner":
+        if found and queue.land_mode(cfg, key, reg) == "owner":
             rows.append(("OK", "deploy on merge", f"{key}: {found[0]} — merges land on the owner's word (queue.land owner)"))
         elif found:
             rows.append(("WARN", "deploy on merge", f"{key}: {found[0]} — every queue merge deploys {base} (queue.land "
@@ -441,26 +458,20 @@ def reconcile_job_rows(home) -> list:
     return [("OK", name, f"loaded, every {every}s")]
 
 
-def janitor_rows(home) -> list:
-    """The janitor's daily LaunchAgent: OK when its plist is there (on, or report only); WARN only when it
-    is missing after an install (install writes it); OK before any install."""
-    from .. import janitor
+def janitor_rows() -> list:
+    """The janitor's daily pass (the heartbeat starts it): WARN when the last pass is older than
+    JANITOR_STALE_DAYS days while the heartbeat is on."""
+    from .. import janitor, reconcile
     from ..janitor import weekly
-    from . import StateUnreadable, launchd, load_state
-    name = "janitor"
-    if sys.platform != "darwin":
-        return [("OK", name, "not macOS: run `orche janitor run` daily (cron/systemd)")]
-    if launchd.plist_path(launchd.JANITOR, home).is_file():
-        how = "on" if janitor.enabled_flag().exists() else "report only (orche janitor enable lets it act)"
-        week = weekly.last(janitor.load_state())
-        return [("OK", name, f"daily at {launchd.daily_at()}, weekly pass {week.date().isoformat() if week else 'never'}, "
-                             f"{how}")]
-    try:
-        installed = bool(load_state())
-    except StateUnreadable:
-        installed = True
-    return [("WARN", name, "daily schedule missing: run orche install") if installed else
-            ("OK", name, "not scheduled yet (orche install adds it)")]
+    age = janitor.last_pass_age()
+    week = weekly.last(janitor.load_state())
+    how = "on" if janitor.enabled_flag().exists() else "off (dry run)"
+    detail = (f"daily through the heartbeat, last pass {janitor.last_pass_text()}, "
+              f"weekly pass {week.date().isoformat() if week else 'never'}, {how}")
+    stale = age is not None and age > JANITOR_STALE_DAYS * janitor.DAILY_S
+    if stale and reconcile.settings().get("enabled", True):
+        return [("WARN", "janitor", detail + "; see logs/janitor.log")]
+    return [("OK", "janitor", detail)]
 
 
 def checks(ctx) -> list:
@@ -495,7 +506,7 @@ def checks(ctx) -> list:
     level, detail = _orche_home()
     add(level, "orche_home", detail)
     job = job_state(ctx.home)
-    for row in (disk_checks() + heartbeat_rows(job) + reconcile_job_rows(ctx.home) + janitor_rows(ctx.home)
+    for row in (disk_checks() + heartbeat_rows(job) + reconcile_job_rows(ctx.home) + janitor_rows()
                 + privacy_rows(job)):
         add(*row)
     try:
@@ -505,7 +516,7 @@ def checks(ctx) -> list:
             add(*row)
         for row in process_checks(reg):
             add(*row)
-        for row in upgrade_checks(reg) + entire_rows(reg):
+        for row in upgrade_checks(reg) + entire_rows(reg) + team_rows(reg):
             add(*row)
         for row in scale_checks(reg):
             add(*row)
@@ -560,4 +571,4 @@ def next_steps(ctx) -> list:
         reg = registry.load()
     except registry.RegistryError:
         reg = registry.empty()
-    return guide.lines(config.load(), reg, ctx.home)
+    return guide.lines(config.load(), reg)

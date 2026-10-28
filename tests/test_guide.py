@@ -25,7 +25,7 @@ class GuideTest(support.TempHomeCase):
 
     def lines(self):
         with mock.patch.object(guide.shutil, "which", lambda name: {"codex": self.codex}.get(name)):
-            return guide.lines(self.cfg, self.reg, self.user)
+            return guide.lines(self.cfg, self.reg)
 
     def line(self, feature):
         [found] = [ln for ln in self.lines() if ln.startswith(f"- {feature}")]
@@ -54,7 +54,8 @@ class GuideTest(support.TempHomeCase):
                       "Off: Codex is not installed. ", lines[1])
         self.assertIn("`npm install -g @openai/codex`", lines[1])
         self.assertIn("Background-run token: lets ORCHE start agents while no Claude window is open. Not set.", lines[2])
-        self.assertIn("Janitor: cleans up daily; retired agents' workspaces and build caches or scratch files idle 7 "
+        self.assertIn("Janitor: cleans up daily (the heartbeat starts it when the last pass is a day old); "
+                      "retired agents' workspaces and build caches or scratch files idle 7 "
                       "days go to a trash emptied after 30 days. Off.", lines[3])
         self.assertIn("More agents at once: how many workers may run in parallel. Up to 4 at once (default).", lines[4])
         self.assertEqual(len(lines), 10)
@@ -78,17 +79,14 @@ class GuideTest(support.TempHomeCase):
                          'Claude read the diff at once and only a defect both name sends it back.')
         jevkey.set_key("t-123", account=jevkey.OAUTH_ACCOUNT)
         self.assertIn(". Set. ", self.line("Background-run token"))
+        self.assertIn(". Off. ", self.line("Janitor"))
         janitor.enabled_flag().touch()
-        self.assertIn(". Off. ", self.line("Janitor"))   # enabled, but no daily schedule
-        plist = self.user / "Library" / "LaunchAgents" / "com.orche.janitor.plist"
-        plist.parent.mkdir(parents=True)
-        plist.write_text("x")
-        on, line = guide.janitor_line(self.cfg, self.user)
+        on, line = guide.janitor_line(self.cfg)
         self.assertTrue(on)
         self.assertIn(". On. ", line)
         self.assertFalse(any(ln.startswith("- Janitor") for ln in self.lines()))
         self.cfg["janitor"] = {"trash_days": 14}
-        self.assertIn("a trash emptied after 14 days", guide.janitor_line(self.cfg, self.user)[1])
+        self.assertIn("a trash emptied after 14 days", guide.janitor_line(self.cfg)[1])
         conf, limits = scale.target(self.cfg, "30")
         for key, value in conf.items():
             scale._put(self.cfg, key, value)
@@ -129,8 +127,8 @@ class GuideTest(support.TempHomeCase):
         self.project("acme")
         self.project("other")
         with mock.patch.object(guide.shutil, "which", lambda name: None):
-            every = guide.lines(self.cfg, self.reg, self.user)
-            own = guide.lines(self.cfg, self.reg, self.user, "acme")
+            every = guide.lines(self.cfg, self.reg)
+            own = guide.lines(self.cfg, self.reg, "acme")
         self.assertEqual([ln[:22] for ln in every if "Merge queue" in ln],
                          ["- Merge queue for acme", "- Merge queue for othe"])
         self.assertEqual([ln[:22] for ln in own if "Merge queue" in ln], ["- Merge queue for acme"])
@@ -142,21 +140,18 @@ class GuideTest(support.TempHomeCase):
         self.assertEqual(guide.parallel(self.cfg, self.reg), (7, "custom"))
 
     def test_running_now_has_the_real_values(self):
-        """c75: the setup report's "Running now": heartbeat interval, janitor time and rules, the project's queue."""
+        """c75: the setup report's "Running now": heartbeat interval, janitor rule and rules, the project's queue."""
         root = self.project("acme")
         self.cfg["publish"] = {"base": "main"}
         self.cfg["reconcile"] = {"enabled": True, "every_s": 120}
         with mock.patch.object(cmd_init.Path, "home", classmethod(lambda cls: self.user)):
             off = cmd_init._running_lines(self.reg, "acme", root, self.cfg)
             janitor.enabled_flag().touch()
-            plist = self.user / "Library" / "LaunchAgents" / "com.orche.janitor.plist"
-            plist.parent.mkdir(parents=True)
-            plist.write_text("x")
             lines = cmd_init._running_lines(self.reg, "acme", root, self.cfg)
         self.assertEqual(off[1], '- Janitor: off; say "let the janitor clean up" (listed below).')
         self.assertEqual(lines, [
             "- Heartbeat: every 120 s (the reconcile job): wakes Main and the divisions when work waits.",
-            "- Janitor: daily at 04:00; moves retired units' workspaces, and build caches of units idle for 7 days, "
+            "- Janitor: daily (the heartbeat starts it when the last pass is a day old); moves retired units' workspaces, and build caches of units idle for 7 days, "
             "to a trash it empties after 30 days; touches nothing in the repository.",
             "- Merge queue: on when the repository has scripts/verify/ci.sh on main (runs that script on each "
             "approved PR; lands it by itself when that passes); this project: waiting; no check script on main and "

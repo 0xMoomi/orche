@@ -24,18 +24,42 @@ RESUMED = "resumed: say in five lines what was done last, what runs now and what
 
 
 def session_env(session) -> str:
-    """`PATH=<plugin>/bin:$PATH ORCHE_SESSION=<session> ` prefix for every ORCHE pane command.
+    """`PATH=<plugin>/bin:$PATH ORCHE_SESSION=<session> [NAME=value ...] ` prefix for every ORCHE pane command.
 
     ORCHE_SESSION lets hooks know the pane's role without guessing from cwd; the PATH entry puts
-    `orche` on the pane's PATH (`$PATH` stays unexpanded: the pane's shell expands it).
+    `orche` on the pane's PATH (`$PATH` stays unexpanded: the pane's shell expands it); each config
+    `team.env` pair follows, shell-quoted (the team's hook switches).
     """
-    return f"PATH={shlex.quote(str(paths.PLUGIN_ROOT / 'bin'))}:$PATH ORCHE_SESSION={shlex.quote(session)} "
+    team = "".join(f"{name}={shlex.quote(value)} " for name, value in config.team_env(config.load()).items())
+    return f"PATH={shlex.quote(str(paths.PLUGIN_ROOT / 'bin'))}:$PATH ORCHE_SESSION={shlex.quote(session)} {team}"
+
+
+def _claude_dir() -> Path:
+    """Claude Code's config dir: `$CLAUDE_CONFIG_DIR`, else `~/.claude`."""
+    base = os.environ.get("CLAUDE_CONFIG_DIR")
+    return Path(base).expanduser() if base else Path.home() / ".claude"
 
 
 def claude_projects() -> Path:
     """Claude Code's transcript root: `$CLAUDE_CONFIG_DIR/projects`, else `~/.claude/projects`."""
-    base = os.environ.get("CLAUDE_CONFIG_DIR")
-    return (Path(base).expanduser() if base else Path.home() / ".claude") / "projects"
+    return _claude_dir() / "projects"
+
+
+def plugin_install_path(plugin_id) -> Path | None:
+    """Where the team plugin `plugin_id` is installed for this user: the `installPath` of its user-scope entry
+    (`plugins[<id>]`, a dict or a list of dicts) in `<claude config dir>/plugins/installed_plugins.json`, when
+    that directory exists; else None (not installed, or the file unreadable)."""
+    try:
+        data = json.loads((_claude_dir() / "plugins" / "installed_plugins.json").read_text(encoding="utf-8"))
+        entries = data["plugins"][plugin_id]
+    except (OSError, ValueError, KeyError, TypeError):
+        return None
+    for entry in entries if isinstance(entries, list) else [entries]:
+        if isinstance(entry, dict) and entry.get("scope") == "user" and isinstance(entry.get("installPath"), str):
+            where = Path(entry["installPath"]).expanduser()
+            if where.is_dir():
+                return where
+    return None
 
 
 def _names(path, session) -> bool:

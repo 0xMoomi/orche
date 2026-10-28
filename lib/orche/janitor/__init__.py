@@ -7,8 +7,13 @@ a manifest and a GRAVEYARD row before anything is removed.
 
 Layout: `rules` decides (plan, no side effects), `discover` reads git/Orca/filesystem,
 `archive` / `trash` act, `graveyard` records. This module runs one pass and renders the report.
+
+The heartbeat (reconcile) starts `orche janitor run` detached when the last pass is DAILY_S old (the
+report's mtime: every pass, dry or live, writes it) and no pass holds `janitor/.pass.lock`.
 """
+import contextlib
 import os
+import time
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from types import SimpleNamespace
@@ -26,6 +31,8 @@ DEFAULTS = {
     "cache_names": [".next", "dist", "out", "build", "coverage", ".turbo"],
 }
 ACTOR = "janitor"
+DAILY_S = 24 * 3600         # the heartbeat starts a pass when the last one is this old
+LOCK_STALE_S = 2 * 3600     # a `.pass.lock` this old belongs to a dead pass
 
 
 @dataclass
@@ -74,6 +81,84 @@ def enabled_flag() -> Path:
 
 def report_path() -> Path:
     return state_dir() / "last-report.md"
+
+
+def lock_path() -> Path:
+    return state_dir() / ".pass.lock"
+
+
+def last_pass_age(now=None):
+    """Seconds since the last pass (the report's mtime; `now` epoch seconds, default the clock), or None."""
+    try:
+        return (time.time() if now is None else now) - report_path().stat().st_mtime
+    except FileNotFoundError:
+        return None
+
+
+def due(now=None) -> bool:
+    """No pass yet, or the last one is DAILY_S old."""
+    age = last_pass_age(now)
+    return age is None or age >= DAILY_S
+
+
+def running(now=None) -> bool:
+    """A pass holds `.pass.lock` and the lock is younger than LOCK_STALE_S."""
+    try:
+        return (time.time() if now is None else now) - lock_path().stat().st_mtime < LOCK_STALE_S
+    except FileNotFoundError:
+        return False
+
+
+@contextlib.contextmanager
+def pass_lock():
+    """Hold `.pass.lock` (O_EXCL; a stale one is taken over) for one `orche janitor run`: yields True,
+    or False when a live pass holds it; removed at the end."""
+    path = lock_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    held = False
+    for _ in range(2):
+        try:
+            os.close(os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o644))
+            held = True
+            break
+        except FileExistsError:
+            if running():
+                break
+            path.unlink(missing_ok=True)
+    try:
+        yield held
+    finally:
+        if held:
+            path.unlink(missing_ok=True)
+
+
+def ago(seconds) -> str:
+    """`12m`, `3h`, `2d`."""
+    s = max(0, int(seconds))
+    return f"{s // 60}m" if s < 3600 else f"{s // 3600}h" if s < 86400 else f"{s // 86400}d"
+
+
+def last_pass_text(now=None) -> str:
+    age = last_pass_age(now)
+    return "never" if age is None else f"{ago(age)} ago"
+
+
+def heartbeat(dry_run) -> list:
+    """The heartbeat's class `janitor` (reconcile): when due() and no pass is running, `orche janitor run`
+    started detached, never inline. One row as review's, or none."""
+    from .. import procs
+    if not due() or running():
+        return []
+    when, failed = last_pass_text(), None
+    if not dry_run:
+        try:
+            procs.spawn_orche(["janitor", "run"], paths.orche_home() / "logs" / "janitor.log")
+        except Exception as exc:  # noqa: BLE001 - due again next pass
+            failed = type(exc).__name__
+            log.log("hooks", f"reconcile: janitor: {failed}: {exc}")
+    return [{"action": "janitor", "class": "janitor", "project": None, "target": "janitor", "rev": None,
+             "attempt": 1, "cap": 1, "failed": failed,
+             "line": f"{'would start' if dry_run else 'start'} the janitor's daily pass (last pass {when})"}]
 
 
 def load_state() -> dict:

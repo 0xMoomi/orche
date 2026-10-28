@@ -1,1 +1,1 @@
-Commit your work on your branch; do not push, merge or rebase: after your done passes the gate ORCHE pushes the branch and opens the PR. Run VERIFY yourself, paste its output and record the ledger row for HEAD.
+Commit your work on your branch; do not push, merge or rebase: after your done passes the gate ORCHE pushes the branch and opens the PR. In a team repository you never push: your done ends at the commit and the ledger row, and the branch is pushed on the owner's word. Run VERIFY yourself, paste its output and record the ledger row for HEAD.

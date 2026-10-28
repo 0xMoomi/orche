@@ -798,6 +798,12 @@ class PaneCommandTest(support.TempHomeCase):
             env = panes.session_env("main-acme")
         self.assertEqual(env, "PATH='/opt/my plugins/orche/bin':$PATH ORCHE_SESSION=main-acme ")
 
+    def test_team_env_follows_the_session_shell_quoted(self):
+        from orche.hr import panes
+        (self.home / "config.json").write_text(json.dumps({"team": {"env": {"TEAM_LOG": "off now", "X": "1"}}}))
+        env = panes.session_env("main-acme")
+        self.assertTrue(env.endswith("ORCHE_SESSION=main-acme TEAM_LOG='off now' X=1 "), env)
+
     def test_pane_shell_resolves_orche(self):
         import subprocess
         from orche.hr import panes

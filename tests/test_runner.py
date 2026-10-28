@@ -448,6 +448,47 @@ class RunTest(RunnerCase):
         self.assertEqual(ptr["via"], "runner")
         self.assertEqual(list((self.home / "runs" / "acme").glob("*.lock")), [])
 
+    def team(self):
+        reg = registry.load()
+        reg["projects"]["acme"]["team"] = support.TEAM_PLUGIN
+        registry.save(reg)
+
+    def test_a_team_done_publishes_nothing_and_the_worker_gets_the_team_rules_and_guard(self):
+        """R-TEAM-2, R-TEAM-3: a verified done in a team repository files the ready line and `pr: none` (no push,
+        no PR, no head review); the installed plugin's rules reach the prompt and its guard the gates."""
+        from unittest import mock
+        from orche import publish
+        from orche.review import build as review_build
+        self.team()
+        folder = support.team_plugin(self.home)
+        unit = self.brief()
+        self.commit_action()
+        self.reply("Did it.\nSTATUS: done\ncoupon field added")
+        with mock.patch.object(publish, "publish") as pub, mock.patch.object(review_build, "after_publish") as after:
+            code, out, err = self.orche("run", unit)
+        self.assertEqual((code, err), (0, ""), out)
+        pub.assert_not_called()
+        after.assert_not_called()
+        [ptr] = self.pointers("main-acme")
+        self.assertEqual((ptr["status"], ptr["summary"], ptr.get("pr")),
+                         ("done", f'coupon field added\nready: say "push {unit}" (div/build)', None))
+        self.assertIsNone(self.run_record(unit)["pr"])
+        self.assertEqual(support.gh_calls(self.gh), [])
+        stdin = (self.fake / "stdin.txt").read_text()
+        self.assertIn("\n\n## Team rules\n" + support.TEAM_RULES.strip() + "\n\n## Runner\n", stdin)
+        self.assertIn("In a team repository you never push", stdin)
+        argv = (self.fake / "argv.txt").read_text().splitlines()
+        self.assertIn(f"{folder}/hooks/guard.sh", argv[argv.index("--settings") + 1])
+
+    def test_a_team_plugin_not_installed_injects_nothing(self):
+        self.team()
+        unit = self.brief()
+        self.reply("STATUS: blocked\nneeds a key")
+        self.orche("run", unit)
+        self.assertNotIn("## Team rules", (self.fake / "stdin.txt").read_text())
+        argv = (self.fake / "argv.txt").read_text().splitlines()
+        self.assertNotIn("guard.sh", argv[argv.index("--settings") + 1])
+
     def test_done_without_a_commit_is_unverified_even_with_a_row_for_the_old_head(self):
         """I-2: a stale ledger row for the pre-run HEAD no longer verifies a run that committed nothing."""
         unit = self.brief()

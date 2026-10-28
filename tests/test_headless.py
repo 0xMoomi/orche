@@ -249,6 +249,40 @@ def help_without(*flags):
     return "Usage: claude [options]\n" + "".join(f"  {f} <x>\n" for f in headless.FLAGS if f not in flags)
 
 
+class TeamTest(TempHomeCase):
+    """R-TEAM-3: the team plugin's PreToolUse guard joins ORCHE's gates; `team.env` reaches every session."""
+
+    def test_gates_add_the_team_plugins_pre_tool_use_resolved(self):
+        import support
+        folder = support.team_plugin(self.home)
+        own = json.loads(headless.gates())["hooks"]["PreToolUse"]
+        both = json.loads(headless.gates(folder))["hooks"]["PreToolUse"]
+        self.assertEqual(both[:len(own)], own)
+        self.assertEqual(both[len(own):], [{"matcher": "Bash", "hooks": [
+            {"type": "command", "command": f"{folder}/hooks/guard.sh"}]}])
+        self.assertNotIn("start.sh", headless.gates(folder))      # never a lifecycle hook
+        argv = headless.argv(project(team=folder), {})
+        self.assertEqual(argv[argv.index("--settings") + 1], headless.gates(folder))
+        (folder / "hooks" / "hooks.json").write_text("{not json")
+        self.assertEqual(headless.gates(folder), headless.gates())   # unreadable: ORCHE's gates alone
+
+    def test_base_env_carries_team_env_and_config_refuses_owned_names(self):
+        from orche import config
+        (self.home / "config.json").write_text(json.dumps({"team": {"env": {
+            "TEAM_DECISIONS": "off", "TEAM_AUTOCOMMIT": 0, "ORCHE_SESSION": "x", "CLAUDE_X": "y",
+            "ANTHROPIC_API_KEY": "z", "ORCA_X": "w", "bad name": "v"}}}))
+        with mock.patch.object(headless.log, "log") as log:
+            cfg = config.load()
+        self.assertEqual(config.team_env(cfg), {"TEAM_DECISIONS": "off", "TEAM_AUTOCOMMIT": "0"})
+        refused = [c.args[1] for c in log.call_args_list if c.args[0] == "config"]
+        self.assertEqual(len(refused), 5, refused)
+        self.assertIn("team.env.ORCHE_SESSION: refused", refused[0])
+        env = headless.base_env(cfg)
+        self.assertEqual((env["TEAM_DECISIONS"], env["TEAM_AUTOCOMMIT"]), ("off", "0"))
+        self.assertNotIn("ORCHE_SESSION", env)
+        self.assertEqual(headless.base_env(cfg, claude_auth=False)["TEAM_DECISIONS"], "off")
+
+
 class CheckTest(TempHomeCase):
     def fake(self, help_text):
         return str(write_fake_claude(self.home / "fake", help_text))

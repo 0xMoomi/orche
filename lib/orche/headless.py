@@ -6,7 +6,7 @@ A `Call` names a context:
 - `project`: the unit worker. Project settings, `--permission-mode bypassPermissions` (a headless
   worker cannot answer prompts; the gates and the deny list still block), the run's own empty MCP
   config when tagged, the caller's tool rules, a persona file, ORCHE's PreToolUse gates through
-  `--settings` (gates()).
+  `--settings` (gates()), then, in a team repository, the team plugin's own (`Call.team`).
 - `sealed`: intake and the Liaison. `--restricted`, `--tools` derived from the allowed rules, no
   session kept.
 - `blank`: triage. No tools, no MCP config, no session kept, its own system prompt.
@@ -63,6 +63,7 @@ class Call:
     system: str | None = None        # --system-prompt (blank: required; others: never)
     env: dict = field(default_factory=dict)  # the caller's own variables, set last; never ORCHE_RUN_ID
     tag: str | None = None           # run tag (procs.run_id): ORCHE_RUN_ID, the marker, the tag sweep
+    team: Path | None = None         # project: the installed team plugin, whose PreToolUse gates join ORCHE's
 
 
 def _validate(call):
@@ -172,19 +173,32 @@ class Result:
         return "\n".join(x for x in (self.failure, own) if isinstance(x, str) and x)
 
 
-def gates() -> str:
-    """The `--settings` value of a project call: compact `{"hooks": {"PreToolUse": [...]}}`, the
-    PreToolUse list of hooks/hooks.json as it is, `${CLAUDE_PLUGIN_ROOT}` in each command replaced
-    by the plugin root. Read on every call, no cache. Headless calls load no user settings, so
-    without this a worker runs no gate (design D8); only PreToolUse is passed, never a lifecycle
-    hook. An unreadable hooks.json or a missing PreToolUse list raises (OSError, ValueError,
-    KeyError): a project worker without its gates must not start."""
-    data = json.loads((paths.PLUGIN_ROOT / "hooks" / "hooks.json").read_text(encoding="utf-8"))
+def _pre_tool_use(root) -> list:
+    """The PreToolUse list of `<root>/hooks/hooks.json`, `${CLAUDE_PLUGIN_ROOT}` in each command replaced
+    by `root`. Raises OSError, ValueError, KeyError or TypeError when it cannot be read."""
+    data = json.loads((Path(root) / "hooks" / "hooks.json").read_text(encoding="utf-8"))
     entries = data["hooks"]["PreToolUse"]
-    root = str(paths.PLUGIN_ROOT)
     for entry in entries:
         for hook in entry["hooks"]:
-            hook["command"] = hook["command"].replace("${CLAUDE_PLUGIN_ROOT}", root)
+            hook["command"] = hook["command"].replace("${CLAUDE_PLUGIN_ROOT}", str(root))
+    return entries
+
+
+def gates(team=None) -> str:
+    """The `--settings` value of a project call: compact `{"hooks": {"PreToolUse": [...]}}`, the
+    PreToolUse list of hooks/hooks.json as it is, `${CLAUDE_PLUGIN_ROOT}` in each command replaced
+    by the plugin root, then (`team`: the installed team plugin's folder) the team plugin's own
+    PreToolUse entries, resolved against its folder. Read on every call, no cache. Headless calls load
+    no user settings, so without this a worker runs no gate (design D8); only PreToolUse is passed,
+    never a lifecycle hook. An unreadable ORCHE hooks.json or a missing PreToolUse list raises (OSError,
+    ValueError, KeyError): a project worker without its gates must not start. An unreadable team
+    hooks.json leaves ORCHE's gates alone."""
+    entries = _pre_tool_use(paths.PLUGIN_ROOT)
+    if team is not None:
+        try:
+            entries += _pre_tool_use(team)
+        except (OSError, ValueError, KeyError, TypeError, AttributeError):
+            log.log("hooks", f"headless: the team plugin's gates at {team} are unreadable; ORCHE's gates alone")
     return json.dumps({"hooks": {"PreToolUse": entries}}, separators=(",", ":"))
 
 
@@ -224,7 +238,7 @@ def argv(call: Call, cfg: dict) -> list:
     if call.system is not None:
         out += ["--system-prompt", call.system]
     if call.context == "project":
-        out += ["--settings", gates()]
+        out += ["--settings", gates(call.team)]
     return out
 
 
@@ -239,8 +253,9 @@ def base_env(cfg: dict, claude_auth: bool = True) -> dict:
     AUTH_ENV pass. The configured Jev key variable never passes. The plugin's bin/ goes first on
     PATH. claude_auth: CLAUDE_CODE_OAUTH_TOKEN inherited, else the one `orche auth set` stored,
     else none (the run uses the login); reading the store is the only lookup, nothing is written.
-    claude_auth=False (another vendor): no CLAUDE* or ANTHROPIC* name at all and no stored token (C5)."""
-    from . import oauth  # lazy: hooks import this module for argv()/env() only
+    claude_auth=False (another vendor): no CLAUDE* or ANTHROPIC* name at all and no stored token (C5).
+    Last, config `team.env` (the team's hook switches; config.load refused the owned names)."""
+    from . import config, oauth  # lazy: hooks import this module for argv()/env() only
     jev_key_env = str((cfg.get("jev") or {}).get("api_key_env") or "JEV_API_KEY")
     out = {k: v for k, v in os.environ.items() if not _owned(k) and k != jev_key_env}
     if claude_auth:
@@ -249,6 +264,7 @@ def base_env(cfg: dict, claude_auth: bool = True) -> dict:
         out = {k: v for k, v in out.items()
                if not k.startswith(("CLAUDE", "ANTHROPIC")) and k not in AUTH_ENV}
     out["PATH"] = f"{paths.PLUGIN_ROOT / 'bin'}{os.pathsep}{out.get('PATH', '')}"
+    out.update(config.team_env(cfg))
     return out
 
 

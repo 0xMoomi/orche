@@ -23,7 +23,8 @@ update follows `origin/main`. Steps, each one a progress line on stderr:
    own files: card link, personas, worktree settings, hooks wiring; no intake, no Orca, never the
    user's files).
 
-The closing block: `ORCHE <old> → <new>`, one line per project, the install's `reconcile job` line, and
+The closing block: `ORCHE <old> → <new>`, one line per project, the install's `reconcile job` line (and its
+`janitor: remove` line when it removed the janitor's old 04:00 LaunchAgent), and
 a restart line when a card, skill, template or agent file changed. `--dry-run` fetches without moving
 any ref (FETCH_HEAD only) and prints the plan. Exit 0 ok, 1 a step failed (named; the checkout keeps
 whatever the finished steps did, a re-run resumes), 2 refused. With `--json` every outcome is one JSON
@@ -127,7 +128,7 @@ def _mode() -> str:
 
 
 def cmd_update(args):
-    from .install import RECONCILE_STEP
+    from .install import JANITOR_STEP, RECONCILE_STEP
     dry_run = args.dry_run
     state = _state()
     root = _root(state)
@@ -186,7 +187,9 @@ def cmd_update(args):
             progress(f"fast-forwarding to origin/{REF} ({new})")
             git(root, "merge", "--ff-only", "--quiet", target)
         progress(f"reinstalling ({mode} mode) with the new code")
-        heartbeat = [ln for ln in run_step("install", install).splitlines() if ln.startswith(RECONCILE_STEP)]
+        text = run_step("install", install).splitlines()
+        heartbeat = [ln for ln in text if ln.startswith(RECONCILE_STEP)]
+        old_janitor = [ln for ln in text if ln.startswith(f"{JANITOR_STEP}: remove")]
         for argv in plugin:
             progress(" ".join(argv))
             run_step("plugin update", argv)
@@ -201,7 +204,7 @@ def cmd_update(args):
         except StepFailed as exc:
             failed.append(exc)
             done.append(f"{key}: {exc}")
-    done += heartbeat[-1:]
+    done += heartbeat[-1:] + old_janitor
     if changed or plugin or resume:
         done.append(RESTART)
     data = {"status": "failed" if failed else "updated", "old": old, "new": new, "mode": mode, "projects": keys,

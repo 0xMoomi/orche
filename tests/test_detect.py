@@ -92,6 +92,36 @@ class ConventionsTest(DetectCase):
         self.assertEqual(self.found(), {})
 
 
+class TeamTest(DetectCase):
+    def test_the_first_enabled_plugin_the_repository_declares(self):
+        self.assertIsNone(detect.team(self.repo))
+        support.declare_team(self.repo)
+        self.assertEqual(detect.team(self.repo), support.TEAM_PLUGIN)
+        self.assertEqual(self.found(), {"team": support.TEAM_PLUGIN})
+        (self.repo / ".claude" / "settings.json").write_text('{"enabledPlugins": {"b@x": true, "a@x": true}}')
+        self.assertEqual(detect.team(self.repo), "a@x")
+        (self.repo / ".claude" / "settings.json").write_text("{not json")
+        self.assertIsNone(detect.team(self.repo))
+        (self.repo / ".claude" / "settings.json").write_text('{"enabledPlugins": {"a@x": false}}')
+        self.assertIsNone(detect.team(self.repo))
+
+    def test_plugin_install_path_and_the_doctor_row(self):
+        from orche.hr import panes
+        reg = registry.empty()
+        reg["projects"]["acme"] = {"path": str(self.repo), "team": support.TEAM_PLUGIN}
+        self.assertIsNone(panes.plugin_install_path(support.TEAM_PLUGIN))
+        self.assertEqual(doctor.team_rows(reg), [("WARN", "team", f"acme: plugin {support.TEAM_PLUGIN} is not "
+                                                                  'installed for this user: say "install the team plugin"')])
+        support.team_plugin(self.home, scope="project")
+        self.assertIsNone(panes.plugin_install_path(support.TEAM_PLUGIN))     # only a user-scope install counts
+        folder = support.team_plugin(self.home)
+        self.assertEqual(panes.plugin_install_path(support.TEAM_PLUGIN), folder)
+        self.assertEqual(doctor.team_rows(reg), [("OK", "team", f"acme: plugin {support.TEAM_PLUGIN} installed, "
+                                                                "owner-word mode")])
+        del reg["projects"]["acme"]["team"]
+        self.assertEqual(doctor.team_rows(reg), [])
+
+
 class EntireLinkTest(DetectCase):
     def test_worktree_local_setting(self):
         wt = self.home / "wt"

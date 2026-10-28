@@ -24,7 +24,11 @@ def settings(cfg, project) -> dict:
     return config.for_project(cfg, "queue", project)
 
 
-def land_mode(cfg, project) -> str:
+def land_mode(cfg, project, reg=None) -> str:
+    """`owner` for a team project (registry.team: merge waits for the owner's word whatever the config says)
+    and for `queue.land` owner; else `auto`. `reg` None: registry.load()."""
+    if registry.team(registry.load() if reg is None else reg, project):
+        return "owner"
     return "owner" if settings(cfg, project).get("land") == "owner" else "auto"
 
 
@@ -129,7 +133,7 @@ def admit(project, pr, head, *, where, base, branch, unit=None, b=None, writer="
     accepted = checks(cfg, project, where, pr=pr, head=head, base=base, verify=verify, accept=accept,
                       tier=b.tier if b is not None else "standard", safe_because=safe_because)
     main = roster.Roster(reg).main(project)
-    owner_ok = land_mode(cfg, project) != "owner" or approved_in_log(project, pr, main.session if main else None)
+    owner_ok = land_mode(cfg, project, reg) != "owner" or approved_in_log(project, pr, main.session if main else None)
     entry = {"id": entry_id(pr, head), "pr": pr, "head": head, "branch": branch, "unit": unit, "writer": writer,
              "parent": b.parent if b else "", "rev": b.rev if b else 0, "verify": verify,
              "approved_by": approved_by or f"{by} (review)", "accept": "; ".join(accepted) or None,

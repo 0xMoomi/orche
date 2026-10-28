@@ -692,7 +692,8 @@ class InitClosesItsWindowTest(FakeClaudeMixin, test_hr.HrCase):
                      "nothing is committed to the repository; ORCHE's own files are excluded from git\n",
                      "\n## Running now\n\n- Heartbeat: every 300 s (the reconcile job): ",
                      "\n- Notifications: Orca shows one when Main finishes a reply; ",
-                     "- Janitor: cleans up daily; ", "- More agents at once: how many workers may run in parallel. "
+                     "- Janitor: cleans up daily (the heartbeat starts it when the last pass is a day old); ",
+                     "- More agents at once: how many workers may run in parallel. "
                      "Up to 4 at once (custom). ",
                      "- Talk to Main in the main-acme-shop tab, in any language.", "\n## Any time\n\n- ",
                      'Say "what else can ORCHE do?" to see this list again (Main runs `orche doctor`).'):

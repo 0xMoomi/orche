@@ -53,6 +53,10 @@ Staff each brief yourself; Main briefs heads, never workers.
   `orche queue add --pr N --project <p>`; a return comes back to you, not to a feature.
 - Your worktree is yours alone; the queue tests in its own checkout. Never edit inside a worker's worktree;
   send it a brief.
+- In a team repository (SETUP.md names its plugin) nothing is pushed until the owner says so: a done ends at the
+  commit and the ledger row. PASS means telling Main `ready: <unit> (<issue>)`, never `orche queue add` yourself;
+  a user-visible change gets the team's finish step (its work-done skill) before ready. Main runs `orche queue add`
+  on the owner's "push" and `orche queue approve` on "merge".
 
 ## The merge queue
 

@@ -33,6 +33,8 @@ reconcile/heartbeat.json last. Classes (design §2.2):
   not running that may_start() lets start -> started detached (`orche review --pr N --head --unit U`,
   never inline), at most one per project a pass, after the repairs and never past
   BUDGET_S;
+- janitor (a full pass only, after review): the janitor's last pass a day old (janitor.due) and none running
+  -> `orche janitor run` started detached (janitor.heartbeat), never inline;
 - silent <unit>: the target's newest unit, a pane unit (never Main) whose dispatch was delivered,
   not run, running or reported on at this rev, with no open child of its own, whose pane has been
   idle SILENT_IDLE_S or whose rev is SILENT_TIMEBOX × TIMEBOX old -> `orche deliver --remind` once
@@ -1056,7 +1058,7 @@ def _pass(cfg_all, cfg, now, started, dry_run, out, keys=None, as_json=False) ->
         if key is not None:
             _block(blocked, key, exc.filename, dry_run)
         return key is not None
-    from . import runs
+    from . import janitor, runs
     from .review import build
     _phase("runs")
     for key in every:
@@ -1101,6 +1103,7 @@ def _pass(cfg_all, cfg, now, started, dry_run, out, keys=None, as_json=False) ->
     new.update(others)
     if dry_run:
         later = build.heartbeat(reg, scope(), True, started + BUDGET_S)
+        later += janitor.heartbeat(True) if keys is None else []
         for row in shut + notes:
             emit(row, row["line"])
         for a in actions:
@@ -1144,6 +1147,11 @@ def _pass(cfg_all, cfg, now, started, dry_run, out, keys=None, as_json=False) ->
         log.log("events", f"reconcile action={row['action']} project={row['project']} target={row['target']} "
                           f"rev=- attempt=1/1" + (f" failed={row['failed']}" if row["failed"] else ""))
         emit(row, row["line"] + (f" — failed ({row['failed']})" if row["failed"] else ""))
+        done += 1
+    _phase("janitor")      # the janitor's daily pass, detached, when the last one is a day old
+    for row in janitor.heartbeat(False) if keys is None else []:
+        log.log("events", "reconcile action=janitor attempt=1/1" + (f" failed={row['failed']}" if row["failed"] else ""))
+        emit(row, row["line"] + (f" (failed: {row['failed']})" if row["failed"] else ""))
         done += 1
     took = time.monotonic() - started
     if done:

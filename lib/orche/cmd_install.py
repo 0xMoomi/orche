@@ -5,8 +5,8 @@ install patches only: `~/.claude/settings.json`, `~/.claude/statusline-command.s
 a plugin-mode install removes them), `~/.claude/fable/{fable,active}.md`,
 `~/.claude/fable/agents/runner.md`, `~/Library/LaunchAgents/com.orche.reconcile.plist` (macOS; the
 heartbeat job, loaded only when the target home is the real one; `--no-reconcile` skips it),
-`~/Library/LaunchAgents/com.orche.janitor.plist` (macOS; the janitor's daily run, loaded the same way; the
-first install also turns the janitor on, `orche janitor disable` turns it off for good), and
+the janitor's enabled flag (the first install turns it on, `orche janitor disable` turns it off for good;
+the heartbeat runs its daily pass, and an old `com.orche.janitor.plist` is removed), and
 moves `~/.codex/AGENTS.md.recovered` into place (`--yes`). Every changed file is first copied to `<file>.bak-<ts>`; `--dry-run` prints the plan
 and writes nothing. `--home PATH` targets another home (tests); ORCHE_HOME then defaults to
 `PATH/.claude/orche` unless set.
@@ -30,7 +30,7 @@ from pathlib import Path
 
 from . import jev_setup, paths, privacy, reconcile, registry, units, util
 from .cli import EXIT_OK, EXIT_USER, fail, out
-from .install import (RECONCILE_STEP, STATE_FILE, Ctx, StateUnreadable, backup, agents,
+from .install import (JANITOR_STEP, RECONCILE_STEP, STATE_FILE, Ctx, StateUnreadable, backup, agents,
                       apply_all, codex, doctor, fable, installed_mode, launchd, load_state, settings, skills,
                       statusline)
 
@@ -131,7 +131,7 @@ def _orche_home(ctx) -> None:
 
 
 OFF_MACOS = "not macOS: run `orche reconcile` every 5 min (cron/systemd)"
-JANITOR_STEP = "janitor"
+OLD_JANITOR = "com.orche.janitor"   # the janitor's old 04:00 LaunchAgent: removed when found
 
 
 def _reconcile_job(ctx, args, new_state) -> None:
@@ -203,37 +203,24 @@ def cmd_grant(args) -> int:
 
 def _janitor_job(ctx, state, new_state) -> None:
     """The janitor, on by default: the first install writes its enabled flag (recorded as
-    `janitor_default`, so an owner's `orche janitor disable` stays), every install writes and loads its
-    daily LaunchAgent like the reconcile job."""
+    `janitor_default`, so an owner's `orche janitor disable` stays); the heartbeat runs its daily pass.
+    An old janitor LaunchAgent is removed once."""
     from . import janitor
-    if sys.platform != "darwin":
-        ctx.note(JANITOR_STEP, "skip", None, "not macOS: run `orche janitor run` daily (cron/systemd)")
-        return
     if not state.get("janitor_default"):
         flag = janitor.enabled_flag()
         if not ctx.dry_run:
             util.atomic_write(flag, f"enabled {util.now_iso()} by orche install\n")
             new_state["janitor_default"] = True
         ctx.note(JANITOR_STEP, "set", flag, "on by default; `orche janitor disable` turns it off")
-    res = launchd.install(launchd.JANITOR, launchd.render(launchd.JANITOR), ctx.home, ctx.dry_run)
-    if not ctx.dry_run:
-        new_state["janitor_plist"] = res["plist"]
-    if res["argv"]:
-        how = "would load" if ctx.dry_run else ("loaded" if res["loaded"] else "not loaded")
-    else:
-        how = "not loaded: --home is not the real home"
-    ctx.note(JANITOR_STEP, "write", res["plist"], f"daily at {launchd.daily_at()}, {how}")
-    if res["error"]:
-        ctx.note(JANITOR_STEP, "warn", None, f"launchctl bootstrap failed: {res['error']}; see orche doctor")
+    _janitor_job_remove(ctx, new_state)
 
 
 def _janitor_job_remove(ctx, state) -> None:
-    if sys.platform != "darwin":
-        return
-    res = launchd.uninstall(launchd.JANITOR, ctx.home, ctx.dry_run)
+    """The janitor's old 04:00 LaunchAgent, when its plist is there: unloaded and removed."""
+    res = launchd.uninstall(OLD_JANITOR, ctx.home, ctx.dry_run)
     if res["missing"]:
         return
-    ctx.note(JANITOR_STEP, "remove", res["plist"], "unloaded" if res["argv"] else "")
+    ctx.note(JANITOR_STEP, "remove", res["plist"], "removed the janitor's old schedule; the heartbeat runs it now")
     if state is not None and not ctx.dry_run:
         state.pop("janitor_plist", None)
 

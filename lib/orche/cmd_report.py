@@ -16,6 +16,8 @@ then pushes the member's own branch and ensures its PR (publish.publish), and a 
 3. A HEAD that changes nothing against origin/<base> (a coordination unit, e.g. Build's parent unit)
 publishes nothing: the done is filed with `pr: none` and that note. A published done is filed at once:
 no review runs inside the report (a cross-check runs only on request, `orche review --pr N`).
+In a team repository (registry.team) a gated done publishes nothing: it is filed with `pr: none` and the line
+`ready: say "push <unit>" (<branch>)` (publish.ready_line); `orche queue add <unit>` publishes on the owner's word.
 Under the runner (ORCHE_RUNNER set by `orche run`) it refuses with exit 2: the runner files the pointer.
 """
 import json
@@ -116,7 +118,10 @@ def cmd_report(args):
         print(proof.message, file=sys.stderr)
         return EXIT_BLOCKED
     pr = None
-    if args.status == "done" and donegate.gated(who.member) and not args.dry_run:
+    if args.status == "done" and donegate.gated(who.member) and registry.team(reg, key):
+        ready = publish.ready_line(unit, publish.own_branch(who.member))   # kept whole: the owner's next word
+        summary = "\n".join(summary.splitlines()[:inbox.MAX_LINES - 1] + [ready])
+    elif args.status == "done" and donegate.gated(who.member) and not args.dry_run:
         out = _publish(reg, who.member, cwd, key, unit, b, report, summary)
         if isinstance(out, publish.Gap):
             print(f"orche: done not filed: {out.text}" + (f"\nOWNER: {out.owner}" if out.owner else ""),

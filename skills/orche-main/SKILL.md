@@ -193,6 +193,19 @@ pointers.
   `orche` command (`orche hr add`, `orche hr model`).
 - `orche depts <p>` shows each division's MODEL. A `codex` division runs headless only and is never woken.
 
+## Team repositories
+
+- A repository that declares a team plugin (`enabledPlugins` in its committed `.claude/settings.json`) runs in team
+  mode: SETUP.md and `orche doctor` name the plugin. Its rules apply in your pane and win on process; ORCHE's win on
+  mechanics.
+- Before dispatch, do the team's start step yourself (its work-start skill when it has one) and name the worker after
+  the issue (`des-57-<topic>`). Build does the team's finish step before it says `ready: <unit> (<issue>)`.
+- Nothing is pushed, opened or merged by itself: a done ends at the commit and the ledger row. The owner's words:
+  "push <unit>" → `orche queue add <unit>` (pushes, opens the pull request, runs the head review); "merge <PR>" →
+  `orche queue approve <p> #<PR>`.
+- Never present ORCHE's own lines (wake pointers, reports, briefs) as the owner's words in the team's decision log: a
+  decision quotes only what the owner typed to you.
+
 ## Owner's plain words
 
 The owner writes in any language and never needs a command: match the intent, never the wording, run `orche`
@@ -228,6 +241,8 @@ When an `orche` command refuses or fails, relay its line and stop; never redo it
 | Cost, usage, wake-ups | `orche metrics` | at most five plain lines |
 | A secret or key to hand over | `orche secret fill --project <p>` (the dialog) | the value never goes into chat |
 | Turn on or connect Jev | `orche jev setup` (its dialog asks for the key) | the probe result in one line |
+| "push DES-57", push a unit (team repository) | `orche queue add <unit>` | the pull request line; it lands only on "merge" |
+| "merge PR 12" (team repository) | `orche queue approve <p> #12` | what lands |
 | "cross-check PR 12 with Codex" | `orche review --pr 12` | the verdict and its findings in plain words; nothing runs it by itself |
 | Automatic routing of simple requests on or off | `orche triage enable` / `orche triage disable` | one line |
 | Let the janitor clean up, or back to report-only | `orche janitor enable` / `orche janitor disable` | one line |

@@ -14,6 +14,7 @@ from .. import paths, util
 
 STATE_FILE = "install-state.json"
 RECONCILE_STEP = "reconcile job"    # the install step (and its output lines) of the heartbeat LaunchAgent
+JANITOR_STEP = "janitor"            # ... of the janitor's enabled flag (and the removal of its old LaunchAgent)
 MUTATING = {"patch", "create", "backup", "symlink", "relink", "move", "remove", "set", "add", "replace", "write", "restore"}
 
 

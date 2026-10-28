@@ -110,6 +110,10 @@ class TempHomeCase(unittest.TestCase):
         # (reconcile.kick waits every_s after it); kick tests remove it and stub the spawn.
         (self.home / "reconcile").mkdir()
         (self.home / "reconcile" / ".kicked").touch()
+        # A fresh janitor report: no heartbeat pass starts a detached `orche janitor run`
+        # (janitor.due); janitor heartbeat tests remove it or set it back and stub the spawn.
+        (self.home / "janitor").mkdir()
+        (self.home / "janitor" / "last-report.md").touch()
         # An ORCHE pane exports ORCHE_SESSION / ORCA_TERMINAL_HANDLE (and maybe more): every test
         # starts without any ORCHE_* / ORCA_* variable (nor a Claude OAuth token, which headless
         # runs and doctor would pick up), and the caller's values come back after.
@@ -405,3 +409,32 @@ def gh_calls(folder: Path) -> list:
 
 def gh_state(folder: Path) -> dict:
     return json.loads((folder / "spec.json").read_text())
+
+
+TEAM_PLUGIN = "team-os@acme"
+TEAM_RULES = "- Push, pull request and merge only on a person's word.\n- One issue per piece of work.\n"
+TEAM_GUARD = "${CLAUDE_PLUGIN_ROOT}/hooks/guard.sh"
+
+
+def team_plugin(home: Path, plugin_id=TEAM_PLUGIN, scope="user") -> Path:
+    """A team plugin installed for this user under $CLAUDE_CONFIG_DIR (TempHomeCase: <home>/claude): its folder
+    with hooks/team-rules.md and a hooks/hooks.json holding one PreToolUse guard and one SessionStart hook,
+    and the `installed_plugins.json` entry that names it. Returns the plugin's folder."""
+    folder = home / "team-plugin"
+    (folder / "hooks").mkdir(parents=True, exist_ok=True)
+    (folder / "hooks" / "team-rules.md").write_text(TEAM_RULES)
+    (folder / "hooks" / "hooks.json").write_text(json.dumps({"hooks": {
+        "PreToolUse": [{"matcher": "Bash", "hooks": [{"type": "command", "command": TEAM_GUARD}]}],
+        "SessionStart": [{"hooks": [{"type": "command", "command": "${CLAUDE_PLUGIN_ROOT}/hooks/start.sh"}]}]}}))
+    installed = Path(os.environ["CLAUDE_CONFIG_DIR"]) / "plugins" / "installed_plugins.json"
+    installed.parent.mkdir(parents=True, exist_ok=True)
+    installed.write_text(json.dumps({"version": 2, "plugins": {plugin_id: [
+        {"scope": scope, "installPath": str(folder), "version": "1.0.0"}]}}))
+    return folder
+
+
+def declare_team(repo: Path, plugin_id=TEAM_PLUGIN) -> None:
+    """The repository's committed `.claude/settings.json` declaring its team plugin (and one disabled one)."""
+    (repo / ".claude").mkdir(parents=True, exist_ok=True)
+    (repo / ".claude" / "settings.json").write_text(json.dumps({"enabledPlugins": {plugin_id: True,
+                                                                                   "a-disabled@x": False}}))

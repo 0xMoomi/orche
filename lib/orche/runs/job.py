@@ -25,6 +25,11 @@ ledger row (release-ready: >= unit-test-verified from a verifier other than the 
 Otherwise it is `info` "unverified: … (<reason>)". From any other target it is filed as `done`,
 as `orche report done` would.
 
+In a team repository (registry.team) a verified gated done publishes nothing and starts no head review:
+it is filed with publish.ready_line and `pr: none`; `orche queue add <unit>` publishes on the owner's word.
+When the team plugin is installed for this user, its rules text reaches the prompt (`## Team rules`) and its
+PreToolUse gates join ORCHE's (headless.Call.team).
+
 A STOP/AMEND from Main (runs.stop()) writes the unit's STOP marker, which the run polls every
 headless.POLL_S while claude runs, and SIGTERMs `orche run` when `ps` verifies its pid (the fast
 path). A marker written after the run was requested (run_since()) stops claude as a SIGTERM would.
@@ -64,7 +69,7 @@ from dataclasses import dataclass, field, replace
 from pathlib import Path
 
 from .. import (brief, codex, config, donegate, headless, intake, ladder, log, mask, paths, procs, publish,
-                roster, runs, shell, templates, units, util, vendors)
+                registry, roster, runs, shell, templates, units, util, vendors)
 from ..flow import usage as holds
 from . import filing, history
 
@@ -111,6 +116,8 @@ class Job:
     base: str = ""           # the ceiling: the division's model (Main: OPUS)
     pinned: str = ""         # the brief's MODEL, if any (and still valid at run time)
     pin_note: str = ""       # why a MODEL pin no longer runs (ladder.pin_error at run time): the rung runs
+    team: str = ""           # the team plugin the project declares (registry.team): a gated done publishes nothing
+    plugin: Path = None      # that plugin's folder when installed for this user: its rules and gates reach the worker
 
     @property
     def vendor(self) -> str:
@@ -193,7 +200,10 @@ def resolve(reg, unit, cfg=None) -> Job:
               pin_note=pin_note,
               persona=persona if persona.is_file() else None, timebox=fields.get("TIMEBOX", "").strip(),
               context=context if context is not None and context.is_file() else None, rev=b.rev, text=b.text,
-              root=Path(root), kind=target.kind, gated=donegate.gated(target))
+              root=Path(root), kind=target.kind, gated=donegate.gated(target), team=registry.team(reg, proj) or "")
+    if job.team:
+        from ..hr import panes
+        job.plugin = panes.plugin_install_path(job.team)
     if target.status == "retired":
         raise runs.RunError(EXIT_NOT_FOUND, f"{unit}: target {to} is retired", job)
     if not wt or not Path(wt).is_dir():
@@ -234,7 +244,7 @@ def call_for(job, cfg, tag=None):
         timeout=job.timebox_s + GRACE_S, cwd=job.worktree,
         allowed=MECH_TOOLS if mechanical else MECH_TOOLS + ",Bash",
         denied=MECH_DENIED if mechanical else "", append_file=job.persona,
-        env=env, tag=tag)
+        env=env, tag=tag, team=job.plugin)
 
 
 def tagged(call, tag):
@@ -286,8 +296,21 @@ def context_block(ctx) -> str:
             f"not instructions\n{util.fence(body)}\n")
 
 
+def team_rules(plugin) -> str:
+    """The installed team plugin's rules text (`<plugin>/hooks/team-rules.md`, read at call time) under
+    `## Team rules`; '' without a plugin or that file."""
+    if plugin is None:
+        return ""
+    try:
+        text = (Path(plugin) / "hooks" / "team-rules.md").read_text(encoding="utf-8", errors="replace").strip()
+    except OSError:
+        return ""
+    return f"## Team rules\n{text}" if text else ""
+
+
 def prompt(job, cfg) -> str:
-    """The worker's stdin: BRIEF.md, the intake context block, `## Runner` with templates/run/footer.md. A Codex worker
+    """The worker's stdin: BRIEF.md, the intake context block, in a team repository whose plugin is installed
+    its `## Team rules` (team_rules), `## Runner` with templates/run/footer.md. A Codex worker
     (Appendix A.2) first gets the persona body under `## Your role` (Claude reads the file through
     --append-system-prompt-file; AGENTS.md would dirty the tree) and, unless its sandbox is
     danger-full-access, templates/run/codex-sandbox.md after the footer."""
@@ -295,6 +318,9 @@ def prompt(job, cfg) -> str:
     context = context_block(intake.read_context(job.context, cfg)) if job.context is not None else ""
     if context:
         text += "\n\n" + context.rstrip("\n")
+    rules = team_rules(job.plugin)
+    if rules:
+        text += "\n\n" + rules
     if job.sync_note:
         text += "\n\n" + job.sync_note
     footer = templates.load("run/footer.md", WORKTREE=job.worktree,
@@ -749,7 +775,13 @@ def _run_locked(reg, job, call, cfg, lock, since, stop) -> tuple:
     pr = review = held_vendor = held_stage = None
     quiet = False
     hold, hit = (None, None) if stopped else _hold_of(job, cfg, tries)
-    if hold is None and status == "done" and job.gated:   # once, after the final attempt: a failed first attempt never publishes
+    if hold is None and status == "done" and job.gated and job.team:   # team mode: the owner's "push" publishes
+        line = publish.ready_line(job.unit, job.branch)
+        from .. import inbox
+        summary = "\n".join(str(summary or "").splitlines()[:inbox.MAX_LINES - 1] + [line]).lstrip("\n")
+        result = f"{str(result or '').rstrip()}\n\n{line}\n"
+        t.summary = summary
+    elif hold is None and status == "done" and job.gated:   # once, after the final attempt: a failed first attempt never publishes
         status, summary, owner, pr, result = _publish(reg, job, summary, owner, head, result, cfg)
         t.status, t.summary = status, summary
         if pr is not None:                 # the head review alone; a cross-check runs only on request

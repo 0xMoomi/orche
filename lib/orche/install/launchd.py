@@ -1,4 +1,4 @@
-"""LaunchAgent helper shared by the janitor schedule and the reconcile job (design c10 §2.4).
+"""LaunchAgent helper for the reconcile job (design c10 §2.4).
 
 A job is a plist under <home>/Library/LaunchAgents, rendered from templates/launchd/<label>.plist,
 written atomically 0644. Loading uses the current launchctl verbs: `bootout gui/<uid>/<label>`
@@ -101,14 +101,6 @@ def kickstart(label, kill=False):
 
 
 RECONCILE = "com.orche.reconcile"
-JANITOR = "com.orche.janitor"
-
-
-def daily_at(label=JANITOR) -> str:
-    """`HH:MM` of the job's StartCalendarInterval (the janitor's daily run)."""
-    import plistlib
-    when = plistlib.loads(render(label).encode("utf-8"))["StartCalendarInterval"]
-    return f"{int(when.get('Hour', 0)):02d}:{int(when.get('Minute', 0)):02d}"
 
 
 def reconcile_plist(every_s) -> str:

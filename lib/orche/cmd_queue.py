@@ -2,6 +2,8 @@
 
   orche queue [<p>]                               status
   orche queue add <unit> [--first] [--accept WHY] queue the unit's open PR at its worktree's HEAD
+                                                  (a team repository: Main only, on the owner's "push";
+                                                  the branch is published first when it has no open PR at HEAD)
   orche queue add --pr N --project <p>            queue a PR by number
       [--surface user]                            the change alters what a user sees or does: it lands only
                                                   on the check script's live-ui-verified
@@ -85,6 +87,22 @@ def _pr_checkout(reg, project, pr, head, base):
     return where
 
 
+def _team_publish(reg, target, where, unit, b, base) -> list:
+    """R-TEAM-2, the owner's "push" in a team repository: publish the unit's branch exactly as its done would
+    have (cmd_report._publish), then start the head review (review.build.after_publish). The one open PR, as
+    github.pr_for_branch lists it; a gap or nothing to publish refuses (exit 3)."""
+    from . import cmd_report
+    report = b.folder / "REPORT.md"
+    out = cmd_report._publish(reg, target, str(where), target.project, unit, b,
+                              str(report) if report.is_file() else "", b.fields.get("GOAL") or unit)
+    if isinstance(out, publish.Gap):
+        raise queue.Refused(cli.EXIT_BLOCKED, out.text + (f"\nOWNER: {out.owner}" if out.owner else ""))
+    if isinstance(out, publish.Unchanged):
+        raise queue.Refused(cli.EXIT_BLOCKED, f"{unit}: {out.note()}")
+    review_build.after_publish(target.project, out.pr, unit)
+    return [{"number": out.pr, "headRefOid": out.head, "baseRefName": base}]
+
+
 # ---- actions ---------------------------------------------------------------------------------
 
 def cmd_add(args, words):
@@ -137,7 +155,13 @@ def cmd_add(args, words):
         base = publish.base(root, cfg, where, project)
         if not base:
             raise queue.Refused(cli.EXIT_BLOCKED, publish.no_base(root or where))
+        team = registry.team(reg, project)
+        if team and me.kind != "main":
+            raise queue.Refused(cli.EXIT_BLOCKED, f"{project} is a team repository: only Main queues, on the owner's "
+                                                  f'word ("push {unit}"); tell Main: ready: {unit}')
         prs = [p for p in github.pr_for_branch(where, branch) if p.get("baseRefName") == base]
+        if team and not args.dry_run and not (len(prs) == 1 and prs[0].get("headRefOid") == head):
+            prs = _team_publish(reg, target, where, unit, b, base)
         if len(prs) != 1:
             raise queue.Refused(cli.EXIT_BLOCKED, f"no open PR for {branch}")
         pr = int(prs[0]["number"])
@@ -266,7 +290,7 @@ def cmd_approve(args, words):
     refs = None if args.all else words[1:]
     if refs == []:
         raise queue.Refused(cli.EXIT_USER, usage)
-    if queue.land_mode(cfg, project) != "owner":
+    if queue.land_mode(cfg, project, reg) != "owner":
         cli.out(args, {"approved": []}, f"{project} lands automatically (land: auto): nothing to approve")
         return cli.EXIT_OK
     if args.dry_run:

@@ -1,5 +1,6 @@
 """Instance config at ORCHE_HOME/config.json, merged over defaults."""
 import copy
+import re
 
 from . import log, paths, util
 
@@ -77,6 +78,11 @@ DEFAULTS = {
     # project name, like the queue's (`orche init --base/--branch-prefix/--issues` writes them, and init reads
     # the unset ones from the repository: lib/orche/detect.py).
     "publish": {"base": None, "branch_prefix": None, "issues": None, "per_project": {}},
+    # team.env: environment names and values added to every ORCHE session, panes and headless runs alike (the
+    # team's hook switches, such as the ones that keep its decision log and auto-commit hooks out of ORCHE's
+    # sessions); Main writes them on the owner's words. A name starting with ORCHE_, ORCA_, CLAUDE or ANTHROPIC
+    # is refused at load (one config log line): those belong to ORCHE and Claude Code.
+    "team": {"env": {}},
     # The merge queue (lib/orche/queue): per_project overrides land by project name. lost_after_s:
     # a testing entry whose integrator's pid still lives while the lock is free counts as lost after this
     # (a dead pid at once).
@@ -177,6 +183,41 @@ DEFAULTS = {
 }
 
 
+TEAM_OWNED = ("ORCHE_", "ORCA_", "CLAUDE", "ANTHROPIC")
+_ENV_NAME = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+
+
+def team_env_error(name, value) -> str | None:
+    """Why `team.env.<name>` cannot be set in ORCHE's sessions, else None."""
+    if not isinstance(name, str) or not _ENV_NAME.match(name):
+        return f"team.env.{name}: not an environment variable name"
+    if name.startswith(TEAM_OWNED):
+        return f"team.env.{name}: refused (names starting with {', '.join(TEAM_OWNED)} belong to ORCHE and Claude Code)"
+    if not isinstance(value, (str, int, float)) or isinstance(value, bool):
+        return f"team.env.{name}: the value must be a string"
+    return None
+
+
+def _check_team(cfg) -> dict:
+    """`cfg` with each refused `team.env` pair dropped, one config log line each (validation at load)."""
+    team = cfg.get("team") if isinstance(cfg.get("team"), dict) else {}
+    pairs = team.get("env") if isinstance(team.get("env"), dict) else {}
+    kept = {}
+    for name, value in pairs.items():
+        err = team_env_error(name, value)
+        if err:
+            log.log("config", err)
+        else:
+            kept[name] = str(value)
+    cfg["team"] = {**team, "env": kept}
+    return cfg
+
+
+def team_env(cfg) -> dict:
+    """The `team.env` pairs of a loaded config (load() already dropped the refused ones)."""
+    return dict(((cfg or {}).get("team") or {}).get("env") or {})
+
+
 def _merge(base, over):
     out = copy.deepcopy(base)
     for key, value in (over or {}).items():
@@ -197,7 +238,7 @@ def load() -> dict:
     except util.JsonError as exc:
         log.log("config", f"using defaults: {exc}")
         data = {}
-    return _merge(DEFAULTS, data if isinstance(data, dict) else {})
+    return _check_team(_merge(DEFAULTS, data if isinstance(data, dict) else {}))
 
 
 def save(cfg: dict) -> None:

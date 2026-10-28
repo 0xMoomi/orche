@@ -9,9 +9,12 @@ timeout that fails silently to "nothing detected" (never a refusal, never a gues
                  MIN_BRANCHES of them share one prefix holding at least two thirds of them
   issues         the issue tracker's team key (`DES`) holding at least two thirds of those branches
   entire         True when the repository uses Entire (`.entire/settings.json`)
+  team           the team plugin the repository declares (`team(root)`: the first enabled key, sorted, of
+                 `enabledPlugins` in its committed `.claude/settings.json`); the project then runs in team mode
 
 cmd_init writes base, branch_prefix and issues into `publish.per_project.<project>` where unset;
-`entire` is read live from the repository wherever it matters (onboarding.link_entire, the doctor).
+`entire` is read live from the repository wherever it matters (onboarding.link_entire, the doctor);
+`team` is kept on the project's registry entry (cmd_init._save_team, only when it changes).
 
 Onboarding (c74) reads three more facts, each local and read-only (a failure counts as "no sign"):
 `stage(root)` (`build` or `operations`: the preset `orche hr choices` recommends), `tracked(root)` (an empty
@@ -31,6 +34,7 @@ MIN_PRS = 20
 MIN_BRANCHES = 3
 SHARE = 2 / 3
 ENTIRE = Path(".entire") / "settings.json"
+TEAM_SETTINGS = Path(".claude") / "settings.json"
 CODE_FILES = 20     # more tracked files than this: the repository has code
 EMPTY_FILES = 5     # fewer tracked files than this: an empty repository (no intake)
 MANIFESTS = ("package.json", "pyproject.toml", "go.mod", "Cargo.toml")
@@ -42,6 +46,18 @@ _KEYED = re.compile(r"^(?P<prefix>[a-z][a-z0-9-]*)/(?P<team>[a-z]+)-(?P<n>[0-9]+
 def uses_entire(root) -> bool:
     """Whether the repository at `root` uses Entire (its committed `.entire/settings.json`)."""
     return (Path(root) / ENTIRE).is_file()
+
+
+def team(root) -> str | None:
+    """The team plugin the repository at `root` declares: the first key (sorted) of `enabledPlugins` whose
+    value is true in its committed `.claude/settings.json`; None for an unreadable or invalid file or none."""
+    try:
+        plugins = json.loads((Path(root) / TEAM_SETTINGS).read_text(encoding="utf-8")).get("enabledPlugins")
+    except (OSError, ValueError, AttributeError):
+        return None
+    if not isinstance(plugins, dict):
+        return None
+    return next((k for k in sorted(plugins) if plugins[k] is True and isinstance(k, str) and k.strip()), None)
 
 
 def _majority(values, minimum):
@@ -88,6 +104,9 @@ def conventions(root, project, cfg=None) -> dict:
     found.update(_branches(root))
     if uses_entire(root):
         found["entire"] = True
+    plugin = team(root)
+    if plugin:
+        found["team"] = plugin
     return found
 
 

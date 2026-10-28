@@ -172,6 +172,30 @@ class ReportTest(support.TempHomeCase):
         self.assertEqual(ptr["pr"], 9)
         self.assertFalse([c for c in self.calls if c[1:3] == ["pr", "create"]])
 
+    def test_a_team_done_publishes_nothing_and_says_what_the_owner_says_next(self):
+        """R-TEAM-2: in a team repository a gated done files `pr: none` and the ready line; no push, no PR, no
+        head review."""
+        from unittest import mock
+        from orche import publish
+        from orche.review import build as review_build
+        reg = registry.load()
+        reg["projects"]["acme-shop"]["team"] = "team-os@acme"
+        registry.save(reg)
+        self.as_session("div-acme-shop-build")
+        unit = "acme-shop-team-20261016-1"
+        self.brief(unit, "div-acme-shop-build")
+        self.ledgered()
+        with mock.patch.object(publish, "publish") as pub, mock.patch.object(review_build, "after_publish") as after:
+            code, _, err = self.orche("report", "done", "--summary", "1\n2\n3\n4\n5\n6")
+        self.assertEqual((code, err), (0, ""))
+        pub.assert_not_called()
+        after.assert_not_called()
+        [ptr] = self.pointers("main-acme-shop")
+        self.assertEqual(ptr["status"], "done")
+        self.assertIsNone(ptr.get("pr"))
+        self.assertEqual(ptr["summary"], f'1\n2\n3\n4\nready: say "push {unit}" (div/build)')
+        self.assertFalse([c for c in self.calls if "push" in c or c[1:2] == ["pr"]])
+
     def test_newest_skips_folders_that_are_not_unit_ids(self):
         self.as_session("div-acme-shop-build")
         self.brief("acme-shop-real-20261016-1", "div-acme-shop-build", age=100)

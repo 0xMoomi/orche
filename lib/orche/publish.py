@@ -23,6 +23,9 @@ The worker's name carries the issue key (`issue_of`: `des-47-…` -> DES-47, `12
 ends with ` (KEY)` and its body starts with `Fixes KEY`; the tracker's own GitHub automation moves the
 issue (ORCHE never calls the tracker). The body names no writer (no AI-authorship marker: a squash merge can
 copy it into history); its queue sentence appears only when the project's gate applies (`gate`).
+
+In a team repository (registry.team) a gated done publishes nothing: it is filed with `ready_line` and
+`pr: none`, and `orche queue add <unit>` (Main, on the owner's "push") calls `publish`.
 """
 import re
 from dataclasses import dataclass
@@ -69,6 +72,11 @@ class Unchanged:
 class Gap:
     text: str
     owner: str | None = None
+
+
+def ready_line(unit, branch) -> str:
+    """A gated done in team mode (registry.team): nothing is published; the owner's word publishes it."""
+    return f'ready: say "push {unit}" ({branch})'
 
 
 def _first(res) -> str:

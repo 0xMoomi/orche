@@ -443,6 +443,60 @@ class QueueCmdTest(support.TempHomeCase):
         self.assertEqual(spawn.call_count, 1)
         self.assertIn("main-acme", spawn.call_args[0][0])
 
+    def team(self):
+        reg = registry.load()
+        reg["projects"]["acme"]["team"] = "team-os@acme"
+        registry.save(reg)
+
+    def test_a_team_project_lands_on_the_owners_word_whatever_the_config(self):
+        self.team()
+        self.assertEqual(queue.land_mode({"queue": {"land": "auto"}}, "acme"), "owner")
+        self.assertEqual(queue.release("acme", {"queue": {"land": "auto"}}), [])
+
+    def test_in_a_team_project_only_main_queues(self):
+        self.team()
+        self.ready()
+        code, _, err = self.orche("queue", "add", self.unit)
+        self.assertEqual(code, 3)
+        self.assertIn('acme is a team repository: only Main queues, on the owner\'s word ("push', err)
+        self.assertFalse(support.gh_calls(self.gh) and [c for c in support.gh_calls(self.gh)
+                                                        if c["argv"][:2] == ["pr", "create"]])
+
+    def test_the_owners_push_publishes_first_then_admits(self):
+        """R-TEAM-2: `orche queue add <unit>` from Main pushes the branch, opens the PR, starts the head review,
+        then admits; the entry waits for "merge"; a second add with the PR open at HEAD publishes nothing."""
+        from orche.review import build as review_build
+        self.team()
+        self.ready(review=None)
+        self.spec({"prs": []})
+        os.environ["ORCHE_SESSION"] = "main-acme"
+        with mock.patch.object(review_build, "after_publish", return_value=False) as after:
+            code, out, err = self.orche("queue", "add", self.unit)
+        self.assertEqual(code, 0, err)
+        after.assert_called_once_with("acme", 1, self.unit)
+        self.assertIn(f"queued PR #1 (feat/checkout @ {self.head[:7]})", out)
+        self.assertIn("waits for the owner's word", out)
+        self.assertEqual(git(self.home / "wt" / "origin.git", "rev-parse", "refs/heads/feat/checkout"), self.head)
+        creates = [c for c in support.gh_calls(self.gh) if c["argv"][:2] == ["pr", "create"]]
+        self.assertEqual(len(creates), 1)
+        self.assertEqual([(e["pr"], e["owner_ok"]) for e in self.queued()], [(1, False)])
+        with mock.patch.object(review_build, "after_publish") as after:
+            code, out, err = self.orche("queue", "add", self.unit)
+        self.assertEqual(code, 0, err)
+        after.assert_not_called()
+        self.assertIn("already queued", out)
+        self.assertEqual(len([c for c in support.gh_calls(self.gh) if c["argv"][:2] == ["pr", "create"]]), 1)
+
+    def test_a_team_publish_gap_exits_3_with_its_text(self):
+        self.team()
+        self.ready()
+        self.spec({"prs": [], "fail": {"pr create": "pull request create failed: GraphQL: something broke"}})
+        os.environ["ORCHE_SESSION"] = "main-acme"
+        code, _, err = self.orche("queue", "add", self.unit)
+        self.assertEqual(code, 3)
+        self.assertIn("orche: gh pr create: pull request create failed: GraphQL: something broke", err)
+        self.assertEqual(self.queued() if (self.home / "queue").exists() else [], [])
+
     def test_owner_approve_from_build_refused(self):
         self.owner()
         self.ready()

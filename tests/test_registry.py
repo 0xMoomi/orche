@@ -220,7 +220,7 @@ class LoadSaveTest(support.TempHomeCase):
     def test_save_then_load_roundtrip(self):
         registry.save(sample())
         self.assertEqual(registry.load(), SAMPLE)
-        self.assertEqual(sorted(p.name for p in self.home.iterdir() if p.name != "reconcile"),
+        self.assertEqual(sorted(p.name for p in self.home.iterdir() if p.name not in ("reconcile", "janitor")),
                          ["config.json", "registry.json"])
 
     def test_save_rejects_invalid(self):
@@ -250,7 +250,7 @@ class CliTest(support.TempHomeCase):
         return cp.returncode, cp.stdout, cp.stderr
 
     def test_version(self):
-        self.assertEqual(self.orche("version"), (0, "orche 0.16.1\n", ""))
+        self.assertEqual(self.orche("version"), (0, "orche 0.17.0\n", ""))
 
     def test_projects_json_empty_home(self):
         self.assertEqual(self.orche("projects", "--json"), (0, "[]\n", ""))

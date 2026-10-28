@@ -3,6 +3,7 @@ import json
 import os
 import plistlib
 import sys
+import time
 import unittest
 from datetime import timedelta
 from pathlib import Path
@@ -123,44 +124,76 @@ class InstallStepTest(InstallCase):
         self.assertEqual(doctor.reconcile_job_rows(self.h)[0][0], "OK")
 
 
-@unittest.skipUnless(sys.platform == "darwin", "the LaunchAgent is macOS only")
 class JanitorDefaultTest(InstallCase):
-    """c75: install turns the janitor on once and writes its daily schedule; a re-install (what `orche update`
-    runs) keeps an owner's `orche janitor disable`; doctor warns only when the schedule is gone after an install."""
+    """c75/c85: install turns the janitor on once (a re-install, what `orche update` runs, keeps an owner's
+    `orche janitor disable`) and writes no janitor LaunchAgent: the heartbeat runs the daily pass. An old
+    `com.orche.janitor.plist` is unloaded through launchctl and removed, once."""
 
     def plist(self):
         return self.h / "Library/LaunchAgents/com.orche.janitor.plist"
 
     def test_install_turns_the_janitor_on_and_an_update_keeps_a_disable(self):
-        self.assertEqual(doctor.janitor_rows(self.h), [("OK", "janitor", "not scheduled yet (orche install adds it)")])
         out = self.install("--mode", "settings", "--yes")
         self.assertIn(f"janitor: set {janitor.enabled_flag()} (on by default; `orche janitor disable` turns it off)",
                       out)
-        self.assertIn(f"janitor: write {self.plist()} (daily at 04:00, not loaded: --home is not the real home)", out)
+        self.assertNotIn("janitor: remove", out)
         self.assertTrue(janitor.enabled_flag().exists())
-        when = plistlib.loads(self.plist().read_bytes())["StartCalendarInterval"]
-        self.assertEqual((when["Hour"], when["Minute"]), (4, 0))
-        self.assertEqual(launchd.daily_at(), "04:00")
-        self.assertEqual(doctor.janitor_rows(self.h), [("OK", "janitor", "daily at 04:00, weekly pass never, on")])
+        self.assertFalse(self.plist().exists())
         self.assertEqual(self.orche("janitor", "disable")[0], 0)
         out = self.install("--mode", "settings", "--yes")   # orche update re-runs install
         self.assertNotIn("janitor: set", out)
         self.assertFalse(janitor.enabled_flag().exists())
-        self.assertTrue(self.plist().is_file())
-        self.assertEqual(doctor.janitor_rows(self.h)[0][2],
-                         "daily at 04:00, weekly pass never, report only (orche janitor enable lets it act)")
-        self.plist().unlink()
-        self.assertEqual(doctor.janitor_rows(self.h), [("WARN", "janitor", "daily schedule missing: run orche install")])
-        self.install("--mode", "settings", "--yes")
-        self.assertTrue(self.plist().is_file())
-        self.assertEqual(self.orche("uninstall", "--home", str(self.h))[0], 0)
-        self.assertFalse(self.plist().exists())
+
+    def test_install_removes_an_old_janitor_agent_through_launchctl(self):
+        self.plist().parent.mkdir(parents=True)
+        self.plist().write_text("x")
+        ran = []
+
+        def runner(argv, *, timeout, input, env=None):
+            ran.append(argv)
+            return shell.Result(0, "", "", argv)
+        with mock.patch.object(shell, "RUNNER", runner), \
+                mock.patch.object(launchd.Path, "home", classmethod(lambda cls: self.h)):
+            out = self.install("--mode", "settings", "--yes", "--no-reconcile")
+            self.assertIn(f"janitor: remove {self.plist()} (removed the janitor's old schedule; the heartbeat runs "
+                          "it now)", out)
+            self.assertEqual([a for a in ran if a[0] == "launchctl"],
+                             [["launchctl", "bootout", f"gui/{UID}/com.orche.janitor"]])
+            self.assertFalse(self.plist().exists())
+            out = self.install("--mode", "settings", "--yes", "--no-reconcile")   # once
+        self.assertNotIn("janitor: remove", out)
+        self.assertEqual(len([a for a in ran if a[0] == "launchctl"]), 1)
 
     def test_dry_run_writes_nothing(self):
+        self.plist().parent.mkdir(parents=True)
+        self.plist().write_text("x")
         out = self.install("--mode", "settings", "--yes", "--dry-run")
         self.assertIn("janitor: would set ", out)
+        self.assertIn(f"janitor: would remove {self.plist()}", out)
         self.assertFalse(janitor.enabled_flag().exists())
-        self.assertFalse(self.plist().exists())
+        self.assertTrue(self.plist().exists())
+
+
+class JanitorDoctorTest(support.TempHomeCase):
+    """c85: the doctor's janitor row: the heartbeat's daily pass, the last and the weekly pass, on or off."""
+
+    def test_never_fresh_and_stale(self):
+        janitor.report_path().unlink()
+        self.assertEqual(doctor.janitor_rows(), [("OK", "janitor", "daily through the heartbeat, last pass never, "
+                                                                   "weekly pass never, off (dry run)")])
+        janitor.report_path().write_text("x")
+        janitor.enabled_flag().touch()
+        janitor.save_state({"weekly": {"last": "2026-10-25T04:00:00+00:00"}})
+        self.assertEqual(doctor.janitor_rows(), [("OK", "janitor", "daily through the heartbeat, last pass 0m ago, "
+                                                                   "weekly pass 2026-10-25, on")])
+        old = time.time() - 3 * janitor.DAILY_S
+        os.utime(janitor.report_path(), (old, old))
+        self.assertEqual(doctor.janitor_rows(), [("WARN", "janitor", "daily through the heartbeat, last pass 3d ago, "
+                                                                     "weekly pass 2026-10-25, on; see logs/janitor.log")])
+        cfg = json.loads((self.home / "config.json").read_text())
+        cfg["reconcile"] = {"enabled": False}
+        (self.home / "config.json").write_text(json.dumps(cfg))
+        self.assertEqual(doctor.janitor_rows()[0][0], "OK")   # the heartbeat off: nothing would run it
 
 
 class KickTest(support.TempHomeCase):

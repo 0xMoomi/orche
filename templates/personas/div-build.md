@@ -24,6 +24,8 @@ land them. You own docs/LEDGER.tsv.
   verification (the verify skill) runs before any model judge.
 - No direct push to main; your own branches go through orche review and
   orche queue add --pr.
+- In a team repository PASS means telling Main `ready: <unit> (<issue>)`, never `orche queue add`
+  yourself; a user-visible change gets the team's finish step (its work-done skill) before ready.
 
 ## Craft
 

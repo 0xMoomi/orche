@@ -664,7 +664,7 @@ class DoctorTest(InstallCase):
         self.assertTrue(steps and all(ln.startswith("- ") for ln in steps), steps)
         self.assertEqual(steps[-1], '- Something wrong: any time. Say "check the setup"; Main runs `orche doctor`.')
         self.assertIn("- More agents at once: how many workers may run in parallel. Up to 4 at once (default). ", out)
-        self.assertIn("- Janitor: cleans up daily; ", out)
+        self.assertIn("- Janitor: cleans up daily (the heartbeat starts it when the last pass is a day old); ", out)
         self.assertFalse(any(ln.startswith(("WARN", "FAIL")) for ln in steps))   # install.sh greps those only
         self.json_doctor = True
         code, out, _ = self.doctor()

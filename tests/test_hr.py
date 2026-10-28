@@ -582,6 +582,28 @@ class InitTest(HrCase):
         report = (self.repo / ".orche" / "SETUP.md").read_text()
         self.assertIn("- Read the repository's team conventions: branch_prefix, entire.\n", report)   # every match
 
+    def test_a_team_plugin_is_kept_on_the_registry_and_named_in_the_report(self):
+        """R-TEAM-1: init saves the declared team plugin as `team`; --refresh (orche update) clears it once the
+        repository no longer declares one; SETUP.md says whether it is installed for this user."""
+        git_repo(self.repo)
+        support.declare_team(self.repo)
+        code, _, err = self.orche("init", "Acme Shop")
+        self.assertEqual(code, 0, err)
+        self.assertEqual(registry.load()["projects"]["acme-shop"]["team"], support.TEAM_PLUGIN)
+        report = (self.repo / ".orche" / "SETUP.md").read_text()
+        self.assertIn("- Read the repository's team conventions: team.\n", report)
+        self.assertIn(f'- Team: plugin {support.TEAM_PLUGIN} (installed for you: no, say "install the team plugin"). '
+                      'Push, pull request and merge wait for your word: "push <unit>" and "merge <PR>"; the team\'s '
+                      "rules reach every ORCHE session.\n", report)
+        support.team_plugin(self.home)
+        self.assertEqual(self.orche("init", "acme-shop", "--refresh")[0], 0)
+        self.assertIn(f"- Team: plugin {support.TEAM_PLUGIN} (installed for you: yes).",
+                      (self.repo / ".orche" / "SETUP.md").read_text())
+        (self.repo / ".claude" / "settings.json").unlink()
+        self.assertEqual(self.orche("init", "acme-shop", "--refresh")[0], 0)
+        self.assertNotIn("team", registry.load()["projects"]["acme-shop"])
+        self.assertNotIn("- Team:", (self.repo / ".orche" / "SETUP.md").read_text())
+
     def test_a_plain_repository_detects_nothing(self):
         git_repo(self.repo)
         self.assertEqual(self.orche("init", "Acme Shop")[0], 0)

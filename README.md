@@ -27,6 +27,8 @@ Then restart Claude Code once so the plugin loads.
 
 Already installed? Inside a project, say "orche init" to Claude Code, or "set up ORCHE here" in any language.
 
+A repository that declares its team plugin in `.claude/settings.json` runs in team mode: push, pull request and merge wait for your word.
+
 A new, empty folder is fine: ORCHE asks whether to create the repository there (GitHub, private by default) and which preset fits, with the recommended answers first.
 
 ## What you get
@@ -45,12 +47,15 @@ Say it to Main in your own words; Main runs the command.
 | "turn on Jev" | faster routing of simple requests: `orche jev setup` asks for the key |
 | "cross-check PR 12 with Codex" | you install Codex once (`npm install -g @openai/codex`, `codex login`); Main then runs `orche review --pr 12`: Codex and Claude read the diff at once and only a defect both name sends it back; nothing runs unless you ask. Codex can still be a division's model (headless only) |
 | "set the token for background runs" | you run `claude setup-token`; Main stores it with `orche auth set` |
-| "let the janitor clean up" | on by default (`orche install` turns it on and schedules it daily); this turns it back on after `orche janitor disable` |
+| "let the janitor clean up" | on by default (`orche install` turns it on; the heartbeat runs it daily, when the last pass is a day old); this turns it back on after `orche janitor disable` |
 | "set up the merge queue for <project>" | `orche init --refresh <project>` (also part of every `orche update`) opens one PR adding `scripts/verify/ci.sh`; merging it turns the queue on |
 | "run up to 30 agents" | `orche hr scale 30`; on a Claude subscription many agents reach the usage window and ORCHE waits for its reset |
 | "add a design division", "switch research to Sonnet", "set up again" | a choice dialog, then `orche hr add`, `orche hr model` or `orche init --refresh` |
 | "pull requests go to develop and branches start with dev/" | `orche init --refresh <project> --base develop --branch-prefix dev` |
 | (nothing to say) | A repository that already follows a team workflow (PRs to develop, dev/des-47 branches, Entire) is read at setup; nothing to configure. |
+| "push DES-57" (team mode) | `orche queue add <unit>`: the branch is pushed, the pull request opened, the head review run |
+| "merge PR 12" (team mode) | `orche queue approve <project> #12` |
+| "install the team plugin" | Main follows the repository's own setup guide |
 | "update" | `orche update`: the newest ORCHE, reinstalled, every project's ORCHE files refreshed (never yours) |
 | "what changed in <project>?" | `orche card <project>`, then `orche ask <project> "…"` |
 | "how much did this cost?" | `orche metrics` |

@@ -8,6 +8,9 @@ standard one. `divisions_of(proj)` is the one enumeration every command uses.
 Every write goes through `update(mutate)`: the change is applied to a registry loaded under `lock()`
 and saved before the lock is released, so two writers (a heartbeat wake and `orche hr add`) cannot
 lose each other's changes. `save` is called only here.
+
+A project's optional `team` is the team plugin id its repository declares (detect.team; written by
+`orche init` and `orche update`): such a project runs in team mode (`team(reg, key)` is the one read site).
 """
 import contextlib
 import copy
@@ -308,6 +311,8 @@ def _validate_project(key, proj, errors):
         errors.append(f"{where}.aliases: must be a list of strings")
     if "secrets" in proj:
         _validate_secrets(proj["secrets"], f"{where}.secrets", errors)
+    if "team" in proj and not (isinstance(proj["team"], str) and proj["team"].strip()):
+        errors.append(f"{where}.team: must be a non-empty string")
     if "orche_version" in proj and not (isinstance(proj["orche_version"], str)
                                         and ORCHE_VERSION.fullmatch(proj["orche_version"])):
         errors.append(f"{where}.orche_version: must be a version like 0.6.0")
@@ -376,6 +381,11 @@ def project(reg: dict, key_or_alias: str):
         if needle in (a.lower() for a in proj.get("aliases", [])):
             return key, proj
     return None
+
+
+def team(reg: dict, key) -> str | None:
+    """The team plugin id project `key` declares (its `team` field: team mode), else None."""
+    return ((reg.get("projects") or {}).get(key) or {}).get("team") or None
 
 
 def append_event(reg: dict, **fields) -> dict:

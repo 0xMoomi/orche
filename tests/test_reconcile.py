@@ -15,7 +15,7 @@ from contextlib import redirect_stderr, redirect_stdout
 import support
 from unittest import mock
 
-from orche import brief, cmd_status, deliver, hr, inbox, notify, orca, procs, reconcile, registry, roster, runs, shell, units, util
+from orche import brief, cmd_status, deliver, hr, inbox, janitor, notify, orca, procs, reconcile, registry, roster, runs, shell, units, util
 from test_registry import load_cli
 from test_deliver import DeadPane
 
@@ -1046,6 +1046,44 @@ class ScaleHeartbeatTest(RepairCase):
                                     "divisions to Codex.", T0)
         self.assertIn("usage", self.owner.NOTICES)                        # a held-back notice is flushed later
 
+
+
+class JanitorHeartbeatTest(ReconcileCase):
+    """c85: the heartbeat starts the janitor's daily pass, detached, when the last pass is a day old and none runs."""
+
+    def age(self, seconds):
+        at = time.time() - seconds
+        os.utime(janitor.report_path(), (at, at))
+
+    def test_starts_once_when_due(self):
+        self.age(janitor.DAILY_S + 3600)
+        _code, lines = self.run_at(0)
+        self.assertEqual(self.spawned, [("janitor", "run")])
+        self.assertEqual(lines, ["start the janitor's daily pass (last pass 1d ago)"])
+        self.assertTrue(any("action=janitor" in e for e in self.events()))
+        janitor.report_path().write_text("x")   # the pass it started wrote its report
+        self.run_at(5)
+        self.assertEqual(self.spawned, [])
+
+    def test_never_ran(self):
+        janitor.report_path().unlink()
+        _code, lines = self.run_at(0)
+        self.assertEqual(self.spawned, [("janitor", "run")])
+        self.assertEqual(lines, ["start the janitor's daily pass (last pass never)"])
+
+    def test_fresh_report_or_held_lock_starts_nothing(self):
+        self.run_at(0)
+        self.assertEqual(self.spawned, [])
+        self.age(janitor.DAILY_S + 60)
+        janitor.lock_path().touch()
+        _code, lines = self.run_at(5)
+        self.assertEqual((self.spawned, lines), ([], []))
+
+    def test_dry_run_says_would_start(self):
+        janitor.report_path().unlink()
+        _code, lines = self.run_at(0, dry_run=True)
+        self.assertEqual(self.spawned, [])
+        self.assertEqual(lines, ["would start the janitor's daily pass (last pass never)"])
 
 if __name__ == "__main__":
     unittest.main()

@@ -12,7 +12,8 @@ clone's stale git locks removed → fetch, the PR's facts and the drops → main
 outside the queue (§5.8) → the candidate (the head merged --no-ff onto the fetched base) → the gate →
 land with --match-head-commit → prove → ledger rows and pointers (§5.6); or a return (§5.7). An entry the
 head review found user-visible (`surface: user`) lands only when the gate's check script said live-ui-verified;
-less returns it (R-REVIEW-12).
+less returns it (R-REVIEW-12). A team project (registry.team) skips that live rule: the team's finish step shows
+the change on the issue before Main says ready (R-TEAM-2).
 
 Entry states: waiting → testing → merged | returned | dropped (the entry leaves queue.json), or back
 to waiting at the front: restarted (the base moved during the gate), lost, main red, a GitHub
@@ -503,6 +504,8 @@ class Pass:
     def not_live(self, g) -> bool:
         """R-REVIEW-12: a user-visible entry whose gate ran the check script and got less than live-ui-verified.
         No check script in the gate: no level, nothing to hold it to."""
+        if registry.team(self.reg, self.project):     # R-TEAM-2: the team's finish step showed it on the issue
+            return False
         ran = gate.CI in str(g.get("gate") or "").split(" + ")
         return self.entry.get("surface") == "user" and ran and g.get("verdict") != LIVE
 

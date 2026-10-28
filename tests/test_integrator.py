@@ -346,6 +346,15 @@ class LiveTest(IntegratorCase):
         p.entry = {**e, "surface": "internal"}
         self.assertFalse(p.not_live({"gate": "scripts/verify/ci.sh", "verdict": "unit-test-verified"}))
 
+    def test_a_team_project_skips_the_live_rule(self):
+        """R-TEAM-2: the team's finish step showed the change on the issue before Main said ready."""
+        reg = registry.load()
+        reg["projects"]["acme"]["team"] = "team-os@acme"
+        registry.save(reg)
+        e = {"pr": 1, "head": "a" * 40, "id": "pr1-aaaaaaa", "surface": "user"}
+        p = integrator.Pass("acme", e, {"base": "main", "green_main": None, "closed": None})
+        self.assertFalse(p.not_live({"gate": "scripts/verify/ci.sh", "verdict": "unit-test-verified"}))
+
 
 class TeamsHeadTest(IntegratorCase):
     """T2: the queue's notes and AMENDs go to the worker's head (here Design), a --pr entry still to Build."""
