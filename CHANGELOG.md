@@ -3,6 +3,16 @@
 All notable changes to ORCHE are listed here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow semantic versioning.
 
+## 0.17.1 — 2026-10-28
+
+### Fixed
+
+- Team mode no longer turns on for a repository whose `.claude/settings.json` enables an ordinary plugin (such as
+  a Vercel plugin from the official marketplace); a team plugin is one whose marketplace the repository itself
+  declares under `extraKnownMarketplaces`.
+- The publish test that checks a stale `origin/<base>` is fetched first now pins the lagging tracking ref itself;
+  git on Linux updated it on the push by URL, so the test failed in CI on Ubuntu.
+
 ## 0.17.0 — 2026-10-28
 
 ### Added

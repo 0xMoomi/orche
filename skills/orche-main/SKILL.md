@@ -195,8 +195,8 @@ pointers.
 
 ## Team repositories
 
-- A repository that declares a team plugin (`enabledPlugins` in its committed `.claude/settings.json`) runs in team
-  mode: SETUP.md and `orche doctor` name the plugin. Its rules apply in your pane and win on process; ORCHE's win on
+- A repository that declares a team plugin (enabled in `enabledPlugins` of its committed `.claude/settings.json`,
+  with its marketplace under `extraKnownMarketplaces`) runs in team mode: SETUP.md and `orche doctor` name the plugin. Its rules apply in your pane and win on process; ORCHE's win on
   mechanics.
 - Before dispatch, do the team's start step yourself (its work-start skill when it has one) and name the worker after
   the issue (`des-57-<topic>`). Build does the team's finish step before it says `ready: <unit> (<issue>)`.

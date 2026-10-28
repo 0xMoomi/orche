@@ -316,9 +316,11 @@ class ReviewBTest(PublishCase):
 
     def test_changes_fetches_the_base_first_never_trusting_a_stale_origin(self):
         """Review B G8c: HEAD already on origin/main (pushed elsewhere) is no change though the local ref lags."""
+        stale = self.git(self.repo, "rev-parse", "origin/main")
         head = self.commit(self.repo, "x.txt", "x\n")
-        self.git(self.repo, "push", "-q", str(self.bare), "HEAD:refs/heads/main")   # by URL: origin/main stays stale
-        self.assertNotEqual(self.git(self.repo, "rev-parse", "origin/main"), head)
+        self.git(self.repo, "push", "-q", str(self.bare), "HEAD:refs/heads/main")
+        self.git(self.repo, "update-ref", "refs/remotes/origin/main", stale)   # the tracking ref lags (git on Linux
+        self.assertNotEqual(self.git(self.repo, "rev-parse", "origin/main"), head)   # updates it on a push by URL)
         self.assertFalse(publish.changes(self.repo, "main"))
         self.assertEqual(self.git(self.repo, "rev-parse", "origin/main"), head)
 

@@ -9,8 +9,9 @@ timeout that fails silently to "nothing detected" (never a refusal, never a gues
                  MIN_BRANCHES of them share one prefix holding at least two thirds of them
   issues         the issue tracker's team key (`DES`) holding at least two thirds of those branches
   entire         True when the repository uses Entire (`.entire/settings.json`)
-  team           the team plugin the repository declares (`team(root)`: the first enabled key, sorted, of
-                 `enabledPlugins` in its committed `.claude/settings.json`); the project then runs in team mode
+  team           the team plugin the repository declares (`team(root)`: the first enabled plugin, sorted, in
+                 its committed `.claude/settings.json` whose marketplace the same file declares under
+                 `extraKnownMarketplaces`); the project then runs in team mode
 
 cmd_init writes base, branch_prefix and issues into `publish.per_project.<project>` where unset;
 `entire` is read live from the repository wherever it matters (onboarding.link_entire, the doctor);
@@ -49,15 +50,20 @@ def uses_entire(root) -> bool:
 
 
 def team(root) -> str | None:
-    """The team plugin the repository at `root` declares: the first key (sorted) of `enabledPlugins` whose
-    value is true in its committed `.claude/settings.json`; None for an unreadable or invalid file or none."""
+    """The team plugin the repository at `root` declares: the first key (sorted) `<name>@<marketplace>` of
+    `enabledPlugins` whose value is true in its committed `.claude/settings.json` and whose marketplace is a key
+    of `extraKnownMarketplaces` in the same file (the repository brings its own marketplace for it). A plugin
+    from a marketplace the file does not declare is never a team plugin. None for an unreadable or invalid file
+    or none."""
     try:
-        plugins = json.loads((Path(root) / TEAM_SETTINGS).read_text(encoding="utf-8")).get("enabledPlugins")
+        data = json.loads((Path(root) / TEAM_SETTINGS).read_text(encoding="utf-8"))
+        plugins, markets = data.get("enabledPlugins"), data.get("extraKnownMarketplaces")
     except (OSError, ValueError, AttributeError):
         return None
-    if not isinstance(plugins, dict):
+    if not isinstance(plugins, dict) or not isinstance(markets, dict):
         return None
-    return next((k for k in sorted(plugins) if plugins[k] is True and isinstance(k, str) and k.strip()), None)
+    return next((k for k in sorted(plugins) if plugins[k] is True and "@" in k
+                 and k.split("@", 1)[0].strip() and k.split("@", 1)[1] in markets), None)
 
 
 def _majority(values, minimum):

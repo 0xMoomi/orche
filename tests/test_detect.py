@@ -93,17 +93,34 @@ class ConventionsTest(DetectCase):
 
 
 class TeamTest(DetectCase):
+    def write(self, data):
+        (self.repo / ".claude").mkdir(exist_ok=True)
+        (self.repo / ".claude" / "settings.json").write_text(json.dumps(data))
+
     def test_the_first_enabled_plugin_the_repository_declares(self):
         self.assertIsNone(detect.team(self.repo))
         support.declare_team(self.repo)
         self.assertEqual(detect.team(self.repo), support.TEAM_PLUGIN)
         self.assertEqual(self.found(), {"team": support.TEAM_PLUGIN})
-        (self.repo / ".claude" / "settings.json").write_text('{"enabledPlugins": {"b@x": true, "a@x": true}}')
+        market = {"source": {"source": "github", "repo": "x/x"}}
+        self.write({"enabledPlugins": {"b@x": True, "a@x": True}, "extraKnownMarketplaces": {"x": market}})
         self.assertEqual(detect.team(self.repo), "a@x")
+        self.write({"enabledPlugins": {"a@x": False}, "extraKnownMarketplaces": {"x": market}})
+        self.assertIsNone(detect.team(self.repo))
         (self.repo / ".claude" / "settings.json").write_text("{not json")
         self.assertIsNone(detect.team(self.repo))
-        (self.repo / ".claude" / "settings.json").write_text('{"enabledPlugins": {"a@x": false}}')
+
+    def test_an_ordinary_plugin_is_never_a_team_plugin(self):
+        self.write({"enabledPlugins": {"vercel@claude-plugins-official": True}})
         self.assertIsNone(detect.team(self.repo))
+        self.assertEqual(self.found(), {})
+        self.write({"enabledPlugins": {"vercel@claude-plugins-official": True},
+                    "extraKnownMarketplaces": {"claude-plugins-official": {"source": {"source": "github",
+                                                                                      "repo": "a/b"}}}})
+        self.assertEqual(detect.team(self.repo), "vercel@claude-plugins-official")
+        self.write({"enabledPlugins": {"vercel@claude-plugins-official": True, "team@acme": True},
+                    "extraKnownMarketplaces": {"acme": {}}})
+        self.assertEqual(detect.team(self.repo), "team@acme")
 
     def test_plugin_install_path_and_the_doctor_row(self):
         from orche.hr import panes

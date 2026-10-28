@@ -434,7 +434,10 @@ def team_plugin(home: Path, plugin_id=TEAM_PLUGIN, scope="user") -> Path:
 
 
 def declare_team(repo: Path, plugin_id=TEAM_PLUGIN) -> None:
-    """The repository's committed `.claude/settings.json` declaring its team plugin (and one disabled one)."""
+    """The repository's committed `.claude/settings.json` declaring its team plugin with its marketplace (and
+    one disabled plugin)."""
     (repo / ".claude").mkdir(parents=True, exist_ok=True)
-    (repo / ".claude" / "settings.json").write_text(json.dumps({"enabledPlugins": {plugin_id: True,
-                                                                                   "a-disabled@x": False}}))
+    market = plugin_id.split("@", 1)[1]
+    (repo / ".claude" / "settings.json").write_text(json.dumps({
+        "enabledPlugins": {plugin_id: True, "a-disabled@x": False},
+        "extraKnownMarketplaces": {market: {"source": {"source": "github", "repo": f"{market}/{market}"}}}}))

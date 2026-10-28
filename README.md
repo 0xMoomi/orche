@@ -27,7 +27,7 @@ Then restart Claude Code once so the plugin loads.
 
 Already installed? Inside a project, say "orche init" to Claude Code, or "set up ORCHE here" in any language.
 
-A repository that declares its team plugin in `.claude/settings.json` runs in team mode: push, pull request and merge wait for your word.
+A repository that declares its team plugin and that plugin's own marketplace in `.claude/settings.json` runs in team mode: push, pull request and merge wait for your word.
 
 A new, empty folder is fine: ORCHE asks whether to create the repository there (GitHub, private by default) and which preset fits, with the recommended answers first.
 
