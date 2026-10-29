@@ -3,6 +3,16 @@
 All notable changes to ORCHE are listed here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow semantic versioning.
 
+## 0.19.1 — 2026-10-30
+
+### Changed
+
+- Every ORCHE pane (Main, division heads, feature panes) starts with `CLAUDE_CODE_PROMPT_CACHE_TTL=1h`, so a pane that wakes after more than five idle minutes on usage credits keeps its one-hour prompt cache instead of rewriting its whole context.
+
+### Fixed
+
+- Codex no longer runs on every `orche review --pr`; it joins only with `--codex`. Without it the review is Claude only, so Build's own fixes and per-PR reviews stop spending Codex credits. Main passes `--codex` only when the owner asks to cross-check with Codex; Build only for a change it seriously doubts.
+
 ## 0.19.0 — 2026-10-29
 
 ### Added

@@ -486,10 +486,10 @@ def _checkout(project, pr, sha, root):
         shutil.rmtree(tmp, ignore_errors=True)
 
 
-def _pre_round(reg, cfg, project, pr, unit, view, root) -> dict | None:
-    """One pre-review round of the PR's head (pre.one_round: the two-vendor panel when both are up, else a
-    reviewer of another vendor than the writer's model; row kind pre). None on PASS or skipped, else the
-    result."""
+def _pre_round(reg, cfg, project, pr, unit, view, root, codex=False) -> dict | None:
+    """One pre-review round of the PR's head (pre.one_round: with `codex` the two-vendor panel when both are up,
+    else a reviewer of another vendor than the writer's model; without it Claude only; row kind pre). None on
+    PASS or skipped, else the result."""
     from ..runs import history
     sha = view["headRefOid"]
     head, writer, b = _members(reg, project, view.get("headRefName", ""), unit)
@@ -515,7 +515,7 @@ def _pre_round(reg, cfg, project, pr, unit, view, root) -> dict | None:
         ctx = pre.Ctx(cfg=cfg, project=project, unit=unit_id, rev=rev, unit_dir=unit_dir, worktree=wt,
                       base=base, writer=writer.session,
                       writer_model=vendors.of(reg, writer), fields=dict(b.fields) if b is not None else {},
-                      tag=procs.run_id(f"review-pr{pr}", time.time_ns()), record=record)
+                      tag=procs.run_id(f"review-pr{pr}", time.time_ns()), record=record, codex=codex)
         hit = history.spend_hit(project, b.unit if b is not None else None, cfg, tag=f"buildreview: {project}")
         if hit:                   # G4 before the paid pre-review call
             return {"status": "pre-error", "head": sha, "error": f"spend cap: pre-review not run ({hit})"}
@@ -531,10 +531,10 @@ def _pre_round(reg, cfg, project, pr, unit, view, root) -> dict | None:
             "findings": list(rnd.findings), "error": rnd.why, "path": str(rnd.path or "")}
 
 
-def for_pr(project, pr, unit=None, *, tell=None, reg=None, cfg=None) -> dict:
-    """`orche review --pr N` (R33), the request and the only trigger of a pre-review: the
+def for_pr(project, pr, unit=None, *, tell=None, reg=None, cfg=None, codex=False) -> dict:
+    """`orche review --pr N [--codex]` (R33), the request and the only trigger of a pre-review: the
     PR's round at its head unless a pass, skipped or return row is there already (one round; row kind
-    pre), then on PASS or skipped the head review (build_review), so `orche queue add --pr N` finds its
+    pre; with `codex`, a row Codex did not take part in is reviewed again with it), then on PASS or skipped the head review (build_review), so `orche queue add --pr N` finds its
     pre row. A pre-review RETURN or error is the result; `tell` (the `--background` caller) hears it as
     a waking `review` pointer."""
     reg = reg if reg is not None else registry.load()
@@ -548,8 +548,8 @@ def for_pr(project, pr, unit=None, *, tell=None, reg=None, cfg=None) -> dict:
     if str(view.get("state") or "OPEN").upper() != "OPEN" or not sha:
         return {"status": "closed", "head": sha, "state": view.get("state")}
     row = ledger.review_for(project, pr, sha, "pre")
-    if row is None or row.get("verdict") == "error":
-        out = _pre_round(reg, cfg, project, pr, unit, view, root)
+    if row is None or row.get("verdict") == "error" or (codex and vendors.CODEX not in str(row.get("model") or "")):
+        out = _pre_round(reg, cfg, project, pr, unit, view, root, codex)
         if out is not None:
             if tell and out["status"] != "no-head":
                 lines = [f"PR #{pr} @{sha[:7]}: pre-review {out['status'][4:].upper()} by {out.get('model')} "

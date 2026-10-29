@@ -1,10 +1,11 @@
 """`orche review --pr N`: the cross-check of an open PR on request (R-REVIEW-1, R33).
 
-  orche review --pr N [--project <p>] [--unit <id>] [--background]
+  orche review --pr N [--project <p>] [--unit <id>] [--codex] [--background]
 
-The request: Main runs it on the owner's words, Build on a change it doubts. One pre-review round of the
-PR's head (the two-vendor panel when both vendors are up, else a single reviewer of the other vendor; a
-ledger row of kind pre, so `orche queue add --pr N` finds it), then on PASS the headless head review;
+The request: Main runs it on the owner's words, Build on its own fixes. One pre-review round of the PR's
+head, Claude only; with --codex (Main: only when the owner asks to cross-check with Codex; Build: only for
+a change it seriously doubts) the two-vendor panel when both vendors are up, else a single reviewer of the
+other vendor (a ledger row of kind pre, so `orche queue add --pr N` finds it), then on PASS the headless head review;
 both PASS queue the PR. A pre-review RETURN prints its findings and exits 3 (fix, push, review again);
 anything else wakes the Build pane. `--background` starts the same detached and tells the caller its
 pre-review verdict as a waking `review` pointer. Nothing in ORCHE starts a cross-check by itself: after
@@ -17,11 +18,12 @@ from .review import build as _build
 
 
 def register(subparsers):
-    p = subparsers.add_parser("review", help="cross-check an open PR on request (two vendors), then its head review",
+    p = subparsers.add_parser("review", help="review an open PR on request (Codex joins with --codex), then its head review",
                               description=__doc__.split("\n", 1)[1])
     p.add_argument("--pr", type=int, required=True, help="the PR number")
     p.add_argument("--project", help="the project (default: the calling session's)")
     p.add_argument("--unit", help="the unit whose brief the PR answers")
+    p.add_argument("--codex", action="store_true", help="Codex joins the review (the two-vendor panel); only when asked")
     p.add_argument("--background", action="store_true", help="start it detached and return")
     p.add_argument("--head", action="store_true", help=argparse.SUPPRESS)   # the head review alone (start())
     p.add_argument("--tell", help=argparse.SUPPRESS)                        # --background's caller
@@ -68,7 +70,7 @@ def run(args):
     project = found[0]
     if args.background:
         caller = roster.env_session() or ""
-        argv = ["review", "--pr", str(args.pr), "--project", project] + (["--unit", args.unit] if args.unit else []) + (["--tell", caller] if caller else [])
+        argv = ["review", "--pr", str(args.pr), "--project", project] + (["--unit", args.unit] if args.unit else []) + (["--codex"] if args.codex else []) + (["--tell", caller] if caller else [])
         procs.spawn_orche(argv, paths.orche_home() / "logs" / "review" / f"{project}-pr{args.pr}.log")
         cli.out(args, {"status": "started"}, f"reviews of PR #{args.pr} started")
         return cli.EXIT_OK
@@ -77,7 +79,7 @@ def run(args):
         if args.head:
             res = _build.build_review(project, args.pr, args.unit, reg=reg, cfg=cfg)
         else:
-            res = _build.for_pr(project, args.pr, args.unit, tell=args.tell, reg=reg, cfg=cfg)
+            res = _build.for_pr(project, args.pr, args.unit, tell=args.tell, reg=reg, cfg=cfg, codex=args.codex)
     except Exception as exc:   # noqa: BLE001 — a detached run's log is the only witness
         log.log("hooks", f"buildreview: {project} PR #{args.pr}: {type(exc).__name__}: {exc}")
         return cli.fail(cli.EXIT_BLOCKED, f"review failed: {exc}")

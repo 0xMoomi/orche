@@ -214,11 +214,24 @@ class RequestedRoundTest(PreReviewCase):
     """One requested round end to end on a real head (pre.one_round, the real package): both vendors read it
     read-only at once; the row names both and the note `panel`."""
 
-    def ctx(self):
+    def ctx(self, codex=True):
         subprocess.run(["/bin/sh", "-c", COMMIT], cwd=self.wt, check=True, capture_output=True)
         return pre.Ctx(cfg=config.load(), project="acme", unit="u1", rev=1, unit_dir=self.root / "u1",
                        worktree=self.wt, base="main", writer="div-acme-build", writer_model=OPUS,
-                       fields={"GOAL": "Add coupon field"}, tag="u1@1")
+                       fields={"GOAL": "Add coupon field"}, tag="u1@1", codex=codex)
+
+    def test_without_codex_asked_codex_is_never_called(self):
+        """`orche review --pr N` without --codex: Claude only, even with Codex installed and up."""
+        self.configure()
+        self.claude_calls(("say", "VERDICT: PASS"))
+        self.codex_answers("VERDICT: PASS")
+        rnd = pre.one_round(self.ctx(codex=False), 1, pr=1, head=self.rev(self.wt), report="r", earlier="")
+        self.assertEqual((rnd.word, rnd.model), ("pass", SONNET))
+        self.assertEqual(self.codex_calls(), [])
+        [row] = self.rows()
+        self.assertEqual(row["note"], "claude only (no --codex): a single review; fallback: same vendor (codex not asked)")
+        [event] = self.prereview_events()
+        self.assertIn(f"prereview unit=u1 reviewer={SONNET} verdict=pass round=1", event)
 
     def test_both_vendors_read_the_change_read_only(self):
         self.configure()
@@ -332,7 +345,7 @@ class PanelTest(support.TempHomeCase):
     def ctx(self, tier="standard"):
         return pre.Ctx(cfg=config.load(), project="acme", unit="u1", rev=1, unit_dir=self.home / "u1",
                        worktree=self.home, base="main", writer="feat-acme-checkout", writer_model=OPUS,
-                       fields={"TIER": tier}, tag="u1@1")
+                       fields={"TIER": tier}, tag="u1@1", codex=True)
 
     def round(self, tier="standard"):
         return pre.one_round(self.ctx(tier), 1, pr=7, head=HEAD, report="r", earlier="")

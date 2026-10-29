@@ -6,6 +6,9 @@ owner's words or from Build on a change it doubts. One round runs at the PR's he
 RETURN; at most `review.rounds` (2) RETURNs per unit revision count at queue admission. A RETURN is fixed by the
 writer through AMEND, then the PR is reviewed again.
 
+Codex joins only when asked (`orche review --pr N --codex`, Ctx.codex): without it the round is Claude only, the single
+review of the same-vendor path, noted `claude only (no --codex): a single review` (Codex is never probed or called).
+
 The round's shape (R-REVIEW-13): the panel when two vendors are up (pair: the first model of `review.order` that is
 up and the first up model of the other vendor read the same package at once, the first in this thread, the second
 beside it under its own tag). Their findings merge by agreement (group): `both` (the same file and overlapping lines,
@@ -41,7 +44,8 @@ TIMEOUT_S = 480         # one reviewer call
 EFFORT = "medium"
 MAX_DIFF_LINES = 3000   # the package's diff, then it says so
 OPUS, SONNET = "claude-opus-5-5", "claude-sonnet-5-5"
-_WHY = {"codex not installed": "codex is not installed"}
+_WHY = {"codex not installed": "codex is not installed", "codex not asked": "Codex joins only with --codex"}
+NOT_ASKED = "codex not asked"
 _HEADER = re.compile(r"^# pre-review r(\d+): (\S+) rev (\d+) ")
 _LEVELS = ("noted", "consider", "act")
 _SPOT = re.compile(r"^`?([^\s:`]+):(\d+)(?:-(\d+))?")
@@ -69,10 +73,10 @@ class Choice:
         return f"fallback: same vendor ({self.why})" if self.why else ""
 
 
-def _probe(cfg, avail):
+def _probe(cfg, avail, codex=True):
     """(up(model), hold_of(model), held, state): whether a model can review now (its vendor not held, §8.5; Codex
-    installed and starting), each vendor's hold read once and Codex probed once, only when asked."""
-    state, held = {"avail": avail}, {}
+    asked for, installed and starting), each vendor's hold read once and Codex probed once, only when asked."""
+    state, held = {"avail": avail, "codex": codex}, {}
 
     def hold_of(model):
         vendor = vendors.vendor_of(model)
@@ -81,6 +85,8 @@ def _probe(cfg, avail):
         return held[vendor]
 
     def up(model) -> bool:
+        if not codex and vendors.vendor_of(model) == vendors.CODEX:
+            return False
         if hold_of(model) is not None:
             return False
         if vendors.vendor_of(model) != vendors.CODEX:
@@ -93,7 +99,9 @@ def _probe(cfg, avail):
 
 
 def _missing(held, state, vendor) -> str:
-    """Why no model of a vendor other than `vendor` is up: that vendor's hold, else Codex's state."""
+    """Why no model of a vendor other than `vendor` is up: Codex not asked, that vendor's hold, else Codex's state."""
+    if not state["codex"]:
+        return NOT_ASKED
     other = next((v for v, h in held.items() if h is not None and v != vendor), None)
     if other is not None:
         return f"{other} held: usage limit until {holds.hhmm(holds.until_of(held[other]))}"
@@ -101,12 +109,12 @@ def _missing(held, state, vendor) -> str:
     return "codex not installed" if avail is None or avail.state == "absent" else "codex does not start"
 
 
-def choose(cfg, writer_model, avail=None) -> Choice:
+def choose(cfg, writer_model, avail=None, codex=True) -> Choice:
     """The reviewer of a head written by `writer_model` (R-REVIEW-2, R3; §8.5: held vendors skipped): the other
     vendor's first model that is up, else a different model of the writer's vendor with the reason noted."""
     order = [str(m) for m in cfg["review"]["order"] if m]
     writer_vendor = vendors.vendor_of(writer_model)
-    up, hold_of, held, state = _probe(cfg, avail)
+    up, hold_of, held, state = _probe(cfg, avail, codex)
 
     def after(model) -> tuple:
         tail = order[order.index(model) + 1:] if model in order else []
@@ -125,17 +133,17 @@ def choose(cfg, writer_model, avail=None) -> Choice:
     return Choice(same, why if vendors.vendor_of(same) == writer_vendor else "", after(same))
 
 
-def pair(cfg, avail=None) -> tuple:
+def pair(cfg, avail=None, codex=True) -> tuple:
     """R-REVIEW-13: (the panel's two models, ""): the first model of review.order that is up and the first up
     model of the other vendor; else ((), why only one vendor is up)."""
     order = [str(m) for m in cfg["review"]["order"] if m]
-    up, _hold_of, held, state = _probe(cfg, avail)
+    up, _hold_of, held, state = _probe(cfg, avail, codex)
     first = next((m for m in order if up(m)), None)
     if first is not None:
         second = next((m for m in order if vendors.vendor_of(m) != vendors.vendor_of(first) and up(m)), None)
         if second is not None:
             return (first, second), ""
-    if len({vendors.vendor_of(m) for m in order}) < 2:
+    if codex and len({vendors.vendor_of(m) for m in order}) < 2:
         return (), "review.order names one vendor"
     return (), _missing(held, state, vendors.vendor_of(first) if first else "")
 
@@ -191,6 +199,7 @@ class Ctx:
     fields: dict              # the brief's keys (GOAL, SCOPE, ACCEPT, VERIFY)
     tag: str | None = None
     record: object = None             # record(answer, head): the call's history line
+    codex: bool = False               # `--codex`: Codex joins (the panel); without it the round is Claude only
 
 
 @dataclass
@@ -255,21 +264,22 @@ def _why(ctx, choice, first, model) -> str:
 
 
 def one_round(ctx, k, *, pr, head, report, earlier) -> Round:
-    """Round k: the panel (_panel) when two vendors are up, else the single review noting why not (the chosen
-    reviewer, the next one once if it gave no verdict); the REVIEW file, the row, the events line. Never raises
-    for what a reviewer does."""
+    """Round k: with ctx.codex the panel (_panel) when two vendors are up, else the single review noting why not
+    (the chosen reviewer, the next one once if it gave no verdict); without it the single Claude review. The
+    REVIEW file, the row, the events line. Never raises for what a reviewer does."""
     rounds = rounds_of(ctx.cfg)
-    avail = vendors.available(ctx.cfg)
-    models, missing = pair(ctx.cfg, avail)
+    avail = vendors.available(ctx.cfg) if ctx.codex else None
+    models, missing = pair(ctx.cfg, avail, ctx.codex)
     if models:
         return _panel(ctx, k, models, pr=pr, head=head, report=report, earlier=earlier, rounds=rounds)
-    degraded = f"panel: only one vendor up ({missing}): a single review"
+    degraded = (f"panel: only one vendor up ({missing}): a single review" if ctx.codex
+                else "claude only (no --codex): a single review")
 
     def recorded(rnd, answers, second_vendor):
         rnd.note = "; ".join(x for x in (degraded, rnd.note) if x)
         return _recorded(ctx, rnd, rounds, pr, answers, second_vendor=second_vendor)
 
-    choice = choose(ctx.cfg, ctx.writer_model, avail)
+    choice = choose(ctx.cfg, ctx.writer_model, avail, ctx.codex)
     if choice.model is None:     # §8.5: no reviewer of an unheld vendor; no row
         return Round(k, "held", "none", choice.note, (), head, None, choice.held)
     answers, note = [], choice.note

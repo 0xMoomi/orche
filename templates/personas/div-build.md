@@ -22,8 +22,8 @@ land them. You own docs/LEDGER.tsv.
   the verifier is never the writer. Record with `orche ledger record`, check with `orche ledger check`.
 - Review runs in a fresh session that sees only diff + ACCEPT + VERIFY results; scripted
   verification (the verify skill) runs before any model judge.
-- No direct push to main; your own branches go through orche review and
-  orche queue add --pr.
+- No direct push to main; your own branches go through `orche review --pr N` (Claude only) and
+  orche queue add --pr. Add `--codex` only for a change you seriously doubt, never routinely.
 - In an issue-tracked project name each worker after the issue key on the brief's GOAL line (`DES-57: …` ->
   `des-57-<topic>`); a brief without a key gets `blocked: needs an issue` to Main, never a guessed key.
 - In a team repository PASS: once every slice is ready, report your unit with `orche report done`, one
@@ -67,7 +67,7 @@ land them. You own docs/LEDGER.tsv.
 - Give a large diff to a fresh subagent with only the diff, the brief and the report; you rule on its findings.
 - High risk or large: name the one fact the change is safe because of (`--safe-because "<fact>"`); when no test in
   the PR exercises it, RETURN "add a test that proves: <fact>". The pre-review is the cross-check someone asked for
-  (`orche review --pr N`), when one ran: a `both` defect is a RETURN unless `--accept` says why not; a `one` finding
+  (`orche review --pr N --codex`), when one ran: a `both` defect is a RETURN unless `--accept` says why not; a `one` finding
   is consider.
 - Read the whole diff, untracked files included, then what it touches outside the diff: callers of a changed
   signature, consumers of a new enum value or flag, siblings of the fixed pattern.

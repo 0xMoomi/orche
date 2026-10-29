@@ -143,7 +143,7 @@ class InitTest(HrCase):
                                    for d in registry.DIVISIONS])
         panes = [l for l in dry if " terminal create " in l]
         self.assertEqual(len(panes), 1)
-        self.assertIn(f"--title main-acme-shop --command {PANE}ORCHE_SESSION=main-acme-shop CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1 claude "
+        self.assertIn(f"--title main-acme-shop --command {PANE}ORCHE_SESSION=main-acme-shop CLAUDE_CODE_PROMPT_CACHE_TTL=1h CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1 claude "
                       "--permission-mode bypassPermissions --name main-acme-shop --json", panes[0])
         autos = [l for l in dry if " automations create " in l]
         self.assertEqual(len(autos), 2)
@@ -194,9 +194,9 @@ class InitTest(HrCase):
         self.assertIn("persona template missing for division build", hr.log_path().read_text())
         # Panes: the two woken divisions, then main.
         panes = [c[c.index("--title") + 1:c.index("--title") + 4] for c in self.orca_calls("terminal create")]
-        self.assertEqual(panes, [["div-acme-shop-build", "--command", f"{PANE}ORCHE_SESSION=div-acme-shop-build claude --permission-mode bypassPermissions --name div-acme-shop-build"],
-                                 ["div-acme-shop-gtm", "--command", f"{PANE}ORCHE_SESSION=div-acme-shop-gtm claude --permission-mode bypassPermissions --name div-acme-shop-gtm"],
-                                 ["main-acme-shop", "--command", f"{PANE}ORCHE_SESSION=main-acme-shop CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1 claude --permission-mode bypassPermissions --name main-acme-shop"]])
+        self.assertEqual(panes, [["div-acme-shop-build", "--command", f"{PANE}ORCHE_SESSION=div-acme-shop-build CLAUDE_CODE_PROMPT_CACHE_TTL=1h claude --permission-mode bypassPermissions --name div-acme-shop-build"],
+                                 ["div-acme-shop-gtm", "--command", f"{PANE}ORCHE_SESSION=div-acme-shop-gtm CLAUDE_CODE_PROMPT_CACHE_TTL=1h claude --permission-mode bypassPermissions --name div-acme-shop-gtm"],
+                                 ["main-acme-shop", "--command", f"{PANE}ORCHE_SESSION=main-acme-shop CLAUDE_CODE_PROMPT_CACHE_TTL=1h CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1 claude --permission-mode bypassPermissions --name main-acme-shop"]])
         self.assertEqual(self.orca_calls("automations create"), [])
         self.assertIn("[dry-run] orca automations create --name orche-hr-audit-acme-shop", err)
         # Project templates and card symlink.
@@ -814,7 +814,7 @@ class FeatNewTest(FeatCase):
                                   "--parent-worktree", "id:repo-acme::/srv/orca/acme-shop-build", "--json"])
         wt = self.wtroot / "feat-payments"
         pane = self.orca_calls("terminal create")[0]
-        self.assertEqual(pane[pane.index("--command") + 1], f"{PANE}ORCHE_SESSION=feat-acme-shop-payments claude --permission-mode bypassPermissions --name feat-acme-shop-payments")
+        self.assertEqual(pane[pane.index("--command") + 1], f"{PANE}ORCHE_SESSION=feat-acme-shop-payments CLAUDE_CODE_PROMPT_CACHE_TTL=1h claude --permission-mode bypassPermissions --name feat-acme-shop-payments")
         self.assertEqual(self.orca_calls("worktree set")[0],
                          ["orca", "worktree", "set", "--worktree", f"id:repo-acme::{wt}", "--unread", "--json"])
         reg = registry.load()
@@ -867,7 +867,7 @@ class FeatNewTest(FeatCase):
                                     "--reason", "r")
         self.assertEqual((code, out), (0, "would create feat-acme-shop-pay (dry-run)\n"))
         self.assertIn("[dry-run] orca worktree create --repo id:repo-acme --name feat-pay --parent-worktree", err)
-        self.assertIn(f"--command {PANE}ORCHE_SESSION=feat-acme-shop-pay claude --permission-mode bypassPermissions --name feat-acme-shop-pay --json", err)
+        self.assertIn(f"--command {PANE}ORCHE_SESSION=feat-acme-shop-pay CLAUDE_CODE_PROMPT_CACHE_TTL=1h claude --permission-mode bypassPermissions --name feat-acme-shop-pay --json", err)
         self.assertIn("[dry-run] orca worktree set --worktree id:repo-acme::<feat-pay worktree> --unread", err)
         self.assertEqual(registry.load(), self.reg)
         self.assertEqual(self.calls, [])
@@ -1174,7 +1174,7 @@ class FeatSleepWakeTest(FeatCase):
         code, out, _ = self.orche("feat", "wake", "acme", "search")
         self.assertEqual((code, out), (0, "feat-acme-shop-search active\n"))
         pane = self.orca_calls("terminal create")[0]
-        self.assertEqual(pane[pane.index("--command") + 1], f"{PANE}ORCHE_SESSION=feat-acme-shop-search claude --permission-mode bypassPermissions --name feat-acme-shop-search")
+        self.assertEqual(pane[pane.index("--command") + 1], f"{PANE}ORCHE_SESSION=feat-acme-shop-search CLAUDE_CODE_PROMPT_CACHE_TTL=1h claude --permission-mode bypassPermissions --name feat-acme-shop-search")
         code, _, err = self.orche("sleep", "feat-acme-shop-search")
         self.assertEqual(code, 3)
         self.assertIn("HANDOFF.md is stale (missing:", err)
@@ -1186,7 +1186,7 @@ class FeatSleepWakeTest(FeatCase):
         self.assertEqual((code, out), (0, "feat-acme-shop-checkout pane reopened\n"))
         [pane] = self.orca_calls("terminal create")
         self.assertEqual(pane[pane.index("--command") + 1],
-                         f"{PANE}ORCHE_SESSION=feat-acme-shop-checkout claude --permission-mode bypassPermissions --name feat-acme-shop-checkout")
+                         f"{PANE}ORCHE_SESSION=feat-acme-shop-checkout CLAUDE_CODE_PROMPT_CACHE_TTL=1h claude --permission-mode bypassPermissions --name feat-acme-shop-checkout")
         self.calls.clear()
         self.terminals = [{"handle": "t-3", "title": "feat-acme-shop-checkout"}]
         code, out, _ = self.orche("feat", "wake", "acme", "checkout")
@@ -1618,7 +1618,7 @@ class StageTest(FeatCase):
         self.assertEqual((data["stage"], data["woke"], len(data["checklist"])), ("public", True, 4))
         self.assertTrue(any("docs/runbooks/" in c for c in data["checklist"]))
         pane = self.orca_calls("terminal create")[0]
-        self.assertEqual(pane[pane.index("--command") + 1], f"{PANE}ORCHE_SESSION=div-acme-shop-ops claude --permission-mode bypassPermissions --name div-acme-shop-ops")
+        self.assertEqual(pane[pane.index("--command") + 1], f"{PANE}ORCHE_SESSION=div-acme-shop-ops CLAUDE_CODE_PROMPT_CACHE_TTL=1h claude --permission-mode bypassPermissions --name div-acme-shop-ops")
         reg = registry.load()
         self.assertEqual(reg["projects"]["acme-shop"]["stage"], "public")
         self.assertEqual(reg["projects"]["acme-shop"]["divisions"]["ops"]["status"], "active")

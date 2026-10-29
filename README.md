@@ -52,7 +52,7 @@ Say it to Main in your own words; Main runs the command.
 | Say | What happens |
 |---|---|
 | "turn on Jev" | faster routing of simple requests: `orche jev setup` asks for the key |
-| "cross-check PR 12 with Codex" | you install Codex once; Main runs `orche review --pr 12`: Codex and Claude read the diff at once. Nothing runs unless you ask |
+| "cross-check PR 12 with Codex" | you install Codex once; Main runs `orche review --pr 12 --codex`: Codex and Claude read the diff at once. Without `--codex` a review is Claude only; Codex runs only when you ask |
 | "set the token for background runs" | you run `claude setup-token`; Main stores it with `orche auth set` |
 | "let the janitor clean up" | on by default (the heartbeat runs it daily); this turns it back on after `orche janitor disable` |
 | "set up the merge queue for <project>" | `orche init --refresh <project>` opens one PR adding `scripts/verify/ci.sh`; merging it turns the queue on (team repository: on your word only) |

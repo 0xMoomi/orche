@@ -599,7 +599,7 @@ class SleepWakeTest(CoreCase):
         self.assertEqual(err, "orche: no transcript named feat-acme-shop-search; the pane starts a fresh session\n"
                               "[dry-run] orca terminal create --worktree id:repo-acme::/srv/orca/acme-shop-search"
                               f" --title feat-acme-shop-search --command PATH={support.ROOT / 'bin'}:$PATH"
-                              " ORCHE_SESSION=feat-acme-shop-search claude --permission-mode bypassPermissions"
+                              " ORCHE_SESSION=feat-acme-shop-search CLAUDE_CODE_PROMPT_CACHE_TTL=1h claude --permission-mode bypassPermissions"
                               " --name feat-acme-shop-search --json\n")
         self.assertEqual(registry.load(), self.reg)
 
@@ -622,7 +622,7 @@ class SleepWakeTest(CoreCase):
         code, out, _ = self.orche("wake", "feat-acme-shop-search")
         self.assertEqual((code, out), (0, "feat-acme-shop-search active\n"))
         self.assertEqual(self.calls[-1][:3], ["orca", "terminal", "create"])
-        self.assertIn(f"PATH={support.ROOT / 'bin'}:$PATH ORCHE_SESSION=feat-acme-shop-search claude "
+        self.assertIn(f"PATH={support.ROOT / 'bin'}:$PATH ORCHE_SESSION=feat-acme-shop-search CLAUDE_CODE_PROMPT_CACHE_TTL=1h claude "
                       "--permission-mode bypassPermissions --name feat-acme-shop-search", self.calls[-1])
         reg = registry.load()
         self.assertEqual(reg["projects"]["acme-shop"]["divisions"]["build"]["features"][1]["status"], "active")
@@ -639,7 +639,7 @@ class SleepWakeTest(CoreCase):
         self.assertEqual(create[create.index("--worktree") + 1], f"id:repo-acme::{self.wt}")
         self.assertEqual(create[create.index("--title") + 1], "div-acme-shop-build")
         self.assertEqual(create[create.index("--command") + 1],
-                         f"PATH={support.ROOT / 'bin'}:$PATH ORCHE_SESSION=div-acme-shop-build "
+                         f"PATH={support.ROOT / 'bin'}:$PATH ORCHE_SESSION=div-acme-shop-build CLAUDE_CODE_PROMPT_CACHE_TTL=1h "
                          "claude --permission-mode bypassPermissions --name div-acme-shop-build")
         reg = registry.load()
         self.assertEqual(reg["projects"]["acme-shop"]["divisions"]["build"]["status"], "active")
@@ -714,7 +714,7 @@ class ProjectPaneTest(CoreCase):
                          [("orche", True, hr.panes.RESUMED)])      # Main says where things stand once idle
         self.assertEqual(self.calls_of("create"), [
             ["orca", "terminal", "create", "--worktree", self.WT, "--title", "main-acme-shop", "--command",
-             f"{self.ENV}ORCHE_SESSION=main-acme-shop CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1 claude --permission-mode bypassPermissions "
+             f"{self.ENV}ORCHE_SESSION=main-acme-shop CLAUDE_CODE_PROMPT_CACHE_TTL=1h CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1 claude --permission-mode bypassPermissions "
              "--name main-acme-shop", "--json"]])
         self.assertEqual(self.calls_of("switch"), [])
         self.assertEqual(len(registry.load()["events"]), events)
@@ -737,7 +737,7 @@ class ProjectPaneTest(CoreCase):
         code, out, err = self.orche("--dry-run", "wake", "main-acme-shop")
         self.assertEqual((code, out), (0, "would open main-acme-shop pane (dry-run)\n"))
         self.assertEqual(err, "orche: no transcript named main-acme-shop; the pane starts a fresh session\n" f"[dry-run] orca terminal create --worktree {self.WT} --title main-acme-shop --command "
-                              f"{self.ENV}ORCHE_SESSION=main-acme-shop CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1 claude --permission-mode bypassPermissions "
+                              f"{self.ENV}ORCHE_SESSION=main-acme-shop CLAUDE_CODE_PROMPT_CACHE_TTL=1h CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1 claude --permission-mode bypassPermissions "
                               "--name main-acme-shop --json\n")
         self.terminals = [{"handle": "t-main", "title": "main-acme-shop"}]
         self.assertEqual(self.orche("--dry-run", "wake", "main-acme-shop"), (0, "would switch to main-acme-shop\n", ""))
@@ -749,7 +749,7 @@ class ProjectPaneTest(CoreCase):
         self.assertEqual(json.loads(out), {
             "session": "main-acme-shop", "pane": "opened", "dry_run": True,
             "argv": ["orca", "terminal", "create", "--worktree", self.WT, "--title", "main-acme-shop", "--command",
-                     f"{self.ENV}ORCHE_SESSION=main-acme-shop CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1 claude --permission-mode bypassPermissions "
+                     f"{self.ENV}ORCHE_SESSION=main-acme-shop CLAUDE_CODE_PROMPT_CACHE_TTL=1h CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1 claude --permission-mode bypassPermissions "
                      "--name main-acme-shop", "--json"]})
 
     def test_wake_main_ignores_awake_limit_and_stage(self):
@@ -820,7 +820,7 @@ class PaneCommandTest(support.TempHomeCase):
     def test_pane_command_prefixes_plugin_bin(self):
         from orche.hr import panes
         self.assertEqual(panes.pane_command("feat-acme-x", resume=True),
-                         f"PATH={support.ROOT / 'bin'}:$PATH ORCHE_SESSION=feat-acme-x claude "
+                         f"PATH={support.ROOT / 'bin'}:$PATH ORCHE_SESSION=feat-acme-x CLAUDE_CODE_PROMPT_CACHE_TTL=1h claude "
                          "--permission-mode bypassPermissions --name feat-acme-x")
 
     def test_unit_panes_start_with_bypass_permissions(self):
@@ -837,23 +837,31 @@ class PaneCommandTest(support.TempHomeCase):
         with mock.patch.object(paths, "PLUGIN_ROOT", Path("/opt/my plugins/orche")):
             env = panes.session_env("main-acme")
         self.assertEqual(env, "PATH='/opt/my plugins/orche/bin':$PATH ORCHE_SESSION=main-acme "
-                              "CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1 ")
+                              "CLAUDE_CODE_PROMPT_CACHE_TTL=1h CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1 ")
 
     def test_team_env_follows_the_session_shell_quoted(self):
         from orche.hr import panes
         (self.home / "config.json").write_text(json.dumps({"team": {"env": {"TEAM_LOG": "off now", "X": "1"}}}))
         env = panes.session_env("main-acme")
-        self.assertTrue(env.endswith("ORCHE_SESSION=main-acme CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1 TEAM_LOG='off now' X=1 "), env)
+        self.assertTrue(env.endswith("ORCHE_SESSION=main-acme CLAUDE_CODE_PROMPT_CACHE_TTL=1h CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1 TEAM_LOG='off now' X=1 "), env)
 
     def test_main_runs_background_work_in_the_foreground(self):
         """c91: Main's pane (`main-<project>`) carries CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1 after
         ORCHE_SESSION; a division's and a feature's do not."""
         from orche.hr import panes
         self.assertTrue(panes.pane_command("main-acme-shop", resume=False).startswith(
-            f"PATH={support.ROOT / 'bin'}:$PATH ORCHE_SESSION=main-acme-shop CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1 "
+            f"PATH={support.ROOT / 'bin'}:$PATH ORCHE_SESSION=main-acme-shop CLAUDE_CODE_PROMPT_CACHE_TTL=1h CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1 "
             "claude "))
         for session in ("div-acme-shop-build", "feat-acme-shop-checkout"):
             self.assertNotIn("CLAUDE_CODE_DISABLE_BACKGROUND_TASKS", panes.pane_command(session, resume=False), session)
+
+    def test_every_pane_keeps_the_one_hour_prompt_cache(self):
+        """c96: Main, a division head and a feature pane all carry CLAUDE_CODE_PROMPT_CACHE_TTL=1h after
+        ORCHE_SESSION, so a pane waking after five idle minutes on usage credits reads a warm cache."""
+        from orche.hr import panes
+        for session in ("main-acme-shop", "div-acme-shop-build", "feat-acme-shop-checkout"):
+            self.assertIn(f"ORCHE_SESSION={session} CLAUDE_CODE_PROMPT_CACHE_TTL=1h ",
+                          panes.pane_command(session, resume=False), session)
 
     def test_pane_shell_resolves_orche(self):
         import subprocess

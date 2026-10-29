@@ -256,11 +256,13 @@ When an `orche` command refuses or fails, relay its line and stop; never redo it
 | Turn on or connect Jev | `orche jev setup` (its dialog asks for the key) | the probe result in one line |
 | "push DES-57", push a unit (team repository) | `orche queue add <unit>` | the pull request line; it lands only on "merge" |
 | "merge PR 12" (team repository) | `orche queue approve <p> #12` | what lands |
-| "cross-check PR 12 with Codex" | `orche review --pr 12` | the verdict and its findings in plain words; nothing runs it by itself |
+| "cross-check PR 12 with Codex" | `orche review --pr 12 --codex` | the verdict and its findings in plain words; nothing runs it by itself |
 | Automatic routing of simple requests on or off | `orche triage enable` / `orche triage disable` | one line |
 | Let the janitor clean up, or back to report-only | `orche janitor enable` / `orche janitor disable` | one line |
 | Usage limit, why did it stop | read the `paused … usage limit until …` line | when it resumes and the two ways to keep going (an API key, or Codex); never re-send briefs during a hold |
 | Remove ORCHE | `orche uninstall`, after one confirmation | what was removed |
+
+`--codex` only when the owner asks for a Codex cross-check ("cross-check with Codex", in any language); never on your own.
 
 ## Status card
 

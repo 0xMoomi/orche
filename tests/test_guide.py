@@ -75,7 +75,7 @@ class GuideTest(support.TempHomeCase):
         self.codex = "/usr/local/bin/codex"
         self.assertEqual(self.line("Codex cross-check"),
                          '- Codex cross-check: a second AI vendor reviews a pull request when you ask. On: runs when '
-                         'you ask. Say "cross-check PR 12 with Codex"; Main runs `orche review --pr 12`: Codex and '
+                         'you ask. Say "cross-check PR 12 with Codex"; Main runs `orche review --pr 12 --codex`: Codex and '
                          'Claude read the diff at once and only a defect both name sends it back.')
         jevkey.set_key("t-123", account=jevkey.OAUTH_ACCOUNT)
         self.assertIn(". Set. ", self.line("Background-run token"))

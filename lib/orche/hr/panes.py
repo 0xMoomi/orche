@@ -24,18 +24,21 @@ RESUMED = "resumed: say in five lines what was done last, what runs now and what
 
 
 def session_env(session) -> str:
-    """`PATH=<plugin>/bin:$PATH ORCHE_SESSION=<session> [NAME=value ...] ` prefix for every ORCHE pane command.
+    """`PATH=<plugin>/bin:$PATH ORCHE_SESSION=<session> CLAUDE_CODE_PROMPT_CACHE_TTL=1h [NAME=value ...] ` prefix for every ORCHE pane command.
 
     ORCHE_SESSION lets hooks know the pane's role without guessing from cwd; the PATH entry puts
     `orche` on the pane's PATH (`$PATH` stays unexpanded: the pane's shell expands it); each config
-    `team.env` pair follows, shell-quoted (the team's hook switches). Main (`main-<project>`) also gets
+    `team.env` pair follows, shell-quoted (the team's hook switches). Every pane also gets
+    `CLAUDE_CODE_PROMPT_CACHE_TTL=1h`: on usage credits Claude Code drops the prompt cache to five minutes,
+    so a pane waking after a longer idle gap would rewrite its whole context (headless runs have no idle
+    gap and do not get it). Main (`main-<project>`) also gets
     `CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1`: its subagents and shells finish inside the turn, so no
     finished background task starts a turn that re-reads Main's whole context (ORCHE wakes Main).
     """
     team = "".join(f"{name}={shlex.quote(value)} " for name, value in config.team_env(config.load()).items())
     main = "CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1 " if str(session).startswith("main-") else ""
     return (f"PATH={shlex.quote(str(paths.PLUGIN_ROOT / 'bin'))}:$PATH ORCHE_SESSION={shlex.quote(session)} "
-            f"{main}{team}")
+            f"CLAUDE_CODE_PROMPT_CACHE_TTL=1h {main}{team}")
 
 
 def _claude_dir() -> Path:

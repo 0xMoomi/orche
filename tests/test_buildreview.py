@@ -386,6 +386,22 @@ class Cli(BuildReviewCase):
         self.assertNotEqual(code, 0)
         self.assertIn("head review error; the head was told", out)
 
+    def test_codex_is_passed_on_and_build_may_ask_for_it(self):
+        seen = []
+        with mock.patch.object(registry, "load", lambda: self.reg), \
+                mock.patch.dict(os.environ, {"ORCHE_SESSION": BUILD}), \
+                mock.patch.object(build, "for_pr", lambda *a, **kw: seen.append(kw["codex"]) or {"status": "closed"}):
+            self.assertEqual(self.run_cli("review", "--pr", "7", "--codex")[0], 0)
+            self.assertEqual(self.run_cli("review", "--pr", "7")[0], 0)
+        self.assertEqual(seen, [True, False])
+
+    def test_background_carries_codex(self):
+        argvs = []
+        with mock.patch.object(registry, "load", lambda: self.reg), \
+                mock.patch.object(procs, "spawn_orche", lambda argv, log: argvs.append(argv)):
+            self.run_cli("review", "--pr", "7", "--project", "acme", "--codex", "--background")
+        self.assertIn("--codex", argvs[0])
+
     def test_unknown_project(self):
         code, _ = self.run_cli("review", "--pr", "7", "--project", "nope")
         self.assertNotEqual(code, 0)
@@ -548,9 +564,25 @@ class BuildsOwnPr(BuildReviewCase):
         return review.Answer(model, None, res, util.now_iso(), util.now_iso(), review.parse(self.verdict), "",
                              self.verdict)
 
+    def test_without_codex_the_review_is_claude_only(self):
+        """The default `orche review --pr N`: Codex is never probed or called, even when it is up."""
+        with mock.patch.object(pre.vendors, "available", side_effect=AssertionError("codex probed")):
+            out = build.for_pr("acme", 7, reg=self.reg, cfg=config.load())
+        self.assertEqual(out["status"], "queued")
+        self.assertEqual(self.asked, ["claude-opus-5-5"])           # the fixture's Build model is the alias `opus`
+        row = ledger.review_for("acme", 7, HEAD, "pre")
+        self.assertEqual((row["model"], row["note"]),
+                         ("claude-opus-5-5", "claude only (no --codex): a single review; "
+                                             "fallback: same vendor (codex not asked)"))
+
+    def test_codex_reviews_a_claude_only_pass_again(self):
+        self.pre("pass", model="claude-sonnet-5-5")
+        self.assertEqual(build.for_pr("acme", 7, reg=self.reg, cfg=config.load(), codex=True)["status"], "queued")
+        self.assertEqual(sorted(self.asked), ["claude-opus-5-5", "codex"])
+
     def test_an_ordinary_head_gets_the_panel_then_the_build_review_queues_it(self):
         """No deep gating: a small, low-risk head (the facts' cart change) gets both vendors at once."""
-        out = build.for_pr("acme", 7, reg=self.reg, cfg=config.load())
+        out = build.for_pr("acme", 7, reg=self.reg, cfg=config.load(), codex=True)
         self.assertEqual(out["status"], "queued")
         row = ledger.review_for("acme", 7, HEAD, "pre")
         self.assertEqual((row["verdict"], row["writer"], row["model"], row["note"]),
@@ -561,7 +593,7 @@ class BuildsOwnPr(BuildReviewCase):
 
     def test_one_vendor_up_is_the_single_cross_vendor_review(self):
         usage.hit("claude", "You've hit your usage limit", {}, project="acme", unit="x", stage="work")
-        out = build.for_pr("acme", 7, reg=self.reg, cfg=config.load())
+        out = build.for_pr("acme", 7, reg=self.reg, cfg=config.load(), codex=True)
         self.assertEqual(out["status"], "held")                     # the head review's vendor is held too
         self.assertEqual(self.asked, ["codex"])
         row = ledger.review_for("acme", 7, HEAD, "pre")
@@ -571,7 +603,7 @@ class BuildsOwnPr(BuildReviewCase):
 
     def test_without_codex_the_same_vendor_fallback_says_so_then_the_build_review(self):
         self.avail = SimpleNamespace(ok=False, state="absent")
-        out = build.for_pr("acme", 7, reg=self.reg, cfg=config.load())
+        out = build.for_pr("acme", 7, reg=self.reg, cfg=config.load(), codex=True)
         self.assertEqual(out["status"], "queued")
         self.assertEqual(self.asked, ["claude-opus-5-5"])           # the fixture's Build model is the alias `opus`
         row = ledger.review_for("acme", 7, HEAD, "pre")

@@ -10,10 +10,10 @@ finished slices, and lets the merge queue land them. Workers write the code; Bui
 
 <!-- inject:start -->
 ORCHE Build rules (full rulebook: skill orche-build)
-- You are traffic control: feature agents write code; their done pushes the branch and opens the PR. Never merge by hand: the merge queue (`orche queue`) tests each PR on main and lands it when green.
-- Each done gets a headless head review; PASS → queued. A cross-check (`orche review --pr N`) runs only when you or the owner ask, never routinely. Workers' reports arrive in a batch: decide in arrival order. PASS = `orche queue add <unit>`; RETURN = `AMEND <unit> rev N` with the reasons. Never wait on the queue.
+- You are traffic control: feature agents write code; their done pushes the branch and opens the PR. Never merge by hand: the merge queue (`orche queue`) tests each PR on main, lands it when green.
+- Each done gets a headless head review; PASS → queued. Own fixes: `orche review --pr N` (Claude only); `--codex` only when you or the owner ask, never routinely (a change you seriously doubt). Take reports in arrival order. PASS = `orche queue add <unit>`; RETURN = `AMEND <unit> rev N` with reasons. Never wait on the queue.
 - Ledger (`orche ledger record|check`): append-only; key (PR, head SHA); a new head voids older rows; no row = unverified. CI green and `[skip ci]` are never evidence. The verifier is never the writer.
-- `STATUS: done` needs a ledger row for HEAD (>= type-check-only); `STATUS: release-ready` (a claim in your final message, filed with `orche report done`) needs >= unit-test-verified from an independent verifier.
+- `STATUS: done` needs a ledger row for HEAD (>= type-check-only); `STATUS: release-ready` (a final-message claim, filed with `orche report done`) needs >= unit-test-verified from an independent verifier.
 - Report your unit to Main once every entry it queued landed. Feature agents come from HR (`orche feat new`).
 - No direct push to main. Tags, releases and deploys need user approval (STANDING 5). Always-pause: force-push to a shared branch, deploy, data deletion, customer messages, external publication, payments.
 - Before done: STATUS.md + DECISIONS.tsv; REPORT.md + `orche report <status> --summary "..."`. Never ask in your pane. Only the owner can unblock → `STATUS: blocked` + one `OWNER: <exact step>` line.
@@ -51,7 +51,7 @@ Staff each brief yourself; Main briefs heads, never workers.
 - Never wait on the queue: take the next report. The queue sends you held notes for merges and returns, and one
   wake when every unit of your brief has landed: then report your unit to Main. Main hears your lineage only from
   that report.
-- Your own fixes and your in-session subagents' branches: `orche review --pr N --background`, then
+- Your own fixes and your in-session subagents' branches: `orche review --pr N --background` (Claude only), then
   `orche queue add --pr N --project <p>`; a return comes back to you, not to a feature.
 - Your worktree is yours alone; the queue tests in its own checkout. Never edit inside a worker's worktree;
   send it a brief.
@@ -97,8 +97,8 @@ Review depth, on top of the eight lines:
   users read, an API response a client renders, CLI output users read); the headless head review sets it too. The
   queue then lands it only on the check script's `verdict: live-ui-verified` and otherwise returns it to the worker:
   "user-visible change: live verification required (the check script's verdict was <level>)".
-- Cross-check: `orche review --pr N` runs only when you or the owner ask, never routinely (a change you doubt);
-  nothing in ORCHE starts one by itself. With both vendors up it is a panel: two models of different vendors from
+- Cross-check: `orche review --pr N --codex` runs only when you or the owner ask, never routinely (a change you
+  seriously doubt, never your own routine fixes); nothing in ORCHE starts one by itself. With both vendors up it is a panel: two models of different vendors from
   `review.order` read the diff at once. Read its report by group: `both` findings first (a defect there is a RETURN
   unless `--accept "<why not>"` says why), then `one` findings (consider). A panel costs two reviews.
 - Blast radius: a high-risk path or more than `review.deep_lines` (400) changed lines, never in a mechanical unit:

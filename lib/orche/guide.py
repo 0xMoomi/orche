@@ -43,7 +43,7 @@ def codex_line():
     """(on?, line): on when `codex` is on PATH; the cross-check runs only when asked."""
     on = shutil.which("codex") is not None
     state = "On: runs when you ask" if on else "Off: Codex is not installed"
-    runs = ("Main runs `orche review --pr 12`: Codex and Claude read the diff at once and only a defect both name "
+    runs = ("Main runs `orche review --pr 12 --codex`: Codex and Claude read the diff at once and only a defect both name "
             "sends it back" if on else "you run `npm install -g @openai/codex` and `codex login`; ORCHE then uses it")
     return on, _line("Codex cross-check", "a second AI vendor reviews a pull request when you ask", state,
                      "cross-check PR 12 with Codex", runs)
