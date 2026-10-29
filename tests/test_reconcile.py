@@ -820,6 +820,114 @@ class LineageCloseRepairTest(RepairCase):
         self.assertTrue(any("reconcile pass took=" in e and e.endswith("actions=1") for e in self.events()))
         self.assertEqual(json.loads(reconcile.heartbeat_path().read_text())["actions"], 1)
 
+    BUILD = "div-acme-shop-build"
+
+    def staffed(self, n=2, timebox="20m", sent_min_ago=None, to=("feat-acme-shop-checkout",)):
+        """H (Main to Build) and n workers under it (Build to `to`, cycled); BRIEF.md mtimes `sent_min_ago`
+        before T0 when given."""
+        h = self.brief(TIMEBOX=timebox)
+        ws = [self.brief(to=to[i % len(to)], sender=self.BUILD, TIMEBOX=timebox) for i in range(n)]
+        for b in [h, *ws]:
+            text = b.path.read_text().splitlines()
+            parent = "-" if b is h else h.unit
+            b.path.write_text("\n".join(f"lineage: {h.unit}   parent: {parent}" if ln.startswith("lineage: ") else ln
+                                        for ln in text) + "\n")
+            if sent_min_ago is not None:
+                t = (T0 - dt.timedelta(minutes=sent_min_ago)).timestamp()
+                os.utime(b.path, (t, t))
+        return h, ws
+
+    def held(self, w, minutes_ago, lin, frm="feat-acme-shop-checkout"):
+        self.pointer(self.BUILD, minutes_ago, unit=w.unit, lineage=lin, quiet="batch", **{"from": frm})
+
+    def build_closes(self):
+        return [x for _p, x in inbox.pending(self.BUILD) if x.get("lineage_closed")]
+
+    def bounds(self):
+        return [x for _p, x in inbox.pending(self.BUILD) if x.get("from") == "orche" and x.get("urgent")]
+
+    def test_the_pass_posts_a_head_close_a_busy_lock_missed(self):
+        h, (w1, w2) = self.staffed()
+        self.held(w1, 6, h.unit)
+        self.held(w2, 5, h.unit)
+        _code, lines = self.run_at(0, dry_run=True)
+        self.assertIn(f"would close lineage {h.unit} for {self.BUILD} (acme-shop)", lines)
+        self.assertEqual(self.build_closes(), [])
+        _code, lines = self.run_at(0)
+        self.assertIn(f"closed lineage {h.unit} for {self.BUILD} (acme-shop)", lines)
+        self.assertIn(("nudge", self.BUILD), self.spawned)
+        [close] = self.build_closes()
+        self.assertEqual(close["summary"].splitlines()[0],
+                         f"lineage {h.unit}: every unit you wait on ended: 2 units, 2 done, 0 failed, 0 stopped")
+        self.assertIn(f"reconcile action=lineage-hold project=acme-shop lineage={h.unit}", "\n".join(self.events()))
+        self.run_at(1)
+        self.assertEqual(len(self.build_closes()), 1)
+
+    def test_the_pass_closes_a_batch_whose_last_unit_was_retired(self):
+        h, (w1, w2) = self.staffed(to=("feat-acme-shop-checkout", "feat-acme-shop-search"))
+        self.held(w1, 5, h.unit)
+        self.run_at(0)
+        self.assertEqual(self.build_closes(), [])
+        reg = registry.load()
+        reg["projects"]["acme-shop"]["divisions"]["build"]["features"][1]["status"] = "retired"
+        registry.save(reg)
+        _code, lines = self.run_at(1)
+        self.assertIn(f"closed lineage {h.unit} for {self.BUILD} (acme-shop)", lines)
+        [close] = self.build_closes()
+        self.assertIn("1 done, 0 failed, 1 stopped", close["summary"])
+
+    def test_the_bound_wakes_once_with_what_arrived_then_the_close(self):
+        h, (w1, w2) = self.staffed(sent_min_ago=30)              # TIMEBOX 20m + 60 s: both past it
+        self.held(w1, 5, h.unit)
+        _code, lines = self.run_at(0)
+        self.assertIn(f"woke {self.BUILD}: lineage {h.unit} past its TIMEBOX (acme-shop)", lines)
+        [bound] = self.bounds()
+        self.assertEqual((bound["status"], bound["unit"], bound["lineage"]), ("info", h.unit, h.unit))
+        self.assertEqual(bound["summary"], f"lineage {h.unit}: 1 of 2 units still open past their TIMEBOX; "
+                                           f"waiting on {w2.unit} (running); the rest comes with the close")
+        _code, lines = self.run_at(5)                            # the bound waits unread: no second one
+        self.assertEqual((len(self.bounds()), [ln for ln in lines if "lineage" in ln]), (1, []))
+        inbox.drain([p for p, _x in inbox.pending(self.BUILD)])  # Build read what arrived
+        self.held(w2, -6, h.unit)
+        _code, lines = self.run_at(6)
+        self.assertIn(f"closed lineage {h.unit} for {self.BUILD} (acme-shop)", lines)
+        self.assertEqual((len(self.build_closes()), self.bounds()), (1, []))
+
+    def test_a_day_old_hold_wakes_whatever_its_timebox(self):
+        h, (w1, w2) = self.staffed(timebox="4h")
+        self.held(w1, 24 * 60 - 5, h.unit)
+        self.assertEqual([ln for ln in self.run_at(0)[1] if "lineage" in ln], [])
+        _code, lines = self.run_at(10)
+        self.assertIn(f"woke {self.BUILD}: lineage {h.unit} past its TIMEBOX (acme-shop)", lines)
+        self.assertEqual(len(self.bounds()), 1)
+
+    def test_a_live_runs_deadline_is_its_lock(self):
+        from orche.flow import lineage
+        h, (w1, w2) = self.staffed(sent_min_ago=120)
+        self.held(w1, 5, h.unit)
+        folder = self.home / "runs" / "acme-shop"
+        folder.mkdir(parents=True, exist_ok=True)
+        started = T0 - dt.timedelta(minutes=10)
+        util.write_json(folder / f"{w2.unit}.lock", {"pid": os.getpid(), "unit": w2.unit, "to": w2.to,
+                                                      "started": started.isoformat(), "timeout_s": 3600})
+        self.assertEqual(lineage.deadline(w2), started + dt.timedelta(seconds=3600))
+        self.assertEqual(lineage.deadline(w1), dt.datetime.fromtimestamp(w1.path.stat().st_mtime, dt.timezone.utc)
+                         + dt.timedelta(seconds=20 * 60 + 60))
+        with mock.patch.object(inbox, "wake"):
+            self.assertEqual(lineage.holds(registry.load(), now=T0 + dt.timedelta(minutes=45)), [])
+            self.assertEqual(lineage.holds(registry.load(), now=T0 + dt.timedelta(minutes=51)),
+                             [("acme-shop", h.unit, self.BUILD, "bound")])
+
+    def test_a_dry_run_lists_a_held_main_close_once(self):
+        a, b = self.lineage(2)
+        self.pointer("main-acme-shop", 5, unit=a.unit, lineage=a.unit, quiet="batch")
+        self.pointer("main-acme-shop", 4, unit=b.unit, lineage=a.unit, quiet="batch")
+        _code, lines = self.run_at(0, dry_run=True)
+        self.assertEqual([ln for ln in lines if a.unit in ln], [f"would close lineage {a.unit} (acme-shop)"])
+        _code, lines = self.run_at(0)
+        self.assertEqual([ln for ln in lines if a.unit in ln], [f"closed lineage {a.unit} (acme-shop)"])
+        self.assertEqual(len(self.closes()), 1)
+
 
 class ScaleHeartbeatTest(RepairCase):
     """0.9.0 T4: the heartbeat's queue, usage, held and review steps, and the busy fix (R34)."""

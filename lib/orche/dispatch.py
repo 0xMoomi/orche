@@ -241,7 +241,41 @@ def _deliver(r, plan, b, status, summary, frm, terms, cfg=None, by=None):
 URGENT_STATES = ("runner-failed", "deliverer-failed")
 
 
-def _feedback(frm, unit, to, rev, state, kind=None, by=None):
+def _stop_subtree(r, plan, sender, terms, cfg, by) -> str:
+    """STOP stops the subtree: every unit under `plan.unit` (flow.lineage.descendants) still running
+    gets the same STOP (_deliver, unrefusable like the named one), and the queue entries of the named
+    unit and every unit under it that have not landed are dropped (`stopped`). The sender's text,
+    '' when nothing else was touched; never raises."""
+    stopped, prs = [], []
+    try:
+        under = lineage.descendants(r.reg, plan.prior)
+        for b, status in under:
+            if status in lineage.STOPS:
+                continue
+            t = r.resolve_to(b.to, b.project)
+            if t is None or t.status == "retired":
+                continue
+            child = Plan(brief.Block("stop", unit=b.unit, note=f"{plan.unit} was stopped"), t.session,
+                         b.project, b, b.unit)
+            _deliver(r, child, b, "stop", child.block.note, sender, terms, cfg, by)
+            stopped.append(b.unit)
+        from . import queue
+        prs = [e["pr"] for e in queue.drop_units(plan.proj, {plan.unit, *(b.unit for b, _s in under)},
+                                                 reason="stopped", by=by or sender)]
+    except Exception as exc:  # noqa: BLE001 - the named STOP went out; report what this pass did
+        log.log("hooks", f"dispatch: stop under {plan.unit}: {type(exc).__name__}: {exc}")
+    if stopped or prs:
+        log.log("events", f"dispatch stop-subtree unit={plan.unit} stopped={len(stopped)} dropped={len(prs)}")
+    parts = []
+    if stopped:
+        parts.append(f"also stopped {len(stopped)} unit{'s' if len(stopped) > 1 else ''} under it "
+                     f"({', '.join(stopped)})")
+    if prs:
+        parts.append(f"{', '.join(f'PR #{n}' for n in prs)} left the queue")
+    return f"STOP {plan.unit}: " + "; ".join(parts) if parts else ""
+
+
+def _feedback(frm, unit, to, rev, state, kind=None, by=None, extra=""):
     """One `info` pointer from orche to the sender: unit id + delivery state. Held until a drain
     trigger, except a failed delivery (URGENT_STATES), which is urgent and names the fix. Pane-state
     hints come from the deliverer's own failure pointer. A brief triage routed from a prompt reads
@@ -257,6 +291,8 @@ def _feedback(frm, unit, to, rev, state, kind=None, by=None):
         summary += f" — run `orche deliver {unit}`"
     elif state == "runner-stop-requested" + RUNNER_NOT_LIVE:
         summary += " — already finished (or still queued: a queued run will not start)"
+    if extra:
+        summary += "\n" + extra
     try:        # best-effort: after a started runner nothing may turn the relay into an error
         inbox.post(inbox.make(unit, "orche", frm, "info", brief_rev=rev, urgent=state in URGENT_STATES,
                               summary=summary))
@@ -359,7 +395,7 @@ def relay_outcome(r, bodies, frm, deadline=None, by=None, skip=None) -> Outcome:
             lines.append(f"block {i + 1}: refused — {plan.removeprefix(brief.REFUSE)}")
             continue
         next(counts)
-        block = plan.block
+        block, cascade = plan.block, ""
         if plan.external:
             rev = 0
             state = _external(plan, sender, sender_proj)
@@ -367,7 +403,8 @@ def relay_outcome(r, bodies, frm, deadline=None, by=None, skip=None) -> Outcome:
         elif block.kind == "stop":
             rev = plan.prior.rev
             state = _deliver(r, plan, plan.prior, "stop", block.note or "STOP requested", sender, terms, cfg, by)
-            _feedback(sender, plan.unit, plan.to, rev, state, kind="stop", by=by)
+            cascade = _stop_subtree(r, plan, sender, terms, cfg, by)
+            _feedback(sender, plan.unit, plan.to, rev, state, kind="stop", by=by, extra=cascade)
         else:
             lin, parent = lineage.assign(r.reg, frm, by) if block.kind == "brief" else (None, None)
             lin = lin or line_of
@@ -384,7 +421,8 @@ def relay_outcome(r, bodies, frm, deadline=None, by=None, skip=None) -> Outcome:
             _feedback(sender, plan.unit, plan.to, rev, state, by=by)
         done.append({"unit": plan.unit, "to": plan.to, "state": state, "rev": rev})
         lines.append(f"block {i + 1}: delivered {plan.unit} → {plan.to} (rev {rev}, {state})"
-                     + (f" — {DEFERRED_TEXT}" if state == DEFERRED else ""))
+                     + (f" — {DEFERRED_TEXT}" if state == DEFERRED else "")
+                     + (f"\n  {cascade}" if block.kind == "stop" and cascade else ""))
         if hashes[i] is not None:
             delivered[hashes[i]] = f"{plan.unit} → {plan.to}"
     if refused:

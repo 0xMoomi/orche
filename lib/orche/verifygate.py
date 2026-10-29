@@ -7,6 +7,8 @@ and offered to an existing repository as one pull request by `orche init` and `o
   {"state": "on"}                        the script is on origin/<base> (fetched first)
   {"state": "pr", "number", "url"}       an open PR from BRANCH adds it (found, or opened now)
   {"state": "waiting", "reason"}         nothing could be pushed (no origin, no base, gh, the push)
+  {"state": "word", "project"}           neither, and `open_pr` is false: a team repository's PR waits for the
+                                         owner's word through Main (R-TEAM-5)
 It opens at most one PR per project: an open PR with head BRANCH, or BRANCH on origin, means it is done.
 The branch is cut from origin/<base> in a temporary worktree, so the owner's checkout is never touched.
 init keeps an open PR's number and URL on the project's registry entry (`verify_pr`), so the doctor and the
@@ -76,7 +78,7 @@ def _waiting(why) -> dict:
     return {"state": "waiting", "reason": mask.redact(str(why).removeprefix("gh: "))[0]}
 
 
-def ensure(root, key, cfg=None) -> dict:
+def ensure(root, key, cfg=None, open_pr=True) -> dict:
     """The merge queue's script on origin/<base>, or one PR adding it (see the module docstring)."""
     if not shell.git(root, "remote", "get-url", "origin", timeout=10).ok:
         return _waiting("the repository has no origin remote")
@@ -95,6 +97,8 @@ def ensure(root, key, cfg=None) -> dict:
     remote = shell.git(root, "ls-remote", "--heads", "origin", BRANCH, timeout=github.NET_S)
     if not remote.ok or remote.out.strip():
         return _waiting(f"the branch {BRANCH} is already on origin" if remote.ok else github.first_line(remote))
+    if not open_pr:
+        return {"state": "word", "project": key}
     tmp = Path(tempfile.mkdtemp(prefix="orche-verify-"))
     wt = tmp / "checkout"
     try:
@@ -124,4 +128,6 @@ def running(state) -> str:
         return "on"
     if state["state"] == "pr":
         return f"waiting for PR #{state['number']} ({state['url']}) to be merged"
+    if state["state"] == "word":
+        return f'waits for the owner\'s word (say "set up the merge queue for {state["project"]}")'
     return f"waiting; the check script could not be pushed ({state['reason']})"

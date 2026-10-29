@@ -181,7 +181,13 @@ def record(project, text, *, kind, source, unit=None, now=None) -> dict:
     with _locked(_path(project, NOTIFY_LOCK)):
         util.write_json(_path(project, ASK), data)
     log.log("events", f"owner ask project={project} kind={kind} source={source}" + (f" unit={unit}" if unit else ""))
+    _status_line(project)
     return data
+
+
+def _status_line(project):
+    from .. import statusline       # the status line's `waiting` counts the open ask
+    statusline.touch(project)
 
 
 def close(project, now=None) -> bool:
@@ -193,6 +199,7 @@ def close(project, now=None) -> bool:
         a["closed_at"] = _iso(now or units.now())
         util.write_json(_path(project, ASK), a)
     log.log("events", f"owner closed project={project}")
+    _status_line(project)
     return True
 
 
@@ -245,6 +252,7 @@ def answer(project, now=None):
         util.write_json(_path(project, ASK), a)
     after = int((now - units.parse_iso(a["at"])).total_seconds() // 60)
     log.log("events", f"owner answered project={project} by={how} after={after}m")
+    _status_line(project)
     return how
 
 
@@ -570,7 +578,8 @@ def fallback(reg, project, now):
     """R26: the oldest report to Main, FALLBACK_S to a day old, that waits on the owner — the newest of
     its unit is blocked, question or failed or carries an owner step, and no brief revision answered
     it; or a lineage's close pointer — with no tagged Main turn, owner prompt, ask or fallback notice
-    since it. (pointer, text) or None."""
+    since it. A report its lineage batch held (`quiet: "batch"`, pending or drained) stays its unit's
+    newest but is never a cause: the batch's close is. (pointer, text) or None."""
     from .. import brief
     newest, closes = {}, []
     for t, ptr, _file in _pointers(project, now - RECENT):
@@ -586,6 +595,8 @@ def fallback(reg, project, now):
     last = max((m for m in marks if m is not None), default=None)
     for t, ptr in sorted([*newest.values(), *closes], key=lambda x: x[0]):
         if (now - t).total_seconds() < FALLBACK_S or (last is not None and last >= t.timestamp()):
+            continue
+        if ptr.get("quiet") == "batch":
             continue
         step_ = ptr.get("owner")
         if not ptr.get("lineage_closed"):

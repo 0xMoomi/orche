@@ -189,7 +189,7 @@ class InstallTest(InstallCase):
         self.assertEqual(len(cmds), 2 + 7)
         pre = self.read_settings()["hooks"]["PreToolUse"]
         self.assertEqual(pre[0], self.settings["hooks"]["PreToolUse"][0])  # existing entries keep their order
-        self.assertEqual([e.get("matcher") for e in pre[1:]], ["Read|Bash|Grep|Edit|Write",
+        self.assertEqual([e.get("matcher") for e in pre[1:]], ["Read|Bash|Grep|Edit|Write|Monitor|Agent|Task",
                                                                "Edit|Write|NotebookEdit|MultiEdit"])
         self.assertNotIn("/plugin install", out)
         self.assertNotIn("careful", out)
@@ -622,7 +622,7 @@ class DoctorTest(InstallCase):
         registry.save(registry.empty())
         _, out, _ = self.doctor()
         self.assertIn(f"OK\tclaude\t{self.claude} 9.9.9 (Claude Code)", out.splitlines())
-        self.assertIn("OK\tclaude flags\tall 15 listed in claude --help", out.splitlines())
+        self.assertIn("OK\tclaude flags\tall 16 listed in claude --help", out.splitlines())
         (self.claude.parent / "help.txt").write_text("Usage: claude [options]\n  -p\n")
         code, out, _ = self.doctor()
         self.assertEqual(code, 0, out)

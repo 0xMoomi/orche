@@ -10,7 +10,7 @@
       {"hooks": [{"type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}/hooks/run.sh\" report_inject"}]}
     ],
     "PreToolUse": [
-      {"matcher": "Read|Bash|Grep|Edit|Write",
+      {"matcher": "Read|Bash|Grep|Edit|Write|Monitor|Agent|Task",
        "hooks": [{"type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}/hooks/run.sh\" env_read_gate"}]},
       {"matcher": "Edit|Write|NotebookEdit|MultiEdit",
        "hooks": [{"type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}/hooks/run.sh\" scope_gate"}]}

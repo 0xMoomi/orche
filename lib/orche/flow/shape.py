@@ -8,9 +8,10 @@ brief are shaped: not orche's own, a dispatch, a STOP, a runner's filing, an ext
 brief-less (`adhoc-`/`xreq-`) unit. Only pointers since the project's window W (guard.window: the owner's
 last prompt or local midnight) count as the previous one, so a re-run the owner asked for wakes again.
 
-Lineage: a done/stopped report to the project's Main of a lineage with two or more members is
-quiet too (flow.lineage.quiets); failed, blocked and question still wake, and a division recipient always
-wakes. A `lineage_closed` pointer is never shaped.
+Lineage batch: a report that ends its unit (done, failed, stopped) is posted `quiet: "batch"` while its
+recipient, Main or a division, still waits on another unit of the lineage, and `quiet: true` when it is
+for an older rev (flow.lineage.quiets); blocked, question, an owner step and urgent reports wake at once,
+and the batch's close wakes the recipient once. A `lineage_closed` pointer is never shaped.
 """
 from .. import inbox, registry, roster
 from . import guard, lineage
@@ -40,8 +41,9 @@ def shape(ptr, sc=None):
     Returns `ptr`."""
     if ptr.get("lineage_closed"):
         return ptr
-    if lineage.quiets(sc, ptr):
-        ptr["quiet"] = True
+    q = lineage.quiets(sc, ptr)
+    if q:
+        ptr["quiet"] = q
     if not _report(ptr):
         return ptr
     prev = _previous(ptr["to"], ptr.get("unit"), ptr["from"], _since(sc, ptr))

@@ -115,10 +115,10 @@ def file_pointer(reg, who, rev, folder, status, summary, head=None, link_report=
     return True
 
 
-def events(who, cost, turns, status, stop=None, rung=None, attempts=1) -> None:
-    """The run's events line; `rung` (tier:model:effort of the last attempt) and the attempt count
-    are added for a worker run (ladder.py)."""
-    ladder = f" rung={rung} attempts={attempts} escalated={int(attempts > 1)}" if rung else ""
+def events(who, cost, turns, status, stop=None, rung=None, attempts=1, escalated=0) -> None:
+    """The run's events line; `rung` (tier:model:effort of the last attempt), the attempt count and
+    whether one climbed the ladder are added for a worker run (ladder.py)."""
+    ladder = f" rung={rung} attempts={attempts} escalated={int(escalated)}" if rung else ""
     log.log("events", f"run unit={who['unit']} to={who['to']} model={who['model']} vendor={who['vendor']} "
                       f"cost={cost} turns={turns} status={status} stop={stop or '-'}{ladder}")
 

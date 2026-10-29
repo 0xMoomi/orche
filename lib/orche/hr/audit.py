@@ -117,8 +117,8 @@ def metrics_line(now) -> str:
     except Exception as exc:  # noqa: BLE001 - the audit must not fail on metrics
         log.log("hr", f"metrics unavailable: {exc}")
         return "metrics (7d): unavailable"
-    return (f"metrics (7d): {m['responses']} responses, ${m['cost_usd']:.2f} list price, "
-            f"main wake-ups {m['wake']['user']}, routine {m['routine']['share']:.0%}")
+    return (f"metrics (7d): {metrics.na(m['responses'])} responses, {metrics.na(m['cost_usd'], '${:.2f}')} list "
+            f"price, main wake-ups {m['wake']['user']}, routine {metrics.na(m['routine']['share'], '{:.0%}')}")
 
 
 def _active(reg, now) -> list:

@@ -226,11 +226,11 @@ _Avoid_: estimate (Codex's token-priced figure), placeholder cost.
 _Avoid_: zombie lock.
 
 **Urgent pointer**:
-A waking pointer whose status is `blocked`, `question` or `failed`, or that carries `urgent: true`. It wakes Main without the quiet window; it sends the owner no notification (Orca's own covers Main's reply).
+A waking pointer whose status is `blocked`, `question` or `failed`, or that carries `urgent: true`. It wakes without the quiet window; a `failed` report inside a lineage batch is held like any other; it sends the owner no notification (Orca's own covers Main's reply).
 _Avoid_: priority, alert.
 
 **Quiet window**:
-How long the nudger waits after the newest waking pointer before it wakes Main (`inbox.quiet_s`, default 90 s, capped by `inbox.quiet_max_s`, 240 s), so a batch of reports is one wake. Skipped when an urgent pointer is pending.
+How long the nudger waits after the newest waking pointer before it wakes Main (`inbox.quiet_s`, default 90 s, capped by `inbox.quiet_max_s`, 240 s), so a burst of waking pointers is one wake. Skipped when an urgent pointer is pending.
 _Avoid_: debounce, delay.
 
 **Reconcile**:
@@ -269,8 +269,12 @@ _Avoid_: budget, quota.
 The id shared by every brief that grew from one owner request, written as `lineage:` in each brief header and carried on its report pointers. It is the first brief's unit.
 _Avoid_: thread, chain id.
 
+**Lineage batch**:
+The units of one lineage a session waits on: for Main the lineage's roots, for any other session the units whose reports go to it, each with everything under them. Their reports that end a unit are held (`quiet: "batch"`) until every unit of the batch has settled; a head's unit settles only once the head reported after its workers. Blocked, question, owner steps and urgent notes wake at once, and the heartbeat wakes a hold whose units are past their TIMEBOX or that is a day old.
+_Avoid_: digest, bundle.
+
 **Lineage close**:
-The one waking pointer from `orche` to Main when every unit of a multi-unit lineage has ended (done, failed or stopped); it names `.orche/units/<L>/LINEAGE.md`. Until then done and stopped reports in that lineage arrive quiet.
+The one waking pointer from `orche` to a session when every unit it waits on in a lineage has settled (to Main it names `.orche/units/<L>/LINEAGE.md`). Until then the reports of that batch arrive held.
 _Avoid_: lineage done, final report.
 
 **Closing line**:

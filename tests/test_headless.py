@@ -72,6 +72,10 @@ class ArgvTest(TempHomeCase):
              ["/opt/x/claude", "-p", "--model", "claude-opus-5-5", "--output-format", "json", "--max-turns",
               "50", "--setting-sources", "project", "--permission-mode", "bypassPermissions",
               "--strict-mcp-config"] + gates_pair()),
+            ("project resume", project(resume="sid-1", max_turns=8), {},
+             ["claude", "-p", "--model", "claude-opus-5-5", "--output-format", "json", "--max-turns", "8",
+              "--setting-sources", "project", "--permission-mode", "bypassPermissions", "--resume", "sid-1",
+              "--strict-mcp-config"] + gates_pair()),
             ("empty claude_bin is the default", project(), {"claude_bin": ""},
              ["claude", "-p", "--model", "claude-opus-5-5", "--output-format", "json", "--max-turns", "50",
               "--setting-sources", "project", "--permission-mode", "bypassPermissions",
@@ -291,11 +295,11 @@ class CheckTest(TempHomeCase):
         bracket = help_without("--append-system-prompt-file") + "  --append-system-prompt[-file] <x>\n"
         alone = help_without("--system-prompt") + "  --append-system-prompt <x>\n"
         rows = [
-            ("all listed", ALL_FLAGS, ("OK", "claude flags", "all 15 listed in claude --help")),
+            ("all listed", ALL_FLAGS, ("OK", "claude flags", "all 16 listed in claude --help")),
             ("effort and restricted missing", help_without("--restricted", "--effort"),
              ("WARN", "claude flags", "not listed in claude --help: --effort, --restricted; headless "
                                       "calls that use them fail (update Claude Code)")),
-            ("bracket form counts", bracket, ("OK", "claude flags", "all 15 listed in claude --help")),
+            ("bracket form counts", bracket, ("OK", "claude flags", "all 16 listed in claude --help")),
             ("append alone is not system", alone,
              ("WARN", "claude flags", "not listed in claude --help: --system-prompt; headless "
                                       "calls that use them fail (update Claude Code)")),
@@ -321,7 +325,7 @@ class CheckTest(TempHomeCase):
         script.chmod(0o755)
         got = headless.check({"claude_bin": str(script)})
         self.assertEqual(got, [("WARN", "claude", f"{script} --version failed: boom"),
-                               ("OK", "claude flags", "all 15 listed in claude --help")])
+                               ("OK", "claude flags", "all 16 listed in claude --help")])
 
     def test_found_on_path(self):
         bin_ = self.fake(ALL_FLAGS)
@@ -339,6 +343,12 @@ class MarkerTest(TempHomeCase):
 
 
 class ResultTest(unittest.TestCase):
+    def test_session_id_and_resume_only_for_a_project_call(self):
+        self.assertEqual(headless.Result(0, {"session_id": "sid-1"}, None, None, False).session_id, "sid-1")
+        self.assertIsNone(headless.Result(0, {"session_id": ""}, None, None, False).session_id)
+        with self.assertRaisesRegex(ValueError, "keeps no session"):
+            headless.argv(sealed(resume="sid-1"), {})
+
     def test_problem_names_why_a_call_failed(self):
         ok = {"type": "result", "subtype": "success", "is_error": False, "result": "hi"}
         self.assertEqual(headless.Result(0, ok, "", "", False).problem, "")

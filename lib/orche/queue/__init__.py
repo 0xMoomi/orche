@@ -212,6 +212,13 @@ def drop(project, ref, *, reason=None, by="auto"):
     return e
 
 
+def drop_units(project, units, *, reason, by="auto") -> list:
+    """drop() every entry of `units` that has not landed; the dropped entries. A testing entry's gate
+    finishes without merging (the integrator re-reads the entry before it lands)."""
+    hits = [e["id"] for e in store.read(project)["entries"] if e.get("unit") in units and not landed(e)]
+    return [e for e in (drop(project, eid, reason=reason, by=by) for eid in hits) if e is not None]
+
+
 def pause(project, *, by, reason=None, entry=None, front=None, unless_paused=False):
     """Pause the queue (`orche queue pause`; the integrator: by restarts, stops or github), `front` back to
     waiting at the front first; logged `paused`. The queue, or None when `unless_paused` found it paused."""

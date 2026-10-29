@@ -474,6 +474,24 @@ class CreateFeatureTest(TransitionsCase):
         self.assertEqual(self.calls, [])
 
 
+    def test_issue_tracked_project_needs_the_key_in_the_name(self):  # c88
+        (self.home / "config.json").write_text(json.dumps(
+            {"publish": {"per_project": {"acme-shop": {"issues": "DES"}}}}))
+        msg = ("acme-shop tracks work in DES issues: name the worker des-<n>-<topic> (the issue from the brief; "
+               "Main creates it before dispatch)")
+        for name in ("dark-mode", "123-dark-mode", "ops-5-dark-mode"):
+            for dry_run in (False, True):
+                with self.subTest(name=name, dry_run=dry_run):
+                    exc = self.refused_create(name=name, dry_run=dry_run)
+                    self.assertEqual((exc.code, exc.msg), (3, msg))
+        self.assertEqual(self.calls, [])
+        _, line = self.create(name="des-57-dark-mode")
+        self.assertEqual(line, "feat-acme-shop-des-57-dark-mode active (feat/des-57-dark-mode)")
+
+    def test_no_issues_key_no_name_check(self):  # c88
+        _, line = self.create(name="dark-mode")
+        self.assertEqual(line, "feat-acme-shop-dark-mode active (feat/dark-mode)")
+
     def test_onboard_errors_refused(self):  # T3 nit: feat new error codes
         for error, code in ((onboarding.UnsafeTarget("x"), 3), (orca.OrcaError("boom"), 1)):
             with self.subTest(code=code), mock.patch.object(onboarding, "onboard", side_effect=error):

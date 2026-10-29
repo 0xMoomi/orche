@@ -1,10 +1,12 @@
 """The card (0.9.0 resume card): `orche status <project>` and the SessionStart card for a cleared or
 restarted Main."""
+import datetime as dt
 import json
+import os
 from unittest import mock
 
 import support
-from orche import inbox, util
+from orche import inbox, units, util
 from orche.queue import store
 from test_cmd_dispatch import BODY
 from test_flow import FlowCase, header
@@ -54,6 +56,22 @@ class CardTest(FlowCase):
         self.assertIn("DONE: 1 unit (1 done)", out)
         self.assertIn("queue: ", out)
         self.assertLessEqual(len(out.splitlines()), 40)
+
+    def test_card_leads_with_what_needs_the_owner_then_finished_then_running(self):
+        a, _b, c = self.three()
+        brief = self.units_dir() / a / "BRIEF.md"
+        os.utime(brief, (brief.stat().st_atime - 60, brief.stat().st_mtime - 60))   # not answered since
+        for path in (self.home / "inbox" / "main-acme").glob("*.json"):   # the question is A's newest pointer
+            ptr = json.loads(path.read_text())
+            if ptr.get("status") == "question":
+                ptr["at"] = units.iso(units.now() + dt.timedelta(seconds=1))
+                path.write_text(json.dumps(ptr))
+        lines = self.orche("status", "acme").stdout.splitlines()
+        heads = [ln for ln in lines if not ln.startswith(" ")]
+        self.assertEqual(heads[:4], ["[orche] resume acme", "NEEDS YOU (1)", "FINISHED (1)", "RUNNING (2)"])
+        self.assertTrue(lines[2].startswith(f"  blocked: {a} (question, since "), lines)
+        self.assertTrue(lines[4].startswith(f"  closed L {c}"), lines)
+        self.assertRegex(heads[-1], r"^queue: 1/0/0 · spent today (\$\d+\.\d\d|n/a)$")
 
     def test_json_shape_and_nothing_in_flight(self):
         res = self.orche("status", "acme")

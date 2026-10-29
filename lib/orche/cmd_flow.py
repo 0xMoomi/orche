@@ -3,7 +3,7 @@
 A paused project relays no brief or AMEND (STOP still works) and the heartbeat repairs nothing in it but
 drains. Resume needs the owner's word: it removes the pause only when the owner prompted Main after it.
 """
-from . import registry, roster
+from . import registry, roster, statusline
 from .cli import EXIT_BLOCKED, EXIT_NOT_FOUND, EXIT_OK, dry, fail, out
 from .flow import guard
 
@@ -33,6 +33,7 @@ def cmd_pause(args):
         dry(f"pause {key}")
         return EXIT_OK
     data = guard.pause(key, roster.actor(), args.reason)
+    statusline.touch(key)       # PAUSED in the status line
     out(args, dict(data, project=key), [f"paused {key}: no brief or AMEND is relayed until the owner's word "
                                         f"(orche flow resume {key}); STOP still works"])
     return EXIT_OK
@@ -48,5 +49,6 @@ def cmd_resume(args):
     ok, at = guard.resume(key, roster.actor())
     if not ok:
         return fail(EXIT_BLOCKED, f"resume needs the owner's word after {at.astimezone():%H:%M}")
+    statusline.touch(key)
     out(args, {"project": key, "paused": False}, [f"resumed {key}"])
     return EXIT_OK

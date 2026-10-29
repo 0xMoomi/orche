@@ -143,7 +143,7 @@ class InitTest(HrCase):
                                    for d in registry.DIVISIONS])
         panes = [l for l in dry if " terminal create " in l]
         self.assertEqual(len(panes), 1)
-        self.assertIn(f"--title main-acme-shop --command {PANE}ORCHE_SESSION=main-acme-shop claude "
+        self.assertIn(f"--title main-acme-shop --command {PANE}ORCHE_SESSION=main-acme-shop CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1 claude "
                       "--permission-mode bypassPermissions --name main-acme-shop --json", panes[0])
         autos = [l for l in dry if " automations create " in l]
         self.assertEqual(len(autos), 2)
@@ -196,7 +196,7 @@ class InitTest(HrCase):
         panes = [c[c.index("--title") + 1:c.index("--title") + 4] for c in self.orca_calls("terminal create")]
         self.assertEqual(panes, [["div-acme-shop-build", "--command", f"{PANE}ORCHE_SESSION=div-acme-shop-build claude --permission-mode bypassPermissions --name div-acme-shop-build"],
                                  ["div-acme-shop-gtm", "--command", f"{PANE}ORCHE_SESSION=div-acme-shop-gtm claude --permission-mode bypassPermissions --name div-acme-shop-gtm"],
-                                 ["main-acme-shop", "--command", f"{PANE}ORCHE_SESSION=main-acme-shop claude --permission-mode bypassPermissions --name main-acme-shop"]])
+                                 ["main-acme-shop", "--command", f"{PANE}ORCHE_SESSION=main-acme-shop CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1 claude --permission-mode bypassPermissions --name main-acme-shop"]])
         self.assertEqual(self.orca_calls("automations create"), [])
         self.assertIn("[dry-run] orca automations create --name orche-hr-audit-acme-shop", err)
         # Project templates and card symlink.
@@ -1683,7 +1683,7 @@ class AuditTest(FeatCase):
                          [("feat-acme-shop-checkout", "idle 20d > 14d")])
         self.assertEqual([(c["source"], c["text"], c["count"]) for c in data["corrections"]],
                          [("STANDING.md", "Run the tests before reporting", 2)])
-        self.assertEqual(data["metrics"], "metrics (7d): 0 responses, $0.00 list price, main wake-ups 0, routine 0%")
+        self.assertEqual(data["metrics"], "metrics (7d): 0 responses, $0.00 list price, main wake-ups 0, routine n/a")
         report = audit.report_path(NOW)
         self.assertEqual(data["report"], str(report))
         text = report.read_text()

@@ -3,7 +3,8 @@
 
 Triage (lib/orche/triage.py, off unless `triage.enabled`) may route a simple prompt straight to a
 division and print `{"decision": "block", ...}` so Main spends no turn; otherwise the prompt reaches
-Main and the inbox text (plus any triage note) is printed and injected. Fail-open.
+Main and the inbox text (plus any triage note) is printed and injected, within inbox.BUDGET characters
+(Claude Code caps hook stdout at 10,000). Fail-open.
 """
 import json
 import os
@@ -73,8 +74,11 @@ def main():
                 inbox.rearm(who.session)   # Main spends no turn: pending reports still need their wake
             _kick()
             return 0
-        # The hook budget runs from STARTED, less the time a classifier call was in flight.
-        text = inbox.handle_prompt(payload, STARTED + outcome.model_s, r, who)
+        # The hook budget runs from STARTED, less the time a classifier call was in flight; the whole
+        # stdout (note included) stays within inbox.BUDGET, under Claude Code's 10,000 characters.
+        note = outcome.note or ""
+        text = inbox.handle_prompt(payload, STARTED + outcome.model_s, r, who,
+                                   budget=max(0, inbox.BUDGET - len(note) - 2) if note else inbox.BUDGET)
         text = "\n\n".join(t for t in (outcome.note, text) if t)
         _kick()
     except Exception as exc:  # noqa: BLE001 - fail-open

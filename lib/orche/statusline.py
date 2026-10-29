@@ -1,6 +1,9 @@
 """Per-project visibility counts and the compact status-line segment (registry + file counts only).
 
-No orca calls here: `orche statusline` runs on every prompt render and must stay under 50 ms.
+No orca calls here: `orche statusline` must stay under 50 ms. The status line itself only prints the
+cached ORCHE_HOME/status/<proj>.line (templates/statusline-segment.sh): its first line is the segment;
+a second line `spent <YYYY-MM-DD> <usd|n/a>` keeps the day's spend (project.spent_today) for the
+refreshes that do not read transcripts, and is dropped the next day.
 """
 import datetime as _dt
 import json
@@ -96,27 +99,92 @@ def division_cells(proj: dict, workers: dict, short=False) -> list:
     return cells
 
 
-def segment(reg: dict, key: str, now=None, r=None) -> str:
-    """`R&D● RS○ BUILD●3 DES●2 GTM● OPS○ · run2 · new1 · 🔑2 · unverified1` (zero trailing cells omitted)."""
+def waiting(reg: dict, key: str, now=None) -> tuple:
+    """(what waits on the owner: the open ask plus the units blocked on the owner, the PAUSED reason or
+    None: a spend cap or an owner pause that holds)."""
+    from . import project                # light at import: the status line loads only what it uses
+    from .flow import guard, owner
+    n = len(project.blocked(reg, key, now)) + (1 if owner.status(key, now) else 0)
+    s, p = guard.spend_status(key, now), guard.pause_status(key)
+    return n, (f"spend cap ${s['cap']:g} reached" if s else "by the owner" if p else None)
+
+
+def segment(reg: dict, key: str, now=None, r=None, spent=None) -> str:
+    """`waiting3 · R&D● RS○ BUILD●3 DES●2 GTM● OPS○ · run2 · 🔑2 · $4.20 today` (zero cells omitted;
+    `spent`: today's USD, "n/a" when unreadable, None when not read today), or, while a spend cap or a
+    pause holds, `PAUSED <why> · say "resume" in Main`."""
+    n, paused = waiting(reg, key, now)
+    if paused:
+        return f'PAUSED {paused} · say "resume" in Main'
     c = counts(reg, key, now, r)
     cells = division_cells(reg["projects"][key], c["workers"], short=True)
-    parts = [" ".join(cells)] if cells else []
-    for label, n in (("run", c["running"]), ("new", c["new"]), ("🔑", c["keys"]),
-                     ("unverified", c["unverified"])):
-        if n:
-            parts.append(f"{label}{n}")
+    parts = ([f"waiting{n}"] if n else []) + ([" ".join(cells)] if cells else [])
+    for label, k in (("run", c["running"]), ("🔑", c["keys"])):
+        if k:
+            parts.append(f"{label}{k}")
+    if spent == "n/a":
+        parts.append("spend n/a")
+    elif spent:
+        parts.append(f"${spent:.2f} today")
     return " · ".join(parts)
 
 
-def refresh(reg: dict, key: str) -> None:
-    """Rewrite ORCHE_HOME/status/<proj>.line after a registry change (best effort, never raises).
+def _path(key):
+    return paths.orche_home() / "status" / f"{key}.line"
+
+
+def _today(now=None) -> str:
+    return (now or units.now()).date().isoformat()
+
+
+def kept_spend(key, now=None):
+    """Today's spend the cached line keeps (float, or "n/a"), else None (none, or another day's)."""
+    try:
+        lines = _path(key).read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return None
+    word, day, value = (lines[1].split() + ["", "", ""])[:3] if len(lines) > 1 else ("", "", "")
+    if word != "spent" or day != _today(now):
+        return None
+    try:
+        return "n/a" if value == "n/a" else float(value)
+    except ValueError:
+        return None
+
+
+def _write(reg, key, now=None, r=None, spent=False) -> str:
+    """Render and cache the segment; `spent` (a number or None for unreadable) replaces the kept spend."""
+    spent = kept_spend(key, now) if spent is False else ("n/a" if spent is None else spent)
+    line = segment(reg, key, now, r, spent)
+    tail = f"spent {_today(now)} {spent if spent == 'n/a' else f'{spent:.6f}'}\n" if spent is not None else ""
+    try:
+        util.atomic_write(_path(key), line + "\n" + tail)
+    except OSError:
+        pass
+    return line
+
+
+def refresh(reg: dict, key: str, spent=False) -> None:
+    """Rewrite ORCHE_HOME/status/<proj>.line after a change (best effort, never raises); `spent`, when
+    given, is today's spend (project.spent_today: a number, None when unreadable).
 
     The one helper every state change uses: init, sleep/wake (also feat and `hr audit --apply`),
-    feat new/retire, stage set.
+    feat new/retire, stage set, a report to Main, the owner's ask, flow pause/resume, `orche status`
+    and the heartbeat (which reads the transcripts: the spend is at most one pass old).
     """
     try:
-        util.atomic_write(paths.orche_home() / "status" / f"{key}.line", segment(reg, key) + "\n")
-    except (OSError, KeyError):
+        _write(reg, key, spent=spent)
+    except Exception:  # noqa: BLE001 - the status line never fails its caller
+        pass
+
+
+def touch(key: str) -> None:
+    """refresh() for a caller without the registry at hand (best effort, never raises)."""
+    try:
+        reg = registry.load()
+        if key in reg.get("projects", {}):
+            _write(reg, key)
+    except Exception:  # noqa: BLE001 - the status line never fails its caller
         pass
 
 
@@ -130,10 +198,6 @@ def run(cwd, as_json=False) -> int:
     key = r.place(cwd).project
     if key is None:
         return 0
-    line = segment(reg, key, r=r)
-    try:
-        util.atomic_write(paths.orche_home() / "status" / f"{key}.line", line + "\n")
-    except OSError:
-        pass
+    line = _write(reg, key, r=r)
     print(json.dumps({"project": key, "line": line}, ensure_ascii=False) if as_json else line)
     return 0

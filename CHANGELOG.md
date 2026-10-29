@@ -3,6 +3,35 @@
 All notable changes to ORCHE are listed here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow semantic versioning.
 
+## 0.19.0 — 2026-10-29
+
+### Added
+
+- A feature worker in an issue-tracked project (`publish.issues` set) carries the issue key in its name: `orche feat new` refuses any other name, `--dry-run` too, Build's workers and the owner's feature agents alike (`des-57-<topic>`).
+- Main's issue duties around a unit: search the tracker first, create or pick the issue, assign it to the owner and set it started, put the key on the brief's GOAL line, and comment the result and the test evidence on the done report; Build reports `needs an issue` instead of guessing a key.
+
+### Changed
+
+- A session is woken once per lineage: its units' reports wait until every unit it waits on has ended (a head's unit once the head reported after its workers); blocked, question, owner steps and urgent notes still wake at once; a hold ends when its units pass their TIMEBOX, or after a day. Build hears its workers' results together and Main hears a request once, after every head reported, instead of one wake per report.
+- Main waits through ORCHE only: its pane runs subagents and shells in the foreground (`CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1`), and the env-read gate refuses Main the Monitor tool, background Bash, Agent and Task calls, and foreground wait loops (`sleep` loops, `gh pr checks --watch`, `gh run watch`), because each finished background task started a Main turn that re-read the whole context.
+- The wake carries the reports: each REPORT.md and a closed lineage's LINEAGE.md are shown in the injected inbox block (masked, at most 1,800 characters each, then a `not shown in full: read <path>` line), so Main and the heads act on a wake without a Read call per report.
+- STOP stops the subtree: `STOP <unit>` also stops every running unit under it in its lineage, and the queued PRs of that unit and the units under it leave the queue (`stopped`), so nothing of a stopped piece of work lands later; the sender's feedback names the units stopped and the PRs dropped.
+- A runner attempt that ends unverified (no STATUS line, no commit, a dirty tree or no ledger row) is resumed once in the same session (`--resume`, 8 turns, what is left of the TIMEBOX, after the spend cap) with a short prompt naming the gap, before it files or climbs the ladder; its history line (`kind` finish) and RUN.json count only that continuation's own cost.
+- `orche metrics` prints `n/a` for a number whose source cannot be read, never 0: a missing or unreadable transcript root, a transcript it cannot open (the total cost), an unreadable registry (the Runner section), no triage samples file, and a mean or median over no samples; the default transcript root follows `CLAUDE_CONFIG_DIR`, as the panes do.
+- Each `orche status` row carries `spent today $X`: the list-price cost of today's responses in the project's and its worktrees' Claude Code transcripts, read as `orche metrics` reads them (`n/a` when they cannot be read; headless calls that keep no transcript are not in it); `--json` rows add `spent_today`.
+- Main's catch-up card (`orche status <project>`, SessionStart) leads with what needs the owner: `NEEDS YOU` (the open ask and the units waiting on the owner), then `FINISHED` (the last closed lineages with their PRs, their runs' cost and how many reports are not confirmed by a ledger row), then `RUNNING` (the open lineages), then the unread reports and `queue: w/t/m · spent today $X`; an empty heading is left out.
+- The status line says what needs the owner and what today cost: `waiting3 · R&D● BUILD●3 · run2 · 🔑2 · $4.20 today` (`waiting` = the open ask plus the units blocked on the owner; `spend n/a` when the transcripts cannot be read), and `PAUSED spend cap $30 reached · say "resume" in Main` (or `PAUSED by the owner`) in place of the counters while a pause holds. `new` and `unverified` left the bar (`orche status` keeps them). It refreshes on a report to Main, the owner's ask, `orche flow pause|resume`, `orche status` and every heartbeat pass (which reads the spend), besides the registry changes; the spend is kept on the cached file's second line and dropped the next day.
+- One macOS notice when a lineage closes (`<project>: finished`): what finished (the root GOAL, `2 done, 1 failed`), its PRs, what its runs cost (`n/a` when the run history cannot be read) and how many reports are not confirmed by a ledger row; none when a member waits on the owner (that ask notifies) and none for a single-unit lineage. It follows the `notify` switch and addresses Orca only while Orca runs, like every notice.
+
+### Fixed
+
+- The gate PR in a team repository no longer opens itself during `orche update`: only the project's Main opens it, on the owner's "set up the merge queue for <project>"; any other caller prints `gate PR: waits for the owner's word`, and `orche doctor` names the words.
+- The prompt hook's injection stays within 9,500 characters, under Claude Code's 10,000-character hook cap past which Claude saw only a file path: ORCHE's closing lines, urgent pointers and owner steps are always kept, report bodies give way first, and pointers that do not fit stay pending for the next prompt.
+
+### Removed
+
+- Two specification rules no code implemented: R-NIGHT-3 (stop new work at 70 % of a night budget) and R-XPROJ-6 (a cross-project dependency that triggers the next Build unit); their IDs stay, marked deleted.
+
 ## 0.18.0 — 2026-10-28
 
 ### Changed

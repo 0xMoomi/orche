@@ -34,6 +34,27 @@ def queue_of(key):
     return {k: v for k, v in s.items() if k not in ("entries", "project", "last")}
 
 
+def spent_today(reg, key, now=None):
+    """The project's spend today (USD, list price) from its Claude Code transcripts, as `orche metrics`
+    counts them: the project root's and every division's and feature's worktree's project dir, from local
+    midnight. None (shown `n/a`) when the transcript root or a transcript cannot be read. Headless calls
+    without a transcript (sealed and blank: reviews, triage) are not in it."""
+    from . import metrics
+    from .hr import panes
+    from .janitor import discover
+    now = now or units.now()
+    proj = reg["projects"][key]
+    trees = [proj.get("path") or ""] + [units.worktree_path(e.get("worktree") or "")
+                                        for d in (proj.get("divisions") or {}).values()
+                                        for e in [d or {}, *((d or {}).get("features") or [])]]
+    names = {discover.claude_slug(discover.real(t)) for t in trees if discover.real(t)}
+    try:
+        return metrics.spent_since(panes.claude_projects(), names,
+                                   now.replace(hour=0, minute=0, second=0, microsecond=0), now)
+    except Exception:  # noqa: BLE001 - a status line never fails the command; unknown is n/a
+        return None
+
+
 def _mtime(path):
     try:
         return _dt.datetime.fromtimestamp(path.stat().st_mtime, _dt.timezone.utc)
@@ -173,11 +194,17 @@ def _statuses(ms) -> dict:
     return dict(sorted(counts.items()))
 
 
+def _unconfirmed(ms) -> int:
+    """Members whose newest report says done without a ledger row (the status line's `unverified`)."""
+    return sum(1 for _b, f, _s, _state in ms if f and f[1].get("status") == "done" and f[1].get("ledger_row") is False)
+
+
 def card(reg, key, now=None) -> dict:
     """The card's facts (also the `--json` of `orche status <project>`): `open`, the newest MAX_OPEN open
     lineages {lineage, goal, units, states, prs, last, waits}, and `open_total`; `owner` (flow.owner.status),
     `unread` and `blocked` as the status row has them; `queue` (queue_of); `closed`, the last MAX_CLOSED
-    closed lineages {lineage, goal, units, statuses: {status: n}}."""
+    closed lineages {lineage, goal, units, statuses: {status: n}, prs, spend (their runs' cost), unconfirmed
+    (done without a ledger row)}; `spent_today` (spent_today, None when unreadable)."""
     rows = lineages(reg, key, now, ttl=None, members=True)
     opened, closed = [r for r in rows if r["open"]], [r for r in rows if not r["open"]][:MAX_CLOSED]
     return {"project": key,
@@ -188,7 +215,9 @@ def card(reg, key, now=None) -> dict:
             "unread": inbox.overdue(roster.Roster(reg), key, now)[1], "blocked": blocked(reg, key, now),
             "queue": queue_of(key),
             "closed": [{"lineage": r["lineage"], "goal": goal(r["members"], r["lineage"]), "units": r["units"],
-                        "statuses": _statuses(r["members"])} for r in closed]}
+                        "statuses": _statuses(r["members"]), "prs": r["prs"], "spend": r["spend"],
+                        "unconfirmed": _unconfirmed(r["members"])} for r in closed],
+            "spent_today": spent_today(reg, key, now)}
 
 
 def has_open(reg, key) -> bool:
@@ -237,27 +266,46 @@ def states_text(r) -> str:
     return f"{r['units']} units: {' · '.join(f'{n} {s}' for s, n in order)}" + (f"  PRs {prs}" if prs else "")
 
 
+def _prs(prs) -> str:
+    return " ".join(f"#{n}" for n in prs[:3]) + (" …" if len(prs) > 3 else "")
+
+
 def card_text(d) -> str:
-    """The card (project.card): `[orche] resume <project>`, then per open lineage its `L` line with the
-    GOAL, its states, its last report and what it waits on; the `owner:`, `unread:` and `blocked:` lines as
-    the status row prints them; `queue: w/t/m`; the closed lineages. At most CARD_LINES lines and CARD_CHARS
-    characters."""
+    """The card (project.card), in the owner's order: `[orche] resume <project>`; NEEDS YOU (the `owner:`
+    and `blocked:` lines as the status row prints them); FINISHED (the closed lineages: GOAL, statuses,
+    PRs, their runs' cost, how many are not confirmed); RUNNING (per open lineage its `L` line with the
+    GOAL, its states, its last report and what it waits on), or `nothing in flight`; the `unread:` lines;
+    `queue: w/t/m · spent today $X`. An empty heading is left out. At most CARD_LINES lines and
+    CARD_CHARS characters."""
+    from . import metrics
     p, q = d["project"], d["queue"]
-    out = [f"[orche] resume {p}"] + ([] if d["open"] else ["nothing in flight"])
+    out = [f"[orche] resume {p}"]
+    needs = owner_lines(d["owner"]) + blocked_lines(d)
+    if needs:
+        out += [f"NEEDS YOU ({(1 if d['owner'] else 0) + len(d['blocked'])})"] + needs
+    if d["closed"]:
+        out.append(f"FINISHED ({len(d['closed'])})")
+    for c in d["closed"]:
+        prs, n = _prs(c.get("prs") or []), c.get("unconfirmed") or 0
+        out.append(f"  closed L {c['lineage']}" + (f" — {c['goal']}" if c["goal"] else "")
+                   + f"  DONE: {c['units']} unit{'' if c['units'] == 1 else 's'} ("
+                   + ", ".join(f"{n} {s}" for s, n in c["statuses"].items()) + ")"
+                   + (f"  PRs {prs}" if prs else "")
+                   + (f"  runs ${c['spend']:.2f}" if c.get("spend") else "")
+                   + (f"  {n} not confirmed (no ledger row)" if n else ""))
+    out += [f"RUNNING ({d['open_total']})"] if d["open"] else ["nothing in flight"]
     for o in d["open"]:
         last = o["last"]
-        out += [f"L {o['lineage']}" + (f" — {o['goal']}" if o["goal"] else ""), f"  {states_text(o)}"]
+        out += [f"  L {o['lineage']}" + (f" — {o['goal']}" if o["goal"] else ""), f"    {states_text(o)}"]
         if last:
-            out.append(f"  last: {last['unit']} {last['status']}"
+            out.append(f"    last: {last['unit']} {last['status']}"
                        + (f" — {last['summary']}" if last["summary"] else ""))
-        out.append(f"  {o['waits']}")
+        out.append(f"    {o['waits']}")
     if d["open_total"] > len(d["open"]):
-        out.append(f"… {d['open_total'] - len(d['open'])} more open: orche status --project {p}")
-    out += owner_lines(d["owner"]) + unread_lines(d, repair_hints(d)) + blocked_lines(d)
-    out.append(f"queue: {q.get('waiting', 0)}/{q.get('testing', 0)}/{q.get('merged_today', 0)}" if q else "queue: -")
-    out += [f"closed L {c['lineage']}" + (f" — {c['goal']}" if c["goal"] else "")
-            + f"  DONE: {c['units']} unit{'' if c['units'] == 1 else 's'} ("
-            + ", ".join(f"{n} {s}" for s, n in c["statuses"].items()) + ")" for c in d["closed"]]
+        out.append(f"  … {d['open_total'] - len(d['open'])} more open: orche status --project {p}")
+    out += unread_lines(d, repair_hints(d))
+    out.append((f"queue: {q.get('waiting', 0)}/{q.get('testing', 0)}/{q.get('merged_today', 0)}" if q else "queue: -")
+               + f" · spent today {metrics.na(d.get('spent_today'), '${:.2f}')}")
     out = [ln if len(ln) <= WIDTH + 40 else ln[:WIDTH + 39] + "…" for ln in out]
     more = f"… the rest: orche status --project {p}"
     if len(out) > CARD_LINES:

@@ -42,7 +42,8 @@ Already installed? Inside a project, say "set up ORCHE here" to Claude Code, in 
 - A `main-<project>` tab in Orca where you talk to Main. Divisions stay dormant (no pane, no cost) until work arrives.
 - A setup report from Main: what was made and what you can switch on any time (also in `<project>/.orche/SETUP.md`).
 - Nothing committed to your repository: the project's ORCHE files (`.orche/`, `PROJECT_CARD.md`, `AGENTS.md`) stay untracked.
-- Every pull request is reviewed by its head, then the merge queue tests it on top of the base branch and merges it when green. Main ends every reply with `RUNNING`, `OWNER` or `DONE`, and ORCHE reminds you after 30 minutes when a decision still waits.
+- Every pull request is reviewed by its head, then the merge queue tests it on top of the base branch and merges it when green. Main hears back once per request, when everything it started has finished (a question or a decision for you reaches it at once), ends every reply with `RUNNING`, `OWNER` or `DONE`, and ORCHE reminds you after 30 minutes when a decision still waits.
+- The status line in Main's pane shows what waits on you and what today cost (`waiting2 · … · $4.20 today`, or `PAUSED …`), and a notice says what finished and what it cost when a request's work ends.
 
 ## Any time
 
@@ -54,7 +55,7 @@ Say it to Main in your own words; Main runs the command.
 | "cross-check PR 12 with Codex" | you install Codex once; Main runs `orche review --pr 12`: Codex and Claude read the diff at once. Nothing runs unless you ask |
 | "set the token for background runs" | you run `claude setup-token`; Main stores it with `orche auth set` |
 | "let the janitor clean up" | on by default (the heartbeat runs it daily); this turns it back on after `orche janitor disable` |
-| "set up the merge queue for <project>" | `orche init --refresh <project>` opens one PR adding `scripts/verify/ci.sh`; merging it turns the queue on |
+| "set up the merge queue for <project>" | `orche init --refresh <project>` opens one PR adding `scripts/verify/ci.sh`; merging it turns the queue on (team repository: on your word only) |
 | "run up to 30 agents" | `orche hr scale 30`; on a Claude subscription ORCHE waits for the usage window to reset |
 | "add a design division", "switch research to Sonnet", "set up again" | a choice dialog, then `orche hr add`, `orche hr model` or `orche init --refresh` |
 | "pull requests go to develop and branches start with dev/" | `orche init --refresh <project> --base develop --branch-prefix dev` |

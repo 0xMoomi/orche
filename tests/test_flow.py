@@ -699,27 +699,42 @@ class LineageCloseTest(FlowCase):
         self.assertIn("| unit | to | rev | status | report |", text)
         for u in (a, b, c):
             self.assertIn(f"| {u} | div-acme-build | 1 | done |", text)
+        out = self.run_hook("report_inject.py", self.payload("prompt.json", prompt="[orche] inbox: new reports"),
+                            ORCHE_SESSION="main-acme").stdout
+        self.assertIn(f"  report: {md}\n````markdown\n# Lineage {lin}\n", out)    # the wake carries LINEAGE.md
 
-    def test_failed_wakes_mid_way_and_counts_in_the_close(self):
-        lin, (a, b) = self.lineage(2)
-        with mock.patch.object(inbox, "wake") as wake:
-            self.assertNotIn("quiet", self.post(a, "failed", lin))
-            self.assertEqual(wake.call_count, 1)
-            self.post(b, "done", lin)
-        [close] = self.closes()
-        self.assertIn("1 done, 1 failed, 0 stopped", close["summary"])
+    def test_the_close_sends_one_finish_notice_with_what_finished_and_its_cost(self):
+        from orche import notify
+        from orche.runs import history
+        lin, (a, b, c) = self.lineage(3)
+        util.write_json(self.units_dir() / b / "RUN.json", {"pr": 41})
+        history.append("acme", {"unit": a, "cost_usd": 1.25, "finished": "2026-10-30T10:00:00+09:00"}, 1)
+        history.append("acme", {"unit": c, "cost_usd": 0.5, "finished": "2026-10-30T10:00:00+09:00"}, 1)
+        with mock.patch.object(inbox, "wake"), mock.patch.object(notify, "send", return_value=True) as send:
+            self.post(a, "done", lin, ledger_row=True)
+            self.post(b, "done", lin)                                 # done without a ledger row
+            self.assertEqual(send.call_count, 0)                      # not before the close
+            self.post(c, "failed", lin)
+        send.assert_called_once()
+        (title, body), kw = send.call_args
+        self.assertEqual((title, kw["kind"]), ("acme: finished", "finish"))
+        self.assertEqual(body, "Add field 0 to checkout form. 2 done, 1 failed. PRs #41. Runs cost $1.75. "
+                               "1 not confirmed (no ledger row).")
 
-    def test_blocked_wakes_and_keeps_the_lineage_open(self):
+    def test_no_finish_notice_when_a_member_waits_on_the_owner_or_notify_is_off(self):
+        from orche import notify, shell
         lin, (a, b) = self.lineage(2)
-        with mock.patch.object(inbox, "wake") as wake:
+        with mock.patch.object(inbox, "wake"), mock.patch.object(notify, "send") as send:
             self.post(a, "done", lin)
-            self.assertNotIn("quiet", self.post(b, "blocked", lin))
-            self.assertEqual(wake.call_count, 1)
-        self.assertEqual(self.closes(), [])
-        from orche import registry
-        from orche.flow import lineage
-        self.assertEqual(lineage.line(registry.load(), "acme", lin),
-                         f"[orche] lineage {lin}: open — 1 of 2 units running; waiting on {b} (blocked)")
+            self.post(b, "question", lin)
+        self.assertEqual(len(self.closes()), 1)
+        send.assert_not_called()                                  # the owner's ask notifies instead
+        calls = []
+        (self.home / "config.json").write_text(json.dumps({"notify": False}))
+        with mock.patch.object(notify, "PLATFORM", "darwin"), \
+                mock.patch.object(shell, "RUNNER", lambda argv, **kw: calls.append(argv)):
+            self.assertFalse(notify.finished("acme", "Ship it.", {"done": 2}, [], 0.0, 0))
+        self.assertEqual(calls, [])
 
     def test_a_single_unit_lineage_is_unchanged(self):
         lin, (a,) = self.lineage(1)
@@ -732,10 +747,12 @@ class LineageCloseTest(FlowCase):
         from orche import registry
         from orche.flow import lineage
         lin, (a,) = self.lineage(1)
+        self.assertEqual(lineage.line(registry.load(), "acme", lin),
+                         f"[orche] lineage {lin}: open — 1 of 1 unit running; waiting on {a} (running)")
         with mock.patch.object(inbox, "wake"):
             self.post(a, "blocked", lin)
         self.assertEqual(lineage.line(registry.load(), "acme", lin),
-                         f"[orche] lineage {lin}: open — 1 of 1 unit running; waiting on {a} (blocked)")
+                         f"[orche] lineage {lin}: closed — 1 unit (1 blocked)")
         with mock.patch.object(inbox, "wake"):
             self.post(a, "done", lin)
         out = self.run_hook("report_inject.py", self.payload("prompt.json", prompt="[orche] inbox: new reports"),
@@ -777,7 +794,7 @@ class LineageCloseTest(FlowCase):
         from orche import registry
         from orche.flow import lineage
         lin, (a, b) = self.lineage(2)
-        with mock.patch.object(inbox, "wake"), mock.patch.object(lineage, "settle", return_value=None):
+        with mock.patch.object(inbox, "wake"), mock.patch.object(lineage, "settle", return_value=[]):
             self.post(a, "done", lin)
             self.post(b, "stop", lin)                                       # the close was lost in a crash
         self.assertEqual(self.closes(), [])
@@ -927,6 +944,310 @@ class LineageCloseTest(FlowCase):
         self.assertEqual(lines.count(want), 1, out)
         self.assertLess(out.index("## Inbox"), out.index(want))
         self.assertEqual(lines[-1], inbox.REPORT_LINE)
+
+
+def brief_text(unit, to, frm, lin, parent, rev=1, timebox="30m"):
+    return (f"rev: {rev}\nunit: {unit}\nto: {to}   from: {frm}\nlineage: {lin}   parent: {parent}\n\n"
+            f"## Brief {unit}\nTO        {to}\nGOAL      g {unit}\nTIMEBOX   {timebox}\n")
+
+
+class StopSubtreeTest(FlowCase):
+    """STOP stops the subtree: every running unit under the named one gets the same STOP; ended ones and
+    siblings do not; the queue entries of the subtree that have not landed leave the queue."""
+
+    post = LineageCloseTest.post
+
+    def queued(self, unit, pr):
+        from orche import queue
+        queue.add("acme", {"id": queue.entry_id(pr, f"{pr:040d}"), "pr": pr, "head": f"{pr:040d}",
+                           "branch": unit, "unit": unit, "state": "waiting"})
+
+    def test_a_stop_reaches_the_running_units_under_it_and_drops_their_prs(self):
+        from orche.queue import store
+        made = [self.first(BODY.replace("Add coupon field", f"Add field {i}")) for i in range(6)]
+        h, w1, w2, g, d, s = (f.name for f in made)
+        for f, parent in zip(made, ("-", h, h, w1, h, "-")):
+            header(f, h, parent)
+        with mock.patch.object(inbox, "wake"):
+            self.post(d, "done", h)
+        self.queued(d, 41)
+        self.queued(s, 42)
+        res = self.orche("dispatch", stdin=f"STOP {h} owner changed plans\n")
+        self.assertEqual(res.returncode, 0, res.stdout + res.stderr)
+        self.assertIn(f"STOP {h}: also stopped 3 units under it ({w1}, {w2}, {g}); PR #41 left the queue", res.stdout)
+        events = self.events()
+        for u in (h, w1, w2, g):
+            self.assertEqual(events.count(f"dispatch kind=stop unit={u} "), 1, u)
+        for u in (d, s):
+            self.assertNotIn(f"dispatch kind=stop unit={u} ", events)
+        self.assertIn(f"dispatch stop-subtree unit={h} stopped=3 dropped=1", events)
+        self.assertEqual([e["pr"] for e in store.read("acme")["entries"]], [42])
+        dropped = [json.loads(ln) for ln in store.log_path("acme").read_text().splitlines()]
+        self.assertEqual([(x.get("event"), x.get("pr"), x.get("reason")) for x in dropped if x.get("event") == "dropped"],
+                         [("dropped", 41, "stopped")])
+        [fb] = [p for _x, p in inbox.pending("main-acme") if f"STOP {h}:" in p.get("summary", "")]
+        self.assertTrue(fb["summary"].startswith(f"relayed {h} → div-acme-build rev 1 (deliverer-started)"), fb)
+
+    def test_a_stop_under_a_leaf_touches_nothing_else(self):
+        made = [self.first(BODY.replace("Add coupon field", f"Add field {i}")) for i in range(2)]
+        h, w = (f.name for f in made)
+        header(made[1], h, h)
+        res = self.orche("dispatch", stdin=f"STOP {w}\n")
+        self.assertEqual(res.returncode, 0, res.stdout + res.stderr)
+        self.assertNotIn("also stopped", res.stdout)
+        self.assertNotIn(f"dispatch kind=stop unit={h} ", self.events())
+
+    def test_an_amend_does_not_cascade(self):
+        made = [self.first(BODY.replace("Add coupon field", f"Add field {i}")) for i in range(2)]
+        h, w = (f.name for f in made)
+        header(made[1], h, h)
+        res = self.orche("dispatch", stdin=amend(h, 2))
+        self.assertEqual(res.returncode, 0, res.stdout + res.stderr)
+        self.assertNotIn(f"dispatch kind=stop unit={w} ", self.events())
+
+
+class BatchTest(FlowCase):
+    """c89: a session is woken once per lineage batch, after every unit it waits on has settled (a head's
+    unit once the head reported after its workers); blocked, question, owner steps and urgent wake at once."""
+    L = "acme-h-20261029-1"
+    BUILD, MAIN, FEAT, RND = "div-acme-build", "main-acme", "feat-acme-checkout", "div-acme-rnd"
+
+    def setUp(self):
+        super().setUp()
+        self.t = units.now() - _dt.timedelta(minutes=30)
+        patcher = mock.patch.object(inbox, "wake")
+        self.wake = patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def make(self, unit, to, frm, parent="-", lin=None, rev=1):
+        d = self.units_dir() / unit
+        d.mkdir(parents=True, exist_ok=True)
+        (d / "BRIEF.md").write_text(brief_text(unit, to, frm, lin or self.L, parent, rev))
+        return unit
+
+    def post(self, unit, frm, to, status, lin=None, rev=1, **extra):
+        self.t += _dt.timedelta(seconds=1)
+        ptr = inbox.make(unit, frm, to, status, brief_rev=rev, summary=f"{unit} {status}", lineage=lin or self.L,
+                         **extra)
+        ptr["at"] = self.t.isoformat(timespec="seconds")
+        return json.loads(inbox.post(ptr).read_text())
+
+    def woke(self):
+        out = [c.args[0] for c in self.wake.call_args_list]
+        self.wake.reset_mock()
+        return out
+
+    def closes(self, who=None):
+        return [x for _p, x in inbox.pending(who or self.MAIN) if x.get("lineage_closed")]
+
+    def head(self, n):
+        """H to Build from Main, and n workers W1..Wn Build staffed under it (to the checkout feature)."""
+        h = self.make(self.L, self.BUILD, self.MAIN)
+        return h, [self.make(f"acme-w{i}-20261029-{i + 1}", self.FEAT, self.BUILD, h) for i in range(1, n + 1)]
+
+    def two(self, to=None, lin=None, n=2):
+        lin = lin or self.L
+        tag = lin.split("-")[1]
+        return [self.make(lin if i == 0 else f"acme-{tag}{i}-20261029-{i + 10}", to or self.BUILD, self.MAIN, lin=lin)
+                for i in range(n)]
+
+    def test_a_heads_workers_wake_it_once_after_the_last_one_ends(self):
+        h, (w1, w2, w3, w4) = self.head(4)
+        self.assertEqual(self.post(w1, self.FEAT, self.BUILD, "info", via="runner")["quiet"], "batch")
+        self.assertEqual(self.post(w2, self.FEAT, self.BUILD, "failed", via="runner")["quiet"], "batch")
+        self.assertEqual(self.post(w3, self.FEAT, self.BUILD, "done")["quiet"], "batch")
+        self.assertEqual(self.woke(), [])
+        self.post(w4, self.FEAT, self.BUILD, "done")
+        self.assertEqual(self.woke(), [self.BUILD])
+        [close] = self.closes(self.BUILD)
+        self.assertEqual((close["from"], close["status"], close["unit"]), ("orche", "done", self.L))
+        self.assertEqual(close["summary"].splitlines()[0],
+                         f"lineage {self.L}: every unit you wait on ended: 4 units, 2 done, 1 failed, 1 stopped")
+        self.assertEqual(self.closes(), [])                                   # Main waits on H's own report
+
+    def test_main_waits_for_the_head_to_report_after_its_workers(self):
+        """The c89 flow table: Build 3 wakes (one per batch round, one urgent), Main 1."""
+        h, (w1, w2, w3, w4) = self.head(4)
+        r = self.make("acme-r-20261029-9", self.RND, self.MAIN)
+        wakes = []
+
+        def step(*args, **extra):
+            self.post(*args, **extra)
+            wakes.extend(self.woke())
+        step(h, self.BUILD, self.MAIN, "info", via="runner")                   # min 1: the head run staffed and ended
+        step(w1, self.FEAT, self.BUILD, "info", via="runner")                  # min 3: unverified
+        step(r, self.RND, self.MAIN, "done")                                   # min 5
+        step(w2, self.FEAT, self.BUILD, "failed", via="runner")                # min 7
+        step(w3, self.FEAT, self.BUILD, "done", via="runner", quiet=True)      # min 12: review pending
+        self.assertEqual(wakes, [])
+        step(w4, self.FEAT, self.BUILD, "done")                                # min 40: Build's batch
+        self.assertEqual((wakes, self.closes()), ([self.BUILD], []))
+        inbox.drain([p for p, _x in inbox.pending(self.BUILD)])                # Build reads it, AMENDs W2
+        (self.units_dir() / w2 / "BRIEF.md").write_text(brief_text(w2, self.FEAT, self.BUILD, self.L, h, rev=2))
+        step(w2, self.FEAT, self.BUILD, "done", rev=2)                         # min 55: the round's close
+        self.assertEqual(wakes, [self.BUILD] * 2)
+        inbox.post(inbox.make(h, "orche", self.BUILD, "info", urgent=True, summary="every unit landed"))
+        wakes.extend(self.woke())                                              # min 60: urgent, at once
+        step(h, self.BUILD, self.MAIN, "done")                                 # min 61: H's own report
+        self.assertEqual((wakes.count(self.BUILD), wakes.count(self.MAIN)), (3, 1))
+        [close] = self.closes()
+        self.assertEqual(close["summary"].splitlines()[0],
+                         f"lineage {self.L} closed: 6 units: 5 done, 0 failed, 1 stopped")
+
+    def test_a_heads_runner_filing_after_quick_workers_does_not_settle_it(self):
+        h, (w1, w2) = self.head(2)
+        r = self.make("acme-r-20261029-9", self.RND, self.MAIN)
+        self.post(r, self.RND, self.MAIN, "done")
+        self.post(w1, self.FEAT, self.BUILD, "done", via="runner")
+        self.post(w2, self.FEAT, self.BUILD, "failed", via="runner")
+        self.assertEqual(self.woke(), [self.BUILD])
+        self.assertEqual(self.post(h, self.BUILD, self.MAIN, "info", via="runner")["quiet"], "batch")
+        self.assertEqual((self.woke(), self.closes()), ([], []))
+        from orche import registry
+        from orche.flow import lineage
+        self.assertEqual(lineage.line(registry.load(), "acme", self.L),
+                         f"[orche] lineage {self.L}: open — 0 of 4 units running; waiting on {h} (report due)")
+        self.post(h, self.BUILD, self.MAIN, "done")
+        self.assertEqual((self.woke(), len(self.closes())), ([self.MAIN], 1))
+
+    def test_failed_joins_the_batch_and_counts_in_the_close(self):
+        a, b = self.two()
+        self.assertEqual(self.post(a, self.BUILD, self.MAIN, "failed")["quiet"], "batch")
+        self.assertEqual(self.woke(), [])
+        self.post(b, self.BUILD, self.MAIN, "done")
+        self.assertEqual(self.woke(), [self.MAIN])
+        [close] = self.closes()
+        self.assertIn("1 done, 1 failed, 0 stopped", close["summary"])
+
+    def test_blocked_and_question_wake_at_once_and_count_as_ended(self):
+        from orche import registry
+        from orche.flow import lineage
+        a, b, c = self.two(n=3)
+        self.post(a, self.BUILD, self.MAIN, "done")
+        self.assertNotIn("quiet", self.post(b, self.BUILD, self.MAIN, "blocked"))
+        self.assertEqual((self.woke(), self.closes()), ([self.MAIN], []))
+        self.assertNotIn("quiet", self.post(c, self.BUILD, self.MAIN, "question"))
+        self.assertEqual(self.woke(), [self.MAIN])                             # the report and its close: one wake
+        [close] = self.closes()
+        self.assertEqual(close["summary"].splitlines()[0],
+                         f"lineage {self.L} closed: 3 units: 1 done, 0 failed, 0 stopped, 1 blocked, 1 question")
+        self.assertEqual(lineage.line(registry.load(), "acme", self.L),
+                         f"[orche] lineage {self.L}: closed — 3 units (1 done, 1 blocked, 1 question)")
+
+    def test_all_members_blocked_closes_the_batch(self):
+        a, b = self.two()
+        self.post(a, self.BUILD, self.MAIN, "blocked")
+        self.assertEqual(self.closes(), [])
+        self.post(b, self.BUILD, self.MAIN, "blocked")
+        self.assertEqual(self.woke(), [self.MAIN, self.MAIN])
+        [close] = self.closes()
+        self.assertIn("0 done, 0 failed, 0 stopped, 2 blocked", close["summary"])
+
+    def test_an_owner_step_or_urgent_report_wakes_at_once(self):
+        a, b, c = self.two(n=3)
+        self.assertNotIn("quiet", self.post(a, self.BUILD, self.MAIN, "done", owner="approve the paid plan"))
+        self.assertEqual(self.woke(), [self.MAIN])
+        self.assertNotIn("quiet", self.post(b, self.BUILD, self.MAIN, "done", urgent=True))
+        self.assertEqual((self.woke(), self.closes()), ([self.MAIN], []))
+
+    def test_an_older_revs_report_is_quiet_and_never_closes(self):
+        a, b = self.two()
+        self.make(b, self.BUILD, self.MAIN, rev=2)
+        self.assertIs(self.post(b, self.BUILD, self.MAIN, "info", via="runner")["quiet"], True)   # rev 1's run
+        self.assertEqual(self.post(a, self.BUILD, self.MAIN, "done")["quiet"], "batch")
+        self.assertEqual((self.woke(), self.closes()), ([], []))
+
+    def test_a_crashed_run_filed_by_reconcile_ends_its_unit(self):
+        import subprocess
+        from orche import registry, runs
+        a, b = self.two()
+        self.post(a, self.BUILD, self.MAIN, "done")
+        proc = subprocess.Popen(["true"])
+        proc.wait()
+        folder = self.home / "runs" / "acme"
+        folder.mkdir(parents=True, exist_ok=True)
+        (folder / f"{b}.lock").write_text(json.dumps({"pid": proc.pid, "unit": b, "to": self.BUILD, "rev": 1,
+                                                      "started": util.now_iso()}))
+        self.assertEqual(self.woke(), [])
+        runs.reconcile(registry.load(), "acme", budget_s=0)
+        self.assertEqual(self.woke(), [self.MAIN])
+        [close] = self.closes()
+        self.assertIn("1 done, 1 failed, 0 stopped", close["summary"])
+
+    def test_a_retired_target_counts_as_gone(self):
+        from orche import registry
+        a = self.make(self.L, self.BUILD, self.MAIN)
+        b = self.make("acme-f-20261029-2", self.FEAT, self.MAIN)
+        reg = registry.load()
+        reg["projects"]["acme"]["divisions"]["build"]["features"][0]["status"] = "retired"
+        registry.save(reg)
+        self.post(a, self.BUILD, self.MAIN, "done")
+        self.assertEqual(self.woke(), [self.MAIN])
+        [close] = self.closes()
+        self.assertIn("1 done, 0 failed, 1 stopped", close["summary"])
+
+    def test_a_stop_that_reached_a_pane_ends_its_unit(self):
+        a, b = self.two()
+        inbox.write(inbox.make(b, self.MAIN, self.BUILD, "stop", brief_rev=1, via="dispatch", summary="STOP"))
+        self.post(a, self.BUILD, self.MAIN, "done")
+        self.assertEqual(self.woke(), [self.MAIN])
+        [close] = self.closes()
+        self.assertIn("1 done, 0 failed, 1 stopped", close["summary"])
+
+    def test_an_amends_old_rev_stop_report_does_not_end_the_new_rev(self):
+        a, b = self.two()
+        inbox.write(inbox.make(b, self.MAIN, self.BUILD, "stop", brief_rev=1, via="dispatch", summary="STOP"))
+        self.make(b, self.BUILD, self.MAIN, rev=2)                              # the AMEND
+        self.assertIs(self.post(b, self.BUILD, self.MAIN, "stop")["quiet"], True)
+        self.post(a, self.BUILD, self.MAIN, "done")
+        self.assertEqual((self.woke(), self.closes()), ([], []))
+
+    def test_mains_direct_feature_unit_is_in_mains_batch(self):
+        from orche import registry
+        h = self.make(self.L, self.BUILD, self.MAIN)
+        f = self.make("acme-f-20261029-2", self.FEAT, self.MAIN)
+        self.assertEqual(self.post(f, self.FEAT, self.MAIN, "done")["quiet"], "batch")
+        self.assertEqual(self.woke(), [])
+        self.post(h, self.BUILD, self.MAIN, "done")
+        self.assertEqual((self.woke(), len(self.closes())), ([self.MAIN], 1))
+        reg = registry.load()                                                   # a division without a session:
+        reg["projects"]["acme"]["divisions"]["build"]["session"] = ""            # its feature reports to Main
+        registry.save(reg)
+        l2 = "acme-g-20261029-3"
+        g = self.make(l2, self.FEAT, "ghost-acme-x", lin=l2)
+        r = self.make("acme-r-20261029-4", self.RND, self.MAIN, lin=l2)
+        self.assertEqual(self.post(g, self.FEAT, self.MAIN, "done", lin=l2)["quiet"], "batch")
+        self.assertEqual(self.woke(), [])
+        self.post(r, self.RND, self.MAIN, "done", lin=l2)
+        self.assertEqual(self.woke(), [self.MAIN])
+        self.assertEqual(sorted(c["unit"] for c in self.closes()), sorted([self.L, l2]))
+
+    def test_a_second_lineage_closes_while_the_first_holds(self):
+        l2 = "acme-k-20261029-5"
+        a1, b1 = self.two()
+        a2, b2 = self.two(lin=l2)
+        self.post(a1, self.BUILD, self.MAIN, "done")
+        self.post(a2, self.BUILD, self.MAIN, "done", lin=l2)
+        self.post(b2, self.BUILD, self.MAIN, "done", lin=l2)
+        self.assertEqual(self.woke(), [self.MAIN])
+        self.assertEqual([c["unit"] for c in self.closes()], [l2])
+
+    def test_the_head_is_not_woken_when_nothing_was_held(self):
+        h, (w1, w2) = self.head(2)
+        self.post(w1, self.FEAT, self.BUILD, "done", via="runner", quiet=True)     # review pending: quiet
+        self.post(w2, self.FEAT, self.BUILD, "done", via="runner", quiet=True)
+        self.assertEqual((self.woke(), self.closes(self.BUILD)), ([], []))
+
+    def test_a_single_unit_batch_wakes_directly(self):
+        h, (w1,) = self.head(1)
+        self.assertNotIn("quiet", self.post(w1, self.FEAT, self.BUILD, "done"))
+        self.assertEqual((self.woke(), self.closes(self.BUILD)), ([self.BUILD], []))
+
+    def test_no_head_close_while_a_waking_pointer_is_pending(self):
+        h, (w1, w2) = self.head(2)
+        self.assertNotIn("quiet", self.post(w1, self.FEAT, self.BUILD, "blocked"))
+        self.assertEqual(self.post(w2, self.FEAT, self.BUILD, "done")["quiet"], "batch")
+        self.assertEqual((self.woke(), self.closes(self.BUILD)), ([self.BUILD], []))   # the block's wake reads it
 
 
 class GuardEdgesTest(FlowCase):

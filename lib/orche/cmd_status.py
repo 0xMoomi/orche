@@ -7,12 +7,13 @@ The facts come from lib/orche/project.py.
 
 0.9.0: the project line carries `queue w/t/m` (waiting / testing / merged today, when
 the merge queue has any) and `runs n/cap` (live runs / runner.max_parallel); a usage hold of the
-project's units is a `paused:` line."""
+project's units is a `paused:` line. `spent today $X` is project.spent_today (`n/a` when the transcripts
+cannot be read)."""
 import json
 import os
 import sys
 
-from . import __version__, config, inbox, project, registry, roster, runs, statusline, units, vendors
+from . import __version__, config, inbox, metrics, project, registry, roster, runs, statusline, units, vendors
 from .flow import guard, owner, shape, usage
 
 CAP_LINES = 3      # sub-lines per kind; the rest: `… <n> more: orche status --project <p>`
@@ -56,8 +57,10 @@ def status_row(reg, key, now=None, cfg=None) -> dict:
     # A non-Claude division is marked with its vendor (`rnd○[codex]`); the status bar is unchanged.
     cells = [cell + (f"[{vendors.vendor_of(m)}]" if m and vendors.vendor_of(m) != "claude" else "")
              for cell, m in zip(statusline.division_cells(proj, c["workers"]), models.values())]
+    spent = project.spent_today(reg, key, now)
     line = (f"{key} stage={proj['stage']} awake={c['awake']}/{limit} divisions: {' '.join(cells) or '-'}{qcell}"
-            f" · new:{c['new']} · keys:{c['keys']} · unverified:{c['unverified']} · runs {c['running']}/{cap}")
+            f" · new:{c['new']} · keys:{c['keys']} · unverified:{c['unverified']}"
+            f" · spent today {metrics.na(spent, '${:.2f}')} · runs {c['running']}/{cap}")
     from . import reconcile
     revived = reconcile.main_reopened(reg, key)
     if revived is not None and ((now or units.now()) - revived).total_seconds() < 86400:
@@ -72,7 +75,8 @@ def status_row(reg, key, now=None, cfg=None) -> dict:
             "undelivered": undelivered, "unread": unread, "blocked": project.blocked(reg, key, now),
             "upgrade": registry.upgrade(proj, __version__),
             "looping": looping(reg, key, now), "paused": paused(key, now), "owner": owner.status(key, now),
-            "queue": q, "runs": {"live": c["running"], "cap": cap}, "holds": usage_holds(key, now)}
+            "queue": q, "runs": {"live": c["running"], "cap": cap}, "holds": usage_holds(key, now),
+            "spent_today": spent}
 
 
 def looping(reg, key, now):
@@ -171,12 +175,14 @@ def cmd_status(args):
     runs.reconcile_cli(reg, args, keys)      # a lost run is filed (and noted on stderr) before counting
     if want and not detail:
         d = project.card(reg, keys[0])
+        statusline.refresh(reg, keys[0], spent=d["spent_today"])
         text = project.card_text(d)
         print(json.dumps({**d, "text": text}, indent=2, ensure_ascii=False) if args.json else text)
         return EXIT_OK
     cfg = config.load()
     rows = [status_row(reg, key, cfg=cfg) for key in keys]
     for row in rows:
+        statusline.refresh(reg, row["project"], spent=row["spent_today"])
         row["stalled"] = stalled(reg, row["project"])
         if detail:
             row["lineages"] = project.lineages(reg, row["project"])

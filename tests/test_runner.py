@@ -809,6 +809,92 @@ class RunTest(RunnerCase):
         self.assertEqual(self.run_record(unit)["status"], "failed")
 
 
+class FinishTest(RunnerCase):
+    """One finishing continuation before `unverified`: the same session resumed once with FINISH_PROMPT,
+    its own cost recorded (a resumed result reports the conversation's total)."""
+
+    def history(self):
+        path = self.home / "runs" / "acme" / "history.jsonl"
+        return [json.loads(line) for line in path.read_text().splitlines()] if path.exists() else []
+
+    def answer(self, result, cost, sid="sid-1", **kw):
+        return json.dumps({"type": "result", "subtype": "success", "is_error": False, "num_turns": 3,
+                           "result": result, "total_cost_usd": cost, "stop_reason": "end_turn",
+                           "session_id": sid, "usage": {"input_tokens": 1}, **kw})
+
+    def setup_calls(self, first, second, finish_action=""):
+        """`first` answers the work call; a call carrying --resume runs `finish_action`, then answers `second`.
+        Every call's argv and stdin are kept under calls/."""
+        d = self.fake
+        (d / "second.json").write_text(second)
+        (d / "reply.json").write_text(first)
+        self.action(f'n=$(ls "{d}/calls"/*.argv 2>/dev/null | wc -l | tr -d " "); mkdir -p "{d}/calls"\n'
+                    f'cp "{d}/argv.txt" "{d}/calls/$n.argv"; cp "{d}/stdin.txt" "{d}/calls/$n.stdin"\n'
+                    f'if grep -qx -- --resume "{d}/argv.txt"; then\n{finish_action}'
+                    f'cp "{d}/second.json" "{d}/reply.json"\nfi\n')
+
+    def calls(self):
+        folder = self.fake / "calls"
+        n = len(list(folder.glob("*.argv"))) if folder.exists() else 0
+        return [((folder / f"{i}.argv").read_text().splitlines(), (folder / f"{i}.stdin").read_text()) for i in range(n)]
+
+    def test_an_unverified_done_is_resumed_once_and_finishes(self):
+        unit = self.brief()
+        self.ledger()
+        self.setup_calls(self.answer("I did it\nSTATUS: done\nall good", 0.31),
+                         self.answer("Committed.\nSTATUS: done\ncoupon field added", 0.5),
+                         COMMIT + ROW.format(verdict="unit-test-verified"))
+        code, out, err = self.orche("run", unit)
+        self.assertEqual(code, 0, out + err)
+        (argv1, _), (argv2, stdin2) = self.calls()
+        self.assertNotIn("--resume", argv1)
+        self.assertEqual(argv2[argv2.index("--resume") + 1], "sid-1")
+        self.assertEqual(argv2[argv2.index("--max-turns") + 1], str(runner.FINISH_TURNS))
+        self.assertEqual(stdin2, runner.FINISH_PROMPT.format(gap="STATUS: done (no commit)"))
+        [ptr] = self.pointers("main-acme")
+        self.assertEqual(ptr["status"], "done")
+        self.assertEqual([(h["kind"], h["cost_usd"]) for h in self.history()], [("work", 0.31), ("finish", 0.19)])
+        self.assertEqual(self.run_record(unit)["cost_usd"], 0.5)
+        self.assertIn("status=done stop=end_turn rung=standard:claude-opus-5-5:medium attempts=2 escalated=0\n",
+                      self.events())
+
+    def test_no_status_line_names_the_gap_and_a_second_unverified_files_without_a_third_call(self):
+        unit = self.brief()
+        self.setup_calls(self.answer("worked on it", 0.2), self.answer("still nothing", 0.3))
+        self.orche("run", unit)
+        calls = self.calls()
+        self.assertEqual(len(calls), 2)
+        self.assertEqual(calls[1][1], runner.FINISH_PROMPT.format(gap="no STATUS line"))
+        [ptr] = self.pointers("main-acme")
+        self.assertEqual(ptr["summary"].splitlines()[0], "unverified: no STATUS line")
+        self.assertEqual([h["kind"] for h in self.history()], ["work", "finish"])
+
+    def test_no_continuation_after_an_error_the_turn_cap_or_without_a_session(self):
+        cases = {"is_error": self.answer("boom", 0.2, is_error=True, subtype="error_during_execution"),
+                 "turn cap": self.answer("", 0.2, is_error=True, subtype="error_max_turns"),
+                 "no session": self.answer("worked on it", 0.2, sid=None)}
+        for name, first in cases.items():
+            with self.subTest(name):
+                shutil.rmtree(self.fake / "calls", ignore_errors=True)
+                unit = self.brief()
+                self.setup_calls(first, self.answer("STATUS: done", 0.3))
+                self.orche("run", unit)
+                self.assertEqual(len(self.calls()), 1)
+
+    def test_no_continuation_past_the_spend_cap(self):
+        self.config({"claude_bin": str(self.claude), "delivery": "runner", "flow": {"max_unit_cost_usd": 0.1}})
+        unit = self.brief()
+        self.setup_calls(self.answer("worked on it", 0.2), self.answer("STATUS: done", 0.3))
+        self.orche("run", unit)
+        self.assertEqual(len(self.calls()), 1)
+
+    def test_a_mechanical_unit_still_unverified_after_the_finish_escalates_as_before(self):
+        unit = self.brief(tier="mechanical")
+        self.setup_calls(self.answer("worked on it", 0.2), self.answer("still nothing", 0.3))
+        self.orche("run", unit)
+        self.assertEqual([h["kind"] for h in self.history()], ["work", "finish", "escalation"])
+
+
 class RunnerFailureTest(RunnerCase):
     """I-1 / I-3: no unit ends without exactly one pointer."""
 

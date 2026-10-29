@@ -211,7 +211,8 @@ def create_feature(reg, key, name, *, scope, reason, by=None, batch=None, strict
     """`orche feat new` end to end (SPEC §2.5). `scope`: the globs, split and non-empty (the CLI checks).
     The head is the caller's division (`by`, else $ORCHE_SESSION): a division of this project staffs
     itself, Main / the owner / anyone else staffs build, a worker is refused (1).
-    Order: head division (2) -> name is a slug (1) -> session free registry-wide (1) -> no live feature
+    Order: head division (2) -> name is a slug (1) -> in an issue-tracked project (publish `issues`) the
+    name starts with that tracker's key, `des-57-<topic>` (3) -> session free registry-wide (1) -> no live feature
     of that name in any division (1) -> creation limits (3, one budget for every division; the global
     cap also freezes creation, unless dry_run) -> scope overlaps with every division's workers (warning;
     3 with `strict`) -> free disk >= `feature_min_free_disk_mb` (3) -> awake limit (3; the pane unless
@@ -236,6 +237,11 @@ def create_feature(reg, key, name, *, scope, reason, by=None, batch=None, strict
         raise book.Refused(cli.EXIT_NOT_FOUND, f"{key} has no {division} division (run orche init first)")
     if util.slugify(name) != name:
         raise book.Refused(cli.EXIT_USER, f"feature name must be lowercase [a-z0-9-]: {name!r}")
+    from .. import publish   # here, not at the top: hr stays free of the git/gh publish layer at import
+    issues = str(publish.settings(None, key).get("issues") or "")
+    if issues and not publish.issue_of(name).startswith(f"{issues}-"):   # an issue-tracked project
+        raise book.Refused(cli.EXIT_BLOCKED, f"{key} tracks work in {issues} issues: name the worker "
+                           f"{issues.lower()}-<n>-<topic> (the issue from the brief; Main creates it before dispatch)")
     owner = onboarding.session_owner(reg, key, session)
     if owner:
         raise book.Refused(cli.EXIT_USER, f"session {session} is taken by project {owner}; pick another name")
@@ -289,7 +295,6 @@ def create_feature(reg, key, name, *, scope, reason, by=None, batch=None, strict
         raise book.Refused(cli.EXIT_BLOCKED, f"feat new {name} stopped: {exc}") from None
     except (orca.OrcaError, OSError, util.JsonError) as exc:
         raise book.Refused(cli.EXIT_USER, f"feat new {name} stopped: {exc}") from None
-    from .. import publish   # here, not at the top: hr stays free of the git/gh publish layer at import
     publish.guard_base(units.worktree_path(entry["worktree"]), publish.base(proj["path"], project=key))   # R29
     status = "paused" if codex else "active"
     feature.update(worktree=entry["worktree"], branch=entry["branch"], status=status)

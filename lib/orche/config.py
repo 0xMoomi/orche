@@ -59,7 +59,7 @@ DEFAULTS = {
     "liaison": {"model": "claude-sonnet-5-5", "effort": "low", "max_turns": 12, "timeout_s": 100},
     # The wake (R-INBOX-4): posting a waking pointer starts `orche nudge <recipient>`, which types
     # `[orche] inbox: new reports` into the recipient's idle pane. false: reports wait for a prompt.
-    # quiet_s: the nudger waits until the newest waking pointer is this old (one wake per batch),
+    # quiet_s: the nudger waits until the newest waking pointer is this old (one wake per burst),
     # at most quiet_max_s more; an urgent pointer (inbox.URGENT) skips the wait.
     "inbox": {"wake": True, "quiet_s": 90, "quiet_max_s": 240},
     # The heartbeat (lib/orche/reconcile.py): `orche reconcile` runs one bounded pass every every_s

@@ -13,8 +13,8 @@ Gated by the top-level config `notify`; macOS only (PLATFORM). Never raises. One
 notification tried, naming the caller's `kind` and the outcome, never the text.
 
 Callers: a parked guard refusal and the heartbeat's reminders and project escalations (flow.owner, with the
-project; Orca's own notification covers Main's closing line), HR (hr.book), the Keymaster (secrets.store)
-and the heartbeat's global notice (reconcile).
+project; Orca's own notification covers Main's closing line), HR (hr.book), the Keymaster (secrets.store),
+the heartbeat's global notice (reconcile) and a lineage's close (finished(), from flow.lineage.close).
 """
 import sys
 import unicodedata
@@ -57,6 +57,19 @@ def argv(title, body, sound=False, *, orca=False) -> list:
     line = SCRIPT[1] + (SOUND if sound else "")
     script = (SCRIPT[0], TELL[0], line, TELL[1], SCRIPT[2]) if orca else (SCRIPT[0], line, SCRIPT[2])
     return ["osascript", *(x for s in script for x in ("-e", s)), arg(body), arg(title)]
+
+
+def finished(project, goal, counts, prs, cost, unconfirmed) -> bool:
+    """The one notice for a closed lineage: `<project>: finished`, then what finished and what it cost:
+    `Add annual plan to checkout. 3 done, 1 failed. PRs #41 #43. Runs cost $4.20. 1 not confirmed (no
+    ledger row).` (`cost` None: `n/a`; zero counts and an empty part left out)."""
+    goal = str(goal or "").strip()
+    parts = [goal + ("" if goal[-1:] in ".!?。" else ".") if goal else "",
+             ", ".join(f"{n} {s}" for s, n in counts.items() if n) + "." if any(counts.values()) else "",
+             "PRs " + " ".join(f"#{n}" for n in prs) + "." if prs else "",
+             f"Runs cost {'n/a' if cost is None else f'${cost:.2f}'}.",
+             f"{unconfirmed} not confirmed (no ledger row)." if unconfirmed else ""]
+    return send(f"{project}: finished", " ".join(p for p in parts if p), kind="finish", project=project)
 
 
 def send(title, body, sound=False, *, kind="-", project=None) -> bool:

@@ -60,7 +60,7 @@ def _project(reg, key):
     return found[0]
 
 
-def _caller(reg, project, *, main_only=False, target=None):
+def caller(reg, project, *, main_only=False, target=None):
     """The calling session's Member if it is the project's Main (or, unless main_only, Build or the head
     of `target`, roster.Roster.head)."""
     r = roster.Roster(reg)
@@ -111,7 +111,7 @@ def cmd_add(args, words):
         if words:
             raise queue.Refused(cli.EXIT_USER, "add --pr N --project <p> takes no unit")
         project = _project(reg, args.project)
-        me = _caller(reg, project)
+        me = caller(reg, project)
         if not me:
             raise queue.Refused(cli.EXIT_BLOCKED, "only Build or Main may queue")
         root = units.project_root(reg, project)
@@ -139,7 +139,7 @@ def cmd_add(args, words):
             raise queue.Refused(cli.EXIT_NOT_FOUND, f"unknown unit {unit!r}")
         project = b.project
         target = roster.Roster(reg).member(b.to)
-        me = _caller(reg, project, target=target)
+        me = caller(reg, project, target=target)
         if not me:
             raise queue.Refused(cli.EXIT_BLOCKED, "only Build, Main or the unit's head may queue")
         if not donegate.gated(target):
@@ -239,7 +239,7 @@ def _gate(words, usage, reg, *, main_only=False, n=1):
     if len(words) < n:
         raise queue.Refused(cli.EXIT_USER, usage)
     project = _project(reg, words[0])
-    m = _caller(reg, project, main_only=main_only)
+    m = caller(reg, project, main_only=main_only)
     if m is None:
         raise queue.Refused(cli.EXIT_BLOCKED, "only Main approves landing in a land: owner project; report it to Main"
                       if main_only else "only Build or Main may change the queue")

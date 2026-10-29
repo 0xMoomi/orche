@@ -21,7 +21,7 @@ update follows `origin/main`. Steps, each one a progress line on stderr:
    orche` and `claude plugin update orche@orche`, as install.sh does on a re-run;
 5. the NEW code refreshes every registered project: `<clone>/bin/orche.py init <key> --refresh` (ORCHE's
    own files: card link, personas, worktree settings, hooks wiring; no intake, no Orca, never the
-   user's files).
+   user's files), without ORCHE_SESSION, so a team repository's gate PR is never opened by an update.
 
 The closing block: `ORCHE <old> → <new>`, one line per project, the install's `reconcile job` line (and its
 `janitor: remove` line when it removed the janitor's old 04:00 LaunchAgent), and
@@ -79,10 +79,10 @@ def git(root, *argv, check=True, timeout=None) -> str:
     return res.stdout
 
 
-def run_step(step, argv) -> str:
+def run_step(step, argv, env=None) -> str:
     """Run one install/refresh step; its output is echoed (stderr) and returned. Raises StepFailed."""
     try:
-        res = subprocess.run(argv, capture_output=True, text=True, stdin=subprocess.DEVNULL)
+        res = subprocess.run(argv, capture_output=True, text=True, stdin=subprocess.DEVNULL, env=env)
     except OSError as exc:
         raise StepFailed(step, str(exc)) from None
     text = (res.stdout or "") + (res.stderr or "")
@@ -196,10 +196,11 @@ def cmd_update(args):
     except StepFailed as exc:
         return _failed(args, exc, done)
     failed = []
+    as_nobody = {k: v for k, v in os.environ.items() if k != "ORCHE_SESSION"}   # never Main: R-TEAM-5
     for key in keys:
         progress(f"refreshing {key}")
         try:
-            text = run_step(f"refresh {key}", [py, orche_py, "init", key, "--refresh"])
+            text = run_step(f"refresh {key}", [py, orche_py, "init", key, "--refresh"], env=as_nobody)
             done.append(next((ln for ln in text.splitlines() if ln.startswith("refreshed ")), f"refreshed {key}"))
         except StepFailed as exc:
             failed.append(exc)

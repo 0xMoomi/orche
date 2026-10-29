@@ -150,17 +150,36 @@ class StatusTest(CoreCase):
         self.assertEqual((code, err), (0, ""))
         self.assertEqual(out, (
             "acme-shop stage=building awake=2/12 divisions: rnd○ build●1"
-            " · new:1 · keys:1 · unverified:1 · runs 0/4\n"
+            " · new:1 · keys:1 · unverified:1 · spent today n/a · runs 0/4\n"
             "docs-site stage=public awake=0/12 divisions: -"
-            " · new:0 · keys:1 · unverified:0 · runs 0/4\n"
+            " · new:0 · keys:1 · unverified:0 · spent today n/a · runs 0/4\n"
             f"{NEVER}\n"))
 
     def test_status_without_counter_dirs(self):
         code, out, _ = self.orche("status", "--project", "shop")
         self.assertEqual(code, 0)
         self.assertEqual(out, "acme-shop stage=building awake=2/12 divisions: rnd○ build●1"
-                              " · new:1 · keys:0 · unverified:0 · runs 0/4\n"
+                              " · new:1 · keys:0 · unverified:0 · spent today n/a · runs 0/4\n"
                               f"{NEVER}\n")
+
+    def test_spent_today_from_the_project_transcripts(self):
+        """Today's responses in the project's and its worktrees' transcript dirs, by list price; $0.00 when
+        the root reads and nothing ran; n/a without a readable root (the golden above)."""
+        import datetime as dt
+        root = Path(os.environ["CLAUDE_CONFIG_DIR"]) / "projects"
+        root.mkdir(parents=True)
+        out = self.orche("status", "--project", "shop")[1]
+        self.assertIn(" · spent today $0.00 · ", out)
+        today = (NOW - dt.timedelta(minutes=5)).isoformat()
+        line = {"type": "assistant", "timestamp": today, "message": {
+            "id": "m1", "model": "claude-opus-5-5", "usage": {"input_tokens": 0, "output_tokens": 100000}}}
+        for name in ("-srv-orca-acme-shop", "-srv-orca-acme-shop-checkout"):
+            (root / name).mkdir()
+            (root / name / "s.jsonl").write_text(json.dumps(dict(line, message=dict(line["message"], id=name))) + "\n"
+                                                  + json.dumps(line) + "\n")
+        [row] = json.loads(self.orche("--json", "status", "--project", "shop")[1])
+        self.assertAlmostEqual(row["spent_today"], 6.0)   # three distinct responses × 100k output × $20/M
+        self.assertIn(" · spent today $6.00 · ", row["line"])
 
     def test_status_json_and_unknown(self):
         code, out, _ = self.orche("--json", "status", "--project", "acme")
@@ -292,7 +311,7 @@ class StatuslineTest(CoreCase):
     def test_registered_path_writes_line(self):
         self.counters()
         code, out, err = self.orche("statusline", "--cwd", "/srv/orca/acme-shop/src/app")
-        line = "R&D○ BUILD●1 · new1 · 🔑1 · unverified1"
+        line = "R&D○ BUILD●1 · 🔑1"
         self.assertEqual((code, out, err), (0, line + "\n", ""))
         self.assertEqual((self.home / "status" / "acme-shop.line").read_text(), line + "\n")
 
@@ -309,7 +328,7 @@ class StatuslineTest(CoreCase):
         self.addCleanup(setattr, roster, "Roster", orig)
         self.counters()
         out = self.orche("statusline", "--cwd", "/srv/orca/acme-shop/src/app")[1]
-        self.assertEqual(out, "R&D○ BUILD●1 · new1 · 🔑1 · unverified1\n")
+        self.assertEqual(out, "R&D○ BUILD●1 · 🔑1\n")
         self.assertEqual(len(built), 1)
 
     def test_marker_and_zero_cells_omitted(self):
@@ -323,11 +342,32 @@ class StatuslineTest(CoreCase):
 
     def test_unit_worktree_resolves_project(self):
         out = self.orche("statusline", "--cwd", "/srv/orca/acme-shop-checkout")[1]
-        self.assertEqual(out, "R&D○ BUILD●1 · new1\n")
+        self.assertEqual(out, "R&D○ BUILD●1\n")
 
     def test_missing_registry_is_silent(self):
         (self.home / "registry.json").unlink()
         self.assertEqual(self.orche("statusline", "--cwd", "/srv/orca/acme-shop"), (0, "", ""))
+
+    def test_waiting_spend_and_paused(self):
+        """waitingN first (the open ask plus units blocked on the owner), today's spend last (kept from the
+        last transcript read, dropped the next day), PAUSED in place of the counters while a pause holds."""
+        from orche import statusline
+        from orche.flow import guard, owner
+        self.write("inbox/main-acme-shop/q.json", {"unit": "u9", "status": "question", "at": units.iso(NOW)})
+        owner.record("acme-shop", "Approve the plan?", kind="decision", source="main", now=NOW)
+        statusline.refresh(registry.load(), "acme-shop", spent=4.2)
+        cached = (self.home / "status" / "acme-shop.line").read_text().splitlines()
+        self.assertEqual(cached, ["waiting2 · R&D○ BUILD●1 · $4.20 today", f"spent {NOW.date()} 4.200000"])
+        out = self.orche("statusline", "--cwd", "/srv/orca/acme-shop")[1]
+        self.assertEqual(out, "waiting2 · R&D○ BUILD●1 · $4.20 today\n")    # the kept spend survives
+        statusline.refresh(registry.load(), "acme-shop", spent=None)
+        self.assertEqual(self.orche("statusline", "--cwd", "/srv/orca/acme-shop")[1],
+                         "waiting2 · R&D○ BUILD●1 · spend n/a\n")
+        units.now = lambda: NOW + dt.timedelta(days=1)   # another day: the spend is gone, the question too old
+        self.assertEqual(self.orche("statusline", "--cwd", "/srv/orca/acme-shop")[1], "waiting1 · R&D○ BUILD●1\n")
+        guard.pause("acme-shop", "main-acme-shop")
+        self.assertEqual(self.orche("statusline", "--cwd", "/srv/orca/acme-shop")[1],
+                         'PAUSED by the owner · say "resume" in Main\n')
 
     def test_fast_without_orca(self):
         start = time.perf_counter()
@@ -383,7 +423,7 @@ class RunningVisibilityTest(CoreCase):
 
     def test_statusline_run_cell(self):
         out = self.orche("statusline", "--cwd", "/srv/orca/acme-shop")[1]
-        self.assertEqual(out, "R&D○ BUILD●1 · run2 · new1\n")
+        self.assertEqual(out, "R&D○ BUILD●1 · run2\n")
 
 
 class CustomDivisionTest(CoreCase):
@@ -427,7 +467,7 @@ class CustomDivisionTest(CoreCase):
     def test_design_workers_count_in_their_cell(self):  # teams §4.5
         self._design_workers()
         self.assertEqual(self.orche("statusline", "--cwd", "/srv/orca/acme-shop-design")[1],
-                         "R&D○ BUILD●1 DES●2 · new1\n")
+                         "R&D○ BUILD●1 DES●2\n")
         line = self.orche("status", "--project", "acme")[1]
         self.assertIn("divisions: rnd○ build●1 design●2 · ", line)
         row = json.loads(self.orche("--json", "status", "--project", "acme")[1])[0]
@@ -441,7 +481,7 @@ class CustomDivisionTest(CoreCase):
 
     def test_statusline_cell_is_the_label_short_form(self):
         self.assertEqual(self.orche("statusline", "--cwd", "/srv/orca/acme-shop-design")[1],
-                         "R&D○ BUILD●1 DES○ · new1\n")
+                         "R&D○ BUILD●1 DES○\n")
         from orche import statusline
         proj = self.reg["projects"]["acme-shop"]
         for label, cell in (("QA", "QA"), ("Brand & Docs", "BRA"), ("デザイン チーム", "デザイ"), ("--", "DES"),
@@ -674,7 +714,7 @@ class ProjectPaneTest(CoreCase):
                          [("orche", True, hr.panes.RESUMED)])      # Main says where things stand once idle
         self.assertEqual(self.calls_of("create"), [
             ["orca", "terminal", "create", "--worktree", self.WT, "--title", "main-acme-shop", "--command",
-             f"{self.ENV}ORCHE_SESSION=main-acme-shop claude --permission-mode bypassPermissions "
+             f"{self.ENV}ORCHE_SESSION=main-acme-shop CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1 claude --permission-mode bypassPermissions "
              "--name main-acme-shop", "--json"]])
         self.assertEqual(self.calls_of("switch"), [])
         self.assertEqual(len(registry.load()["events"]), events)
@@ -697,7 +737,7 @@ class ProjectPaneTest(CoreCase):
         code, out, err = self.orche("--dry-run", "wake", "main-acme-shop")
         self.assertEqual((code, out), (0, "would open main-acme-shop pane (dry-run)\n"))
         self.assertEqual(err, "orche: no transcript named main-acme-shop; the pane starts a fresh session\n" f"[dry-run] orca terminal create --worktree {self.WT} --title main-acme-shop --command "
-                              f"{self.ENV}ORCHE_SESSION=main-acme-shop claude --permission-mode bypassPermissions "
+                              f"{self.ENV}ORCHE_SESSION=main-acme-shop CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1 claude --permission-mode bypassPermissions "
                               "--name main-acme-shop --json\n")
         self.terminals = [{"handle": "t-main", "title": "main-acme-shop"}]
         self.assertEqual(self.orche("--dry-run", "wake", "main-acme-shop"), (0, "would switch to main-acme-shop\n", ""))
@@ -709,7 +749,7 @@ class ProjectPaneTest(CoreCase):
         self.assertEqual(json.loads(out), {
             "session": "main-acme-shop", "pane": "opened", "dry_run": True,
             "argv": ["orca", "terminal", "create", "--worktree", self.WT, "--title", "main-acme-shop", "--command",
-                     f"{self.ENV}ORCHE_SESSION=main-acme-shop claude --permission-mode bypassPermissions "
+                     f"{self.ENV}ORCHE_SESSION=main-acme-shop CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1 claude --permission-mode bypassPermissions "
                      "--name main-acme-shop", "--json"]})
 
     def test_wake_main_ignores_awake_limit_and_stage(self):
@@ -796,13 +836,24 @@ class PaneCommandTest(support.TempHomeCase):
         from orche.hr import panes
         with mock.patch.object(paths, "PLUGIN_ROOT", Path("/opt/my plugins/orche")):
             env = panes.session_env("main-acme")
-        self.assertEqual(env, "PATH='/opt/my plugins/orche/bin':$PATH ORCHE_SESSION=main-acme ")
+        self.assertEqual(env, "PATH='/opt/my plugins/orche/bin':$PATH ORCHE_SESSION=main-acme "
+                              "CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1 ")
 
     def test_team_env_follows_the_session_shell_quoted(self):
         from orche.hr import panes
         (self.home / "config.json").write_text(json.dumps({"team": {"env": {"TEAM_LOG": "off now", "X": "1"}}}))
         env = panes.session_env("main-acme")
-        self.assertTrue(env.endswith("ORCHE_SESSION=main-acme TEAM_LOG='off now' X=1 "), env)
+        self.assertTrue(env.endswith("ORCHE_SESSION=main-acme CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1 TEAM_LOG='off now' X=1 "), env)
+
+    def test_main_runs_background_work_in_the_foreground(self):
+        """c91: Main's pane (`main-<project>`) carries CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1 after
+        ORCHE_SESSION; a division's and a feature's do not."""
+        from orche.hr import panes
+        self.assertTrue(panes.pane_command("main-acme-shop", resume=False).startswith(
+            f"PATH={support.ROOT / 'bin'}:$PATH ORCHE_SESSION=main-acme-shop CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1 "
+            "claude "))
+        for session in ("div-acme-shop-build", "feat-acme-shop-checkout"):
+            self.assertNotIn("CLAUDE_CODE_DISABLE_BACKGROUND_TASKS", panes.pane_command(session, resume=False), session)
 
     def test_pane_shell_resolves_orche(self):
         import subprocess

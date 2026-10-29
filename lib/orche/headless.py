@@ -33,7 +33,7 @@ CONTEXTS = ("project", "sealed", "blank")
 FLAGS = ("--model", "--effort", "--output-format", "--setting-sources", "--permission-mode",
          "--restricted", "--tools", "--no-session-persistence", "--strict-mcp-config", "--mcp-config",
          "--allowedTools", "--disallowedTools", "--append-system-prompt-file", "--system-prompt",
-         "--settings")
+         "--settings", "--resume")
 # CLAUDE_CODE_* variables that carry authentication or the provider choice: every call keeps them.
 AUTH_ENV = ("CLAUDE_CODE_OAUTH_TOKEN", "CLAUDE_CODE_USE_BEDROCK", "CLAUDE_CODE_USE_VERTEX",
             "CLAUDE_CODE_USE_FOUNDRY", "CLAUDE_CODE_SKIP_BEDROCK_AUTH", "CLAUDE_CODE_SKIP_VERTEX_AUTH",
@@ -64,6 +64,7 @@ class Call:
     env: dict = field(default_factory=dict)  # the caller's own variables, set last; never ORCHE_RUN_ID
     tag: str | None = None           # run tag (procs.run_id): ORCHE_RUN_ID, the marker, the tag sweep
     team: Path | None = None         # project: the installed team plugin, whose PreToolUse gates join ORCHE's
+    resume: str | None = None        # project: --resume <session id> (the runner's finishing continuation)
 
 
 def _validate(call):
@@ -77,6 +78,8 @@ def _validate(call):
         raise ValueError(f"timeout must be > 0, got {call.timeout!r}")
     if procs.ENV in call.env:
         raise ValueError(f"{procs.ENV} comes from the tag, not from env")
+    if call.resume is not None and call.context != "project":
+        raise ValueError(f"a {call.context} call keeps no session to resume")
     if call.context == "blank":
         extra = [name for name in ("cwd", "tag", "allowed", "denied", "append_file") if getattr(call, name)]
         if extra:
@@ -137,6 +140,12 @@ class Result:
     @property
     def cost_usd(self):
         return self.data.get("total_cost_usd")
+
+    @property
+    def session_id(self):
+        """The session a project call kept (`--resume` continues it); None when the result names none."""
+        value = self.data.get("session_id")
+        return value if isinstance(value, str) and value else None
 
     @property
     def turns(self):
@@ -208,8 +217,8 @@ def argv(call: Call, cfg: dict) -> list:
     (gates(), which raises when it cannot).
 
     The three shapes, after `-p --model M [--effort E] --output-format json --max-turns N`:
-    project `--setting-sources project --permission-mode bypassPermissions` (a headless worker
-    cannot answer prompts; the gates and the deny list still block); sealed `--restricted --tools
+    project `--setting-sources project --permission-mode bypassPermissions [--resume <id>]` (a headless
+    worker cannot answer prompts; the gates and the deny list still block); sealed `--restricted --tools
     <names>` (`--restricted` refuses bypass); blank `--setting-sources project --tools ""`. Then
     `--strict-mcp-config`, the tagged `--mcp-config`, the tool rules, `--no-session-persistence`
     (sealed, blank), the prompt file or system prompt, and the project call's `--settings`."""
@@ -220,6 +229,8 @@ def argv(call: Call, cfg: dict) -> list:
     out += ["--output-format", "json", "--max-turns", str(call.max_turns)]
     if call.context == "project":
         out += ["--setting-sources", "project", "--permission-mode", "bypassPermissions"]
+        if call.resume is not None:
+            out += ["--resume", call.resume]
     elif call.context == "sealed":
         out += ["--restricted", "--tools", _tool_names(call.allowed)]
     else:

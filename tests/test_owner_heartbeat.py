@@ -357,6 +357,15 @@ class FallbackTest(BeatCase):
         self.assertEqual(self.shown_at([105, 110, 140]), [110])
         self.assertEqual(self.bodies()[-1], "acme-shop-lin-20261020-3: lineage closed")
 
+    def test_a_report_its_batch_holds_is_never_a_fallback_cause(self):
+        lin = "acme-shop-lin-20261020-3"
+        self.report("failed", T0, lineage=lin, quiet="batch")                    # pending, held by its batch
+        self.assertEqual(self.shown_at([10, 20]), [])
+        inbox.drain([p for p, _x in inbox.pending(MAIN)])                        # drained by the close's wake
+        self.report("done", at(40), unit=lin, frm="orche", lineage=lin, lineage_closed=True)
+        self.assertEqual(self.shown_at([41, 45, 50, 55]), [50])                   # the close is the cause
+        self.assertEqual(self.bodies(), [f"{lin}: lineage closed"])
+
 
 class HeldTest(BeatCase):
     def test_a_gap_held_notice_is_sent_once_at_the_next_pass(self):

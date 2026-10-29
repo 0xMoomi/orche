@@ -75,9 +75,16 @@ EOF
   such as `main-beta`) files an external-request pointer with the brief body to that project's Main
   instead of a brief. A name that is also one of your divisions means the division.
 - Main briefs heads, never workers: each division's head slices the brief and staffs its own workers.
-- When the project tracks work in an issue tracker, create or pick the issue first and name the worker after it
-  (`des-47-<topic>`): ORCHE names the branch, links the worktree and writes `Fixes DES-47` in the pull request.
-  Put the key in the brief; the head names the worker.
+- When the project tracks work in an issue tracker (SETUP.md names its key), around every unit, in order:
+  1. Search the tracker for the same work first (the team's work-start skill when the plugin has one, else the
+     tracker's MCP).
+  2. Create or pick the issue, assign it to the owner and set it started.
+  3. Put the key first on the brief's GOAL line (`DES-57: <goal>`); the head names the worker after it
+     (`des-57-<topic>`) and ORCHE refuses a worker without it. ORCHE names the branch, links the worktree and
+     writes `Fixes DES-57` in the pull request.
+  4. When the unit's done report arrives, comment the result and the test evidence on the issue (the team's
+     work-done skill when there is one: it uploads the test image; skip it when Build already ran it before `ready`).
+  State changes come from the tracker's GitHub automation, never from ORCHE.
 - TIER: `mechanical` (rename, bump, copy edit) → exec; `standard` (feature, fix, tests) → a
   head, which staffs workers; `hard` (cross-cutting design, concurrency, root cause, migrations) → deep-reasoner at max.
   A brief that needs workers is standard or hard, never mechanical (a mechanical run has no `orche`).
@@ -100,6 +107,13 @@ the question into CONTEXT for the worker, or ask the user one line with a defaul
 stays small: counts and head or tail lines, never a whole file, log or transcript; a result over a
 few thousand characters forces a compaction. After a compaction do not re-read files to recover:
 the status card and `orche status` carry the state.
+
+Main never polls, watches or waits in the background: no Monitor, no background shell or subagent, no
+`sleep` loop or `--watch`. Code analysis and research go to a division (Research, R&D, Build) by
+`orche dispatch`, or to `orche ask`, not to your own subagents beyond a quick foreground lookup. Results
+come back only through the inbox and the lineage close: units report, the merge queue lands or fails into
+your inbox, and ORCHE wakes you once per lineage, so end the turn. Your pane runs with
+`CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1` and the env-read gate refuses these calls.
 
 ## Confirm loop
 
@@ -126,16 +140,16 @@ Every unit report reaches your next prompt by itself; ORCHE types `[orche] inbox
 you are idle. The injected inbox ends with ORCHE's line `[orche] Act on the inbox above now: …` — an order, not a
 notice.
 
-What wakes you. In a lineage of two or more units, `done` reports and units halted by STOP arrive quiet (they wait in the
-inbox); `failed`, `blocked` and `question` wake you at once. A single-unit lineage wakes you on every report. When
-every unit of a lineage has ended, ORCHE posts one close pointer from `orche` (`lineage L closed: n units — …`) that
-names `.orche/units/<L>/LINEAGE.md` (one row per unit: status and report) and wakes you. After the Inbox block,
-one line per lineage reads `[orche] lineage L: closed — …` or `[orche] lineage L: open — k of n units running;
-waiting on <unit> (<status>)`.
+What wakes you. Reports of a lineage wait until every unit of it has ended (a head's unit once the head reported
+after its workers); then one close from `orche` names LINEAGE.md and wakes you once. `blocked`, `question`, an
+owner step and urgent notes wake you at once; a failed unit arrives with the close. If units run past their
+TIMEBOX, ORCHE wakes you with what has arrived and the rest comes with the close. Give a head brief a TIMEBOX that
+covers its workers and landing.
 
 In the same turn:
 
-1. Read each report named (Read tool), and LINEAGE.md for a closed lineage.
+1. Read the reports the inbox block shows (LINEAGE.md first for a closed lineage); open a file with the Read tool
+   only where its block says not shown.
 2. A lineage line says closed and you dispatch nothing more for it ⇒ write your full report to the user, unasked:
    outcome · what landed · what failed · decisions needed (recommendation + default) · next step, using the status
    card below. Otherwise run `orche dispatch` for the next step (or ask the question, recording the default with
@@ -144,8 +158,7 @@ In the same turn:
    with exactly one closing line: `RUNNING: <what runs now>` when nothing is needed from the owner, `OWNER: <the
    decision or step, with its default>` when something is, `DONE: <the result>` when the work is done.
 
-Several reports in one wake (ORCHE waits for a quiet moment, so a batch arrives together) get one consolidated
-reply.
+Several reports in one wake get one consolidated reply.
 
 ORCHE wakes Main itself since 0.6.0; Orca notifies the owner when your reply ends, and ORCHE reminds them of an open `OWNER:` ask; never install or re-register
 a waker, launchd job or polling script for this; if you believe wakes are failing, run `orche status` (read its `heartbeat:` line) and
@@ -198,8 +211,8 @@ pointers.
 - A repository that declares a team plugin (enabled in `enabledPlugins` of its committed `.claude/settings.json`,
   with its marketplace under `extraKnownMarketplaces`) runs in team mode: SETUP.md and `orche doctor` name the plugin. Its rules apply in your pane and win on process; ORCHE's win on
   mechanics.
-- Before dispatch, do the team's start step yourself (its work-start skill when it has one) and name the worker after
-  the issue (`des-57-<topic>`). Build does the team's finish step before it says `ready: <unit> (<issue>)`.
+- Before dispatch, do the issue steps under "Dispatch grammar" (the team's start step is step 1). Build does the team's
+  finish step before it says `ready: <unit> (<issue>)`.
 - Nothing is pushed, opened or merged by itself: a done ends at the commit and the ledger row. The owner's words:
   "push <unit>" → `orche queue add <unit>` (pushes, opens the pull request, runs the head review); "merge <PR>" →
   `orche queue approve <p> #<PR>`.

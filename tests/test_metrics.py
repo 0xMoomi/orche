@@ -172,9 +172,34 @@ class MetricsTest(support.TempHomeCase):
             "  claude-opus-5-5 medium: units 2, cost $1.20, median $0.60/unit, failures 1",
             "  claude-sonnet-5-5 ?: units 1, cost $0.40, median $0.40/unit, failures 0"])
 
-    def test_missing_root_is_empty(self):
+    def test_missing_root_is_na_not_zero(self):
         m = metrics.compute(self.root / "nope", days=30, now=NOW)
-        self.assertEqual((m["responses"], m["cost_usd"], m["routine"]["share"]), (0, 0, 0.0))
+        self.assertEqual((m["readable"], m["responses"], m["cost_usd"], m["routine"]["share"]),
+                         (False, None, None, None))
+        lines = metrics.render({**m, "triage": None, "runner": None})
+        self.assertIn("responses: n/a (avg context n/a)", lines)
+        self.assertIn("estimated cost: n/a (list price)", lines)
+        self.assertIn("  n/a (no samples file)", lines)
+        self.assertIn("  n/a (registry unreadable)", lines)
+        self.assertNotIn("$0.00", "\n".join(lines))
+
+    def test_an_unreadable_transcript_makes_the_total_na(self):
+        locked = self.root / "-srv-orca-acme-shop" / "sess-2.jsonl"
+        shutil.copy(TRANSCRIPTS / "metrics_main.jsonl", locked)
+        os.chmod(locked, 0)
+        try:
+            if os.access(locked, os.R_OK):
+                self.skipTest("running as a user who reads mode-0 files")
+            m = self.compute()
+        finally:
+            os.chmod(locked, 0o644)
+        self.assertEqual((m["unreadable"], m["cost_usd"], m["responses"]), (1, None, 5))
+        lines = metrics.render(m)
+        self.assertIn("1 unreadable", lines[0])
+        self.assertIn("estimated cost: n/a (list price)", lines)
+
+    def test_no_runs_median_is_na(self):
+        self.assertIsNone(metrics.runner_summary([], days=30, now=NOW)["median_cost_usd"])
 
 
 if __name__ == "__main__":

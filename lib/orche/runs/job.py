@@ -25,6 +25,12 @@ ledger row (release-ready: >= unit-test-verified from a verifier other than the 
 Otherwise it is `info` "unverified: … (<reason>)". From any other target it is filed as `done`,
 as `orche report done` would.
 
+A Claude attempt that ended normally but unverified (no STATUS line, or a done-gate gap) gets one
+finishing continuation before anything climbs or files (_finish): the same session resumed
+(`--resume`, FINISH_TURNS turns, FINISH_PROMPT naming the gap) within what is left of the TIMEBOX,
+after G4; never twice, never for Codex, never after a STOP. Its history line (`kind` finish) and
+RUN.json count only its own cost: a resumed result reports the whole conversation's total.
+
 In a team repository (registry.team) a verified gated done publishes nothing and starts no head review:
 it is filed with publish.ready_line and `pr: none`; `orche queue add <unit>` publishes on the owner's word.
 When the team plugin is installed for this user, its rules text reaches the prompt (`## Team rules`) and its
@@ -88,6 +94,11 @@ GRACE_S = 60
 CODEX_OWNER = "fix codex: orche doctor (row vendors) names the step; then orche run {unit}"
 STOPPED = "stopped by Main"
 STOPPED_BEFORE_START = "stopped by Main before start"
+FINISH_TURNS = 8
+FINISH_MIN_S = 60       # TIMEBOX left below which no finishing continuation starts
+FINISH_PROMPT = ("Your run ended without a valid completion: {gap}. Do only the closing steps your brief requires "
+                 "(commit, ledger row from your VERIFY output, REPORT.md, the final STATUS line). Start no new work. "
+                 "If you cannot finish, end with STATUS: blocked and one OWNER line.")
 _TIMEBOX = re.compile(r"(\d+(?:\.\d+)?)\s*(hours?|hrs?|h|minutes?|mins?|m)(?![a-z])", re.IGNORECASE)
 
 
@@ -678,8 +689,9 @@ class _Try:
         return self.res.error is not None and not self.res.killed and self.res.code != 127
 
 
-def _attempt(reg, job, call, cfg, lock, since, stop, head_before, text, kind="work") -> _Try:
-    """Run the worker once with `text` on stdin and decide its outcome."""
+def _attempt(reg, job, call, cfg, lock, since, stop, head_before, text, kind="work", prior=None) -> _Try:
+    """Run the worker once with `text` on stdin and decide its outcome. `prior`: the resumed session's
+    total so far (a finish), taken off this call's reported total."""
     started = util.now_iso()
     res = adapter(call).run(
         call, text, cfg, stop=stop,
@@ -699,6 +711,8 @@ def _attempt(reg, job, call, cfg, lock, since, stop, head_before, text, kind="wo
         status, summary = decide(reg, replace(job, model=call.model), data, error, code, head_before, head)
     cost = history.cost(res, started, finished, cfg, ran=not dead)     # the worker ran, its cost unknown: §7.3
     usage = res.usage if cost is res.cost_usd else None
+    if prior is not None and cost is res.cost_usd and isinstance(cost, (int, float)):
+        cost, usage = round(max(0.0, cost - prior), 4), None
     return _Try(kind, call, started, finished, res, stopped, stop_at, dead, owner, status, summary, head, cost, usage)
 
 
@@ -733,8 +747,39 @@ def _hold_of(job, cfg, tries) -> tuple:
     return None, None
 
 
+def _finish(reg, job, call, cfg, lock, since, stop, head_before, tries, recipient, before):
+    """The one finishing continuation of the last attempt in `tries`, or None when it does not qualify:
+    a Claude call that ended normally (no error, exit 0, not stopped, timed out, at its turn cap or at a
+    usage limit) and was decided `unverified`, with a session id, no pointer of the worker's own, no
+    STOP, at least FINISH_MIN_S of the TIMEBOX left and G4 not hit."""
+    t = tries[-1]
+    res = t.res
+    if (not isinstance(call, headless.Call) or t.kind == "finish" or t.status != "info"
+            or not str(t.summary).startswith("unverified:") or t.stopped or t.dead or t.timed_out
+            or res.error is not None or res.code or res.is_error or holds.is_limit(res.limit_text, cfg)
+            or res.data.get("subtype") == "error_max_turns" or res.session_id is None
+            or filing.worker_pointers(recipient, job.unit, job.to) - before
+            or stop.signum is not None or runs.stop_requested(job.project, job.unit, since)):
+        return None
+    began = units.parse_iso(tries[0].started)
+    left = call.timeout - ((units.now() - began).total_seconds() if began is not None else 0)
+    if left < FINISH_MIN_S:
+        return None
+    capped = _spend_hit(job, cfg, tries)
+    if capped:
+        log.log("hooks", f"runner: {job.unit}: no finishing continuation: spend cap ({capped})")
+        return None
+    gap = str(t.summary).splitlines()[0].removeprefix("unverified:").strip()
+    log.log("hooks", f"runner: {job.unit}: ended unverified ({gap}); resuming once to finish")
+    more = replace(call, resume=res.session_id, max_turns=FINISH_TURNS, timeout=left)
+    prior = res.cost_usd if isinstance(res.cost_usd, (int, float)) and not isinstance(res.cost_usd, bool) else None
+    return _attempt(reg, job, more, cfg, lock, since, stop, head_before, FINISH_PROMPT.format(gap=gap),
+                    kind="finish", prior=prior)
+
+
 def _run_locked(reg, job, call, cfg, lock, since, stop) -> tuple:
-    """(record, the STOP marker's mtime_ns this run consumed, else None). A mechanical attempt that
+    """(record, the STOP marker's mtime_ns this run consumed, else None). An attempt that ends
+    unverified gets one finishing continuation first (_finish); a mechanical attempt that then still
     fails or ends unverified re-runs once at the standard rung (ladder.escalate), in this run."""
     raw = timebox_raw(job.timebox)
     if raw is not None and raw > MAX_TIMEBOX_S:
@@ -751,7 +796,10 @@ def _run_locked(reg, job, call, cfg, lock, since, stop) -> tuple:
     _audit(job, cfg)
     base_prompt = prompt(job, cfg)
     tries = [_attempt(reg, job, call, cfg, lock, since, stop, head_before, base_prompt)]
-    t = tries[0]
+    more = _finish(reg, job, call, cfg, lock, since, stop, head_before, tries, recipient, before)
+    if more is not None:
+        tries.append(more)
+    t = tries[-1]
     limited = holds.is_limit(t.res.limit_text, cfg)      # §8.5: a usage limit holds the unit; no climb
     if (not limited
             and ladder.escalate(cfg, job.tier, bool(job.pinned), t.status, t.summary, stopped=t.stopped,
@@ -823,7 +871,7 @@ def _run_locked(reg, job, call, cfg, lock, since, stop) -> tuple:
     for x in tries:       # the model calls: one history line each
         history.attempt(job.project, job.rev, unit=job.unit, to=job.to, model=x.call.model, effort=x.call.effort, res=x.res, started=x.started,
                         finished=x.finished, status=x.status, kind=x.kind, cfg=cfg, stop_reason=record["stop_reason"],
-                        ran=not x.dead)
+                        ran=not x.dead, spent=x.cost)
     if worker_filed:
         log.log("hooks", f"runner: {job.unit}: the worker filed its own pointer; the runner files none")
     else:
@@ -836,7 +884,8 @@ def _run_locked(reg, job, call, cfg, lock, since, stop) -> tuple:
             raise filing.FilingError(f"pointer: {exc}") from exc
     units.touch_activity(job.to)
     filing.events(w, record["cost_usd"], record["num_turns"], status, record["stop_reason"],
-                  rung=f"{job.tier}:{call.model}:{call.effort}", attempts=len(tries))
+                  rung=f"{job.tier}:{call.model}:{call.effort}", attempts=len(tries),
+                  escalated=any(x.kind == "escalation" for x in tries))
     late = runs.marker_time(job.project, job.unit)
     if stopped:
         return record, stop_at

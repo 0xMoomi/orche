@@ -28,10 +28,14 @@ def session_env(session) -> str:
 
     ORCHE_SESSION lets hooks know the pane's role without guessing from cwd; the PATH entry puts
     `orche` on the pane's PATH (`$PATH` stays unexpanded: the pane's shell expands it); each config
-    `team.env` pair follows, shell-quoted (the team's hook switches).
+    `team.env` pair follows, shell-quoted (the team's hook switches). Main (`main-<project>`) also gets
+    `CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1`: its subagents and shells finish inside the turn, so no
+    finished background task starts a turn that re-reads Main's whole context (ORCHE wakes Main).
     """
     team = "".join(f"{name}={shlex.quote(value)} " for name, value in config.team_env(config.load()).items())
-    return f"PATH={shlex.quote(str(paths.PLUGIN_ROOT / 'bin'))}:$PATH ORCHE_SESSION={shlex.quote(session)} {team}"
+    main = "CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1 " if str(session).startswith("main-") else ""
+    return (f"PATH={shlex.quote(str(paths.PLUGIN_ROOT / 'bin'))}:$PATH ORCHE_SESSION={shlex.quote(session)} "
+            f"{main}{team}")
 
 
 def _claude_dir() -> Path:

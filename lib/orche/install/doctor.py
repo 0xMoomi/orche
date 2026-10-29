@@ -261,7 +261,8 @@ def gate_rows(reg, cfg) -> list:
                     ("WARN", "queue gate", f"{key}: waiting for {verifygate.awaiting(reg['projects'][key])}")
                     if verifygate.pending(root) else
                     ("WARN", "queue gate", f"{key}: no check script on origin/{base} and no PR; "
-                                           f"orche init --refresh {key} opens one"))
+                                           + (f'say "set up the merge queue for {key}" (Main opens the PR)'
+                                              if registry.team(reg, key) else f"orche init --refresh {key} opens one")))
         found = _deploys(root)
         if found and queue.land_mode(cfg, key, reg) == "owner":
             rows.append(("OK", "deploy on merge", f"{key}: {found[0]} — merges land on the owner's word (queue.land owner)"))

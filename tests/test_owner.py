@@ -82,6 +82,44 @@ class RenderTest(unittest.TestCase):
         self.assertEqual(sum("OWNER STEP" in line for line in lines), 1)
 
 
+class FitTest(support.TempHomeCase):
+    """inbox.fit: report bodies are added LINEAGE.md first, then failed, blocked and question reports, then
+    done reports, while they fit; urgent and owner-step pointers are never left pending."""
+
+    def item(self, unit, status, name="REPORT.md", **kw):
+        path = self.home / unit / name
+        path.parent.mkdir(parents=True)
+        path.write_text(f"{unit} body " + "b" * 900)
+        return (None, inbox.make(unit, "div-acme-build", "main-acme", status, report_path=str(path), **kw))
+
+    def test_bodies_fill_the_room_in_rank_order(self):
+        items = [self.item("u-done", "done"), self.item("u-failed", "failed"), self.item("L-1", "done", "LINEAGE.md")]
+        skeleton = len(inbox.render(items))
+        for room, shown in ((skeleton + 1000, ["L-1"]), (skeleton + 2000, ["L-1", "u-failed"]),
+                            (skeleton + 3000, ["L-1", "u-failed", "u-done"]), (skeleton, [])):
+            with self.subTest(room=room):
+                text, kept = inbox.fit(items, room=room)
+                self.assertLessEqual(len(text), room)
+                self.assertEqual(len(kept), 3)
+                self.assertEqual([u for u in ("L-1", "u-failed", "u-done") if f"{u} body" in text], shown)
+
+    def test_over_the_room_plain_pointers_wait_urgent_and_owner_steps_stay(self):
+        items = [self.item("u-owner", "blocked", owner="approve"), self.item("u-urgent", "info", urgent=True)]
+        items += [self.item(f"u-{i}", "done", summary="s" * 400) for i in range(10)]
+        text, kept = inbox.fit(items, room=1500)
+        units_ = [p["unit"] for _x, p in kept]
+        self.assertEqual(units_[:2], ["u-owner", "u-urgent"])
+        self.assertLess(len(kept), len(items))
+        self.assertLessEqual(len(text), 1500)
+
+    def test_the_tail_survives_an_oversized_head(self):
+        tail = inbox.REPORT_LINE
+        text = inbox._within("## Standing orders\n" + "x" * 20000, "## Inbox (1)", tail, 9000)
+        self.assertLessEqual(len(text), 9000)
+        self.assertTrue(text.endswith("\n\n" + tail))
+        self.assertIn("[not shown in full: [drain] repeats the inbox]", text)
+
+
 class OwnerCase(support.TempHomeCase):
     """A fake clock (`now`), quiet hours off, notifications on macOS and Orca not running
     (the plain osascript path): every argv is recorded."""

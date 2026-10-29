@@ -404,6 +404,30 @@ class GatePullRequestTest(test_hr.HrCase):
         self.assertEqual(self.gate_row(), ("OK", "queue gate", "acme-shop: scripts/verify/ci.sh on origin/main"))
         self.assertEqual(len(self.creates()), 1)
 
+    def test_a_team_repository_waits_for_the_owner_s_word(self):  # R-TEAM-5
+        support.declare_team(self.repo)
+        commit_all(self.repo, "team")
+        git_out(self.repo, "push", "-q", "origin", "main")
+        line = 'gate PR: waits for the owner\'s word (say "set up the merge queue for acme-shop")'
+        with mock.patch.dict(os.environ, {"ORCHE_SESSION": "div-acme-shop-build"}):
+            code, out, err = self.orche("init", "Acme Shop", "--no-intake")
+        self.assertEqual(code, 0, err)
+        self.assertIn(line, out)
+        self.assertNotIn("merge queue:", out)
+        self.assertEqual(self.gate_row(), ("WARN", "queue gate", "acme-shop: no check script on origin/main and no "
+                                                                 'PR; say "set up the merge queue for acme-shop" '
+                                                                 "(Main opens the PR)"))
+        code, out, err = self.orche("init", "acme-shop", "--refresh")   # no session: `orche update`, the dev session
+        self.assertEqual(code, 0, err)
+        self.assertIn(line, out)
+        self.assertFalse(self.creates())
+        main = registry.load()["projects"]["acme-shop"]["main_session"]
+        with mock.patch.dict(os.environ, {"ORCHE_SESSION": main}):
+            code, out, err = self.orche("init", "acme-shop", "--refresh")
+        self.assertEqual(code, 0, err)
+        self.assertEqual(len(self.creates()), 1)
+        self.assertIn("merge queue: waiting for PR #1 (https://github.com/acme/acme/pull/1) to be merged", out)
+
     def test_the_script_on_main_means_on(self):
         verifygate.write(self.repo)
         commit_all(self.repo, "gate")

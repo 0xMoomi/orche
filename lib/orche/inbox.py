@@ -6,14 +6,15 @@ import re
 import time
 from pathlib import Path
 
-from . import config, log, orca, paths, procs, units, util
+from . import config, log, mask, orca, paths, procs, units, util
 
 STATUSES = ("done", "failed", "blocked", "question", "info", "external-request", "stop")
 DRAINED = ".drained"
 NUDGED = ".nudged"
 NUDGED_TTL = _dt.timedelta(minutes=10)
 WAKE_TEXT = "[orche] inbox: new reports"
-REPORT_LINE = ("[orche] Act on the inbox above now: read each report named (Read tool). Where a lineage line says "
+REPORT_LINE = ("[orche] Act on the inbox above now: the reports are shown above; Read a file only where its block "
+               "says not shown. Where a lineage line says "
                "closed and you dispatch nothing more for it, write your full report to the user — outcome · what "
                "landed · what failed · decisions needed (recommendation + default) · next step; otherwise dispatch the "
                "next step and write one progress line. Anything the owner must decide or do goes first. Never only "
@@ -32,6 +33,12 @@ URGENT = ("blocked", "question", "failed")   # wakes at once (no quiet window)
 RECONCILE_RESERVE_S = 1.0   # of the prompt hook's budget, kept for the inbox, Jev and stall marks
 MAX_LINES = 5
 TRUNCATED = "[…truncated]"
+# The prompt hook's whole stdout. Claude Code shows Claude only a file path and a preview past 10,000
+# characters, so the inbox block fits BUDGET: report bodies go first, the instruction lines never.
+BUDGET = 9500
+BODY_MAX = 1800                         # characters of one inlined REPORT.md or LINEAGE.md
+BODY_FILES = ("LINEAGE.md", "REPORT.md")
+_CTRL = re.compile(r"[\x00-\x08\x0b-\x1f\x7f]")
 
 
 def box(session: str) -> Path:
@@ -66,31 +73,36 @@ def write(ptr: dict) -> Path:
 def post(ptr: dict) -> Path:
     """write(ptr), then wake its recipient when the pointer wakes (R-INBOX-4). Raises only what
     write raises; the wake never does. Under the project's flow lock (a report that carries a lineage),
-    flow.shape marks a repeated report, or a done/stopped report to Main of a lineage with two or more
-    members, quiet first (a failure there is logged and the pointer is written as given); after the
-    write, the report that leaves every member of its lineage terminal posts the one close pointer
-    (flow.lineage). Without the lock (busy past LOCK_WAIT_S) no close is written: the heartbeat posts
-    it. A close that fails wakes the recipient, quiet or not (never a silent stall)."""
+    flow.shape marks a repeated report quiet, and a report its recipient's lineage batch holds
+    `quiet: "batch"`, first (a failure there is logged and the pointer is written as given); after the
+    write, flow.lineage.settle posts the close of each batch this report completed (the recipient's,
+    Main's), and each close's recipient is woken once. Without the lock (busy past LOCK_WAIT_S) no
+    close is written: the heartbeat posts it. A close that fails wakes the recipient, quiet or not
+    (never a silent stall)."""
     from .flow import lineage, shape
     sc = lineage.scope(ptr)
-    closed, failed = None, False
+    closes, failed = [], False
     with lineage.lock(sc) as held:
         try:
             shape.shape(ptr, sc)
         except Exception as exc:  # noqa: BLE001 - shaping never costs a pointer
             log.log("hooks", f"inbox: shape failed for {ptr.get('unit')}: {exc}")
         target = write(ptr)
+        if str(ptr.get("to") or "").startswith("main-"):   # what waits on the owner may have changed
+            from . import statusline
+            statusline.touch(ptr["to"][len("main-"):])
         if held:
             try:
-                closed = lineage.settle(sc)
+                closes = lineage.settle(sc, ptr)
             except Exception as exc:  # noqa: BLE001 - a close never costs the report: wake instead
-                failed = True
+                closes, failed = [], True
                 log.log("hooks", f"inbox: lineage close failed for {ptr.get('unit')}: {type(exc).__name__}: {exc}")
     woke = wakes(ptr) or failed
     if woke:
         wake(ptr["to"])
-    if closed is not None and (closed["to"] != ptr["to"] or not woke):
-        wake(closed["to"])
+    for to in dict.fromkeys(c["to"] for c in closes):
+        if to != ptr["to"] or not woke:
+            wake(to)
     return target
 
 
@@ -250,11 +262,13 @@ def _one(value) -> str:
     return " ".join(str(value).split()) or "?"
 
 
-def render(items: list, stalled=()) -> str:
+def render(items: list, stalled=(), bodies=None) -> str:
     """`## Inbox (<n>)`, the data header, and one block per pointer (every field single-lined); a
-    pointer's `owner` step is its first line under the header (`OWNER STEP:`)."""
+    pointer's `owner` step is its first line under the header (`OWNER STEP:`). `bodies` maps an item's
+    index to its report's fenced body (`body`), shown under its `report:` line in place of `summary:`."""
+    bodies = bodies or {}
     lines = [f"## Inbox ({len(items)})", DATA_HEADER]
-    for _path, p in items:
+    for i, (_path, p) in enumerate(items):
         sha = _one(p.get("head_sha") or "-")[:8]
         mark = " · STALLED (no pane output > 20 min)" if p.get("from") in stalled else ""
         lines.append(f"- unit {_one(p.get('unit', '?'))} · from {_one(p.get('from', '?'))} · "
@@ -263,11 +277,70 @@ def render(items: list, stalled=()) -> str:
             lines.append("  OWNER STEP: " + _one(p["owner"]))
         lines.append(f"  brief_rev {_one(p.get('brief_rev', '?'))} · head {sha} · ledger_row "
                      f"{'yes' if p.get('ledger_row') else 'no'}")
+        if i in bodies:
+            lines += ["  report: " + _one(p["report_path"]), bodies[i]]
+            continue
         if p.get("summary"):
             lines.append("  summary: " + _one(p["summary"]))
         if p.get("report_path"):
             lines.append("  report: " + _one(p["report_path"]))
     return "\n".join(lines)
+
+
+def body(path) -> str | None:
+    """A REPORT.md or LINEAGE.md as data: masked whole (mask.redact), control characters dropped, cut
+    at BODY_MAX with `[not shown in full: read <path>]`, in a fence no line inside can close; None when
+    the path is not an absolute path to one of those or cannot be read."""
+    if not path or not Path(str(path)).is_absolute() or Path(str(path)).name not in BODY_FILES:
+        return None
+    try:
+        text = Path(str(path)).read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return None
+    text = _CTRL.sub("", mask.redact(text)[0]).strip()
+    cut = len(text) > BODY_MAX
+    block = util.fence(text[:BODY_MAX].rstrip() if cut else text, "markdown")
+    return block + f"\n[not shown in full: read {_one(path)}]" if cut else block
+
+
+def _rank(ptr) -> int:
+    """Which bodies come first when the budget runs out: LINEAGE.md, then failed, blocked and question
+    reports, then done reports, then the rest."""
+    if Path(str(ptr.get("report_path"))).name == "LINEAGE.md":
+        return 0
+    return {"failed": 1, "blocked": 1, "question": 1, "done": 2}.get(ptr.get("status"), 3)
+
+
+def fit(items: list, stalled=(), room=BUDGET) -> tuple:
+    """(text, shown): render() of `items` within `room` characters. Over it, pointers that are neither
+    urgent nor carry an owner step are left pending from the last one up (they come with the next
+    prompt); then report bodies are added by _rank while they fit. Bare `report:` paths stay for the rest."""
+    shown = list(items)
+    text = render(shown, stalled)
+    while len(text) > room and len(shown) > 1:
+        k = next((i for i in reversed(range(len(shown)))
+                  if not is_urgent(shown[i][1]) and not shown[i][1].get("owner")), None)
+        if k is None:
+            break
+        shown.pop(k)
+        text = render(shown, stalled)
+    bodies = {}
+    for i in sorted(range(len(shown)), key=lambda j: (_rank(shown[j][1]), j)):
+        b = body(shown[i][1].get("report_path"))
+        if b is None:
+            continue
+        trial = render(shown, stalled, {**bodies, i: b})
+        if len(trial) <= room:
+            bodies[i], text = b, trial
+    return text, shown
+
+
+def by_lineage(items: list) -> list:
+    """`items` in a stable order that keeps each lineage together: by the index of the first item with
+    the same `lineage` field, then its own (an item without the field is its own group)."""
+    first = {}
+    keys = [(first.setdefault(p.get("lineage"), i) if p.get("lineage") else i, i) for i, (_x, p) in enumerate(items)]
+    return [it for _k, it in sorted(zip(keys, items), key=lambda z: z[0])]
 
 
 # ---- UserPromptSubmit ------------------------------------------------------
@@ -346,8 +419,8 @@ def _reconcile(r, who, terms) -> None:
         log.log("hooks", f"report_inject: reconcile: {type(exc).__name__}: {exc}")
 
 
-def handle_prompt(payload, started, r, who) -> str:
-    """Text to inject for a UserPromptSubmit event ('' for nothing).
+def handle_prompt(payload, started, r, who, budget=BUDGET) -> str:
+    """Text to inject for a UserPromptSubmit event ('' for nothing), at most `budget` characters.
 
     `r` is the run's roster.Roster and `who` this session's Identity. An unidentified session gets
     nothing (ruling 137). Orca is listed at most once per run (stall marks), within the hook budget.
@@ -356,14 +429,29 @@ def handle_prompt(payload, started, r, who) -> str:
     if me is None:
         return ""
     try:
-        return _prompt_text(payload, started, r, who, me)
+        return _prompt_text(payload, started, r, who, me, budget)
     finally:
         # After the drain, never before: a nudger waiting on the lock must not see "no marker" while
         # the reports this prompt injects are still pending (a second wake into an empty inbox).
         unmark(me)
 
 
-def _prompt_text(payload, started, r, who, me) -> str:
+def _within(head, block, tail, budget) -> str:
+    """head, block and tail joined in at most `budget` characters: the tail (ORCHE's instruction lines)
+    whole; past the budget the head (STANDING) is cut from its end, then the block (already fitted)."""
+    sep = "\n\n"
+    text = sep.join(t for t in (head, block, tail) if t)
+    if len(text) <= budget:
+        return text
+    cut = "[not shown in full: [drain] repeats the inbox]"
+    room = budget - len(tail) - len(cut) - 3 * len(sep)
+    head = head[:max(0, room - len(block))].rstrip()
+    rest = sep.join(t for t in (head, block) if t)[:max(0, room)].rstrip()
+    text = sep.join(t for t in (rest, cut, tail) if t)
+    return text[max(0, len(text) - budget):] if budget > 0 else ""
+
+
+def _prompt_text(payload, started, r, who, me, budget) -> str:
     prompt = payload.get("prompt") or ""
     main = who.member is not None and who.member.kind == "main"
     owner = not prompt.lstrip().startswith("[orche]")
@@ -373,26 +461,30 @@ def _prompt_text(payload, started, r, who, me) -> str:
     terms = orca.Terminals(orca.hook_deadline(started))
     units.touch_activity(me)
     _reconcile(r, who, terms)
-    out = _standing_once(r, payload, who)
+    head = "\n\n".join(_standing_once(r, payload, who))
     read_at = units.now()   # before the inbox is read: a report landing after it is not this turn's
     items = _jev(prompt, pending(me), terms.deadline)
-    inject, named = [], []
+    block, tail, named = "", [], []
     if items:
         times = [t for t in (pointer_time(p, x) for p, x in items) if t is not None]
         drain_all = (DRAIN_RE.match(prompt) or NUDGE_RE.match(prompt) or STATUS_RE.search(prompt)
                      or len(items) >= DRAIN_COUNT or (times and units.now() - min(times) > DRAIN_AGE))
-        inject = [it for it in items if drain_all or not held(it[1])]
+        inject = by_lineage([it for it in items if drain_all or not held(it[1])])
         if inject:
-            out.append(render(inject, _stalled(r, inject, terms)))
-            drain([p for p, _x in inject])
             if main:     # only a lineage field, or the brief of the pointer's unit, names a lineage
                 named = [n for n in (lineage.of_pointer(x, r.reg, who.member.project) for _p, x in inject) if n]
-                out.extend(lineage.lines(r.reg, who.member.project, [{"lineage": n} for n in named]))
+                tail.extend(lineage.lines(r.reg, who.member.project, [{"lineage": n} for n in named]))
+            held_back = "[orche] inbox: 0000 report(s) left pending for size; they come with the next prompt"
+            fixed = len("\n\n".join(t for t in (head, *tail, held_back, REPORT_LINE if main else "") if t))
+            block, shown = fit(inject, _stalled(r, inject, terms), budget - fixed - 4)
+            drain([p for p, _x in shown])
+            if len(shown) < len(inject):
+                tail.append(held_back.replace("0000", str(len(inject) - len(shown))))
         waiting = len(items) - len(inject)
         if waiting:
-            out.append(f"[orche] inbox: {waiting} note(s) held — FYI from ORCHE, no action needed; [drain] shows them")
+            tail.append(f"[orche] inbox: {waiting} note(s) held — FYI from ORCHE, no action needed; [drain] shows them")
         if inject and main:
-            out.append(REPORT_LINE)  # ORCHE's own order, last in every block Main gets (§14.2)
+            tail.append(REPORT_LINE)  # ORCHE's own order, last in every block Main gets (§14.2)
     if main:
         lineage.write_turn(me, owner, named, at=read_at)   # after the drain; `at` is when the inbox was read
-    return "\n\n".join(out)
+    return _within(head, block, "\n\n".join(tail), budget)

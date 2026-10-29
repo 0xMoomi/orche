@@ -11,7 +11,7 @@ finished slices, and lets the merge queue land them. Workers write the code; Bui
 <!-- inject:start -->
 ORCHE Build rules (full rulebook: skill orche-build)
 - You are traffic control: feature agents write code; their done pushes the branch and opens the PR. Never merge by hand: the merge queue (`orche queue`) tests each PR on main and lands it when green.
-- Each done gets a headless head review; PASS → queued. A cross-check (`orche review --pr N`) runs only when you or the owner ask, never routinely. You see a report on RETURN or error: decide in arrival order. PASS = `orche queue add <unit>`; RETURN = `AMEND <unit> rev N` with the reasons. Never wait on the queue.
+- Each done gets a headless head review; PASS → queued. A cross-check (`orche review --pr N`) runs only when you or the owner ask, never routinely. Workers' reports arrive in a batch: decide in arrival order. PASS = `orche queue add <unit>`; RETURN = `AMEND <unit> rev N` with the reasons. Never wait on the queue.
 - Ledger (`orche ledger record|check`): append-only; key (PR, head SHA); a new head voids older rows; no row = unverified. CI green and `[skip ci]` are never evidence. The verifier is never the writer.
 - `STATUS: done` needs a ledger row for HEAD (>= type-check-only); `STATUS: release-ready` (a claim in your final message, filed with `orche report done`) needs >= unit-test-verified from an independent verifier.
 - Report your unit to Main once every entry it queued landed. Feature agents come from HR (`orche feat new`).
@@ -43,20 +43,23 @@ Staff each brief yourself; Main briefs heads, never workers.
 - A finished slice reaches you only when a review says RETURN, the two reviews disagree, a review failed, the change
   is high-risk or large, or the spend cap ended the reviews. Everything else ORCHE queued itself (held notes
   "auto-queued PR #N").
-- Decide in arrival order, one report at a time, with the review checklist. `orche queue add <unit> --dry-run`
-  prints the facts. PASS = `orche queue add <unit>` (`--accept "<why>"` when you overrule open findings or a review
-  error). RETURN = `AMEND <unit> rev N` naming the failing checklist lines and what would pass; put every question in
+- Your workers' reports reach you together once every worker of the lineage has ended (a block, a question, an
+  owner step or an urgent note wakes you at once): decide them in arrival order, one report at a time, with the
+  review checklist. `orche queue add <unit> --dry-run` prints the facts. PASS = `orche queue add <unit>`
+  (`--accept "<why>"` when you overrule open findings or a review error). RETURN = `AMEND <unit> rev N` naming the failing checklist lines and what would pass; put every question in
   that one AMEND (each AMEND counts toward G1's three a window).
 - Never wait on the queue: take the next report. The queue sends you held notes for merges and returns, and one
-  wake when every unit of your brief has landed: then report your unit to Main.
+  wake when every unit of your brief has landed: then report your unit to Main. Main hears your lineage only from
+  that report.
 - Your own fixes and your in-session subagents' branches: `orche review --pr N --background`, then
   `orche queue add --pr N --project <p>`; a return comes back to you, not to a feature.
 - Your worktree is yours alone; the queue tests in its own checkout. Never edit inside a worker's worktree;
   send it a brief.
 - In a team repository (SETUP.md names its plugin) nothing is pushed until the owner says so: a done ends at the
-  commit and the ledger row. PASS means telling Main `ready: <unit> (<issue>)`, never `orche queue add` yourself;
-  a user-visible change gets the team's finish step (its work-done skill) before ready. Main runs `orche queue add`
-  on the owner's "push" and `orche queue approve` on "merge".
+  commit and the ledger row. PASS: once every slice is ready, report your unit with `orche report done`, one
+  `ready: <unit> (<issue>)` line per slice, never `orche queue add` yourself; a user-visible change gets the
+  team's finish step (its work-done skill) before ready. Main runs `orche queue add` on the owner's "push" and
+  `orche queue approve` on "merge".
 
 ## The merge queue
 

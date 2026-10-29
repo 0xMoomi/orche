@@ -3,9 +3,13 @@
 Assistant responses are deduplicated by `message.id` (Claude Code writes one line per content
 block, and resumed sessions repeat history). Files under a `subagents/` directory are subagent
 transcripts; every other file is a main session.
+
+A number whose source cannot be read is None (rendered `n/a`), never 0: a missing or unlistable
+transcript root, a transcript that cannot be opened (the totals), a mean over no samples.
 """
 import datetime as _dt
 import json
+import os
 import re
 from collections import defaultdict
 from pathlib import Path
@@ -30,7 +34,14 @@ SKIP_MODELS = {"<synthetic>"}
 
 
 def default_root() -> Path:
-    return Path.home() / ".claude" / "projects"
+    """Claude Code's transcript root (`$CLAUDE_CONFIG_DIR/projects`, else `~/.claude/projects`)."""
+    from .hr import panes       # hr loads metrics: import on use
+    return panes.claude_projects()
+
+
+def na(value, fmt="{}") -> str:
+    """`value` formatted, or `n/a` when it is None (its source could not be read)."""
+    return "n/a" if value is None else fmt.format(value)
 
 
 def load_prices(path=None) -> dict:
@@ -91,14 +102,22 @@ def compute(root=None, days=30, now=None, prices=None) -> dict:
     wake = {"user": 0, "notification": 0}
     routine = 0
     files = {"main": 0, "subagent": 0}
+    unreadable = 0
 
     from . import transcript       # hr loads metrics; transcript stays out of its imports
-    paths = sorted(root.rglob("*.jsonl")) if root.is_dir() else []
-    for path in paths:
+    try:
+        paths = sorted(root.rglob("*.jsonl")) if root.is_dir() and os.access(root, os.R_OK | os.X_OK) else None
+    except OSError:
+        paths = None
+    for path in paths or []:
         try:
             if _dt.datetime.fromtimestamp(path.stat().st_mtime, _dt.timezone.utc) < cutoff:
                 continue
         except OSError:
+            unreadable += 1
+            continue
+        if not os.access(path, os.R_OK):
+            unreadable += 1
             continue
         sub = is_subagent(path, root)
         files["subagent" if sub else "main"] += 1
@@ -150,20 +169,76 @@ def compute(root=None, days=30, now=None, prices=None) -> dict:
             "cost_usd": round(cost(usage_by_model[model], price_row(model, prices)), 6),
         }
     total = sum(responses.values())
+    readable = paths is not None
+    whole = readable and not unreadable       # a total over a partial read is not a real number
     return {
         "root": str(root),
+        "readable": readable,
+        "unreadable": unreadable,
         "days": days,
         "files": files,
-        "responses": total,
-        "avg_context": round(sum(context.values()) / total) if total else 0,
-        "cost_usd": round(sum(m["cost_usd"] for m in models.values()), 6),
+        "responses": total if readable else None,
+        "avg_context": round(sum(context.values()) / total) if total else None,
+        "cost_usd": round(sum(m["cost_usd"] for m in models.values()), 6) if whole else None,
         "models": models,
         "by_day": {day: dict(sorted(v.items())) for day, v in sorted(by_day.items())},
         "wake": wake,
         "routine": {"messages": wake["user"], "routine": routine,
-                    "share": round(routine / wake["user"], 4) if wake["user"] else 0.0},
-        "ask_user_question": len(ask_ids),
+                    "share": round(routine / wake["user"], 4) if wake["user"] else None},
+        "ask_user_question": len(ask_ids) if readable else None,
     }
+
+
+def spent_since(root, names, since, now=None, prices=None):
+    """List-price cost (USD) of the assistant responses at or after `since` in the transcripts under
+    `root`/<name> for each of `names` (Claude Code project dirs; a missing one adds nothing),
+    deduplicated by message id; None when `root` or a transcript written since cannot be read."""
+    root = Path(root).expanduser()
+    now = now or _dt.datetime.now(_dt.timezone.utc).astimezone()
+    prices = prices or load_prices()
+    if not root.is_dir() or not os.access(root, os.R_OK | os.X_OK):
+        return None
+    # a line is parsed only when it has a usage block and a UTC date the window touches
+    days = {d.encode() for d in {since.astimezone(_dt.timezone.utc).date().isoformat(),
+                                 now.astimezone(_dt.timezone.utc).date().isoformat()}}
+    seen, total = set(), 0.0
+    for name in sorted(set(names)):
+        folder = root / name
+        if not folder.is_dir():
+            continue
+        try:
+            files = sorted(folder.rglob("*.jsonl"))
+            fresh = [f for f in files if _dt.datetime.fromtimestamp(f.stat().st_mtime, _dt.timezone.utc) >= since]
+        except OSError:
+            return None
+        for path in fresh:
+            try:
+                with open(path, "rb") as fh:
+                    for line in fh:
+                        if b'"usage"' not in line or not any(d in line for d in days):
+                            continue
+                        try:
+                            obj = json.loads(line)
+                        except ValueError:
+                            continue
+                        if not isinstance(obj, dict) or obj.get("type") != "assistant":
+                            continue
+                        message = obj.get("message") if isinstance(obj.get("message"), dict) else {}
+                        mid, model = message.get("id"), message.get("model") or "unknown"
+                        try:
+                            ts = _dt.datetime.fromisoformat(str(obj.get("timestamp")).replace("Z", "+00:00"))
+                        except ValueError:
+                            continue
+                        ts = ts if ts.tzinfo else ts.replace(tzinfo=_dt.timezone.utc)
+                        if not mid or mid in seen or model in SKIP_MODELS or not since <= ts <= now:
+                            continue
+                        seen.add(mid)
+                        usage = message.get("usage") if isinstance(message.get("usage"), dict) else {}
+                        total += cost({k: v for k, v in usage.items() if isinstance(v, int)},
+                                      price_row(model, prices))
+            except OSError:
+                return None
+    return round(total, 6)
 
 
 def runner_summary(records, days=30, now=None) -> dict:
@@ -201,15 +276,19 @@ def runner_summary(records, days=30, now=None) -> dict:
 def _cost_stats(costs) -> dict:
     ordered = sorted(costs)
     mid = len(ordered) // 2
-    median = (ordered[mid] if len(ordered) % 2 else (ordered[mid - 1] + ordered[mid]) / 2) if ordered else 0.0
-    return {"units": len(costs), "cost_usd": round(sum(costs), 6), "median_cost_usd": round(median, 6)}
+    median = (ordered[mid] if len(ordered) % 2 else (ordered[mid - 1] + ordered[mid]) / 2) if ordered else None
+    return {"units": len(costs), "cost_usd": round(sum(costs), 6),
+            "median_cost_usd": round(median, 6) if ordered else None}
 
 
 def triage_summary(path, days=30, now=None) -> dict:
     """Triage decisions (ORCHE_HOME/triage/samples.jsonl rows whose `at` is in the window).
 
     main counts `main` and `tag` ([main]) rows; classifier_calls are rows with a backend; every
-    direct row is one Main turn saved (approximately: Main would have spent a dispatch turn)."""
+    direct row is one Main turn saved (approximately: Main would have spent a dispatch turn).
+    None when the samples file cannot be read (triage never ran, or no access)."""
+    if not os.access(path, os.R_OK):
+        return None
     now = now or _dt.datetime.now(_dt.timezone.utc).astimezone()
     cutoff = now - _dt.timedelta(days=days)
     counts, ms, model_ms = defaultdict(int), [], []
@@ -230,15 +309,19 @@ def triage_summary(path, days=30, now=None) -> dict:
             model_ms.append(row["model_ms"])
     seen = sum(counts.values())
     return {"prompts": seen, "direct": counts["direct"], "main": counts["main"], "bypass": counts["bypass"],
-            "mean_ms": round(sum(ms) / len(ms)) if ms else 0, "classifier_calls": len(model_ms),
-            "mean_classifier_ms": round(sum(model_ms) / len(model_ms)) if model_ms else 0,
+            "mean_ms": round(sum(ms) / len(ms)) if ms else None, "classifier_calls": len(model_ms),
+            "mean_classifier_ms": round(sum(model_ms) / len(model_ms)) if model_ms else None,
             "main_turns_saved": counts["direct"]}
 
 
 def render(m: dict) -> list:
-    lines = [f"window: last {m['days']} days, {m['files']['main']} main + "
-             f"{m['files']['subagent']} subagent transcripts",
-             f"responses: {m['responses']} (avg context {m['avg_context']} tokens)"]
+    lost = f", {m['unreadable']} unreadable" if m.get("unreadable") else ""
+    if not m.get("readable", True):
+        lines = [f"window: last {m['days']} days, transcripts n/a ({m['root']} cannot be read)"]
+    else:
+        lines = [f"window: last {m['days']} days, {m['files']['main']} main + "
+                 f"{m['files']['subagent']} subagent transcripts{lost}"]
+    lines.append(f"responses: {na(m['responses'])} (avg context {na(m['avg_context'], '{} tokens')})")
     rows = [("MODEL", "RESPONSES", "PER_DAY", "AVG_CONTEXT", "COST_USD")]
     for model, r in m["models"].items():
         rows.append((model, str(r["responses"]), f"{r['per_day']:.2f}", str(r["avg_context"]),
@@ -246,22 +329,26 @@ def render(m: dict) -> list:
     widths = [max(len(row[i]) for row in rows) for i in range(len(rows[0]))]
     lines += ["  ".join(v.ljust(w) for v, w in zip(row, widths)).rstrip() for row in rows]
     rt = m["routine"]
-    lines += [f"estimated cost: ${m['cost_usd']:.2f} (list price)",
+    lines += [f"estimated cost: {na(m['cost_usd'], '${:.2f}')} (list price)",
               f"main wake-ups: user {m['wake']['user']}, notification {m['wake']['notification']}",
-              f"routine messages: {rt['routine']}/{rt['messages']} ({rt['share']:.0%})",
-              f"AskUserQuestion: {m['ask_user_question']}"]
-    tri = m.get("triage")
-    if tri is not None:
-        lines += ["Triage (Main prompts, triage/samples.jsonl):",
-                  f"  prompts {tri['prompts']}, direct {tri['direct']}, main {tri['main']}, bypass {tri['bypass']}, "
-                  f"mean latency {tri['mean_ms']} ms ({tri['classifier_calls']} classifier calls, mean "
-                  f"{tri['mean_classifier_ms']} ms), Main turns saved ≈ {tri['main_turns_saved']}"]
-    run = m.get("runner")
-    if run is not None:
-        lines += ["Runner (orche run, RUN.json):",
-                  f"  units {run['units']}, cost ${run['cost_usd']:.2f}, median ${run['median_cost_usd']:.2f}/unit, "
-                  f"failures {run['failures']}"]
-        lines += [f"  {key}: units {g['units']}, cost ${g['cost_usd']:.2f}, "
-                  f"median ${g['median_cost_usd']:.2f}/unit, failures {g['failures']}"
-                  for key, g in run.get("by_model_effort", {}).items()]
+              f"routine messages: {rt['routine']}/{rt['messages']} ({na(rt['share'], '{:.0%}')})",
+              f"AskUserQuestion: {na(m['ask_user_question'])}"]
+    if "triage" in m:
+        tri = m["triage"]
+        lines.append("Triage (Main prompts, triage/samples.jsonl):")
+        lines.append("  n/a (no samples file)" if tri is None else
+                     f"  prompts {tri['prompts']}, direct {tri['direct']}, main {tri['main']}, bypass {tri['bypass']}, "
+                     f"mean latency {na(tri['mean_ms'], '{} ms')} ({tri['classifier_calls']} classifier calls, mean "
+                     f"{na(tri['mean_classifier_ms'], '{} ms')}), Main turns saved ≈ {tri['main_turns_saved']}")
+    if "runner" in m:
+        run = m["runner"]
+        lines.append("Runner (orche run, RUN.json):")
+        if run is None:
+            lines.append("  n/a (registry unreadable)")
+        else:
+            lines.append(f"  units {run['units']}, cost ${run['cost_usd']:.2f}, "
+                         f"median {na(run['median_cost_usd'], '${:.2f}/unit')}, failures {run['failures']}")
+            lines += [f"  {key}: units {g['units']}, cost ${g['cost_usd']:.2f}, "
+                      f"median {na(g['median_cost_usd'], '${:.2f}/unit')}, failures {g['failures']}"
+                      for key, g in run.get("by_model_effort", {}).items()]
     return lines

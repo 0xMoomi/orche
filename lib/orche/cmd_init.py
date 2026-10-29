@@ -244,14 +244,16 @@ def _save_team(reg, key, root) -> None:
 
 def _merge_queue(reg, key, root, lines):
     """A live run's merge-queue check script (verifygate.ensure): its state, one `merge queue: …` line on
-    `lines` and an open PR kept on the registry entry (`verify_pr`, saved only when it changes); None without
-    a git checkout."""
-    from . import verifygate
+    `lines` (`gate PR: …` when it waits for the owner's word) and an open PR kept on the registry entry
+    (`verify_pr`, saved only when it changes); None without a git checkout. In a team repository only the
+    project's Main opens the PR (the caller test `orche queue add` uses; R-TEAM-5)."""
+    from . import cmd_queue, verifygate
     from .hr import book
     if not (Path(root) / ".git").exists():
         return None
-    gate = verifygate.ensure(root, key)
-    lines.append(f"merge queue: {verifygate.running(gate)}")
+    gate = verifygate.ensure(root, key, open_pr=not registry.team(reg, key)
+                             or cmd_queue.caller(reg, key, main_only=True) is not None)
+    lines.append(f"{'gate PR' if gate['state'] == 'word' else 'merge queue'}: {verifygate.running(gate)}")
     pr = {"number": gate["number"], "url": gate["url"]} if gate["state"] == "pr" else None
     if pr and key in reg["projects"] and reg["projects"][key].get("verify_pr") != pr:
         book.write(reg, lambda r: r["projects"][key].__setitem__("verify_pr", pr))

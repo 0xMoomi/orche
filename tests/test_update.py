@@ -23,7 +23,7 @@ here = pathlib.Path(__file__).resolve().parent.parent
 version = re.search(r'"(.+)"', (here / "lib/orche/__init__.py").read_text()).group(1)
 home = pathlib.Path(os.environ["ORCHE_HOME"])
 with open(home / "fake-calls.log", "a") as fh:
-    fh.write(json.dumps({"version": version, "argv": sys.argv[1:]}) + "\n")
+    fh.write(json.dumps({"version": version, "argv": sys.argv[1:], "session": os.environ.get("ORCHE_SESSION")}) + "\n")
 if sys.argv[1] == "install":
     print("settings.json: write (hooks)")
     print("reconcile job: write /h/Library/LaunchAgents/com.orche.reconcile.plist (every 300s, loaded)")
@@ -121,6 +121,13 @@ class UpdateTest(support.TempHomeCase):
         self.assertEqual({c["version"] for c in calls}, {"0.8.0"})   # the NEW code ran every step
         self.assertEqual(calls[0]["argv"], ["install", "--mode", "settings", "--no-jev"])
         self.assertEqual([c["argv"] for c in calls[1:]], [["init", "acme", "--refresh"], ["init", "beta", "--refresh"]])
+
+    def test_refresh_runs_as_no_session(self):  # R-TEAM-5: an update never opens a team repository's gate PR
+        self.publish()
+        with mock.patch.dict(os.environ, {"ORCHE_SESSION": "main-acme"}):
+            self.assertEqual(self.update()[0], 0)
+        self.assertEqual([(c["argv"][0], c["session"]) for c in self.calls()],
+                         [("install", "main-acme"), ("init", None), ("init", None)])
 
     def test_no_restart_line_without_a_session_file_change(self):
         self.publish(skill="old")

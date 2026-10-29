@@ -1,7 +1,8 @@
 """Run history: `ORCHE_HOME/runs/<p>/history.jsonl`, one line per RUN.json written (job,
 `unrun`, `lost`), each one O_APPEND write:
 `{unit, rev, to, model, vendor, effort, status, stop_reason, cost_usd, num_turns, started, finished, kind}`;
-a run with an escalation writes one line per attempt (`kind` work / escalation; ladder.py).
+a run with an escalation or a finishing continuation writes one line per attempt (`kind` work / escalation /
+finish; ladder.py, runs/job.py).
 Readers: the spend cap (G4) and the run cap (G5) in flow.guard. A corrupt line is skipped.
 
 A run whose worker started but left no cost figure (killed, timed out, crashed, Codex without a
@@ -18,8 +19,8 @@ KEYS = ("unit", "rev", "to", "model", "vendor", "effort", "status", "stop_reason
         "started", "finished", "kind")
 # Not a run for G5: busy and held (never started the worker), usage_limit (the vendor refused it; §8.5)
 UNCOUNTED = ("busy", "held", "usage_limit")
-COUNTED = (None, "", "work")   # G5 counts a run's first attempt only: escalation lines are calls inside that
-                               # run, review lines are review calls (G4 counts every line's cost; R-REVIEW-8, R-LADDER-5)
+COUNTED = (None, "", "work")   # G5 counts a run's first attempt only: escalation and finish lines are calls
+                               # inside that run, review lines are review calls (G4 counts every line's cost; R-REVIEW-8, R-LADDER-5)
 UNKNOWN_USD_PER_MIN = 0.25  # what a minute of a run without a cost figure counts (§7.3)
 
 
@@ -50,14 +51,17 @@ def cost(res, started, finished, cfg, ran=True):
     return reserve(started, finished, guard.unit_cap(cfg.get("flow") or {}))
 
 
-def attempt(proj, rev, *, unit, to, model, effort, res, started, finished, status, kind, cfg, stop_reason=None, ran=True):
-    """Append the history line of one model call inside a unit's work (`kind`: work, escalation, review,
-    build-review; the run's, a requested pre-review's or a head review's), its cost counted by cost(). Logs, never
-    raises for the write."""
+def attempt(proj, rev, *, unit, to, model, effort, res, started, finished, status, kind, cfg, stop_reason=None, ran=True,
+            spent=None):
+    """Append the history line of one model call inside a unit's work (`kind`: work, escalation, finish,
+    review, build-review; the run's, a requested pre-review's or a head review's), its cost `spent` when
+    given (a finish resumes a session whose total includes the earlier call's), else counted by cost().
+    Logs, never raises for the write."""
     from .. import vendors
     append(proj, {"unit": unit, "to": to, "model": model, "vendor": vendors.vendor_of(model),
                   "effort": effort, "status": status, "stop_reason": stop_reason,
-                  "cost_usd": cost(res, started, finished, cfg, ran), "num_turns": res.turns,
+                  "cost_usd": spent if spent is not None else cost(res, started, finished, cfg, ran),
+                  "num_turns": res.turns,
                   "started": started, "finished": finished, "kind": kind}, rev)
 
 
@@ -131,6 +135,15 @@ def _cost(row):
 def spend(proj, since, unit=None):
     """Headless spend (USD) of the project, or of one unit, finished at or after `since`."""
     return round(sum(_cost(r) for r in read(proj, since) if unit is None or r.get("unit") == unit), 2)
+
+
+def units_spend(proj, names):
+    """Headless spend (USD) of the units `names` over the whole history; None when the history exists but
+    cannot be read (shown `n/a`, never 0)."""
+    p = path(proj)
+    if p.exists() and not os.access(p, os.R_OK):
+        return None
+    return round(sum(_cost(r) for r in read(proj) if r.get("unit") in names), 2)
 
 
 def runs_of(proj, unit, since):

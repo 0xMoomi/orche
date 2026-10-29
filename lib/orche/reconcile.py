@@ -39,6 +39,10 @@ reconcile/heartbeat.json last. Classes:
   not run, running or reported on at this rev, with no open child of its own, whose pane has been
   idle SILENT_IDLE_S or whose rev is SILENT_TIMEBOX × TIMEBOX old -> `orche deliver --remind` once
   per revision; SILENT_ESCALATE_S later (or at 2 × TIMEBOX) one urgent `info` to the brief's sender;
+- lineage (flow.lineage, before owner): a lineage close a crash or a busy lock missed (repair); then
+  a session holding a `quiet: "batch"` pointer and no waking one gets its batch's close when the batch
+  is complete, else one urgent wake when every unit it waits on is past its TIMEBOX deadline or the
+  oldest held pointer is a day old (holds);
 - owner (flow.owner.heartbeat, before the classes above): an answered ask is marked, a filled secret
   no dialog reported is told to Main, then the 10-minute fallback, a held notice or the open ask's
   re-notification (30, 60, 120, 240 min after it; none in quiet hours, one at their end). A
@@ -1069,11 +1073,18 @@ def _pass(cfg_all, cfg, now, started, dry_run, out, keys=None, as_json=False) ->
         except Exception as exc:  # noqa: BLE001 - lost runs never stop the pass
             if not denied(exc):
                 log.log("hooks", f"reconcile: runs: {type(exc).__name__}: {exc}")
-    # a lineage close a crash or a busy lock missed (never raises; dry-run takes no lock)
+    # a lineage close a crash or a busy lock missed, then the batch holds a post left (never raise;
+    # dry-run takes no lock)
     _phase("lineage")
+    closed = lineage.repair(reg, dry_run, now=now, keys=scope())
     shut = [{"action": "lineage-close", "class": "lineage", "project": p, "target": lin, "rev": None,
              "attempt": 1, "cap": 1, "line": f"{'would close' if dry_run else 'closed'} lineage {lin} ({p})",
-             "failed": None} for p, lin in lineage.repair(reg, dry_run, now=now, keys=scope())]
+             "failed": None} for p, lin in closed]
+    shut += [{"action": "lineage-hold", "class": "lineage", "project": p, "target": lin, "rev": None,
+              "attempt": 1, "cap": 1, "failed": None,
+              "line": (f"{'would close' if dry_run else 'closed'} lineage {lin} for {s} ({p})" if kind == "close"
+                       else f"{'would wake' if dry_run else 'woke'} {s}: lineage {lin} past its TIMEBOX ({p})")}
+             for p, lin, s, kind in lineage.holds(reg, dry_run, now=now, keys=scope(), closed=set(closed))]
     # answered asks, missed secret resumes, the fallback, held notices, re-notifications
     _phase("owner")
     notes = list(owner.heartbeat(reg, now, dry_run, scope()))
@@ -1117,7 +1128,7 @@ def _pass(cfg_all, cfg, now, started, dry_run, out, keys=None, as_json=False) ->
     _phase("apply")
     util.write_json(state_path(), new)
     for row in shut:
-        log.log("events", f"reconcile action=lineage-close project={row['project']} lineage={row['target']}")
+        log.log("events", f"reconcile action={row['action']} project={row['project']} lineage={row['target']}")
         emit(row, row["line"])
         done += 1
     for row in notes:
@@ -1153,6 +1164,11 @@ def _pass(cfg_all, cfg, now, started, dry_run, out, keys=None, as_json=False) ->
         log.log("events", "reconcile action=janitor attempt=1/1" + (f" failed={row['failed']}" if row["failed"] else ""))
         emit(row, row["line"] + (f" (failed: {row['failed']})" if row["failed"] else ""))
         done += 1
+    _phase("statusline")   # today's spend and what waits on the owner: the status line is at most a pass old
+    from . import project as facts, statusline
+    for key in every:
+        if key not in blocked:
+            statusline.refresh(reg, key, spent=facts.spent_today(reg, key, now))
     took = time.monotonic() - started
     if done:
         log.log("events", f"reconcile pass took={took:.1f}s actions={done}")

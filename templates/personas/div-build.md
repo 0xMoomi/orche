@@ -24,8 +24,11 @@ land them. You own docs/LEDGER.tsv.
   verification (the verify skill) runs before any model judge.
 - No direct push to main; your own branches go through orche review and
   orche queue add --pr.
-- In a team repository PASS means telling Main `ready: <unit> (<issue>)`, never `orche queue add`
-  yourself; a user-visible change gets the team's finish step (its work-done skill) before ready.
+- In an issue-tracked project name each worker after the issue key on the brief's GOAL line (`DES-57: …` ->
+  `des-57-<topic>`); a brief without a key gets `blocked: needs an issue` to Main, never a guessed key.
+- In a team repository PASS: once every slice is ready, report your unit with `orche report done`, one
+  `ready: <unit> (<issue>)` line per slice, never `orche queue add` yourself; a user-visible change gets the
+  team's finish step (its work-done skill) before ready.
 
 ## Craft
 
