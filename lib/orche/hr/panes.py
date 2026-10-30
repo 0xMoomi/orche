@@ -31,14 +31,15 @@ def session_env(session) -> str:
     `team.env` pair follows, shell-quoted (the team's hook switches). Every pane also gets
     `CLAUDE_CODE_PROMPT_CACHE_TTL=1h`: on usage credits Claude Code drops the prompt cache to five minutes,
     so a pane waking after a longer idle gap would rewrite its whole context (headless runs have no idle
-    gap and do not get it). Main (`main-<project>`) also gets
-    `CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1`: its subagents and shells finish inside the turn, so no
-    finished background task starts a turn that re-reads Main's whole context (ORCHE wakes Main).
+    gap and do not get it). Main (`main-<project>`) and division heads (`div-<project>-<division>`) also
+    get `CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1`: their subagents and shells finish inside the turn, so no
+    finished background task starts a turn that re-reads the pane's whole context (ORCHE wakes them).
+    Feature panes do not.
     """
     team = "".join(f"{name}={shlex.quote(value)} " for name, value in config.team_env(config.load()).items())
-    main = "CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1 " if str(session).startswith("main-") else ""
+    foreground = "CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1 " if str(session).startswith(("main-", "div-")) else ""
     return (f"PATH={shlex.quote(str(paths.PLUGIN_ROOT / 'bin'))}:$PATH ORCHE_SESSION={shlex.quote(session)} "
-            f"CLAUDE_CODE_PROMPT_CACHE_TTL=1h {main}{team}")
+            f"CLAUDE_CODE_PROMPT_CACHE_TTL=1h {foreground}{team}")
 
 
 def _claude_dir() -> Path:

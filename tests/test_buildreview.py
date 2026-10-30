@@ -569,10 +569,10 @@ class BuildsOwnPr(BuildReviewCase):
         with mock.patch.object(pre.vendors, "available", side_effect=AssertionError("codex probed")):
             out = build.for_pr("acme", 7, reg=self.reg, cfg=config.load())
         self.assertEqual(out["status"], "queued")
-        self.assertEqual(self.asked, ["claude-opus-5-5"])           # the fixture's Build model is the alias `opus`
+        self.assertEqual(self.asked, ["claude-sonnet-5-5"])         # the fixture's Build model is the alias `opus`
         row = ledger.review_for("acme", 7, HEAD, "pre")
         self.assertEqual((row["model"], row["note"]),
-                         ("claude-opus-5-5", "claude only (no --codex): a single review; "
+                         ("claude-sonnet-5-5", "claude only (no --codex): a single review; "
                                              "fallback: same vendor (codex not asked)"))
 
     def test_codex_reviews_a_claude_only_pass_again(self):
@@ -605,11 +605,11 @@ class BuildsOwnPr(BuildReviewCase):
         self.avail = SimpleNamespace(ok=False, state="absent")
         out = build.for_pr("acme", 7, reg=self.reg, cfg=config.load(), codex=True)
         self.assertEqual(out["status"], "queued")
-        self.assertEqual(self.asked, ["claude-opus-5-5"])           # the fixture's Build model is the alias `opus`
+        self.assertEqual(self.asked, ["claude-sonnet-5-5"])         # the fixture's Build model is the alias `opus`
         row = ledger.review_for("acme", 7, HEAD, "pre")
         self.assertEqual((row["verdict"], row["model"], row["note"]),
-                         ("pass", "claude-opus-5-5", "panel: only one vendor up (codex not installed): a single "
-                                                        "review; fallback: same vendor (codex not installed)"))
+                         ("pass", "claude-sonnet-5-5", "panel: only one vendor up (codex not installed): a single "
+                                                          "review; fallback: same vendor (codex not installed)"))
         self.assertEqual(len(self.calls), 1)
 
     def test_a_pre_review_return_stops_before_the_build_review(self):

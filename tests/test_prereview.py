@@ -18,7 +18,7 @@ from unittest import mock
 import support
 from types import SimpleNamespace
 
-from orche import config, headless, inbox, ledger, registry, review, util, vendors
+from orche import config, headless, inbox, ladder, ledger, registry, review, util, vendors
 from orche.flow import usage
 from orche.install import doctor
 from orche.review import build
@@ -310,6 +310,16 @@ class GrammarTest(support.TempHomeCase):
         self.assertEqual(pre.choose(cfg, SONNET, absent).model, OPUS)
         self.assertEqual(pre.choose(cfg, "claude-haiku-5-5", absent).model, OPUS)
         self.assertEqual(CHANGED, "the reviewer changed files")
+
+    def test_the_same_vendor_reviewer_is_never_the_writers_own_model(self):
+        absent = vendors.Availability("absent", "", "")
+        for order in (["codex", OPUS, SONNET], ["codex", "opus", "sonnet"]):
+            cfg = {**config.DEFAULTS, "review": {**config.DEFAULTS["review"], "order": order}}
+            for writer in ("opus", OPUS):
+                with self.subTest(order=order, writer=writer):
+                    c = pre.choose(cfg, writer, absent)
+                    self.assertEqual(ladder.full_id(c.model), SONNET)
+                    self.assertNotIn(OPUS, [ladder.full_id(m) for m in c.rest])
 
 
 HEAD = "c" * 40

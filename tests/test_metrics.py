@@ -62,15 +62,37 @@ class MetricsTest(support.TempHomeCase):
         return path
 
     def test_prices_override_and_dated_ids(self):
-        row = {"input": 1.0, "output": 0, "cache_read": 0, "cache_write": 0}
+        row = {"input": 1.0, "output": 0, "cache_read": 0, "cache_write": 0, "cache_write_1h": 0}
         prices = metrics.load_prices(self.prices_file({"claude-mystery-9": row}))
         self.assertAlmostEqual(self.compute(prices=prices)["models"]["claude-mystery-9"]["cost_usd"], 1.0)
         self.assertEqual(metrics.price_row("claude-opus-5-5-20261001", metrics.PRICES)["input"], 4.0)
 
+    def test_cache_writes_priced_by_ttl(self):
+        row = metrics.PRICES["claude-opus-5-5"]
+        self.assertEqual((row["cache_write"], row["cache_write_1h"]), (row["input"] * 1.25, row["input"] * 2))
+        split = {"cache_creation_input_tokens": 3_000_000,
+                 "cache_creation": {"ephemeral_5m_input_tokens": 1_000_000, "ephemeral_1h_input_tokens": 2_000_000}}
+        self.assertAlmostEqual(metrics.cost(split, row), 5.0 + 16.0)
+        self.assertAlmostEqual(metrics.cost({"cache_creation_input_tokens": 3_000_000}, row), 15.0)  # no split: 5m
+
+    def test_one_hour_writes_from_transcript_lines(self):
+        session = self.root / "-srv-orca-acme-shop"
+        line = {"type": "assistant", "timestamp": "2026-10-15T23:00:00.000Z",
+                "message": {"id": "msg_1h", "model": "claude-haiku-5-5", "role": "assistant", "content": [],
+                            "usage": {"input_tokens": 0, "output_tokens": 0, "cache_read_input_tokens": 0,
+                                      "cache_creation_input_tokens": 1_000_000,
+                                      "cache_creation": {"ephemeral_5m_input_tokens": 0,
+                                                         "ephemeral_1h_input_tokens": 1_000_000}}}}
+        (session / "sess-2.jsonl").write_text(json.dumps(line) + "\n")
+        self.assertAlmostEqual(self.compute()["models"]["claude-haiku-5-5"]["cost_usd"], 0.2)
+        since = dt.datetime(2026, 10, 15, 22, 0, tzinfo=dt.timezone.utc)
+        self.assertAlmostEqual(metrics.spent_since(self.root, ["-srv-orca-acme-shop"], since, now=NOW), 0.2)
+
     def test_prices_rejects_bad_rows(self):
         bad = {
             "non-dict row": {"m": 1},
-            "string value": {"m": {"input": "1", "output": 0, "cache_read": 0, "cache_write": 0}},
+            "string value": {"m": {"input": "1", "output": 0, "cache_read": 0, "cache_write": 0,
+                                     "cache_write_1h": 0}},
             "missing key": {"m": {"input": 1, "output": 0, "cache_read": 0}},
             "not an object": [1, 2],
         }

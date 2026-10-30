@@ -194,8 +194,8 @@ class InitTest(HrCase):
         self.assertIn("persona template missing for division build", hr.log_path().read_text())
         # Panes: the two woken divisions, then main.
         panes = [c[c.index("--title") + 1:c.index("--title") + 4] for c in self.orca_calls("terminal create")]
-        self.assertEqual(panes, [["div-acme-shop-build", "--command", f"{PANE}ORCHE_SESSION=div-acme-shop-build CLAUDE_CODE_PROMPT_CACHE_TTL=1h claude --permission-mode bypassPermissions --name div-acme-shop-build"],
-                                 ["div-acme-shop-gtm", "--command", f"{PANE}ORCHE_SESSION=div-acme-shop-gtm CLAUDE_CODE_PROMPT_CACHE_TTL=1h claude --permission-mode bypassPermissions --name div-acme-shop-gtm"],
+        self.assertEqual(panes, [["div-acme-shop-build", "--command", f"{PANE}ORCHE_SESSION=div-acme-shop-build CLAUDE_CODE_PROMPT_CACHE_TTL=1h CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1 claude --permission-mode bypassPermissions --name div-acme-shop-build"],
+                                 ["div-acme-shop-gtm", "--command", f"{PANE}ORCHE_SESSION=div-acme-shop-gtm CLAUDE_CODE_PROMPT_CACHE_TTL=1h CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1 claude --permission-mode bypassPermissions --name div-acme-shop-gtm"],
                                  ["main-acme-shop", "--command", f"{PANE}ORCHE_SESSION=main-acme-shop CLAUDE_CODE_PROMPT_CACHE_TTL=1h CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1 claude --permission-mode bypassPermissions --name main-acme-shop"]])
         self.assertEqual(self.orca_calls("automations create"), [])
         self.assertIn("[dry-run] orca automations create --name orche-hr-audit-acme-shop", err)
@@ -1618,7 +1618,7 @@ class StageTest(FeatCase):
         self.assertEqual((data["stage"], data["woke"], len(data["checklist"])), ("public", True, 4))
         self.assertTrue(any("docs/runbooks/" in c for c in data["checklist"]))
         pane = self.orca_calls("terminal create")[0]
-        self.assertEqual(pane[pane.index("--command") + 1], f"{PANE}ORCHE_SESSION=div-acme-shop-ops CLAUDE_CODE_PROMPT_CACHE_TTL=1h claude --permission-mode bypassPermissions --name div-acme-shop-ops")
+        self.assertEqual(pane[pane.index("--command") + 1], f"{PANE}ORCHE_SESSION=div-acme-shop-ops CLAUDE_CODE_PROMPT_CACHE_TTL=1h CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1 claude --permission-mode bypassPermissions --name div-acme-shop-ops")
         reg = registry.load()
         self.assertEqual(reg["projects"]["acme-shop"]["stage"], "public")
         self.assertEqual(reg["projects"]["acme-shop"]["divisions"]["ops"]["status"], "active")

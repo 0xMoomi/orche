@@ -15,16 +15,17 @@ from collections import defaultdict
 from pathlib import Path
 
 
-# USD list price per 1M tokens: input, output, cache read, cache write.
+# USD list price per 1M tokens: input, output, cache read, cache write (5-minute cache, 1.25x input),
+# one-hour cache write (2x input).
 PRICES = {
-    "claude-fable-5-1": {"input": 10.0, "output": 50.0, "cache_read": 0.25, "cache_write": 12.5},
-    "claude-opus-5-5": {"input": 4.0, "output": 20.0, "cache_read": 0.20, "cache_write": 5.0},
-    "claude-sonnet-5-5": {"input": 2.0, "output": 10.0, "cache_read": 0.20, "cache_write": 2.5},
-    "claude-haiku-5-5": {"input": 0.10, "output": 0.50, "cache_read": 0.01, "cache_write": 0.125},
-    "claude-opus-5": {"input": 5.0, "output": 25.0, "cache_read": 0.5, "cache_write": 6.25},
+    "claude-fable-5-1": {"input": 10.0, "output": 50.0, "cache_read": 0.25, "cache_write": 12.5, "cache_write_1h": 20.0},
+    "claude-opus-5-5": {"input": 4.0, "output": 20.0, "cache_read": 0.20, "cache_write": 5.0, "cache_write_1h": 8.0},
+    "claude-sonnet-5-5": {"input": 2.0, "output": 10.0, "cache_read": 0.20, "cache_write": 2.5, "cache_write_1h": 4.0},
+    "claude-haiku-5-5": {"input": 0.10, "output": 0.50, "cache_read": 0.01, "cache_write": 0.125, "cache_write_1h": 0.2},
+    "claude-opus-5": {"input": 5.0, "output": 25.0, "cache_read": 0.5, "cache_write": 6.25, "cache_write_1h": 10.0},
 }
 FALLBACK_MODEL = "claude-opus-5"
-PRICE_KEYS = ("input", "output", "cache_read", "cache_write")
+PRICE_KEYS = ("input", "output", "cache_read", "cache_write", "cache_write_1h")
 USAGE_KEYS = ("input_tokens", "output_tokens", "cache_read_input_tokens", "cache_creation_input_tokens")
 NOTIFICATION_TAG = "<task-notification>"
 # A short user message matching this is "routine" (status / resume / confirm).
@@ -47,8 +48,8 @@ def na(value, fmt="{}") -> str:
 def load_prices(path=None) -> dict:
     """PRICES, with whole rows from a JSON file merged over (a row replaces that model's row).
 
-    File format: `{"<model>": {"input": n, "output": n, "cache_read": n, "cache_write": n}}`,
-    USD per 1M tokens, every row with exactly those four numeric keys. Raises ValueError
+    File format: `{"<model>": {"input": n, "output": n, "cache_read": n, "cache_write": n,
+    "cache_write_1h": n}}`, USD per 1M tokens, every row with exactly those five numeric keys. Raises ValueError
     naming the offending model otherwise.
     """
     prices = {model: dict(row) for model, row in PRICES.items()}
@@ -78,11 +79,25 @@ def price_row(model: str, prices: dict) -> dict:
     return prices[max(prefixes, key=len)] if prefixes else prices[FALLBACK_MODEL]
 
 
+def _count(d, key) -> int:
+    value = d.get(key) if isinstance(d, dict) else None
+    return value if isinstance(value, int) and not isinstance(value, bool) else 0
+
+
 def cost(usage: dict, row: dict) -> float:
-    return (usage.get("input_tokens", 0) * row["input"]
-            + usage.get("output_tokens", 0) * row["output"]
-            + usage.get("cache_read_input_tokens", 0) * row["cache_read"]
-            + usage.get("cache_creation_input_tokens", 0) * row["cache_write"]) / 1_000_000
+    """List-price USD of one response's usage. Cache writes are priced by TTL from
+    `usage.cache_creation` (`ephemeral_5m_input_tokens`, `ephemeral_1h_input_tokens`); without
+    that split every write is priced at the 5-minute rate."""
+    split = usage.get("cache_creation")
+    if isinstance(split, dict) and ("ephemeral_5m_input_tokens" in split or "ephemeral_1h_input_tokens" in split):
+        writes_5m, writes_1h = _count(split, "ephemeral_5m_input_tokens"), _count(split, "ephemeral_1h_input_tokens")
+    else:
+        writes_5m, writes_1h = _count(usage, "cache_creation_input_tokens"), 0
+    return (_count(usage, "input_tokens") * row["input"]
+            + _count(usage, "output_tokens") * row["output"]
+            + _count(usage, "cache_read_input_tokens") * row["cache_read"]
+            + writes_5m * row["cache_write"]
+            + writes_1h * row["cache_write_1h"]) / 1_000_000
 
 
 def is_subagent(path: Path, root: Path) -> bool:
@@ -97,6 +112,7 @@ def compute(root=None, days=30, now=None, prices=None) -> dict:
     seen_msgs, seen_users, ask_ids = set(), set(), set()
     usage_by_model = defaultdict(lambda: dict.fromkeys(USAGE_KEYS, 0))
     responses = defaultdict(int)
+    spend = defaultdict(float)
     context = defaultdict(int)
     by_day = defaultdict(lambda: defaultdict(int))
     wake = {"user": 0, "notification": 0}
@@ -138,6 +154,7 @@ def compute(root=None, days=30, now=None, prices=None) -> dict:
                 seen_msgs.add(mid)
                 usage = message.get("usage") if isinstance(message.get("usage"), dict) else {}
                 responses[model] += 1
+                spend[model] += cost(usage, price_row(model, prices))
                 for key in USAGE_KEYS:
                     value = usage.get(key)
                     usage_by_model[model][key] += value if isinstance(value, int) else 0
@@ -166,7 +183,7 @@ def compute(root=None, days=30, now=None, prices=None) -> dict:
             "per_day": round(n / days, 2) if days else float(n),
             "avg_context": round(context[model] / n),
             **usage_by_model[model],
-            "cost_usd": round(cost(usage_by_model[model], price_row(model, prices)), 6),
+            "cost_usd": round(spend[model], 6),
         }
     total = sum(responses.values())
     readable = paths is not None
@@ -234,8 +251,7 @@ def spent_since(root, names, since, now=None, prices=None):
                             continue
                         seen.add(mid)
                         usage = message.get("usage") if isinstance(message.get("usage"), dict) else {}
-                        total += cost({k: v for k, v in usage.items() if isinstance(v, int)},
-                                      price_row(model, prices))
+                        total += cost(usage, price_row(model, prices))
             except OSError:
                 return None
     return round(total, 6)

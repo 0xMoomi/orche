@@ -395,6 +395,8 @@ R-DRAIN-1: Main MUST NOT read diffs. If review is needed, Main creates a verific
 
 R-DRAIN-2: Main MUST NOT poll, watch or wait in the background: results reach it only through the inbox and the lineage close. Main's pane runs with `CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1`, so its subagents and shells finish inside the turn, and the env-read gate refuses Main the Monitor tool, a Bash, Agent or Task call with `run_in_background: true`, and a foreground Bash wait loop (`sleep` in a `while`/`until`/`for` loop, `gh pr checks --watch`, `gh run watch`). Each finished background task would start a Main turn that re-reads the whole context.
 
+Division head panes (`div-<project>-<division>`) also run with `CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1`, so a head's subagents and shells finish inside its turn instead of each starting a new head turn; the env-read gate does not change for heads, and feature panes keep background tasks.
+
 Every ORCHE pane (Main, division heads, feature panes) runs with `CLAUDE_CODE_PROMPT_CACHE_TTL=1h`, so a pane that wakes after more than five idle minutes on usage credits reads a warm prompt cache instead of rewriting its whole context; headless runs have no idle gap and do not get it.
 
 ### 4.6 Confirm loop before build

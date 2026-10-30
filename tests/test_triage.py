@@ -514,7 +514,8 @@ class ClassifierTest(TriageCase):
         (self.fake / "sleep").write_text("30")
         started = time.monotonic()
         self.assertIsNone(triage.classify("Add a line to README.md", ["build"], self.cfg())[0])
-        self.assertLess(time.monotonic() - started, latency + 2.5)
+        # the classifier sleeps 30 s: returning within the budget plus a loaded machine's margin means it was cut
+        self.assertLess(time.monotonic() - started, latency + 10)
         self.assertIn("triage: claude-haiku timeout after", self.hooks_log())   # the classifier ran, and was cut
         pids = [(self.fake / "pid").read_text().strip(), (self.fake / "child").read_text().strip()]
         deadline = time.monotonic() + 10

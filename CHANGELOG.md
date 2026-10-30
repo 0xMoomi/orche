@@ -3,6 +3,17 @@
 All notable changes to ORCHE are listed here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow semantic versioning.
 
+## 0.19.2 — 2026-10-30
+
+### Changed
+
+- Division head panes also start with `CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1`, as Main does, so a head's subagents and shells finish inside its turn instead of each finished background task starting a new head turn that re-reads its whole context. Feature panes keep background tasks; the env-read gate does not change for heads.
+
+### Fixed
+
+- `orche metrics` prices one-hour cache writes at their own rate (2x the model's input price) from the transcript's `usage.cache_creation` split, and five-minute writes at 1.25x; a response without the split is priced at the five-minute rate as before. A `--prices` file row now carries a fifth key, `cache_write_1h`.
+- The same-vendor reviewer fallback compares models by full id, so a writer recorded as `opus` is never reviewed by `claude-opus-5-5` (or the reverse).
+
 ## 0.19.1 — 2026-10-30
 
 ### Changed

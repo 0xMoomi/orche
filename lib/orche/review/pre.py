@@ -34,7 +34,7 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 
-from .. import ledger, log, procs, publish, shell, templates, util, vendors
+from .. import ladder, ledger, log, procs, publish, shell, templates, util, vendors
 from ..flow import usage as holds
 from . import CHANGED, ask, fence, masked, one_line
 
@@ -113,20 +113,24 @@ def choose(cfg, writer_model, avail=None, codex=True) -> Choice:
     """The reviewer of a head written by `writer_model` (R-REVIEW-2, R3; §8.5: held vendors skipped): the other
     vendor's first model that is up, else a different model of the writer's vendor with the reason noted."""
     order = [str(m) for m in cfg["review"]["order"] if m]
-    writer_vendor = vendors.vendor_of(writer_model)
+    writer = ladder.full_id(writer_model)       # `opus` and claude-opus-5-5 are one model
+    writer_vendor = vendors.vendor_of(writer)
     up, hold_of, held, state = _probe(cfg, avail, codex)
+
+    def other(model) -> bool:
+        return ladder.full_id(model) != writer
 
     def after(model) -> tuple:
         tail = order[order.index(model) + 1:] if model in order else []
-        return tuple(m for m in tail if m != writer_model and up(m))
+        return tuple(m for m in tail if other(m) and up(m))
 
     cross = next((m for m in order if vendors.vendor_of(m) != writer_vendor and up(m)), None)
     if cross is not None:
         return Choice(cross, "", after(cross))
     why = _missing(held, state, writer_vendor)
-    same = next((m for m in order if m != writer_model and up(m)), None)
+    same = next((m for m in order if other(m) and up(m)), None)
     if same is None:
-        same = SONNET if writer_model == OPUS else OPUS
+        same = SONNET if writer == OPUS else OPUS
         blocked = next((v for v, h in held.items() if h is not None), None)
         if blocked is not None or hold_of(same) is not None:
             return Choice(None, why, (), blocked or vendors.vendor_of(same))
