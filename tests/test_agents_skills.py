@@ -9,7 +9,7 @@ from orche.hr import onboarding
 
 AGENTS = support.ROOT / "agents"
 PERSONAS = support.ROOT / "templates" / "personas"
-PROMPTS = ("intake.md", "liaison.md")     # headless workers' system prompts, not unit personas
+PROMPTS = ("intake.md", "liaison.md", "staff.md")   # headless workers' system prompts and the Staff card, not unit personas
 SKILLS = support.ROOT / "skills"
 MODELS = {"claude-sonnet-5-5", "claude-opus-5-5", "claude-haiku-5-5", "{{MODEL}}"}
 EFFORTS = {"low", "medium", "high", "max", "{{EFFORT}}"}

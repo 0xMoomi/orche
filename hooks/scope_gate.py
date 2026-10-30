@@ -4,7 +4,8 @@ feature's scope globs. Always allowed: `.orche/`, `docs/` and `.claude/agent-mem
 worktree, `~/.claude/agent-memory/`, the session scratch root (`/private/tmp/claude-<uid>/`,
 `$TMPDIR/claude-*`, or $ORCHE_SCRATCH_ROOT), and the session's own unit folders under the real
 project root (`<root>/.orche/units/<u>/…` when unit <u>'s brief is addressed to the session),
-except their `BRIEF.md`, `BRIEF.rev<N>.md` and `RUN.json`. Internal error -> allow + log."""
+except their `BRIEF.md`, `BRIEF.rev<N>.md` and `RUN.json`. The CEO Staff (ORCHE_SESSION `staff`) edits
+nothing anywhere (lib/orche/staff.py). Internal error -> allow + log."""
 import json
 import os
 import re
@@ -54,7 +55,9 @@ def own_unit_file(reg, unit, path) -> bool:
 
 def decide(payload):
     """Deny reason, or None to stay silent."""
-    from orche import registry, roster, units
+    from orche import registry, roster, staff, units
+    if staff.is_staff(os.environ.get("ORCHE_SESSION")):
+        return staff.reason(payload.get("tool_name"), payload.get("tool_input"))
     tool_input = payload.get("tool_input") or {}
     target = tool_input.get("file_path") or tool_input.get("notebook_path")
     if not target:

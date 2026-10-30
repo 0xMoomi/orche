@@ -246,6 +246,7 @@ When an `orche` command refuses or fails, relay its line and stop; never redo it
 | HR log, weekly HR report, who is idle | `orche hr log` / `orche hr audit` | at most five plain lines |
 | Enforce a repeated mistake ("enforce <class>", after the weekly `audit:` note) | its row in `.orche/STANDING.md` "Enforcement"; a brief to Build that adds the proposed level (a structural change, a test, a hook or gate), then the row's status set to `enforced`; a standing-order level: `orche hr correct <p> --text "<the draft>"` (`orche hr audit <p>` prints it) | one line: the class and what enforces it now |
 | Approve the waiting PRs (the `land: owner` question) | ask once for every waiting PR, default merge; yes → `orche queue approve <p> --all`; refuse one → `orche queue drop <p> #N --reason owner`; pause or resume the queue → `orche queue pause <p>` / `orche queue resume <p>` | what lands, what was dropped |
+| Open or close the staff window (the CEO Staff) | `orche wake staff` / `orche sleep staff` (one Staff for every project; off until the owner asks) | one line |
 | Reopen Main, a pane was closed | `orche wake main-<p>` (it reopens with its conversation) | one line |
 | Put a unit to sleep, wake it | `orche sleep <unit>` / `orche wake <unit>` | one line |
 | Go live or public; back to building | ask once, then `orche stage set <p> public --yes` (Ops wakes) or `orche stage set <p> building --yes` | the stage and Ops' checklist in plain words |

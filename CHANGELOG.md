@@ -3,6 +3,16 @@
 All notable changes to ORCHE are listed here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow semantic versioning.
 
+## 0.19.3 — 2026-10-30
+
+### Added
+
+- The CEO Staff: one optional pane for every project (`orche wake staff`, on the owner's "open the staff window"; `orche sleep staff` closes it) that answers everyday questions on Opus 5.5 at medium effort. It knows what the owner and every Main said to each other (the owner's prompts and Main's final replies from Main's transcripts, masked; the newest at its start, the newer ones with each prompt), runs only reads, and leaves a project's Main a held note when the owner says "tell Main: …" (`orche report info --to <project>`). It lives in the ORCHE checkout, so no project's spend counts it, and the heartbeat never wakes or reopens it.
+
+### Changed
+
+- The specification no longer assumes Main runs Fable: Main runs the owner's Claude Code default model (recommended Opus 5.5, high effort), which the owner switches per session with `/model`; ORCHE never pins Main's model.
+
 ## 0.19.2 — 2026-10-30
 
 ### Changed

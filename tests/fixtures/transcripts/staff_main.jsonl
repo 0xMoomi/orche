@@ -1,0 +1,15 @@
+{"type": "custom-title", "customTitle": "main-acme", "sessionId": "s1"}
+{"type": "user", "timestamp": "2026-10-29T01:00:00Z", "message": {"role": "user", "content": "ship the pricing page"}}
+{"type": "assistant", "timestamp": "2026-10-29T01:00:05Z", "message": {"id": "msg_a1", "role": "assistant", "content": [{"type": "text", "text": "Looking at it."}, {"type": "tool_use", "id": "t1", "name": "Bash", "input": {"command": "orche status"}}]}}
+{"type": "user", "timestamp": "2026-10-29T01:00:06Z", "message": {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "t1", "content": "TOOL OUTPUT secret-ish"}]}}
+{"type": "assistant", "timestamp": "2026-10-29T01:01:00Z", "message": {"id": "msg_a2", "role": "assistant", "content": [{"type": "text", "text": "Dispatched pricing to Build with key @CANARY_KEY@."}]}}
+{"type": "user", "timestamp": "2026-10-29T01:02:00Z", "message": {"role": "user", "content": "<system-reminder>\nnoise\n</system-reminder>"}}
+{"type": "user", "timestamp": "2026-10-29T01:03:00Z", "message": {"role": "user", "content": "meta line"}, "isMeta": true}
+{"type": "user", "timestamp": "2026-10-29T02:00:00Z", "message": {"role": "user", "content": "[orche] inbox: new reports"}}
+{"type": "assistant", "timestamp": "2026-10-29T02:00:10Z", "message": {"id": "msg_s", "role": "assistant", "content": [{"type": "text", "text": "subagent chatter"}]}, "isSidechain": true}
+{"type": "assistant", "timestamp": "2026-10-29T02:01:00Z", "message": {"id": "msg_a3", "role": "assistant", "content": [{"type": "text", "text": "Pricing landed: PR #12 merged."}]}}
+{"type": "user", "timestamp": "2026-10-29T03:00:00Z", "message": {"role": "user", "content": [{"type": "text", "text": "<system-reminder>ctx</system-reminder>\nwhat about the docs?"}]}}
+{"type": "assistant", "timestamp": "2026-10-29T03:01:00Z", "message": {"id": "msg_a4", "role": "assistant", "content": [{"type": "text", "text": "Docs are next."}]}}
+{"type": "assistant", "timestamp": "2026-10-29T03:01:01Z", "message": {"id": "msg_a4", "role": "assistant", "content": [{"type": "text", "text": "Build starts them at 4."}]}}
+{"type": "user", "timestamp": "2026-10-29T04:00:00Z", "message": {"role": "user", "content": "<task-notification>\n<status>completed</status>\n</task-notification>"}}
+{"type": "user", "timestamp": "2026-10-29T05:00:00Z", "message": {"role": "user", "content": "and the blog?"}}

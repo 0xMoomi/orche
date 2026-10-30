@@ -4,7 +4,9 @@
 Triage (lib/orche/triage.py, off unless `triage.enabled`) may route a simple prompt straight to a
 division and print `{"decision": "block", ...}` so Main spends no turn; otherwise the prompt reaches
 Main and the inbox text (plus any triage note) is printed and injected, within inbox.BUDGET characters
-(Claude Code caps hook stdout at 10,000). Fail-open.
+(Claude Code caps hook stdout at 10,000). The CEO Staff (ORCHE_SESSION `staff`) gets no triage and no
+inbox: only the exchanges between the owner and every Main since its last prompt (lib/orche/staff.py),
+within the same budget. Fail-open.
 """
 import json
 import os
@@ -65,6 +67,12 @@ def main():
         from orche import inbox, registry, roster, triage
         r = roster.Roster(registry.load())
         who = r.identify(payload.get("cwd") or os.getcwd())
+        from orche import staff
+        if staff.is_staff(who.session):
+            text = staff.prompt_text(r.reg, inbox.BUDGET)
+            if text:
+                print(text)
+            return 0
         _owner_seen(payload, who)          # before triage: a routed prompt is still the owner's word
         outcome = triage.handle(payload, STARTED, r, who)   # never raises
         if outcome.block is not None:

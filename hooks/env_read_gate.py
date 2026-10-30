@@ -17,6 +17,10 @@ in a `while`/`until`/`for` loop, `gh pr checks --watch`, `gh run watch`) are ref
 background task starts a Main turn that re-reads the whole context, while units report and the
 merge queue lands or fails into Main's inbox and ORCHE wakes Main once per lineage.
 
+A fifth rule keeps the CEO Staff read-only: for ORCHE_SESSION `staff` a Bash command that runs
+`orche dispatch`, a queue action, an HR change, `git commit|push` or `gh pr merge|create` is refused
+(`lib/orche/staff.py`; the scope gate refuses its file edits).
+
 Denies only on a positive match; prints nothing otherwise (no auto-allow). Internal error -> allow +
 log, except that both rule sets refuse a command they cannot finish checking ("too complex").
 """
@@ -88,6 +92,14 @@ def wait_reason(tool, tool_input, session):
     return None
 
 
+def staff_reason(tool, tool_input, session):
+    """staff.DENY when the CEO Staff's Bash command would change something; None for every other session."""
+    if session != "staff" or tool != "Bash":
+        return None
+    from orche import staff
+    return staff.reason(tool, tool_input)
+
+
 def _log_denial(tool, reason):
     """One events line per denial: the gate, the session, the tool and the reason's first 80 characters
     (the reason names only the matched token or path; never file contents or the command). Best-effort."""
@@ -108,7 +120,8 @@ def main():
         tool, tool_input = payload.get("tool_name"), payload.get("tool_input") or {}
         reason = (jevgate.reason(tool, tool_input) or envgate.reason(tool, tool_input)
                   or transcript_reason(tool, tool_input)
-                  or wait_reason(tool, tool_input, os.environ.get("ORCHE_SESSION")))
+                  or wait_reason(tool, tool_input, os.environ.get("ORCHE_SESSION"))
+                  or staff_reason(tool, tool_input, os.environ.get("ORCHE_SESSION")))
         if reason is None:
             return 0
     except Exception as exc:  # noqa: BLE001 - gates allow on internal error

@@ -19,13 +19,15 @@ no review runs inside the report (a cross-check runs only on request, `orche rev
 In a team repository (registry.team) a gated done publishes nothing: it is filed with `pr: none` and the line
 `ready: say "push <unit>" (<branch>)` (publish.ready_line); `orche queue add <unit>` publishes on the owner's word.
 Under the runner (ORCHE_RUNNER set by `orche run`) it refuses with exit 2: the runner files the pointer.
+The CEO Staff (ORCHE_SESSION `staff`, not a member) files only `info --to <project or main-<p>>`: a held
+note from `staff` (unit `adhoc-staff-<yyyymmdd>`) that never wakes Main; Main reads it at its next wake.
 """
 import json
 import os
 import sys
 from pathlib import Path
 
-from . import brief, cli, donegate, inbox, mask, publish, registry, roster, units, util
+from . import brief, cli, donegate, inbox, mask, publish, registry, roster, staff, units, util
 from .flow import lineage, owner
 
 EXIT_OK, EXIT_USER, EXIT_RUNNER, EXIT_BLOCKED = 0, 1, 2, 3
@@ -54,6 +56,29 @@ def unidentified_message(r, place) -> str:
             "(ORCHE panes set it automatically) or run inside a unit worktree")
 
 
+def _staff_note(args, r) -> int:
+    """The CEO Staff's note to a project's Main: `info`, never urgent, held (it does not wake Main)."""
+    if args.status != "info" or args.urgent or args.owner or args.unit:
+        return cli.fail(EXIT_USER, "Staff files only `orche report info --to <project> --summary ...` "
+                                   "(no --urgent, --owner or --unit): a note Main reads at its next wake")
+    target = r.resolve_to(args.to or "", None)
+    if target is None or target.kind != "main":
+        return cli.fail(EXIT_USER, f"--to must name a project or its Main, got {args.to!r}")
+    summary = inbox.clip(mask.redact(args.summary)[0])
+    if not summary:
+        return cli.fail(EXIT_USER, "--summary is empty")
+    ptr = inbox.make(f"adhoc-{staff.SESSION}-{units.now():%Y%m%d}", staff.SESSION, target.session, "info",
+                     summary=summary)
+    path = None if args.dry_run else inbox.post(ptr)
+    if args.json:
+        print(json.dumps(ptr, indent=2, ensure_ascii=False))
+    elif args.dry_run:
+        print(f"[dry-run] would leave {target.session} a note")
+    else:
+        print(f"note left for {target.session} (it reads it at its next wake): {path}")
+    return EXIT_OK
+
+
 def cmd_report(args):
     if os.environ.get("ORCHE_RUNNER"):
         print("orche: report refused: this unit runs under `orche run`, which files your pointer from "
@@ -68,6 +93,8 @@ def cmd_report(args):
     cwd = os.getcwd()
     r = roster.Roster(reg)
     who = r.identify(cwd)
+    if staff.is_staff(who.session):
+        return _staff_note(args, r)
     if who.session is None:
         return cli.fail(EXIT_USER, unidentified_message(r, who.place))
     if who.member is None:

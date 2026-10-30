@@ -104,8 +104,9 @@ Liaison (headless) ── orche ask <proj> · orche card refresh <proj> (read-on
 
 | Role | Model / effort | Worktree | Responsibilities | Guards |
 |---|---|---|---|---|
-| Main | Fable 5.1 / xhigh | project main checkout | Understand, decompose, assign, confirm loop, approve integration, prepare release | MUST NOT edit code (rulebook; see note below). Long work goes to divisions. No deep review during drain. Reports with the status card |
+| Main | the owner's Claude Code default (recommended Opus 5.5 / high); the owner switches it per session with /model, Fable for audits and hard decisions | project main checkout | Understand, decompose, assign, confirm loop, approve integration, prepare release | MUST NOT edit code (rulebook; see note below). Long work goes to divisions. No deep review during drain. Reports with the status card |
 | Liaison | Sonnet 5.5 / low | none: headless calls in the main checkout (§14.14) | Refresh PROJECT_CARD.md (`orche card refresh`); answer other projects' questions (`orche ask`) | Read-only tools; card first; no model call when nothing landed since the base commit; cannot assign work |
+| CEO Staff (optional) | Opus 5.5 / medium, pinned in its pane command | the ORCHE checkout (one pane for every project) | Answer the owner's everyday questions from the owner's exchanges with every Main, the cards and read-only commands | Read-only (R-TOPO-6): the gates refuse its edits, dispatch, queue and HR changes, commits, pushes and PRs; work goes to Main as a held note. No heartbeat |
 | R&D | Opus 5.5 / high (+ deep-reasoner at max) | `div/rnd` | Product and architecture planning, design, prototypes | MUST NOT edit product code (prototype folder only). gstack only for important decisions (§13) |
 | Research | Sonnet 5.5 / medium | `div/research` | Market, technical, competitive research reports | Read-only. Conclusion ≤1 page. Escalate synthesis to Opus if heavy |
 | Build | Opus 5.5 / high | `div/build` | Traffic control: splits briefs into slices, staffs a worker per slice, decides PASS or RETURN, owns the ledger; the merge queue lands PRs | Code that lands is written by workers; Build never merges by hand |
@@ -121,6 +122,9 @@ Rules:
 - R-TOPO-3: Exactly one writer per worktree. A file's ownership belongs to one division or feature agent.
 - R-TOPO-4: Exactly one Main per project.
 - R-TOPO-5: Model IDs are configuration, not code. Implementations MUST read them from registry/persona files.
+- R-TOPO-6: The CEO Staff is optional, one per machine, and read-only; it is off until the owner asks a Main for it.
+
+**R-TOPO-6, the CEO Staff.** The owner's words "open the staff window" (any language) make Main run `orche wake staff`, which switches to the `staff` pane or opens it in the ORCHE checkout (added to Orca with `orca repo add` when Orca does not list it), so its transcripts and spend belong to no project; `orche sleep staff` closes it. The pane runs `claude --permission-mode bypassPermissions --model claude-opus-5-5 --effort medium`, resuming its newest `staff` conversation (the exception to R-TOPO-5: one fixed role, no registry record). Staff is not a member: the heartbeat never reminds, escalates, batch-wakes or reopens it. Its SessionStart text is its persona (`templates/personas/staff.md`), one card line per project and, from each project's Main transcripts, the owner's own prompts and Main's final reply per turn (no tool calls or output, no `[orche]` prompts, no system reminders; masked; labelled by project and time), newest first, six per project, older ones trimmed within the 6,000-character cap; each prompt then injects only the exchanges that started after the cursor `inbox/staff/.cursor.json`, within 9,500 characters, so nothing repeats. The env-read gate refuses its Bash writes (`orche` other than status, card, ask, metrics, doctor, depts, `queue` status, `hr log|choices|audit` without `--apply` and `report info`; `git commit|push`; `gh pr merge|create`) and the scope gate its file edits, with `[orche] Staff answers questions; work goes through Main. Say "tell Main: ..." and Staff leaves Main a note.` On "tell Main: …" Staff runs `orche report info --to <project> --summary "…"`: a held note from `staff` that does not wake Main, read at Main's next wake.
 - Implementation note (models): a division's model is the `model` string in its registry record, set by `orche init` (the recommendation, or the custom spec), `orche hr add` or `orche hr model`; the table's models are the `kinds` defaults. `orche depts`, `orche status`, briefs and `orche doctor` show it.
 - Implementation note: the `scope-gate` hook acts only inside division and feature worktrees (edits outside the worktree or a feature's scope globs are denied; `.orche/` and `docs/` are always allowed). Main's "no code edits" rule is enforced by its persona and the `orche-main` rulebook, not by a hook.
 - Implementation note (setup):
@@ -693,7 +697,7 @@ Failing minimal test → fix → pass. If impractical, use the nearest executabl
 | 3 | TIER routing | mechanical → Sonnet/medium; max only for hard | Fewer Opus-high calls |
 | 4 | Main never reads results | Long work in divisions; review as verification units | Main context protected |
 | 5 | Verification as scripts | 0-token re-verification | Less rework and re-asking |
-| 6 | Model per role | Research/Liaison/HR Sonnet; runner Haiku; Fable only for Main | Fewer Fable calls |
+| 6 | Model per role | Research/Liaison/HR Sonnet; runner Haiku; Main on the owner's default model (ORCHE never pins it); Fable only when the owner asks | Fewer Fable calls |
 | 7 | Jev gates (§7) | Routine messages, urgency | Routine 13–15% handled with 0 Main turns |
 | 8 | Cache-friendly ordering | STANDING + persona as prefix; brief last. Evaluate `subagentPromptCacheTtl: 1h` after one week of measurement | Fewer cache writes |
 | 9 | Parallel width | Concurrent exec 3; awake sessions 12; in-flight workers ≈10 rolling | Prevents runaway |

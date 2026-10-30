@@ -4,7 +4,9 @@ HANDOFF and the last 20 DECISIONS rows (main worktree: role + STANDING + the ten
 The role comes from the Roster's identity: $ORCHE_SESSION when set (never the cwd), else the cwd's unit.
 Right after the role comes a "Role rules" card: the inject-marked block of skills/orche-main (main
 checkout), skills/orche-build (the div-*-build worktree) or skills/orche (every other unit).
-Total output stays under 6,000 characters; the card is trimmed first. Fail-open."""
+Total output stays under 6,000 characters; the card is trimmed first. The CEO Staff (ORCHE_SESSION
+`staff`, lib/orche/staff.py) gets its own text instead: its persona, one card line per project and the
+newest exchanges between the owner and every Main, within the same cap. Fail-open."""
 import json
 import os
 import sys
@@ -236,6 +238,10 @@ def main():
         from orche import registry, roster
         r = roster.Roster(registry.load())
         who = r.identify(payload.get("cwd") or os.getcwd())
+        from orche import staff
+        if staff.is_staff(who.session):
+            print(staff.start_text(r.reg, CAP))
+            return 0
         sections = _sections(r, who)
         text = build(sections) if sections else ""
         text = _with_resume(r, who, payload.get("source"), text)

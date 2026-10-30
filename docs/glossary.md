@@ -103,6 +103,10 @@ _Avoid_: run id (the lock's field name for the same value).
 The headless read-only role that answers other projects' questions (`orche ask`) and refreshes PROJECT_CARD.md (`orche card refresh`). Not a member: no pane, session, memory or registry record.
 _Avoid_: liaison session, liaison pane (gone since 0.5.0).
 
+**CEO Staff**:
+The optional, read-only pane (session `staff`, one per machine, `lib/orche/staff.py`) the owner asks everyday questions; it knows the owner's exchanges with every Main from their transcripts and hands work to Main as a held note. Not a member: no registry record, memory or heartbeat.
+_Avoid_: assistant, secretary, staff division (it is no division).
+
 **Base commit**:
 The commit a card reflects: `base <sha>` under `## Last refreshed`. A refresh reads what landed since it and moves it to HEAD when it writes.
 _Avoid_: stamp (that is intake's).

@@ -453,6 +453,21 @@ class OwnerNoticeTest(ReconcileCase):
         self.assertEqual(len(self.notes({"inbox": {"wake": True, "quiet_s": 0, "notify": False}})), 1)  # ignored
 
 
+class StaffIgnoredTest(ReconcileCase):
+    def test_the_heartbeat_never_reminds_wakes_or_reopens_staff(self):
+        """The CEO Staff is no member: a waiting pointer, a gone pane or a quiet one changes nothing."""
+        self.pointer("staff", 120, status="question", urgent=True)
+        (self.home / "fake-orca.json").write_text(json.dumps({"terminal list": {"terminals": [
+            {"title": "main-acme-shop"}, {"title": "div-acme-shop-build"}, {"title": "main-docs-site"},
+            {"title": "staff", "handle": "t-staff", "connected": False, "lastOutputAt": 0}]}}))
+        for minutes in (0, 30, 240):
+            self.assertEqual(self.run_at(minutes)[1], [])
+            self.assertEqual(self.spawned, [])
+        calls = (self.home / "logs" / "fake-orca.jsonl").read_text()
+        self.assertNotIn("create", calls)
+        self.assertNotIn("staff", "\n".join(self.events()))
+
+
 class ClosedMainTest(ReconcileCase):
     """T4: a Main with waiting reports and no pane is reopened in place, REOPEN_CAP a day."""
 

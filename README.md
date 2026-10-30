@@ -64,6 +64,7 @@ Say it to Main in your own words; Main runs the command.
 | "update" | `orche update`: the newest ORCHE, reinstalled, every project's ORCHE files refreshed (never yours) |
 | "what changed in <project>?" | `orche card <project>`, then `orche ask <project> "…"` |
 | "how much did this cost?" | `orche metrics` |
+| "open the staff window" | `orche wake staff`: one CEO Staff pane for every project (Opus 5.5, medium) that answers everyday questions from what you told each Main; it changes nothing, and "tell Main: …" leaves that Main a note. "Close the staff window": `orche sleep staff` |
 | "check the setup", "what else can ORCHE do?" | `orche doctor`, ending with the next steps |
 | "continue" | after a cut-off or /clear, Main picks the work up from `orche status <project>` |
 | "enforce <class>" | Main sends Build that mistake class's row of the Enforcement table, from the weekly review of repeated mistakes |
