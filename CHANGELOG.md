@@ -3,6 +3,12 @@
 All notable changes to Orche are listed here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow semantic versioning.
 
+## 0.19.6 — 2026-11-01
+
+### Fixed
+
+- Orche wakes Main again. Every Main pane runs a named session, and Claude Code draws that name into the composer's top rule (`──── main-<project> ─`); 0.19.4 and 0.19.5 accepted only a bare rule, so Main's composer read as missing and every wake into Main was held (`nudge-failed`), and the heartbeat could not tell a duplicate Main pane was idle. A rule may now end in the session's name.
+
 ## 0.19.5 — 2026-11-01
 
 ### Changed

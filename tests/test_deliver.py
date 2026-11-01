@@ -23,6 +23,7 @@ from test_hooks import HookCase
 from test_registry import load_cli
 
 RULE = "─" * 40
+NAMED = "─" * 40 + " main-acme ─"   # a named session's top rule (every Main pane runs `--name main-<p>`)
 
 
 def screen(prompt="❯", handle="t-main", **extra):
@@ -343,6 +344,8 @@ class NudgeTest(NudgeCase):
                  (screen("❯ half typed"), "half typed"),
                  (screen(f"❯ {inbox.WAKE_TEXT}"), inbox.WAKE_TEXT),
                  (two_rows, "first line\n  second line"),
+                 ({"terminal": {"source": "screen", "tail": [NAMED, "❯", RULE, "  ⏵⏵ footer"]}}, ""),
+                 ({"terminal": {"source": "screen", "tail": [NAMED, "❯ half typed", RULE]}}, "half typed"),
                  (below, ""),
                  (footer, ""),
                  ({"terminal": {"source": "screen", "tail": ["● Done.", RULE, "❯ no rule below"]}}, None),

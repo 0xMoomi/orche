@@ -259,7 +259,7 @@ def reopen_pane(reg, session, handle, done=None):
 
 REMIND_RE = re.compile(r"^\s*\[orche\] report due:")
 PROMPT_ROW = re.compile(r"^\s*❯ ?(.*)$")          # Claude Code's composer row
-RULE_ROW = re.compile(r"^\s*[─━-]{8,}\s*$")       # the rules drawn above and below it
+RULE_ROW = re.compile(r"^\s*[─━-]{8,}(?:\s+\S.*\s+[─━-]+)?\s*$")   # its rules; a named session's top rule ends `─ main-<p> ─`
 PLACEHOLDER = re.compile(r'^Try\s+["“]')           # its empty-composer hint
 
 
