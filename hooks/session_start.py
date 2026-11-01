@@ -239,7 +239,7 @@ def main():
             return 0
         from orche import registry, roster
         r = roster.Roster(registry.load())
-        who = r.identify(payload.get("cwd") or os.getcwd())
+        who = r.identify(payload.get("cwd") or os.getcwd(), transcript=payload.get("transcript_path"))
         from orche import staff
         if staff.is_staff(who.session):
             if payload.get("source") != "startup":

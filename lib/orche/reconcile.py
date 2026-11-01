@@ -13,6 +13,15 @@ reconcile/heartbeat.json last. Classes:
   one closed first, deliver.reopen_pane; no nudge when nothing waits),
   an active division/feature woken (`hr.wake`), then `orche nudge`, REOPEN_CAP a day (`reopens:<session>`, STALL_S apart);
   past the cap one escalation; a dormant or paused unit is never woken: one urgent `info` to Main;
+- unread Main past CAP nudges (accepted, nothing drained: the pane runs without Orche's identity, e.g.
+  a tab Orca restored with its own `claude --resume`): before the escalation one repair, within
+  REOPEN_CAP a day: every Main pane closed and Main reopened through `hr.project_pane` (resume; its
+  `resumed:` note wakes it); never while a Main pane printed within deliver.ACTIVE_S or its composer
+  holds text (`orca terminal read --screen`, deliver._composer); the escalation follows if it still
+  drains nothing;
+- twin <session>: Orca lists more than one connected pane titled Main's session -> every one but the
+  most recently active closed (uncapped, no state; a pane being typed in is left), and Main told which
+  pane was kept;
 - undelivered <unit>: a `via: dispatch` pointer pending >= inbox.LATE -> `orche deliver --retry`; a
   `deferred` one (a runner dispatch from inside a Codex sandbox) at once, its first try in that pass;
 - drain <unit>: that pointer's revision ran, runs or was reported on (never a STOP) -> drained at
@@ -139,7 +148,7 @@ class _Args:
 
 @dataclass
 class Condition:
-    cls: str            # unread | closed | undelivered | drain | busy | silent | held
+    cls: str            # unread | closed | twin | undelivered | drain | busy | silent | held
     key: str            # the episode: "<class>:<target>:<episode>"
     project: str
     target: str         # session (unread, closed) or unit
@@ -156,7 +165,7 @@ class Condition:
 
 @dataclass
 class Action:
-    kind: str           # nudge | deliver | drain | restart | rerun | reopen | remind | escalate
+    kind: str           # nudge | deliver | drain | restart | rerun | reopen | repair | dedupe | remind | escalate
     cond: Condition
     attempt: int
     cap: int
@@ -183,6 +192,11 @@ class Action:
             verb = "reopen" if c.kind == "main" else "wake"
             why = f"{c.count} report(s) waiting, {mins} min" if c.count else "disconnected"
             return f"{verb} {c.target} pane ({why}; {verb} {self.attempt}/{self.cap} today)"
+        if self.kind == "repair":
+            return (f"reopen {c.target} pane ({c.count} report(s) unread {mins} min after {self.cap} accepted "
+                    f"nudges; reopen {self.attempt}/{REOPEN_CAP} today)")
+        if self.kind == "dedupe":
+            return f"close {len(c.info.get('panes', [])) - 1} duplicate {c.target} pane(s)"
         if self.kind == "remind":
             return f"remind {c.target} in {c.to} (rev {c.rev}, {c.info.get('reason')}; try 1/1)"
         if self.cap == 0:
@@ -194,8 +208,12 @@ def panes(now_s=None, mark_ok=True):
     """{normalised title: terminal} from one `terminal list`, or None when Orca is unreachable
     (logged as `reconcile orca-unreachable` at most hourly)."""
     try:
-        return {orca.normalize_title(t.get("title")): t
-                for t in orca.terminals_of(orca.terminal("list", timeout=10))}
+        out = {}
+        for t in orca.terminals_of(orca.terminal("list", timeout=10)):
+            first = out.setdefault(orca.normalize_title(t.get("title")), t)
+            if first is not t:
+                first.setdefault("twins", []).append(t)
+        return out
     except orca.OrcaError as exc:
         mark = folder() / ".orca-unreachable"
         now_s = time.time() if now_s is None else now_s
@@ -411,6 +429,11 @@ def observe(reg, now, keys=None, wake=True, terms=None, cfg_all=None, hush=False
         if not wake or terms is None or (m.entry or {}).get("pane") is False:
             continue   # a headless feature (`pane: false`) has no pane to reopen: its runs read the inbox
         dead = m.kind == "main" and session in terms and orca.disconnected(terms[session])
+        if m.kind == "main" and session in terms:
+            live = [t for t in [terms[session], *terms[session].get("twins", [])] if not orca.disconnected(t)]
+            if len(live) > 1:
+                out.append(Condition("twin", f"twin:{session}", m.project, session, 0.0, kind="main",
+                                     info={"panes": live}))
         if not waking and not dead:
             continue
         if waking:
@@ -465,7 +488,12 @@ def _came_back(e, c) -> bool:
     return last is not None and since is not None and since > last
 
 
-def _plan_repair(c, e, now, actions) -> None:
+def _reopens(new, session, now) -> int:
+    r = new.get(f"reopens:{session}")
+    return int(r.get("n") or 0) if isinstance(r, dict) and r.get("day") == now.date().isoformat() else 0
+
+
+def _plan_repair(c, e, now, actions, new) -> None:
     stall, cap, escalates = timing(c.cls)
     attempts = list(e.get("attempts") or [])
     n = len(attempts)
@@ -488,6 +516,12 @@ def _plan_repair(c, e, now, actions) -> None:
         at = now + _dt.timedelta(seconds=max(0.0, stall * 2 ** cap - c.age_s))
     e["next"] = units.iso(at) if at is not None else None
     if at is not None and at <= now and len(e.get("attempts") or []) >= cap:
+        reopens = _reopens(new, c.target, now)
+        if c.cls == "unread" and c.kind == "main" and not e.get("repaired") and reopens < REOPEN_CAP:
+            if c.ready or c.age_s < stall * 2 ** (cap + 1):   # a pane never quiet: the notice after all
+                if c.ready:     # quiet and not just nudged; apply also reads every Main composer first
+                    actions.append(Action("repair", c, reopens + 1, cap))
+                return
         actions.append(Action("escalate", c, n, cap, {"reminded": attempts[-1] if attempts else None}))
 
 
@@ -533,6 +567,9 @@ def plan(conds, state, now, resolved=frozenset()) -> tuple:
             if c.ready:
                 actions.append(Action("drain", c, 1, 1))
             continue
+        if c.cls == "twin":
+            actions.append(Action("dedupe", c, 1, 1))
+            continue
         e = new[c.key] = _entry(state, c.key, now)
         e.update(project=c.project, target=c.target, cls=c.cls, to=c.to, seen=units.iso(now),
                  **({"rev": c.rev} if c.rev is not None else {}),
@@ -546,7 +583,7 @@ def plan(conds, state, now, resolved=frozenset()) -> tuple:
         if c.cls == "held" and reruns >= int(c.info.get("per_pass") or 1):
             c = replace(c, ready=False)       # at most runner.max_parallel_total re-runs a pass, oldest first
         n = len(actions)
-        _plan_repair(c, e, now, actions)
+        _plan_repair(c, e, now, actions, new)
         reruns += c.cls == "held" and len(actions) > n
     return actions, new
 
@@ -665,6 +702,51 @@ def _reopen(reg, c) -> None:
         _nudge(c.target)
 
 
+def _typing(term) -> bool:
+    """A person may be typing in `term`: it printed within deliver.ACTIVE_S, or its composer is not
+    shown empty (`terminal read --screen`; an unreadable screen counts as typing)."""
+    from . import deliver
+    at = term.get("lastOutputAt")
+    if isinstance(at, (int, float)) and time.time() - at / 1000 < deliver.ACTIVE_S:
+        return True
+    try:
+        shown = orca.terminal("read", "--terminal", str(term.get("handle")), "--screen", timeout=deliver.CALL_S)
+    except orca.OrcaError:
+        return True
+    return deliver._composer(deliver._result(shown, "terminal")) != ""
+
+
+def _repair_main(reg, c) -> None:
+    """Main's wakes were accepted and nothing drained: close every pane titled Main's session and reopen
+    Main through `hr.project_pane` (resume; its `resumed:` note wakes it), stamped MAIN_REOPENED. Raises
+    (the attempt is spent) when a pane is being typed in."""
+    from . import hr
+    found = [t for t in orca.terminals_of(orca.terminal("list", timeout=10))
+             if orca.normalize_title(t.get("title")) == orca.normalize_title(c.target)]
+    if any(_typing(t) for t in found if not orca.disconnected(t)):
+        raise orca.OrcaError(f"{c.target} pane is in use: not reopened", code="owner_typing")
+    for t in found:
+        orca.terminal("close", "--terminal", str(t.get("handle")), timeout=10)
+    hr.project_pane(reg["projects"][c.project], dry_run=False, switch=False)
+    util.write_json(inbox.box(c.target) / MAIN_REOPENED, {"at": units.now().isoformat()})
+
+
+def _dedupe(c) -> None:
+    """Close every listed Main pane but the most recently active one (a pane being typed in is left),
+    then tell Main in one `info` which pane stayed."""
+    live = sorted(c.info.get("panes", []), key=lambda t: t.get("lastOutputAt") or 0, reverse=True)
+    keep, closed = live[0], 0
+    for t in live[1:]:
+        if not _typing(t):
+            orca.terminal("close", "--terminal", str(t.get("handle")), timeout=10)
+            closed += 1
+    if closed:
+        log.log("events", f"reconcile dedupe session={c.target} kept={keep.get('handle')} closed={closed}")
+        inbox.post(inbox.make(c.target, "orche", c.target, "info", brief_rev=1,
+                              summary=f"closed {closed} duplicate {c.target} pane(s); kept {keep.get('handle')}, "
+                                      "the most recently active"))
+
+
 def _last_nudge(session) -> str:
     from . import deliver
     try:
@@ -698,6 +780,10 @@ def apply(reg, action, now) -> None:
         runs.start(c.target)
     elif kind == "reopen":
         _reopen(reg, c)
+    elif kind == "repair":
+        _repair_main(reg, c)
+    elif kind == "dedupe":
+        _dedupe(c)
     elif kind == "remind":
         _remind(c.target, str(c.info.get("reason") or ""))
     else:
@@ -709,14 +795,17 @@ def _record(new, a, now) -> None:
     attempt, so it is capped and escalated once like any other."""
     at = units.iso(now)
     e = new.get(a.cond.key)
-    if a.kind == "drain" or e is None:
+    if a.kind in ("drain", "dedupe") or e is None:
         return
     if a.kind == "escalate":
         e["escalated"], e["escalated_at"] = True, at
         e.pop("next", None)
         return
-    if a.kind == "reopen":
+    if a.kind in ("reopen", "repair"):
         new[f"reopens:{a.cond.target}"] = {"day": now.date().isoformat(), "n": a.attempt, "at": at}
+    if a.kind == "repair":
+        e["repaired"] = at          # once an episode: the escalation follows if Main still drains nothing
+        return
     e["attempts"] = list(e.get("attempts") or []) + [at]
 
 

@@ -397,7 +397,7 @@ class PaneGateTest(ReconcileCase):
             calls.append(argv)
             return shell.Result(0 if argv[0] == "osascript" else 113, "", "", argv)
         with mock.patch.object(notify, "PLATFORM", "darwin"), mock.patch.object(shell, "run", run):
-            for m in (0, 10, 30, 70):
+            for m in (0, 10, 30, 70, 80):       # 70: the repair (a composer it cannot read: not reopened)
                 self.run_at(m)
         notes = [c for c in calls if c[0] == "osascript"]
         self.assertEqual(len(notes), 1)
@@ -405,6 +405,62 @@ class PaneGateTest(ReconcileCase):
         self.assertIn("last nudge: user-typing at", notes[0][-2])           # an argument, never script
         self.assertEqual(notes[0][-1], "Orche acme-shop")
         self.assertTrue(any("owner-notified project=acme-shop" in e for e in self.events()))
+
+
+class MainRepairTest(ReconcileCase):
+    """Main's wakes accepted and nothing drained: one reopen before the escalation; duplicate Main panes."""
+    EMPTY = {"terminal": {"source": "screen", "tail": ["─" * 20, "❯ ", "─" * 20]}}
+    TYPED = {"terminal": {"source": "screen", "tail": ["─" * 20, "❯ half a sentence", "─" * 20]}}
+
+    def fake(self, panes, read):
+        (self.home / "fake-orca.json").write_text(json.dumps(
+            {"terminal list": {"terminals": panes}, "terminal read": read}))
+
+    def pane(self, handle, minutes_ago):
+        return {"handle": handle, "title": "✳ main-acme-shop", "lastOutputAt": time.time() * 1000 - minutes_ago * 60000}
+
+    def closed(self):
+        path = self.home / "logs" / "fake-orca.jsonl"
+        rows = [json.loads(l)["argv"] for l in path.read_text().splitlines()] if path.exists() else []
+        return [a[a.index("--terminal") + 1] for a in rows if a[1:3] == ["terminal", "close"]]
+
+    def test_stuck_main_is_reopened_once_then_escalated(self):
+        self.fake([self.pane("t1", 10)], self.EMPTY)
+        self.pointer("main-acme-shop", 12)
+        with mock.patch.object(hr, "project_pane", return_value=({}, "")) as opened, \
+                mock.patch.object(reconcile, "_tell_owner") as told:
+            for m in (0, 10, 30):
+                self.run_at(m)
+            lines = self.run_at(70)[1]
+            self.assertTrue(any(l.startswith("reopen main-acme-shop pane") for l in lines), lines)
+            self.assertEqual((self.closed(), opened.call_count, told.call_count), (["t1"], 1, 0))
+            self.assertEqual(opened.call_args.kwargs, {"dry_run": False, "switch": False})
+            self.assertTrue((inbox.box("main-acme-shop") / reconcile.MAIN_REOPENED).is_file())
+            self.run_at(80)                                   # still nothing drained: the stuck notice
+            self.assertEqual((opened.call_count, told.call_count), (1, 1))
+
+    def test_a_pane_being_typed_in_is_never_closed(self):
+        self.fake([self.pane("t1", 10)], self.TYPED)
+        self.pointer("main-acme-shop", 12)
+        with mock.patch.object(hr, "project_pane") as opened, mock.patch.object(reconcile, "_tell_owner"):
+            for m in (0, 10, 30, 70):
+                self.run_at(m)
+        self.assertEqual((self.closed(), opened.call_count), ([], 0))
+        self.assertTrue(any("action=repair" in e and "failed=OrcaError" in e for e in self.events()))
+
+    def test_duplicate_main_panes_keep_the_most_recently_active(self):
+        self.fake([self.pane("t-old", 30), self.pane("t-new", 3), self.pane("t-mid", 20)], self.EMPTY)
+        self.run_at(0)
+        self.assertEqual(sorted(self.closed()), ["t-mid", "t-old"])
+        notes = [p for _x, p in inbox.pending("main-acme-shop")]
+        self.assertEqual(len(notes), 1)
+        self.assertIn("closed 2 duplicate main-acme-shop pane(s); kept t-new", notes[0]["summary"])
+        self.assertTrue(any("dedupe session=main-acme-shop kept=t-new closed=2" in e for e in self.events()))
+
+    def test_one_main_pane_is_left_alone(self):
+        self.fake([self.pane("t1", 30)], self.EMPTY)
+        self.run_at(0)
+        self.assertEqual(self.closed(), [])
 
 
 class StatusHintTest(ReconcileCase):

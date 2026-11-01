@@ -1341,6 +1341,20 @@ class ReportInjectTest(HookCase):
         self.assertEqual(len(self.inbox("main-acme")), 2)
         self.assertEqual(self.inbox("main-acme", drained=True), [])
 
+    def test_orca_restored_main_pane_drains_by_its_transcript_name(self):
+        """Orca's own `claude --resume` of Main's conversation carries no ORCHE_SESSION; its transcript
+        still names Main, so the prompt hook drains Main's inbox (and an unnamed one there does not)."""
+        self.pointer("acme-a-20261016-1")
+        unnamed = self.root / "t.jsonl"
+        unnamed.write_text('{"type":"user"}\n')
+        res = self.run_hook("report_inject.py", self.payload("prompt.json", prompt="[drain]"), ORCHE_SESSION="")
+        self.assertEqual((res.returncode, res.stdout, len(self.inbox("main-acme"))), (0, "", 1))
+        unnamed.write_text('{"type":"user"}\n{"type":"custom-title","customTitle":"main-acme"}\n')
+        res = self.run_hook("report_inject.py", self.payload("prompt.json", prompt="[drain]"), ORCHE_SESSION="")
+        self.assertEqual(res.returncode, 0)
+        self.assertEqual(self.inbox("main-acme"), [])
+        self.assertEqual(len(self.inbox("main-acme", drained=True)), 1)
+
     def test_identified_prompt_touches_activity_unidentified_does_not(self):
         self.prompt()
         self.assertTrue((self.home / "activity" / "main-acme").is_file())

@@ -188,6 +188,22 @@ class IdentifyTest(RosterCase):
         self.assertEqual(who.place.project, "acme")
         self.assertEqual(calls, seen)
 
+    def test_main_checkout_without_env_is_main_only_when_the_transcript_is_named_main(self):
+        """An Orca-restored Main pane (`claude --resume`, no ORCHE_SESSION) in the main checkout is Main
+        when its transcript carries Main's name; any other session there stays unidentified."""
+        named, other = self.root / "named.jsonl", self.root / "other.jsonl"
+        named.write_text('{"type":"user"}\n{"type":"custom-title","customTitle":"main-acme"}\n')
+        other.write_text('{"type":"custom-title","customTitle":"side-work"}\n')
+        who = self.r.identify(self.root / "acme/src", {}, transcript=str(named))
+        self.assertEqual((who.session, who.member), ("main-acme", self.r.member("main-acme")))
+        for cwd, path in (("acme/src", other), ("acme/src", None), ("acme/src", self.root / "gone.jsonl"),
+                          ("beta", named), ("elsewhere", named)):
+            with self.subTest(cwd=cwd, path=path):
+                who = self.r.identify(self.root / cwd, {}, transcript=str(path) if path else None)
+                self.assertIsNone(who.session)
+        unit = self.r.identify(self.root / "acme-build", {}, transcript=str(named))
+        self.assertEqual(unit.session, "div-acme-build")              # a unit worktree keeps its unit
+
     def test_unit_lookup_does_not_walk_for_the_project(self):
         calls = self._counting()
         place = self.r.place(self.root / "clone/src")

@@ -454,7 +454,8 @@ def log_refusal(me, blocks, refused, rules=()):
 def handle_stop_failure(payload: dict) -> None:
     """StopFailure hook (a turn ended on an API error; Stop does not fire): re-arm the wake as Stop does.
     Claude Code ignores the output; only the side effect matters."""
-    who = roster.Roster(registry.load()).identify(payload.get("cwd") or os.getcwd())
+    who = roster.Roster(registry.load()).identify(payload.get("cwd") or os.getcwd(),
+                                                  transcript=payload.get("transcript_path"))
     if who.session:
         inbox.rearm(who.session, unread=_orche_turn(who))
 
@@ -482,7 +483,7 @@ def handle_stop(payload: dict, started=None):
     tpath = payload.get("transcript_path")
     _msg_id, text = final_text(payload)
     r = roster.Roster(registry.load())
-    who = r.identify(cwd)
+    who = r.identify(cwd, transcript=tpath)
     me = who.session
     if me:
         units.touch_activity(me)

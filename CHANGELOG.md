@@ -3,6 +3,22 @@
 All notable changes to Orche are listed here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow semantic versioning.
 
+## 0.19.5 — 2026-11-01
+
+### Changed
+
+- The README's structure diagram shows who talks to whom, compactly: you and Main, Main and another project's Main (`orche ask`, work requests), divisions briefing and reporting to each other, the shared CEO Staff, and workers through pull requests to the merge queue.
+
+### Fixed
+
+- A Main pane Orca restored after a restart (its own `claude --resume`, without Orche's `ORCHE_SESSION`)
+  is Main again: in the main checkout a session whose transcript is named Main's session is identified as
+  Main, so its prompts drain the inbox. Any other session there stays unidentified.
+- The heartbeat repairs a Main whose wakes are accepted and nothing drains: after three nudges it closes
+  every Main pane and reopens Main through its own pane command with resume (within the two reopens a
+  day), before telling the owner, and never while a Main pane is being typed in.
+- Duplicate Main panes are closed so one remains (the most recently active), and Main is told which.
+
 ## 0.19.4 — 2026-11-01
 
 ### Changed

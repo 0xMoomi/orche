@@ -228,11 +228,15 @@ class Roster:
                 return key if key in self.reg.get("projects", {}) else None
         return None
 
-    def identify(self, cwd, env=None) -> Identity:
-        """D2: a non-empty env is authoritative, else the place's unit when it has a session, else unidentified.
+    def identify(self, cwd, env=None, transcript=None) -> Identity:
+        """D2: a non-empty env is authoritative, else the place's unit when it has a session, else the
+        project's Main when the cwd is its main checkout and `transcript` (the hook payload's
+        `transcript_path`) is named Main's session, else unidentified.
 
         Without ORCHE_SESSION the member is the record at the worktree (possibly a retired twin); callers use
-        `who.member` and never look the session up again.
+        `who.member` and never look the session up again. The transcript rule covers a Main pane Orca
+        restored with its own `claude --resume` (no Orche prefix); a session there under another name stays
+        unidentified.
         """
         session = env_session(env)
         if session:
@@ -240,6 +244,11 @@ class Roster:
         place = self.place(cwd)
         if place.unit is not None and place.unit.session:
             return Identity(place.unit.session, place.unit, place)
+        main = self.main(place.project) if place.unit is None and transcript else None
+        if main is not None:
+            from .hr import panes   # hr imports the roster: resolved at call time
+            if panes._names(transcript, main.session):
+                return Identity(main.session, main, place)
         return Identity(None, None, place)
 
     def recipient(self, session, sender=None) -> str | None:

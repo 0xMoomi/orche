@@ -8,30 +8,30 @@ For developers on macOS who want several agents on one repository without watchi
 ## How it works
 
 ```mermaid
-flowchart TD
-  subgraph orca [Orca holds the panes]
-    main["Main<br/>one per project"]
-    heads["Division heads<br/>Build, Research, R&D, GTM, Ops"]
-    staff["CEO Staff<br/>shared, read-only"]
+flowchart TB
+  you([You])
+  staff(["CEO Staff<br/>one for all projects"])
+  subgraph B ["Another project"]
+    mainB[Main]
   end
-  you([You]) -->|any language| main
-  main -->|orche dispatch| heads
-  heads --> workers["Workers<br/>own worktrees, headless runs"]
-  workers --> prs[Pull requests]
-  prs -->|Build reviews| queue[Merge queue]
-  queue -->|green| base[(Base branch)]
-  heads -.->|one wake per finished batch| main
-  main -.->|every conversation| staff
-  staff -.->|leaves Main a note| main
-  beat["Heartbeat<br/>every 5 min, no model call"] -.->|reopens panes| main
+  you -->|any language| mainA
+  staff -.-|"reads every Main<br/>leaves notes"| mainA
+  mainB <-->|"ask · work request"| mainA
+  subgraph A ["Your project"]
+    mainA[Main] <-->|"brief ⇄ report"| divs
+    subgraph divs ["Divisions also talk to each other"]
+      direction LR
+      research[Research] <-->|"brief ⇄ report"| build[Build] --> queue["Workers → PRs → merge queue"]
+    end
+  end
 ```
 
-- **Main**, one per project, turns what you say into briefs and hands them to divisions with `orche dispatch`.
-- **Divisions** (Build, Research, R&D, GTM, Ops, or your own) split larger work into workers, one per slice, each in its own git worktree; workers run headless, so no pane waits on you.
+- **Main**, one per project, turns what you say into briefs and hands them to divisions with `orche dispatch`. It also talks to other projects' Mains: `orche ask` gets a read-only answer without waking them, and a work request goes to that Main, which asks you before taking it on.
+- **Divisions** (Build, Research, R&D, GTM, Ops, or your own) brief each other too (Research can hand Build a task), and every report goes back to whoever sent the brief. They split larger work into workers, one per slice, each in its own git worktree; workers run headless, so no pane waits on you.
 - **Agents open their own pull requests.** Build reviews each one, and the merge queue runs `scripts/verify/ci.sh` on the base branch and lands it when green. In team mode (a repository that declares its team plugin) push, pull request and merge wait for your word; in an issue-tracked project (Linear) each worker's name carries the issue key and its PR says `Fixes DES-57`.
 - **One wake per finished batch.** Main hears back once, when everything a request started has ended; a question or a decision for you reaches it at once.
 - **The CEO Staff**, one window for all your projects, opens by default: it knows what you said to every Main and what each answered, answers everyday questions, changes nothing, and "tell Main: …" leaves that Main a note.
-- **The heartbeat**, a LaunchAgent pass every 5 minutes that makes no model call itself, reopens closed panes, re-delivers stuck briefs and keeps the merge queue moving.
+- **The heartbeat**, a LaunchAgent pass every 5 minutes that makes no model call itself, reopens closed panes (also a Main that Orca reopened without Orche), re-delivers stuck briefs and keeps the merge queue moving.
 
 ## Quick start
 
