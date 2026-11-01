@@ -32,11 +32,14 @@ output="dir:${current_dir}"
 printf "%s\\n" "$output\""""  # no trailing newline, like the real script
 
 def tree_digest(root) -> dict:
+    """Every path under `root` but the fake claude's folder (it logs each call)."""
     out = {}
     for dirpath, dirnames, filenames in os.walk(root):
         for name in sorted(dirnames + filenames):
             p = Path(dirpath) / name
             rel = str(p.relative_to(root))
+            if rel.split(os.sep)[0] == "fake-claude":
+                continue
             if p.is_symlink():
                 out[rel] = "link:" + os.readlink(p)
             elif p.is_file():
@@ -50,9 +53,9 @@ def ok_runner(results):
     """A shell.RUNNER stub answering orca calls from `results` ({"status": ..., "repo list": ...})."""
     calls = []
 
-    def run(argv, *, timeout, input, env=None):
+    def run(argv, *, timeout, input, **kw):
         if argv[0] != "orca":
-            return REAL_RUNNER(argv, timeout=timeout, input=input)
+            return REAL_RUNNER(argv, timeout=timeout, input=input, **kw)
         calls.append(argv)
         key = argv[1] if argv[1] == "status" else " ".join(argv[1:3])
         res = results.get(key, {})
@@ -89,11 +92,16 @@ class InstallCase(support.TempHomeCase):
         (c / "agents" / "hr.md").write_text("my own hr\n")  # pre-existing regular file
         (c / "agents" / "deep-reasoner.md").symlink_to(self.h / "mine" / "deep-reasoner.md")
         self.c = c
-        # doctor probes `claude --version/--help`: a fake script, never the real binary.
+        # doctor probes `claude --version/--help` and `claude plugin list --json`: a fake script, never the
+        # real binary (the plugin is not installed until a test says so).
         self.claude = support.write_fake_claude(self.home / "fake-claude")
         (self.home / "config.json").write_text(json.dumps({"claude_bin": str(self.claude)}))
         shell.RUNNER, self.calls = ok_runner({"status": {"running": True}})
         self.addCleanup(setattr, shell, "RUNNER", REAL_RUNNER)
+
+    def plugin_on(self):
+        """orche@orche installed and enabled, as `claude plugin list --json` reports it."""
+        support.plugin_installed(self.claude.parent)
 
     def orche(self, *argv):
         out, err = io.StringIO(), io.StringIO()
@@ -130,6 +138,8 @@ class InstallTest(InstallCase):
                          f"statusline: would patch {self.c / 'statusline-command.sh'}",
                          f"agents: would symlink {self.c / 'agents' / 'exec.md'}",
                          f"agents: skip {self.c / 'agents' / 'hr.md'} (existing regular file; left untouched)",
+                         "hooks: settings mode (the orche plugin is not enabled for new sessions, so settings.json "
+                         "registers Orche's hooks)",
                          "/plugin install orche@orche"):
             self.assertIn(expected, out)
         self.assertEqual(out.splitlines()[-1], "  /plugin install orche@orche")
@@ -147,8 +157,9 @@ class InstallTest(InstallCase):
         self.assertEqual(json.loads(out)["instructions"], [])
 
     def test_install_backs_up_merges_and_is_idempotent(self):
+        self.plugin_on()
         out = self.install()
-        self.assertEqual(out.splitlines()[-1], "  /plugin install orche@orche")
+        self.assertEqual(out.splitlines()[-1], "hooks: ok (on for new sessions: the orche plugin is enabled)")
         data = self.read_settings()
         for key, value in self.settings.items():
             if key not in ("env", "hooks"):
@@ -197,9 +208,13 @@ class InstallTest(InstallCase):
     # -- R4: switching install modes never leaves two Stop hooks --------------------------------
     def test_plugin_install_after_settings_install_removes_settings_hooks(self):
         self.install("--mode", "settings")
+        self.assertEqual(self.state()["mode"], "settings")
         backups = len(self.backups())
-        out = self.install()   # plugin mode (the default)
+        self.plugin_on()
+        out = self.install()   # the existing install's mode (settings), but the plugin is on: it wins
         self.assertEqual(self.read_settings()["hooks"], self.settings["hooks"])
+        self.assertIn("hooks: plugin mode (the orche plugin is enabled and registers Orche's hooks; settings.json "
+                      "entries would run each one twice)", out)
         self.assertIn(f"settings: remove (hook Stop {PLUGIN_CMDS[0]} (plugin mode: the plugin registers "
                       "the hooks))", out)
         self.assertEqual(len(self.backups()), backups + 1)
@@ -223,8 +238,10 @@ class InstallTest(InstallCase):
         self.assertEqual(self.read_settings(), self.settings)
 
     def test_settings_install_after_plugin_install_adds_hooks_once(self):
+        self.plugin_on()
         self.install()
         self.assertEqual(self.read_settings()["hooks"], self.settings["hooks"])
+        support.plugin_installed(self.claude.parent, disabled_in=self.c)   # the owner turns the plugin off
         self.install("--mode", "settings")
         self.install("--mode", "settings")
         cmds = self.commands(self.read_settings())
@@ -255,6 +272,74 @@ class InstallTest(InstallCase):
         self.assertEqual(code, 1)
         self.assertEqual((self.c / "settings.json").read_text(), "{broken")
         self.assertIn("settings: error", out)
+        self.assertIn(f"hooks: error {self.c / 'settings.json'} (new sessions would run without Orche: 0 of 7 hooks "
+                      "registered and the orche plugin not enabled)", out)
+
+    # -- c108: the existing install's mode is kept; plugin mode only while the plugin is on -----------
+    def test_install_without_mode_keeps_the_existing_installs_mode(self):
+        self.install("--mode", "settings")
+        out = self.install()
+        self.assertEqual(self.state()["mode"], "settings")
+        self.assertEqual([self.commands(self.read_settings()).count(c) for c in PLUGIN_CMDS],
+                         [PLUGIN_CMDS.count(c) for c in PLUGIN_CMDS])
+        self.assertNotIn("hooks: settings mode", out)
+        self.assertNotIn("/plugin", out)
+        self.assertEqual(out.splitlines()[-1], f"hooks: ok (on for new sessions: all 7 in {self.c / 'settings.json'})")
+
+    def test_plugin_mode_with_the_plugin_disabled_registers_the_hooks_in_settings(self):
+        # The 2026-11-01 incident: the plugin installed but turned off on purpose; plugin mode asked for.
+        support.plugin_installed(self.claude.parent, disabled_in=self.c)
+        self.settings["enabledPlugins"]["orche@orche"] = False
+        out = self.install("--mode", "plugin", "--no-plugin-hint")
+        self.assertEqual(self.state()["mode"], "settings")
+        self.assertEqual(sorted(h["command"] for h in self.state()["added_hooks"]), sorted(PLUGIN_CMDS))
+        self.assertIn("hooks: settings mode (the orche plugin is not enabled for new sessions, so settings.json "
+                      "registers Orche's hooks)", out)
+        self.assertIn(f"hooks: ok (on for new sessions: all 7 in {self.c / 'settings.json'})", out)
+        calls = (self.claude.parent / "claude-argv.txt").read_text().splitlines()
+        self.assertEqual(set(calls), {"plugin list --json"})   # asked, never changed
+        self.assertEqual(self.orche("uninstall", "--home", str(self.h))[0], 0)
+        self.assertEqual(self.read_settings(), self.settings)
+
+    def session_home(self, settings=None):
+        """This test's home as the real one ($HOME) with $CLAUDE_CONFIG_DIR at an Orca-like profile folder."""
+        profile = self.home / "profile"
+        profile.mkdir()
+        if settings is not None:
+            (profile / "settings.json").write_text(settings)
+        support.staff_asleep()
+        patcher = mock.patch.dict(os.environ, {"HOME": str(self.h), "CLAUDE_CONFIG_DIR": str(profile)})
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        return profile / "settings.json"
+
+    def test_settings_mode_writes_the_hooks_into_claude_config_dir_too(self):
+        other = self.session_home(json.dumps({"model": "fable", "hooks": {}}) + "\n")
+        out = self.install("--mode", "settings", "--no-reconcile")
+        data = json.loads(other.read_text())
+        self.assertEqual(data["model"], "fable")
+        self.assertEqual(sorted(self.commands(data)), sorted(PLUGIN_CMDS))
+        self.assertNotIn("cleanupPeriodDays", data)   # only the hook entries go there
+        self.assertEqual(len(list(other.parent.glob("settings.json.bak-*"))), 1)
+        self.assertIn(f"hooks: ok (on for new sessions: all 7 in {self.c / 'settings.json'}, {other})", out)
+        self.assertIn(f"settings: ok {other} (unchanged)", self.install("--mode", "settings", "--no-reconcile"))
+        self.assertEqual(len(list(other.parent.glob("settings.json.bak-*"))), 1)
+        self.plugin_on()   # enabled for both folders: plugin mode takes the entries out of both
+        self.install("--no-reconcile")
+        self.assertEqual(self.commands(json.loads(other.read_text())), [])
+        self.assertEqual(self.read_settings()["hooks"], self.settings["hooks"])
+        self.assertEqual(self.state()["mode"], "plugin")
+        calls = (self.claude.parent / "claude-argv.txt").read_text().splitlines()
+        self.assertEqual(calls[-2:], ["plugin list --json", "plugin list --json"])   # once per folder
+
+    def test_a_session_file_that_cannot_take_the_hooks_fails_the_install(self):
+        other = self.session_home("{broken")
+        code, out, _ = self.orche("install", "--home", str(self.h), "--mode", "settings", "--no-reconcile")
+        self.assertEqual(code, 1, out)
+        self.assertEqual(other.read_text(), "{broken")
+        self.assertIn(f"hooks: error {other} (new sessions would run without Orche: 0 of 7 hooks registered and the "
+                      "orche plugin not enabled)", out)
+        self.assertNotIn("hooks: ok", out)
 
     def test_uninstall_removes_blocks_links_and_hooks_keeps_backups(self):
         self.install("--mode", "settings")
@@ -443,7 +528,8 @@ class SkillsTest(InstallCase):
     def test_plugin_mode_removes_our_links_and_keeps_foreign_ones(self):
         self.install("--mode", "settings")
         (self.skills() / "mine").mkdir()
-        out = self.install()
+        self.plugin_on()
+        out = self.install("--mode", "plugin")
         for name in self.NAMES:
             self.assertFalse((self.skills() / name).is_symlink(), name)
             self.assertIn(f"skills: remove {self.skills() / name}", out)
@@ -451,6 +537,7 @@ class SkillsTest(InstallCase):
         self.assertTrue((self.skills() / "mine").is_dir())
 
     def test_plain_plugin_mode_says_nothing_about_skills(self):
+        self.plugin_on()
         out = self.install()
         self.assertNotIn("skills:", out)
         self.assertFalse(self.skills().exists())
@@ -542,6 +629,7 @@ LOGIN_SH = "/fake/login-sh"
 class DoctorTest(InstallCase):
     def setUp(self):
         super().setUp()
+        self.plugin_on()   # the hooks row is OK unless a test turns the plugin off
         # `$SHELL -lc ...` answers (never the developer's real login shell): command -> stdout or None.
         self.login = {"command -v python3 && python3 --version 2>&1": "/opt/homebrew/bin/python3\nPython 3.14.0\n",
                       "command -v orche": f"{support.ROOT / 'bin' / 'orche'}\n"}
@@ -552,12 +640,12 @@ class DoctorTest(InstallCase):
         which = (lambda tool: None if tool in missing else real("python3") if tool == "python3" else real("sh"))
         inner = shell.RUNNER
 
-        def runner(argv, *, timeout, input, env=None):
+        def runner(argv, *, timeout, input, **kw):
             if argv[0] == LOGIN_SH and argv[1] == "-lc":
                 self.login_calls.append(argv)
                 out = self.login.get(argv[2])
                 return shell.Result(0 if out else 1, out or "", "", argv)
-            return inner(argv, timeout=timeout, input=input)
+            return inner(argv, timeout=timeout, input=input, **kw)
         with mock.patch.object(doctor.shutil, "which", which), mock.patch.dict(os.environ, {"SHELL": LOGIN_SH}), \
                 mock.patch.object(shell, "RUNNER", runner):
             return self.orche(*(["--json"] if getattr(self, "json_doctor", False) else []), "doctor", "--home",
@@ -661,7 +749,7 @@ class DoctorTest(InstallCase):
         self.assertIn("OK\tregistry\tvalid (0 project(s))", lines)
         self.assertTrue(any(l.startswith("OK\torca\t") for l in lines))
         self.assertTrue(any(l.startswith("WARN\tstatusline\t") for l in lines))
-        self.assertTrue(any(l.startswith("WARN\thooks\t") for l in lines))
+        self.assertIn(f"OK\thooks\torche plugin enabled for new sessions ({self.c})", lines)
         self.assertTrue(any(l.startswith("WARN\tcleanupPeriodDays\t") for l in lines))
         self.assertTrue(all(l.split("\t")[0] in ("OK", "WARN", "FAIL") for l in lines[:lines.index("")]))
         self.assertIn("WARN\tjev\tnot configured (Haiku fallback)", lines)  # Jev is optional
@@ -704,16 +792,29 @@ class DoctorTest(InstallCase):
 
     def test_hooks_registered_twice_warns(self):
         registry.save(registry.empty())
+        support.plugin_installed(self.claude.parent, disabled_in=self.c)
         self.install("--mode", "settings")
+        _, out, _ = self.doctor()
+        self.assertIn(f"OK\thooks\tall 7 Orche hooks in {self.c / 'settings.json'}", out.splitlines())
         data = self.read_settings()
-        data["enabledPlugins"]["orche@orche"] = True
+        data["enabledPlugins"]["orche@orche"] = True   # the owner turns the plugin on again
         (self.c / "settings.json").write_text(json.dumps(data, indent=2) + "\n")
         _, out, _ = self.doctor()
-        self.assertIn("WARN\thooks\thooks registered twice (plugin + 7 settings.json entries): run orche install "
-                      "(plugin mode removes the settings entries) or disable the plugin", out.splitlines())
-        self.install()   # R4: plugin mode removes them; doctor is quiet again
+        self.assertIn(f"WARN\thooks\thooks registered twice (plugin + 7 entries in {self.c / 'settings.json'}): run "
+                      "orche install (the plugin wins, the settings entries go)", out.splitlines())
+        self.install()   # R4: the plugin wins and the settings entries go; doctor is quiet again
         _, out, _ = self.doctor()
-        self.assertIn("OK\thooks\torche plugin enabled", out.splitlines())
+        self.assertIn(f"OK\thooks\torche plugin enabled for new sessions ({self.c})", out.splitlines())
+
+    def test_hooks_off_is_a_fail_in_plain_words(self):
+        registry.save(registry.empty())
+        support.plugin_installed(self.claude.parent, disabled_in=self.c)
+        code, out, _ = self.doctor()
+        self.assertEqual(code, 1, out)
+        self.assertIn("FAIL\thooks\tOrche's hooks are off: new sessions run without Orche. Say \"repair the setup\"; "
+                      f"Main runs orche install ({self.c / 'settings.json'}: 0 of 7 hooks, the orche plugin not "
+                      "enabled)", out.splitlines())
+        self.assertNotIn("restart", out.lower())
 
     def test_invalid_registry_fails_and_orca_down_warns(self):
         (self.home / "registry.json").write_text("{nope")

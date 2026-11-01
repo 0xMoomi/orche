@@ -115,7 +115,7 @@ _Avoid_: stamp (that is intake's).
 `orche card refresh <project>`: a git gate, then (only when commits outside the card and `.orche/` landed since the base commit) one Liaison call whose sections the CLI merges into the card.
 
 **Effort**:
-Claude Code's `--effort` level. A unit worker's effort comes from its TIER (mechanical low, standard medium, hard high); its model comes from the target's registry record. A pane's effort is its persona file's `effort:` line; a division record carries none (an old `effort` key is ignored).
+Claude Code's `--effort` level. A unit worker's effort comes from its TIER (mechanical low, standard medium, hard high); its model comes from the target's registry record. A division's or feature's pane effort is its persona file's `effort:` line; Main's and Staff's pane commands pass `--effort` (xhigh, medium). A division record carries none (an old `effort` key is ignored).
 _Avoid_: tier (TIER is the brief's field).
 
 **Vendor**:

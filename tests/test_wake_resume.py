@@ -11,7 +11,7 @@ from pathlib import Path
 from unittest import mock
 
 import support  # noqa: F401  (puts lib/ on sys.path)
-from orche import inbox
+from orche import inbox, staff
 from orche.hr import panes
 from orche.janitor import discover
 
@@ -109,10 +109,28 @@ class MainResumesTest(support.TempHomeCase):
     def test_project_pane_resumes_by_default_and_posts_the_resumed_note(self):
         data, _ = panes.project_pane(self.proj, dry_run=False, switch=False)
         self.assertEqual(data["pane"], "opened")
-        self.assertTrue(self.opened[0].endswith(f"bypassPermissions --resume {ID_NEW}"), self.opened[0])
+        self.assertTrue(self.opened[0].endswith(f"bypassPermissions --model claude-opus-5-5 --effort xhigh --resume {ID_NEW}"),
+                        self.opened[0])   # a resumed Main is pinned too: the flags beat the model its transcript restores
         got = [(p["from"], p["to"], p["status"], p["urgent"], p["summary"]) for _f, p in inbox.pending("main-acme")]
         self.assertEqual(got, [("orche", "main-acme", "info", True, panes.RESUMED)])
         self.assertTrue(panes.RESUMED.startswith("resumed: "))
+
+    def test_every_main_pane_is_pinned_to_opus_xhigh_and_no_unit_pane_is(self):
+        """Opus 5.5 starts at medium effort and the user settings' top-level `effortLevel` does not reach it,
+        so every Main pane passes model and effort itself (staff.MAIN_MODEL, MAIN_EFFORT, next to Staff's
+        pair), fresh and resumed; a level or model the owner picks in the session still wins there."""
+        pin = f"--model {staff.MAIN_MODEL} --effort {staff.MAIN_EFFORT} "
+        self.assertEqual(pin, "--model claude-opus-5-5 --effort xhigh ")
+        self.assertEqual((staff.MODEL, staff.EFFORT), ("claude-opus-5-5", "medium"))
+        with contextlib.redirect_stderr(io.StringIO()):
+            self.assertTrue(panes.pane_command("main-acme", resume=True, cwd=self.root).endswith(
+                f"bypassPermissions {pin}--resume {ID_NEW}"))
+            self.assertTrue(panes.pane_command("main-acme", resume=False).endswith(f"bypassPermissions {pin}--name main-acme"))
+            for unit in ("div-acme-build", "feat-acme-x"):
+                for resume in (True, False):
+                    self.assertNotIn("--model", panes.pane_command(unit, resume=resume, cwd=self.root))
+        panes.project_pane(self.proj, dry_run=False, switch=False, resume=False)
+        self.assertIn(f" {pin}--name main-acme", self.opened[0])
 
     def test_project_pane_fresh_posts_nothing(self):
         panes.project_pane(self.proj, dry_run=False, switch=False, resume=False)

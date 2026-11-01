@@ -19,6 +19,14 @@ reconcile/heartbeat.json last. Classes:
   `resumed:` note wakes it); never while a Main pane printed within deliver.ACTIVE_S or its composer
   holds text (`orca terminal read --screen`, deliver._composer); the escalation follows if it still
   drains nothing;
+- outside <session>: a Main its hooks marked running outside Orche's pane command (roster.OUTSIDE in its
+  inbox folder: a tab Orca relaunched with a plain `claude`, so no ORCHE_SESSION, pane env or pinned
+  model) is turned back into Orche's Main through the same repair (`_repair_main`: every Main pane
+  closed, Main reopened through `hr.project_pane` with resume, its `resumed:` note wakes it), only when
+  it is safe: a pane titled Main's session is listed connected, every such pane printed nothing for
+  OUTSIDE_IDLE_S, the owner's last prompt in Main (flow owner-seen) is as old, no composer holds text
+  (`_typing`), outside flow.quiet_hours, within REOPEN_CAP a day; never twice for one marker (the
+  reopen stamps it `reopened`; Main's own pane removes it, so a later relaunch is a new marker);
 - twin <session>: Orca lists more than one connected pane titled Main's session -> every one but the
   most recently active closed (uncapped, no state; a pane being typed in is left), and Main told which
   pane was kept;
@@ -96,6 +104,7 @@ STALL_S = 600             # the first attempt after 10 min, then doubling
 CAP = 3                   # attempts before the one escalation (at STALL_S · 2^CAP)
 BUDGET_S = 60             # no new action after this long in one pass (the rest is due next pass)
 REOPEN_CAP = 2            # closed: reopens (Main) or wakes (division/feature) of one session a day
+OUTSIDE_IDLE_S = 600      # outside: Main's pane printed nothing, and the owner wrote nothing, this long
 SILENT_IDLE_S = 1200      # silent: the pane idle this long ...
 SILENT_TIMEBOX = 1.5      # ... or the revision this many TIMEBOXes old
 SILENT_ESCALATE_S = 1800  # silent: the escalation this long after the reminder, or at 2 × TIMEBOX
@@ -148,7 +157,7 @@ class _Args:
 
 @dataclass
 class Condition:
-    cls: str            # unread | closed | twin | undelivered | drain | busy | silent | held
+    cls: str            # unread | closed | twin | outside | undelivered | drain | busy | silent | held
     key: str            # the episode: "<class>:<target>:<episode>"
     project: str
     target: str         # session (unread, closed) or unit
@@ -165,7 +174,7 @@ class Condition:
 
 @dataclass
 class Action:
-    kind: str           # nudge | deliver | drain | restart | rerun | reopen | repair | dedupe | remind | escalate
+    kind: str  # nudge | deliver | drain | restart | rerun | reopen | repair | restore | dedupe | remind | escalate
     cond: Condition
     attempt: int
     cap: int
@@ -195,6 +204,9 @@ class Action:
         if self.kind == "repair":
             return (f"reopen {c.target} pane ({c.count} report(s) unread {mins} min after {self.cap} accepted "
                     f"nudges; reopen {self.attempt}/{REOPEN_CAP} today)")
+        if self.kind == "restore":
+            return (f"reopen {c.target} pane (it runs outside Orche's pane command, marked {mins} min ago; "
+                    f"reopen {self.attempt}/{self.cap} today)")
         if self.kind == "dedupe":
             return f"close {len(c.info.get('panes', [])) - 1} duplicate {c.target} pane(s)"
         if self.kind == "remind":
@@ -408,6 +420,26 @@ def _wakes_head(m) -> bool:
     return vendors.vendor_of(model) != vendors.CODEX
 
 
+def _outside(m, terms, now, hush) -> list:
+    """The outside condition of Main `m` (see the module docstring) while its marker is not `reopened` and a
+    pane titled its session is listed connected; ready when every such pane printed nothing for
+    OUTSIDE_IDLE_S (a pane that does not say when it printed is not), the owner's last prompt in Main is as
+    old, quiet hours do not hold and no composer shows text (`_typing`, read last). Age: since the marker."""
+    marker = roster.outside(m.session)
+    term = terms.get(m.session)
+    if marker is None or marker.get("reopened") or term is None:
+        return []
+    live = [t for t in [term, *term.get("twins", [])] if not orca.disconnected(t)]
+    if not live:
+        return []
+    at, seen = units.parse_iso(marker.get("at")), guard.last_seen(m.project)
+    ready = (not hush and all(s is not None and s >= OUTSIDE_IDLE_S for s in map(probe, live))
+             and (seen is None or time.time() - seen >= OUTSIDE_IDLE_S) and not any(map(_typing, live)))
+    return [Condition("outside", f"outside:{m.session}:{marker.get('at')}", m.project, m.session,
+                      max(0.0, (now - at).total_seconds()) if at else 0.0, ready=ready, kind="main",
+                      info={"at": marker.get("at")})]
+
+
 def observe(reg, now, keys=None, wake=True, terms=None, cfg_all=None, hush=False) -> list:
     """The conditions for the projects `keys` (default all): [Condition], sorted by key. `terms`:
     panes() (None: Orca unreachable, no pane class). `hush` (flow.quiet_hours): no closed repair."""
@@ -428,6 +460,8 @@ def observe(reg, now, keys=None, wake=True, terms=None, cfg_all=None, hush=False
         waking = [(t, path, p) for t, path, p in late if inbox.wakes(p)]
         if not wake or terms is None or (m.entry or {}).get("pane") is False:
             continue   # a headless feature (`pane: false`) has no pane to reopen: its runs read the inbox
+        if m.kind == "main":
+            out += _outside(m, terms, now, hush)
         dead = m.kind == "main" and session in terms and orca.disconnected(terms[session])
         if m.kind == "main" and session in terms:
             live = [t for t in [terms[session], *terms[session].get("twins", [])] if not orca.disconnected(t)]
@@ -569,6 +603,11 @@ def plan(conds, state, now, resolved=frozenset()) -> tuple:
             continue
         if c.cls == "twin":
             actions.append(Action("dedupe", c, 1, 1))
+            continue
+        if c.cls == "outside":    # no episode state: the marker itself records its one reopen
+            n = _reopens(new, c.target, now)
+            if c.ready and n < REOPEN_CAP:
+                actions.append(Action("restore", c, n + 1, REOPEN_CAP))
             continue
         e = new[c.key] = _entry(state, c.key, now)
         e.update(project=c.project, target=c.target, cls=c.cls, to=c.to, seen=units.iso(now),
@@ -731,6 +770,17 @@ def _repair_main(reg, c) -> None:
     util.write_json(inbox.box(c.target) / MAIN_REOPENED, {"at": units.now().isoformat()})
 
 
+def _restore_main(reg, c) -> None:
+    """A Main running outside Orche's pane command: its marker stamped `reopened` first (one try a marker,
+    whatever follows), then `_repair_main`. Raises when the marker changed since the pass observed it."""
+    marker = roster.outside(c.target)
+    if marker is None or marker.get("reopened") or marker.get("at") != c.info.get("at"):
+        raise RuntimeError(f"{c.target}'s outside marker changed: not reopened")
+    stamp = {**marker, "reopened": units.now().isoformat(timespec="seconds")}
+    util.write_json(inbox.box(c.target) / roster.OUTSIDE, stamp)
+    _repair_main(reg, c)
+
+
 def _dedupe(c) -> None:
     """Close every listed Main pane but the most recently active one (a pane being typed in is left),
     then tell Main in one `info` which pane stayed."""
@@ -782,6 +832,8 @@ def apply(reg, action, now) -> None:
         _reopen(reg, c)
     elif kind == "repair":
         _repair_main(reg, c)
+    elif kind == "restore":
+        _restore_main(reg, c)
     elif kind == "dedupe":
         _dedupe(c)
     elif kind == "remind":
@@ -794,15 +846,15 @@ def _record(new, a, now) -> None:
     """The bookkeeping of an applied action, also when its apply raised: a failing repair spends its
     attempt, so it is capped and escalated once like any other."""
     at = units.iso(now)
+    if a.kind in ("reopen", "repair", "restore"):
+        new[f"reopens:{a.cond.target}"] = {"day": now.date().isoformat(), "n": a.attempt, "at": at}
     e = new.get(a.cond.key)
-    if a.kind in ("drain", "dedupe") or e is None:
+    if a.kind in ("drain", "dedupe", "restore") or e is None:
         return
     if a.kind == "escalate":
         e["escalated"], e["escalated_at"] = True, at
         e.pop("next", None)
         return
-    if a.kind in ("reopen", "repair"):
-        new[f"reopens:{a.cond.target}"] = {"day": now.date().isoformat(), "n": a.attempt, "at": at}
     if a.kind == "repair":
         e["repaired"] = at          # once an episode: the escalation follows if Main still drains nothing
         return

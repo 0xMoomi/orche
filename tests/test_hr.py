@@ -146,7 +146,8 @@ class InitTest(HrCase):
         self.assertIn("--title staff --command", panes.pop(0))
         self.assertIn("would open staff pane (dry-run)", out)
         self.assertIn(f"--title main-acme-shop --command {PANE}ORCHE_SESSION=main-acme-shop CLAUDE_CODE_PROMPT_CACHE_TTL=1h CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1 claude "
-                      "--permission-mode bypassPermissions --name main-acme-shop --json", panes[0])
+                      "--permission-mode bypassPermissions --model claude-opus-5-5 --effort xhigh --name main-acme-shop --json",
+                      panes[0])
         autos = [l for l in dry if " automations create " in l]
         self.assertEqual(len(autos), 2)
         self.assertIn("--name orche-hr-audit-acme-shop --trigger weekly --day 1 --time 09:00", autos[0])
@@ -156,6 +157,8 @@ class InitTest(HrCase):
         self.assertIn(f"--workspace path:{os.path.realpath(self.repo)}", autos[1])
         self.assertIn("[dry-run] write ", err)
         self.assertIn("ops: dormant (gated by stage)", out)
+        self.assertEqual([l.split(" --comment ")[1] for l in dry if " --comment " in l],
+                         ["Resting: starts when Main hands it work --json"] * len(registry.DIVISIONS))   # no --wake
         # Only read-only Orca calls ran; nothing was written.
         self.assertEqual({" ".join(c[1:3]) for c in self.calls}, {"repo list", "terminal list"})
         self.assertEqual(registry.load()["projects"], {})
@@ -198,9 +201,16 @@ class InitTest(HrCase):
         panes = [c[c.index("--title") + 1:c.index("--title") + 4] for c in self.orca_calls("terminal create")]
         self.assertEqual(panes, [["div-acme-shop-build", "--command", f"{PANE}ORCHE_SESSION=div-acme-shop-build CLAUDE_CODE_PROMPT_CACHE_TTL=1h CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1 claude --permission-mode bypassPermissions --name div-acme-shop-build"],
                                  ["div-acme-shop-gtm", "--command", f"{PANE}ORCHE_SESSION=div-acme-shop-gtm CLAUDE_CODE_PROMPT_CACHE_TTL=1h CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1 claude --permission-mode bypassPermissions --name div-acme-shop-gtm"],
-                                 ["main-acme-shop", "--command", f"{PANE}ORCHE_SESSION=main-acme-shop CLAUDE_CODE_PROMPT_CACHE_TTL=1h CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1 claude --permission-mode bypassPermissions --name main-acme-shop"]])
+                                 ["main-acme-shop", "--command", f"{PANE}ORCHE_SESSION=main-acme-shop CLAUDE_CODE_PROMPT_CACHE_TTL=1h CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1 claude --permission-mode bypassPermissions --model claude-opus-5-5 --effort xhigh --name main-acme-shop"]])
         self.assertEqual(self.orca_calls("automations create"), [])
         self.assertIn("[dry-run] orca automations create --name orche-hr-audit-acme-shop", err)
+        # A resting division's Orca card says so (its empty note checked first); an awake one has no note.
+        notes = [(c[c.index("--worktree") + 1], c[c.index("--comment") + 1])
+                 for c in self.orca_calls("worktree set") if "--comment" in c]
+        resting = [d for d in registry.DIVISIONS if divs[d]["status"] == "dormant"]
+        self.assertEqual(notes, [(f"id:repo-acme::{self.wtroot / f'div-{d}'}", "Resting: starts when Main hands it work")
+                                 for d in resting])
+        self.assertEqual(len(self.orca_calls("worktree show")), len(resting))
         # Project templates and card symlink.
         for rel in (".orche/STANDING.md", "PROJECT_CARD.md", "docs/RUBRIC.md", "docs/LEDGER.tsv",
                     "docs/GRAVEYARD.md", ".env.example"):

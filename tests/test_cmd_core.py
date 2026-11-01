@@ -672,6 +672,18 @@ class SleepWakeTest(CoreCase):
         self.reg["projects"]["acme-shop"]["divisions"]["build"]["worktree"] = f"repo-acme::{self.wt}"
         registry.save(self.reg)
         self.handoff = self.wt / ".orche" / "div" / "build" / "HANDOFF.md"
+        self.note = ""   # the comment `orca worktree show` answers for a workspace, or an Orca error
+
+    def fake_runner(self, argv, *, timeout, input, env=None):
+        if argv[1:3] != ["worktree", "show"]:
+            return super().fake_runner(argv, timeout=timeout, input=input, env=env)
+        self.calls.append(argv)
+        envelope = ({"ok": False, "error": {"code": "selector_not_found", "message": "no such workspace"}}
+                    if isinstance(self.note, Exception) else {"ok": True, "result": {"worktree": {"comment": self.note}}})
+        return shell.Result(0, json.dumps(envelope), "", argv)
+
+    def note_calls(self):
+        return [c for c in self.calls if c[1:3] in (["worktree", "show"], ["worktree", "set"])]
 
     def fresh_handoff(self):
         self.handoff.parent.mkdir(parents=True, exist_ok=True)
@@ -696,7 +708,9 @@ class SleepWakeTest(CoreCase):
         self.fresh_handoff()
         code, out, err = self.orche("--dry-run", "sleep", "div-acme-shop-build")
         self.assertEqual((code, out), (0, "would sleep div-acme-shop-build (dry-run)\n"))
-        self.assertEqual(err, "[dry-run] orca terminal close --terminal <div-acme-shop-build> --json\n")
+        self.assertEqual(err, "[dry-run] orca terminal close --terminal <div-acme-shop-build> --json\n"
+                              f"[dry-run] orca worktree set --worktree id:repo-acme::{self.wt} --comment "
+                              f"{hr.transitions.RESTING} --json\n")
         self.assertEqual(registry.load(), self.reg)
         self.assertEqual(self.calls, [])
 
@@ -705,12 +719,58 @@ class SleepWakeTest(CoreCase):
         self.terminals = [{"handle": "t-9", "title": "div-acme-shop-build"}]
         code, out, _ = self.orche("sleep", "div-acme-shop-build")
         self.assertEqual((code, out), (0, "div-acme-shop-build paused\n"))
-        self.assertEqual(self.calls[-1], ["orca", "terminal", "close", "--terminal", "t-9", "--json"])
+        self.assertIn(["orca", "terminal", "close", "--terminal", "t-9", "--json"], self.calls)
         reg = registry.load()
         self.assertEqual(reg["projects"]["acme-shop"]["divisions"]["build"]["status"], "paused")
         self.assertEqual({k: reg["events"][-1][k] for k in ("type", "project", "unit")},
                          {"type": "sleep", "project": "acme-shop", "unit": "build"})
         self.assertIn("sleep div-acme-shop-build by user", hr.log_path().read_text())
+
+    # -- the resting note on a division's Orca card --------------------------------------------------
+    def test_a_division_put_to_sleep_shows_the_resting_note_and_waking_clears_it(self):
+        """Sleep writes the note on an empty card after the record; wake clears only that note, with a
+        blank comment (Orca's CLI drops an empty one)."""
+        sel = f"id:repo-acme::{self.wt}"
+        self.fresh_handoff()
+        self.terminals = [{"handle": "t-9", "title": "div-acme-shop-build"}]
+        self.assertEqual(self.orche("sleep", "div-acme-shop-build")[:2], (0, "div-acme-shop-build paused\n"))
+        show = ["orca", "worktree", "show", "--worktree", sel, "--json"]
+        self.assertEqual(self.note_calls(), [show, ["orca", "worktree", "set", "--worktree", sel, "--comment",
+                                                    "Resting: starts when Main hands it work", "--json"]])
+        self.assertEqual(self.calls[-3][1:3], ["terminal", "close"])   # after the pane closed
+        self.calls.clear()
+        self.terminals = []
+        self.note = hr.transitions.RESTING
+        self.assertEqual(self.orche("wake", "div-acme-shop-build")[:2], (0, "div-acme-shop-build active\n"))
+        self.assertEqual(self.note_calls(), [show, ["orca", "worktree", "set", "--worktree", sel, "--comment", " ",
+                                                    "--json"]])
+        self.assertEqual(registry.load()["projects"]["acme-shop"]["divisions"]["build"]["status"], "active")
+
+    def test_a_note_someone_else_wrote_stays_and_a_blank_one_is_not_rewritten(self):
+        self.note = "waiting on the design review"
+        self.fresh_handoff()
+        self.assertEqual(self.orche("sleep", "div-acme-shop-build")[0], 0)
+        self.assertEqual(self.orche("wake", "div-acme-shop-build")[0], 0)
+        self.note = " "
+        self.fresh_handoff()
+        self.assertEqual(self.orche("sleep", "div-acme-shop-build")[0], 0)   # whitespace counts as no note: set
+        self.assertEqual(self.orche("wake", "div-acme-shop-build")[0], 0)    # not ours to clear
+        self.assertEqual([c[-3:-1] for c in self.calls if c[1:3] == ["worktree", "set"]],
+                         [["--comment", hr.transitions.RESTING]])
+
+    def test_an_orca_error_on_the_note_is_one_log_line_and_the_sleep_stands(self):
+        self.note = RuntimeError("selector_not_found")
+        self.fresh_handoff()
+        self.assertEqual(self.orche("sleep", "div-acme-shop-build")[:2],
+                         (0, "div-acme-shop-build paused (no open pane)\n"))
+        self.assertEqual(registry.load()["projects"]["acme-shop"]["divisions"]["build"]["status"], "paused")
+        self.assertFalse([c for c in self.calls if c[1:3] == ["worktree", "set"]])
+        self.assertIn(f"resting note on repo-acme::{self.wt} not set: selector_not_found: no such workspace",
+                      (self.home / "logs" / "hr.log").read_text())
+
+    def test_a_feature_never_gets_the_note(self):
+        self.assertEqual(self.orche("wake", "feat-acme-shop-search")[0], 0)
+        self.assertEqual(self.note_calls(), [])
 
     def test_sleep_without_pane_just_records(self):
         self.fresh_handoff()
@@ -843,10 +903,11 @@ class ProjectPaneTest(CoreCase):
         self.assertEqual(self.calls_of("create"), [
             ["orca", "terminal", "create", "--worktree", self.WT, "--title", "main-acme-shop", "--command",
              f"{self.ENV}ORCHE_SESSION=main-acme-shop CLAUDE_CODE_PROMPT_CACHE_TTL=1h CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1 claude --permission-mode bypassPermissions "
-             "--name main-acme-shop", "--json"]])
+             "--model claude-opus-5-5 --effort xhigh --name main-acme-shop", "--json"]])
         self.assertEqual(self.calls_of("switch"), [])
         self.assertEqual(len(registry.load()["events"]), events)
-        self.assertIn("--permission-mode bypassPermissions --name main-acme-shop", " ".join(self.calls_of("create")[0]))
+        self.assertIn("--permission-mode bypassPermissions --model claude-opus-5-5 --effort xhigh --name main-acme-shop",
+                      " ".join(self.calls_of("create")[0]))   # Opus 5.5 at xhigh: settings' effortLevel does not reach it
 
     def test_wake_main_switches_to_an_open_pane(self):
         self.terminals = [{"handle": "t-main", "title": "✳ main-acme-shop"}]
@@ -866,7 +927,7 @@ class ProjectPaneTest(CoreCase):
         self.assertEqual((code, out), (0, "would open main-acme-shop pane (dry-run)\n"))
         self.assertEqual(err, "orche: no transcript named main-acme-shop; the pane starts a fresh session\n" f"[dry-run] orca terminal create --worktree {self.WT} --title main-acme-shop --command "
                               f"{self.ENV}ORCHE_SESSION=main-acme-shop CLAUDE_CODE_PROMPT_CACHE_TTL=1h CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1 claude --permission-mode bypassPermissions "
-                              "--name main-acme-shop --json\n")
+                              "--model claude-opus-5-5 --effort xhigh --name main-acme-shop --json\n")
         self.terminals = [{"handle": "t-main", "title": "main-acme-shop"}]
         self.assertEqual(self.orche("--dry-run", "wake", "main-acme-shop"), (0, "would switch to main-acme-shop\n", ""))
         self.assertEqual({c[2] for c in self.calls}, {"list", "read"})   # read-only: the pane verified (0.7.2)
@@ -878,7 +939,7 @@ class ProjectPaneTest(CoreCase):
             "session": "main-acme-shop", "pane": "opened", "dry_run": True,
             "argv": ["orca", "terminal", "create", "--worktree", self.WT, "--title", "main-acme-shop", "--command",
                      f"{self.ENV}ORCHE_SESSION=main-acme-shop CLAUDE_CODE_PROMPT_CACHE_TTL=1h CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1 claude --permission-mode bypassPermissions "
-                     "--name main-acme-shop", "--json"]})
+                     "--model claude-opus-5-5 --effort xhigh --name main-acme-shop", "--json"]})
 
     def test_wake_main_ignores_awake_limit_and_stage(self):
         self.reg["limits"]["max_awake_sessions"] = 0

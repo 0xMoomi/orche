@@ -4,7 +4,7 @@ from typing import NamedTuple
 
 from .. import cli, config, orca, registry, roster, scale, setup_flow, units, util, vendors
 from . import book, limits, onboarding, panes
-from .transitions import wake
+from .transitions import resting_note, wake
 
 
 class Plan(NamedTuple):
@@ -136,6 +136,8 @@ def _onboard_division(reg, key, proj, name, *, wake, root, repo_id, spec, by, dr
                                model=model, effort=effort, wake=wake, existing=resume,
                                on_created=provisional, dry_run=dry_run,
                                custom={"label": spec["label"], "charter": spec["charter"]} if spec else None)
+    if not wake:
+        resting_note(entry["worktree"], True, dry_run=dry_run)
     if not dry_run:
         record = {**entry, **base}
         book.record(reg, f"create {session} ({entry['status']}) by {by} on {model}" + (" (resumed)" if resume else ""),

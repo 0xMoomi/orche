@@ -135,6 +135,9 @@ Each division has its own model: Claude by default, Codex optional (headless onl
 
 Tell Main "switch research to Sonnet" and it changes one with `orche hr model`.
 
+Main itself runs Opus 5.5 at xhigh effort: its pane command pins both, since Opus 5.5 starts at medium and the
+`effortLevel` setting does not reach it; `/model` or `/effort` in Main's pane still wins until the pane is reopened.
+
 ## What is team mode?
 
 A repository that declares its team plugin and that plugin's own marketplace in `.claude/settings.json` runs in team mode:

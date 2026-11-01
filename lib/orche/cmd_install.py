@@ -9,6 +9,12 @@ the heartbeat runs its daily pass). Every changed file is first copied to `<file
 and writes nothing. `--home PATH` targets another home (tests); ORCHE_HOME then defaults to
 `PATH/.claude/orche` unless set.
 
+The mode is `--mode`, else the existing install's (install-state.json `mode`), else plugin; it then follows
+what Claude Code reports: plugin mode only while `claude plugin list --json` shows orche@orche enabled for
+every session folder (settings.session_dirs), else settings mode (the hooks in settings.json). The last step
+checks that the next session runs Orche's hooks (the plugin on, or every hook in each settings.json it reads);
+when not, the run fails with `hooks: error` saying new sessions would run without Orche.
+
 The first install on a terminal also asks once for an optional Jev key (`jev_setup`); `--no-jev`
 skips it, `--jev-key-stdin [--jev-kind gateway|direct]` configures it without prompts. A missing
 or failing Jev never fails the install.
@@ -31,15 +37,20 @@ from pathlib import Path
 from . import jev_setup, paths, privacy, reconcile, registry, staff, units, util
 from .cli import EXIT_OK, EXIT_USER, fail, out
 from .install import (JANITOR_STEP, RECONCILE_STEP, STATE_FILE, Ctx, StateUnreadable, backup, agents,
-                      doctor, installed_mode, launchd, load_state, settings, skills,
+                      doctor, installed_mode, launchd, load_state, plugin, settings, skills,
                       statusline)
+
+MODES = ("plugin", "settings")
+HOOKS_STEP = "hooks"
+HOOKS_OFF = "new sessions would run without Orche"
 
 
 def register(subparsers):
     p = subparsers.add_parser("install", help="patch user settings, status line and agents")
     p.add_argument("--home", help="home directory to patch (default: $HOME)")
-    p.add_argument("--mode", choices=("plugin", "settings"), default="plugin",
-                   help="plugin: print /plugin install steps (default); settings: register hooks in settings.json")
+    p.add_argument("--mode", choices=MODES, default=None,
+                   help="plugin: hooks from the Claude Code plugin once it is enabled; settings: hooks in "
+                        "settings.json (default: the existing install's mode, else plugin)")
     p.add_argument("--no-jev", action="store_true", help="do not ask for a Jev key (add one later: orche jev setup)")
     p.add_argument("--jev-key-stdin", action="store_true", help="read a Jev key from stdin, no prompts")
     p.add_argument("--jev-kind", choices=("gateway", "direct"), default=None,
@@ -251,6 +262,36 @@ def _jev_step(args, state, new_state):
     return jev_setup.prompt_flow(dialog=not args.no_dialog, kind=args.jev_kind)
 
 
+def _mode(ctx, wanted) -> str:
+    """The mode this install uses: plugin only while the plugin is on for every session folder (else its
+    entries would be missing), settings otherwise (with the plugin on, settings entries run every hook twice)."""
+    on = plugin.on(settings.session_dirs(ctx))
+    mode = "plugin" if on else "settings"
+    if wanted == "plugin" and not on:
+        ctx.note(HOOKS_STEP, "settings mode", None, "the orche plugin is not enabled for new sessions, so "
+                                                   "settings.json registers Orche's hooks")
+    elif wanted == "settings" and on:
+        ctx.note(HOOKS_STEP, "plugin mode", None, "the orche plugin is enabled and registers Orche's hooks; "
+                                                 "settings.json entries would run each one twice")
+    return mode
+
+
+def _hooks_check(ctx, mode) -> None:
+    """The last step: Orche's hooks are on for the next session, else a step error."""
+    if ctx.dry_run:
+        return
+    short = settings.short(ctx, mode == "plugin")
+    for path, missing in short:
+        total = len(settings.plugin_hooks(ctx.plugin_root))
+        ctx.note(HOOKS_STEP, "error", path, f"{HOOKS_OFF}: {total - missing} of {total} hooks registered and the "
+                                            "orche plugin not enabled")
+    if not short:
+        ctx.note(HOOKS_STEP, "ok", None, "on for new sessions: " + (
+            "the orche plugin is enabled" if mode == "plugin" else
+            f"all {len(settings.plugin_hooks(ctx.plugin_root))} in "
+            + ", ".join(str(d / "settings.json") for d in settings.session_dirs(ctx))))
+
+
 def cmd_install(args):
     if getattr(args, "grant", False):
         return cmd_grant(args)
@@ -258,19 +299,23 @@ def cmd_install(args):
     ctx = _ctx(args)
     state = _state_or_error(ctx, "install", "install refused, settings.json not touched")
     jev_result = None
+    wanted = mode = args.mode
     if state is not None:
-        new_state = {**state, "plugin_root": str(ctx.plugin_root), "mode": args.mode}
+        wanted = args.mode or (state.get("mode") if state.get("mode") in MODES else None) or "plugin"
+        mode = _mode(ctx, wanted)
+        new_state = {**state, "plugin_root": str(ctx.plugin_root), "mode": mode}
         if (ctx.plugin_root / ".git").exists():   # the clone `orche update` pulls (not a plugin cache copy)
             new_state["clone"] = str(ctx.plugin_root)
         try:
             _run_steps(ctx, "install", [("ORCHE_HOME", lambda: _orche_home(ctx)),
-                                        ("settings.json", lambda: settings.install(ctx, args.mode, new_state))])
+                                        ("settings.json", lambda: settings.install(ctx, mode, new_state))])
             _save_state(ctx, new_state)  # before the riskier file edits: uninstall must see added hooks
             _run_steps(ctx, "install", [("statusline-command.sh", lambda: statusline.install(ctx)),
                                         ("agents", lambda: agents.install(ctx)),
-                                        ("skills", lambda: skills.install(ctx, args.mode)),
+                                        ("skills", lambda: skills.install(ctx, mode)),
                                         (RECONCILE_STEP, lambda: _reconcile_job(ctx, args, new_state)),
-                                        (JANITOR_STEP, lambda: _janitor_job(ctx, state, new_state))])
+                                        (JANITOR_STEP, lambda: _janitor_job(ctx, state, new_state)),
+                                        (HOOKS_STEP, lambda: _hooks_check(ctx, mode))])
             jev_result = _jev_step(args, state, new_state)
         finally:
             if not ctx.errors:   # a failed install keeps the old version: `orche update` resumes
@@ -278,7 +323,7 @@ def cmd_install(args):
                 new_state["version"] = __version__
             _save_state(ctx, new_state)
     instructions = []
-    if args.mode == "plugin" and not args.no_plugin_hint:
+    if wanted == "plugin" and mode != "plugin" and not args.no_plugin_hint:
         instructions = ["Install the Orche hooks as a Claude Code plugin (inside Claude Code):",
                         f"  /plugin marketplace add {ctx.plugin_root}",
                         "  /plugin install orche@orche"]
@@ -288,7 +333,7 @@ def cmd_install(args):
     real = ctx.home.resolve() == Path.home().resolve()
     opened = staff.auto_open(dry_run=ctx.dry_run) if real and not ctx.errors and state is not None else None
     lines += [opened] if opened else []
-    data = {"home": str(ctx.home), "dry_run": ctx.dry_run, "mode": args.mode, "actions": ctx.actions,
+    data = {"home": str(ctx.home), "dry_run": ctx.dry_run, "mode": mode, "actions": ctx.actions,
             "instructions": instructions, "errors": ctx.errors, "staff": opened}
     if jev_result is not None:
         data["jev"] = {k: v for k, v in jev_result.items() if k != "lines"}

@@ -86,7 +86,8 @@ def scale_line(cfg, reg):
 def gate_lines(cfg, reg, project=None) -> list:
     """One line per registered project (only `project` when given) whose base branch lacks
     `scripts/verify/ci.sh` (the doctor's `queue gate` rows) and that has no PR adding it
-    (verifygate.pending): init could not push the script. Merged into one line past MAX_GATES."""
+    (verifygate.pending): init could not push the script. Merged into one line past MAX_GATES. A project with
+    no origin remote is told to go on GitHub first (the phrase a failed `orche init --new` names)."""
     from . import verifygate
     from .install import doctor
     missing = []
@@ -96,7 +97,7 @@ def gate_lines(cfg, reg, project=None) -> list:
         if (root / ".git").exists() and not verifygate.pending(root):
             base, ok = publish.gate(root, cfg, key)
             if not ok:
-                missing.append((key, base))
+                missing.append((key, base, verifygate.has_remote(root)))
     what = "lands approved pull requests by itself after its checks pass"
     if len(missing) > MAX_GATES:
         return [_line("Merge queue", what, f"{missing[0][0]} and {len(missing) - 1} more projects lack the check "
@@ -105,7 +106,10 @@ def gate_lines(cfg, reg, project=None) -> list:
     return [_line(f"Merge queue for {key}", what, f"The check script (scripts/verify/ci.sh) could not be pushed to "
                   f"{base}, so a person merges each PR" if base else "No base branch found yet, so a person merges "
                   "each PR", f"set up the merge queue for {key}", f"Main runs `orche init --refresh {key}`")
-            for key, base in missing]
+            if remote else
+            _line(f"Merge queue for {key}", what, "No GitHub remote yet: it starts once this project is on GitHub",
+                  "publish this repository to GitHub", f"Main runs gh repo create, then `orche init --refresh {key}`")
+            for key, base, remote in missing]
 
 
 def lines(cfg, reg, project=None) -> list:
@@ -150,6 +154,32 @@ def _divisions_text(proj):
     trees = [units.worktree_path(d["worktree"]) for d in proj["divisions"].values() if d.get("worktree")]
     where = f"{paths.tilde(Path(trees[0]).parent)}/div-<division>" if trees else "none"
     return sum(len(n) for n in groups.values()), names, where
+
+
+STATES = {"active": "on", "dormant": "resting", "paused": "resting", "onboarding": "setup"}   # retired: left out
+STATE_TEXT = {"on": "always on: one Orca tab each", "resting": "resting: no tab and no cost until Main hands one work",
+              "setup": 'not set up yet: say "set up again"'}
+RESTING_HOW = ('Work Main hands a resting division runs in the background in its workspace, with no tab; its tab '
+               'opens when it staffs workers (Build does, for code) or when you say "wake <division>", and it rests '
+               'again when you say "put <division> to sleep".')
+
+
+def agents_line(proj, most, preset) -> str:
+    """The setup report's "Agents" line from each division's registry status: active ones always on (their
+    tab open), dormant and paused ones resting (no tab and no cost; a brief to one runs as a headless worker
+    in its workspace, its tab opens when it staffs a worker or on `orche wake`, and it rests again on
+    `orche sleep`), unfinished ones not set up; the names only when the states differ. Then the workers:
+    one per running unit of work, up to `most` at once (`preset`)."""
+    groups = {}
+    for name in registry.divisions_of(proj):
+        state = STATES.get(((proj.get("divisions") or {}).get(name) or {}).get("status"))
+        if state:
+            groups.setdefault(state, []).append(name)
+    parts = [f"{len(names)} division{'' if len(names) == 1 else 's'}"
+             + (f" ({', '.join(names)})" if len(groups) > 1 else "") + f", {STATE_TEXT[state]}"
+             for state, names in sorted(groups.items(), key=lambda g: list(STATE_TEXT).index(g[0]))]
+    return (f"- Agents: {'; '.join(parts) or 'no divisions'}." + (f" {RESTING_HOW}" if "resting" in groups else "")
+            + f" Each unit of work adds one worker while it runs; up to {most} run at once ({preset}).")
 
 
 def _intake_text(key, root, intake_line):
@@ -236,14 +266,13 @@ def write_report(reg, key, root, intake_line=None, detected=(), created=(), gate
     """`<root>/.orche/SETUP.md`, the setup report Main gives the owner (untracked: `info/exclude`); `created`:
     the lines of a repository `orche init --new` made; `gate`: this run's verifygate.ensure answer."""
     proj, cfg = reg["projects"][key], config.load()
-    count, names, where = _divisions_text(proj)
+    _count, names, where = _divisions_text(proj)
     most, preset = parallel(cfg, reg)
     path = paths.project_local(root) / SETUP_REPORT
     text = "\n".join([f"# Orche is set up: {key}", "", *created,
                       f"- Divisions: {names or 'none'}",
                       *([PRESET_LINES[proj["preset"]]] if proj.get("preset") in PRESET_LINES else []),
-                      f"- Agents: {count} division agent{'' if count == 1 else 's'}, one Orca tab each, always on. Each unit of work adds one "
-                      f"worker while it runs; up to {most} run at once ({preset}).",
+                      agents_line(proj, most, preset),
                       f"- Workspaces: {where}; nothing is committed to the repository; Orche's own files are "
                       "excluded from git",
                       f"- Intake: {_intake_text(key, root, intake_line)}", *_team_lines(key, root, detected),

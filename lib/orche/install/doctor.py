@@ -1,8 +1,9 @@
 """`orche doctor`: one OK/WARN/FAIL line per check. FAIL only for python < 3.11 (this interpreter,
-or no 3.11+ the launchers' finder can pick in a login shell), an invalid registry or an unwritable
-ORCHE_HOME. Jev is optional and fails open, so its row is WARN at worst (not configured, disabled,
-or a failed last probe). The human output ends with "Next steps (optional, any time)": `guide.lines`, which
-never changes the exit code."""
+or no 3.11+ the launchers' finder can pick in a login shell), an invalid registry, an unwritable
+ORCHE_HOME, or Orche's hooks off for the next session (`hooks_row`: the install's own final check). Jev
+is optional and fails open, so its row is WARN at worst (not configured, disabled, or a failed last probe).
+The human output ends with "Next steps (optional, any time)": `guide.lines`, which never changes the exit
+code."""
 import os
 import re
 import shlex
@@ -12,7 +13,7 @@ from pathlib import Path
 
 from .. import (__version__, config, github, headless, jev_setup, ladder, mask, oauth, orca, paths, procs, registry,
                 runs, shell, units, vendors)
-from . import settings, statusline
+from . import plugin, settings, statusline
 
 TOOLS = ("gcloud", "gh", "vercel", "age", "zstd")
 WRITE_PERMS = ("ADMIN", "MAINTAIN", "WRITE")     # gh viewerPermission the merge queue can merge with
@@ -180,11 +181,12 @@ def gh_rows(reg) -> list:
         login = github.run(None, "api", "user", "--jq", ".login", timeout=10).strip() or "?"
     except github.GhError:
         login = "?"
+    from .. import verifygate
     rows = []
     for key, root in roots(reg):
         url = shell.git(root, "remote", "get-url", "origin", timeout=10)
         if not url.ok or not url.out.strip():
-            rows.append(("WARN", "gh", f"{key}: no origin remote — the merge queue lands PRs on GitHub"))
+            rows.append(("OK", "gh", f"{key}: {verifygate.NO_REMOTE}"))
             continue
         try:
             data, err = github.data(None, "repo", "view", url.out.strip(), "--json",
@@ -256,7 +258,9 @@ def gate_rows(reg, cfg) -> list:
         if not (root / ".git").exists():
             continue
         base, ok = publish.gate(root, cfg, key)
-        rows.append(("WARN", "queue gate", f"{key}: {publish.no_base(root)}") if not base else
+        remote = verifygate.has_remote(root)
+        rows.append(("OK", "queue gate", f"{key}: {verifygate.NO_REMOTE}") if not remote else
+                    ("WARN", "queue gate", f"{key}: {publish.no_base(root)}") if not base else
                     ("OK", "queue gate", f"{key}: scripts/verify/ci.sh on origin/{base}") if ok else
                     ("WARN", "queue gate", f"{key}: waiting for {verifygate.awaiting(reg['projects'][key])}")
                     if verifygate.pending(root) else
@@ -527,18 +531,7 @@ def checks(ctx) -> list:
     if err:
         add("WARN", "settings", err)
         data = {}
-    in_settings = settings.settings_hooks(data, ctx.plugin_root)
-    if in_settings and settings.plugin_enabled(data):
-        add("WARN", "hooks", f"hooks registered twice (plugin + {len(in_settings)} settings.json entries): "
-                             "run orche install (plugin mode removes the settings entries) or disable the plugin")
-    elif settings.plugin_enabled(data):
-        add("OK", "hooks", "orche plugin enabled")
-    else:
-        missing = settings.registered(data, ctx.plugin_root)
-        add("OK" if not missing else "WARN", "hooks",
-            "all six plugin hooks registered in settings.json" if not missing else
-            f"plugin not enabled and {len(missing)} hook(s) missing from settings.json "
-            "(run /plugin install orche@orche or orche install --mode settings)")
+    add(*hooks_row(ctx))
     script = statusline.script_path(ctx)
     if statusline.present(ctx) and statusline.after_exit(script.read_text(encoding="utf-8")):
         add("WARN", "statusline", f"Orche block in {script} sits after an `exit` line and never runs "
@@ -554,6 +547,33 @@ def checks(ctx) -> list:
         add("WARN", "careful hook", "careful hook registered in settings.json — its approval dialogs stall "
                                     "unattended Orche panes; remove it or keep it only for your own sessions")
     return out
+
+
+HOOKS_OFF = ("Orche's hooks are off: new sessions run without Orche. Say \"repair the setup\"; Main runs "
+             "orche install")
+
+
+def hooks_row(ctx) -> tuple:
+    """The `hooks` row, the truth `orche install` checks last: the plugin on for every session folder
+    (`claude plugin list --json`, asked once each) or every Orche hook in each one's settings.json; FAIL when
+    neither, WARN when the plugin and settings entries would both run them."""
+    dirs = settings.session_dirs(ctx)
+    files = [d / "settings.json" for d in dirs]
+    if plugin.on(dirs):
+        twice = [(path, len(settings.settings_hooks(data, ctx.plugin_root))) for path in files
+                 for data in [settings.load(ctx, path)[0] or {}] if settings.settings_hooks(data, ctx.plugin_root)]
+        if twice:
+            return ("WARN", "hooks", f"hooks registered twice (plugin + {twice[0][1]} entries in {twice[0][0]}): "
+                                     "run orche install (the plugin wins, the settings entries go)")
+        return ("OK", "hooks", f"orche plugin enabled for new sessions ({', '.join(map(str, dirs))})")
+    short = settings.short(ctx, False)
+    if not short:
+        return ("OK", "hooks", f"all {len(settings.plugin_hooks(ctx.plugin_root))} Orche hooks in "
+                               f"{', '.join(map(str, files))}")
+    total = len(settings.plugin_hooks(ctx.plugin_root))
+    path, missing = short[0]
+    return ("FAIL", "hooks", f"{HOOKS_OFF} ({path}: {total - missing} of {total} hooks, the orche plugin not "
+                             "enabled)")
 
 
 def next_steps(ctx) -> list:

@@ -25,8 +25,8 @@ my-app                                   (Orca repo)
 
 Pane titles equal Claude Code session names. Orche starts a division or feature pane with
 `PATH=<plugin>/bin:$PATH ORCHE_SESSION=<session> claude --permission-mode bypassPermissions --name <session>`
-(or `--resume <session id>` on wake), and the Main pane with the same command (since 0.6.0 Main also
-starts in bypass, like every pane), so hooks know the pane's role and `orche` is on the pane's PATH. `orche init` creates the division worktrees; `orche feat new` creates
+(or `--resume <session id>` on wake), and the Main pane with the same command plus
+`--model claude-opus-5-5 --effort xhigh` (since 0.6.0 Main also starts in bypass, like every pane), so hooks know the pane's role and `orche` is on the pane's PATH. `orche init` creates the division worktrees; `orche feat new` creates
 feature worktrees.
 
 ## Lineage
@@ -40,10 +40,20 @@ produces is reviewed and queued by its head.
 | Status | In the sidebar | Meaning |
 |---|---|---|
 | `active` | card with a running pane | awake and working |
-| `dormant` | card, no pane | onboarded but never started; costs nothing. Ops stays here while the stage is `building` |
-| `paused` | card, no pane | put to sleep (`orche sleep`, or the HR audit after 14 idle days); `orche wake` resumes the same session |
+| `dormant` | card, no pane; a division's card carries the resting note | onboarded but never started; costs nothing. Ops stays here while the stage is `building` |
+| `paused` | card, no pane; a division's card carries the resting note | put to sleep (`orche sleep`, or the HR audit after 14 idle days); `orche wake` resumes the same session |
 | `onboarding` | card, maybe no pane | the worktree exists but setup did not finish; re-run `orche init` or `orche feat new` to resume |
 | `retired` | gone | worktree removed with `orca worktree rm`; memory files and transcripts archived under `~/.claude/orche/archive/<session>/` |
+
+**Resting note.** When Orche creates a division dormant or puts one to sleep, it writes
+`Resting: starts when Main hands it work` as the workspace's Orca note (`orca worktree set --comment`),
+and clears it when the division wakes. Orca's default card shows a note as a notes icon in the row
+under the card's name, and its text under Notes when you hover the card; compact cards show it only
+when Notes is on in Show properties. Clicking a resting card opens a plain shell tab there (Orca's
+`Terminal 1`), not an agent: work Main hands the division runs in the background in its workspace,
+and its agent tab opens when it staffs workers or when you say "wake <division>". Orche writes the
+note only on a card whose note is empty and clears only its own text, so a note you wrote stays. A
+division that was already resting gets the note at its next sleep.
 
 A new feature agent's card gets Orca's **unread dot**. So does Main's workspace whenever a turn Orche
 started there ends (a wake or a delivered report), and it stays until you open it: Orca marks a turn

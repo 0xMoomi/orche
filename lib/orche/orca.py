@@ -11,7 +11,7 @@ from . import config, log, paths, shell, util
 ALLOWED = {
     "status": None,
     "repo": {"list", "add"},
-    "worktree": {"list", "ps", "create", "set", "rm"},
+    "worktree": {"list", "ps", "show", "create", "set", "rm"},
     "terminal": {"list", "create", "send", "rename", "wait", "read", "close", "switch"},
     "orchestration": {"send", "check"},
     "automations": {"create", "list", "remove"},

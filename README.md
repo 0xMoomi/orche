@@ -44,6 +44,7 @@ Stop at the first failure and show me its text; no sudo, no workarounds, never p
 ```
 
 Then restart Claude Code once so the plugin loads. Already installed? Inside a project, say "set up Orche here", in any language.
+Re-running it on a Mac that already has Orche keeps that install (its folder and its plugin or settings mode) and only sets up the project.
 
 **One-time macOS step.** When a project lives in Documents, Desktop, Downloads, iCloud Drive or `/Volumes`, the heartbeat needs Full Disk Access. The installer opens System Settings at the Python app; switch it on under Privacy & Security, Full Disk Access, then run `orche install --grant`.
 

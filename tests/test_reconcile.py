@@ -16,6 +16,7 @@ import support
 from unittest import mock
 
 from orche import brief, cmd_status, deliver, hr, inbox, janitor, notify, orca, procs, reconcile, registry, roster, runs, shell, units, util
+from orche.flow import guard
 from test_registry import load_cli
 from test_deliver import DeadPane
 
@@ -461,6 +462,78 @@ class MainRepairTest(ReconcileCase):
         self.fake([self.pane("t1", 30)], self.EMPTY)
         self.run_at(0)
         self.assertEqual(self.closed(), [])
+
+
+class OutsideMainTest(ReconcileCase):
+    """A Main whose hooks marked it running outside Orche's pane command is reopened through the Main
+    repair: only while it is safe, within the daily reopen cap, and never twice for one marker."""
+    fake, pane, closed = MainRepairTest.fake, MainRepairTest.pane, MainRepairTest.closed
+    LINE = "reopen main-acme-shop pane (it runs outside Orche's pane command, marked 15 min ago; reopen 1/2 today)"
+
+    def setUp(self):
+        super().setUp()
+        self.mark()
+        self.owner_wrote(11)
+
+    def mark(self):
+        util.write_json(inbox.box("main-acme-shop") / roster.OUTSIDE, {"at": T0.isoformat()})
+
+    def owner_wrote(self, minutes_ago):
+        path = guard.folder("acme-shop") / "owner-seen"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.touch()
+        os.utime(path, (time.time() - minutes_ago * 60,) * 2)
+
+    def test_a_quiet_marked_main_is_reopened_once_with_its_conversation(self):
+        self.fake([self.pane("t1", 11)], MainRepairTest.EMPTY)
+        with mock.patch.object(hr, "project_pane", return_value=({}, "")) as opened:
+            self.assertIn(self.LINE, self.run_at(15)[1])
+            self.assertEqual((self.closed(), opened.call_count), (["t1"], 1))
+            self.assertEqual(opened.call_args.kwargs, {"dry_run": False, "switch": False})   # resume: the default
+            self.assertEqual(roster.outside("main-acme-shop"),
+                             {"at": T0.isoformat(), "reopened": (T0 + dt.timedelta(minutes=15)).isoformat()})
+            self.assertTrue((inbox.box("main-acme-shop") / reconcile.MAIN_REOPENED).is_file())
+            self.assertEqual(json.loads(reconcile.state_path().read_text())["reopens:main-acme-shop"]["n"], 1)
+            self.run_at(40)                                   # still listed plain: never twice for one marker
+            self.assertEqual(opened.call_count, 1)
+        self.assertEqual([e.split("\t")[-1] for e in self.events() if "action=restore" in e],
+                         ["reconcile action=restore project=acme-shop target=main-acme-shop rev=- attempt=1/2"])
+
+    def test_it_waits_while_anything_says_someone_is_there(self):
+        cases = {"the pane printed 5 min ago": ([self.pane("t1", 5)], MainRepairTest.EMPTY, 11, None),
+                 "the owner wrote 5 min ago": ([self.pane("t1", 11)], MainRepairTest.EMPTY, 5, None),
+                 "a draft in the composer": ([self.pane("t1", 11)], MainRepairTest.TYPED, 11, None),
+                 "no composer on the screen": ([self.pane("t1", 11)], {"terminal": {"source": "screen", "tail": []}},
+                                               11, None),
+                 "the pane names no output time": ([{"handle": "t1", "title": "main-acme-shop"}],
+                                                   MainRepairTest.EMPTY, 11, None),
+                 "no Main pane listed": ([], MainRepairTest.EMPTY, 11, None),
+                 "quiet hours": ([self.pane("t1", 11)], MainRepairTest.EMPTY, 11, "08:00-10:00")}
+        for why, (listed, read, wrote, quiet) in cases.items():
+            with self.subTest(why):
+                (self.home / "config.json").write_text(json.dumps({**WAKE, "flow": {"quiet_hours": quiet or ""}}))
+                self.owner_wrote(wrote)
+                self.fake(listed, read)
+                with mock.patch.object(hr, "project_pane") as opened:
+                    self.run_at(15)
+                self.assertEqual((self.closed(), opened.call_count), ([], 0))
+                self.assertEqual(roster.outside("main-acme-shop"), {"at": T0.isoformat()})
+
+    def test_the_daily_reopen_cap_counts_every_main_reopen(self):
+        self.fake([self.pane("t1", 11)], MainRepairTest.EMPTY)
+        util.write_json(reconcile.state_path(), {"reopens:main-acme-shop": {"day": "2026-10-16", "n": 2,
+                                                                              "at": T0.isoformat()}})
+        with mock.patch.object(hr, "project_pane") as opened:
+            self.run_at(15)
+        self.assertEqual((self.closed(), opened.call_count), ([], 0))
+        self.assertEqual(roster.outside("main-acme-shop"), {"at": T0.isoformat()})
+
+    def test_a_dry_run_says_what_it_would_do_and_stamps_nothing(self):
+        self.fake([self.pane("t1", 11)], MainRepairTest.EMPTY)
+        with mock.patch.object(hr, "project_pane") as opened:
+            self.assertIn(f"would {self.LINE}", self.run_at(15, dry_run=True)[1])
+        self.assertEqual((self.closed(), opened.call_count), ([], 0))
+        self.assertEqual(roster.outside("main-acme-shop"), {"at": T0.isoformat()})
 
 
 class StatusHintTest(ReconcileCase):

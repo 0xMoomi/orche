@@ -941,7 +941,7 @@ class ScaleDoctorTest(support.TempHomeCase):
         reg = {"projects": {"widget": {"path": str(root)}, "loose": {"path": str(self.git_repo("loose"))}}}
         self.fake_gh("WRITE")
         self.assertEqual(doctor.gh_rows(reg), [
-            ("WARN", "gh", "loose: no origin remote — the merge queue lands PRs on GitHub"),
+            ("OK", "gh", "loose: no GitHub remote yet: the merge queue starts once this project is on GitHub"),
             ("OK", "gh", "widget: gh as ci-bot · WRITE on ACME/WIDGET · base main")])
         (self.home / "config.json").write_text(json.dumps(support.no_wake(
             {"publish": {"per_project": {"widget": {"base": "develop"}}}})))
@@ -962,6 +962,11 @@ class ScaleDoctorTest(support.TempHomeCase):
         root = self.git_repo("site")
         (root / "vercel.json").write_text("{}")
         reg = {"projects": {"site": {"path": str(root)}}}
+        [no_remote, _deploy] = doctor.gate_rows(reg, config.load())        # no origin yet: a note, no step
+        self.assertEqual(no_remote, ("OK", "queue gate", "site: no GitHub remote yet: the merge queue starts once this "
+                                                         "project is on GitHub"))
+        subprocess.run(["git", "-C", str(root), "remote", "add", "origin", "https://github.com/ACME/SITE.git"],
+                       check=True, capture_output=True)
         [no_base, _deploy] = doctor.gate_rows(reg, config.load())          # no origin/HEAD, no publish.base: R12
         self.assertIn("site: no base branch: publish.base is unset and origin/HEAD is not set", no_base[2])
         self.assertIn("OWNER: git -C", no_base[2])

@@ -916,7 +916,8 @@ class LandOnMainTest(SetupCase):
                   and c[2] not in ("list",)]
         self.assertEqual(writes[-1], "terminal switch")   # after both panes were created
         [main] = [c for c in self.orca_calls("terminal create") if c[c.index("--title") + 1] == "main-acme-shop"]
-        self.assertIn("--permission-mode bypassPermissions --name main-acme-shop", main[main.index("--command") + 1])
+        self.assertIn("--permission-mode bypassPermissions --model claude-opus-5-5 --effort xhigh --name main-acme-shop",
+                      main[main.index("--command") + 1])
 
     def test_open_panes_are_not_switched_to_before_the_end(self):
         self.terminals = [{"handle": "t1", "title": "main-acme-shop"}]

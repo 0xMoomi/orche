@@ -16,7 +16,8 @@ English when they are not, and with no prompts yet the macOS locale (`defaults r
 Home: the Orche checkout (`paths.PLUGIN_ROOT`) as an Orca repo (`orca repo add` once when Orca does not
 list it). Staff belongs to no project: its transcripts sit in their own Claude project dir, so no
 project's spend, metrics or spend cap counts them, and nothing is written into a project repository.
-The pane runs `--model claude-opus-5-5 --effort medium` (the same `--effort` flag headless runs pass).
+The pane runs `--model claude-opus-5-5 --effort medium` (the same `--effort` flag headless runs pass);
+MAIN_MODEL and MAIN_EFFORT, next to them, are every Main pane's (`--model claude-opus-5-5 --effort xhigh`).
 
 Knowledge: each project's Main transcripts (named `main-<p>` in its main checkout's Claude project dir):
 per turn, the owner's own prompt and Main's final text (no tool calls or output, no `[orche]` prompts,
@@ -39,6 +40,7 @@ from . import cmdscan
 
 SESSION = "staff"
 MODEL, EFFORT = "claude-opus-5-5", "medium"
+MAIN_MODEL, MAIN_EFFORT = "claude-opus-5-5", "xhigh"   # every Main pane (hr/panes.pane_command)
 DENY = '[orche] Staff answers questions; work goes through Main. Say "tell Main: ..." and Staff leaves Main a note.'
 PER_PROJECT = 6            # exchanges per project at SessionStart
 SIDE_MAX = 700             # characters of one prompt or one reply

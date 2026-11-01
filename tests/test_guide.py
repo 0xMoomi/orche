@@ -103,7 +103,14 @@ class GuideTest(support.TempHomeCase):
             self.assertIn(". Off. ", self.line("Jev"))
 
     def test_a_project_without_the_queue_gate_gets_a_line(self):
-        self.project("acme")
+        root = self.project("acme")
+        self.assertEqual(self.line("Merge queue for acme"),
+                         '- Merge queue for acme: lands approved pull requests by itself after its checks pass. No '
+                         'GitHub remote yet: it starts once this project is on GitHub. Say "publish this repository '
+                         'to GitHub"; Main runs gh repo create, then `orche init --refresh acme`.')
+        self.check_shape(self.lines())
+        subprocess.run(["git", "-C", str(root), "remote", "add", "origin", "https://example.invalid/acme.git"],
+                       check=True)
         self.assertIn('No base branch found yet, so a person merges each PR. Say "set up the merge queue for acme"; '
                       'Main runs `orche init --refresh acme`', self.line("Merge queue for acme"))
         self.cfg["publish"] = {"base": "main"}
@@ -162,6 +169,29 @@ class GuideTest(support.TempHomeCase):
         self.cfg["queue"]["land"] = "owner"
         self.assertIn('lands it when you say "merge"', guide.running_lines(self.reg, "acme", root, self.cfg)[2])
         for ln in lines:
+            self.assertNotRegex(ln, "[\u2013\u2014]")
+
+    def test_the_agents_line_says_each_divisions_real_state(self):
+        """`always on` only for an active division; dormant and paused ones rest (no tab, no cost; their work
+        runs as a headless worker, the tab opens on workers or `wake`), an unfinished one is not set up yet,
+        a retired one is left out; names only when the states differ."""
+        def proj(**statuses):
+            return {"divisions": {name: {"status": status} for name, status in statuses.items()}}
+        resting = guide.agents_line(proj(rnd="dormant", research="paused", build="dormant"), 4, "default")
+        self.assertEqual(resting, f"- Agents: 3 divisions, resting: no tab and no cost until Main hands one work. "
+                                  f"{guide.RESTING_HOW} Each unit of work adds one worker while it runs; up to 4 run "
+                                  "at once (default).")
+        self.assertIn("runs in the background in its workspace, with no tab", guide.RESTING_HOW)
+        self.assertNotIn("always on", resting)
+        mixed = guide.agents_line(proj(rnd="dormant", build="active", gtm="paused", ops="onboarding",
+                                       research="retired"), 8, "preset 20")
+        self.assertEqual(mixed, "- Agents: 1 division (build), always on: one Orca tab each; 2 divisions (rnd, gtm), "
+                                "resting: no tab and no cost until Main hands one work; 1 division (ops), not set up "
+                                f'yet: say "set up again". {guide.RESTING_HOW} Each unit of work adds one worker '
+                                "while it runs; up to 8 run at once (preset 20).")
+        awake = guide.agents_line(proj(build="active", gtm="active"), 4, "default")
+        self.assertTrue(awake.startswith("- Agents: 2 divisions, always on: one Orca tab each. Each unit"), awake)
+        for ln in (resting, mixed, awake):
             self.assertNotRegex(ln, "[\u2013\u2014]")
 
     def test_a_folder_that_is_not_a_git_checkout_is_skipped(self):

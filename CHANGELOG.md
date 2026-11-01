@@ -3,6 +3,39 @@
 All notable changes to Orche are listed here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow semantic versioning.
 
+## 0.19.7 — 2026-11-01
+
+### Added
+
+- A resting division's workspace card in Orca's sidebar says so. When Orche creates a division dormant or puts one to sleep, it writes the card's note `Resting: starts when Main hands it work`, and it clears the note when the division wakes. Orca shows the note as a notes icon under the card's name, with the text on hover, so the plain shell tab a click on a resting card opens no longer looks like an agent that failed to start. A note you wrote on a card stays as it is; a division already resting gets the note at its next sleep.
+
+### Changed
+
+- Every Main pane Orche opens, fresh or resumed, runs Opus 5.5 at xhigh effort (`--model claude-opus-5-5 --effort xhigh`). Opus 5.5 starts at medium, and a top-level `effortLevel` in your Claude Code settings does not reach it, so Mains ran at medium unless you set the level by hand. A level or model you pick in Main's pane (`/effort max`, `/model`) still wins there until the pane is reopened.
+
+### Fixed
+
+- Installing or updating Orche can no longer leave its hooks off. On a Mac that already has Orche, the README
+  quick start keeps that install: install.sh keeps its mode and uses the clone it recorded (fast-forwarded only
+  when it is on `main` with a clean tree, used as is otherwise, one line saying so), so it never makes a second
+  clone or asks which folder to use. `orche install` and `orche update` without `--mode` keep the mode too.
+- Plugin mode only while the plugin is really on: install.sh and `orche update` run `claude plugin enable
+  orche@orche --scope user` after installing or updating it, and the hooks leave settings.json only when
+  `claude plugin list --json` shows it enabled for every config folder a new session reads; otherwise the
+  install is a settings-mode one.
+- In an Orca pane (`CLAUDE_CONFIG_DIR` at Orca's account profile, which Orca refreshes from
+  `~/.claude/settings.json` when it opens a terminal or starts an agent), settings mode writes the hook entries
+  into that profile's settings.json too, and plugin mode removes them from both.
+- One final check at the end of install.sh, `orche install` and `orche update`: the run fails, saying new
+  sessions would run without Orche, unless the plugin is on or every hook is in each settings file a new
+  session reads. Doctor's `hooks` row reads the same truth, names the file, and is a FAIL in plain words when
+  the hooks are off (the owner says "repair the setup" and Main runs `orche install`), never a restart.
+- A project with no `origin` remote: doctor's `gh` and `queue gate` rows and the setup report say "no GitHub
+  remote yet: the merge queue starts once this project is on GitHub", not a `git remote set-head` step; its
+  "Any time" line names the words for that ("publish this repository to GitHub").
+- A Main running outside Orche's pane command (a tab Orca relaunched with a plain `claude`, so it lacked Orche's environment and the pinned model) is turned back into Orche's Main. Its hooks mark it, and the heartbeat reopens it with its conversation through the Main repair, only while nobody is there: no output in its pane and no prompt from you for 10 minutes, nothing in its composer, outside quiet hours, within the two reopens a day, and once per mark.
+- The setup report (`.orche/SETUP.md`) tells each division's real state: `always on` only for an awake one; a resting one reads `resting: no tab and no cost until Main hands one work`, with what happens then (the work runs in the background in its workspace, its tab opens when it staffs workers or when you say "wake <division>", and it rests again when you say "put <division> to sleep").
+
 ## 0.19.6 — 2026-11-01
 
 ### Fixed

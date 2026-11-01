@@ -2,6 +2,8 @@
 """SessionStart hook: on startup/resume/clear/compact, print the unit's role + STANDING, CHARTER, STATUS,
 HANDOFF and the last 20 DECISIONS rows (main worktree: role + STANDING + the ten principles).
 The role comes from the Roster's identity: $ORCHE_SESSION when set (never the cwd), else the cwd's unit.
+A Main identified without $ORCHE_SESSION is marked for the heartbeat, and Main's own pane clears the
+mark (roster.note_pane, as the prompt hook does).
 Right after the role comes a "Role rules" card: the inject-marked block of skills/orche-main (main
 checkout), skills/orche-build (the div-*-build worktree) or skills/orche (every other unit).
 Total output stays under 6,000 characters; the card is trimmed first. The CEO Staff (ORCHE_SESSION
@@ -240,6 +242,7 @@ def main():
         from orche import registry, roster
         r = roster.Roster(registry.load())
         who = r.identify(payload.get("cwd") or os.getcwd(), transcript=payload.get("transcript_path"))
+        roster.note_pane(who)   # a Main outside Orche's pane command is marked for the heartbeat
         from orche import staff
         if staff.is_staff(who.session):
             if payload.get("source") != "startup":

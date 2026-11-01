@@ -6,7 +6,8 @@ and offered to an existing repository as one pull request by `orche init` and `o
 `ensure` never asks and never fails init: it answers a state for the setup report's "Running now" line,
   {"state": "on"}                        the script is on origin/<base> (fetched first)
   {"state": "pr", "number", "url"}       an open PR from BRANCH adds it (found, or opened now)
-  {"state": "waiting", "reason"}         nothing could be pushed (no origin, no base, gh, the push)
+  {"state": "remote"}                    the repository has no origin remote yet (NO_REMOTE: a note, no step)
+  {"state": "waiting", "reason"}         nothing could be pushed (no base, gh, the push)
   {"state": "word", "project"}           neither, and `open_pr` is false: a team repository's PR waits for the
                                          owner's word through Main (R-TEAM-5)
 It opens at most one PR per project: an open PR with head BRANCH, or BRANCH on origin, means it is done.
@@ -58,6 +59,13 @@ def pending(root) -> bool:
     return shell.git(root, "rev-parse", "--verify", "-q", f"refs/remotes/origin/{BRANCH}", timeout=10).ok
 
 
+NO_REMOTE = "no GitHub remote yet: the merge queue starts once this project is on GitHub"
+
+
+def has_remote(root) -> bool:
+    return shell.git(root, "remote", "get-url", "origin", timeout=10).ok
+
+
 def awaiting(proj) -> str:
     """The PR adding the script as init last recorded it (`verify_pr`): `PR #<n> (<url>)`."""
     pr = (proj or {}).get("verify_pr") or {}
@@ -80,8 +88,8 @@ def _waiting(why) -> dict:
 
 def ensure(root, key, cfg=None, open_pr=True) -> dict:
     """The merge queue's script on origin/<base>, or one PR adding it (see the module docstring)."""
-    if not shell.git(root, "remote", "get-url", "origin", timeout=10).ok:
-        return _waiting("the repository has no origin remote")
+    if not has_remote(root):
+        return {"state": "remote"}
     base = publish.base(root, cfg, project=key)
     if not base:
         return _waiting("no base branch: origin/HEAD is not set")
@@ -130,4 +138,6 @@ def running(state) -> str:
         return f"waiting for PR #{state['number']} ({state['url']}) to be merged"
     if state["state"] == "word":
         return f'waits for the owner\'s word (say "set up the merge queue for {state["project"]}")'
+    if state["state"] == "remote":
+        return NO_REMOTE
     return f"waiting; the check script could not be pushed ({state['reason']})"

@@ -3,9 +3,15 @@
 Only our keys are touched: `cleanupPeriodDays`, `env.CLAUDE_AUTOCOMPACT_PCT_OVERRIDE`, and hook
 entries matched by their exact command string. Every other key and hook entry is preserved in
 order. `env.CLAUDE_CODE_SUBAGENT_PROMPT_CACHE_TTL` is deliberately left untouched.
+
+A session reads `$CLAUDE_CONFIG_DIR/settings.json` when that is set: an Orca pane's is its account profile,
+which Orca refreshes from `~/.claude/settings.json` when it opens a terminal or starts an agent. So the hook
+entries also go into (and out of) that file when it is another one (`session_dirs`); the other keys stay in
+the home file only.
 """
 import copy
 import json
+import os
 from pathlib import Path
 
 from .. import util
@@ -21,6 +27,18 @@ ENV_UNTOUCHED = "CLAUDE_CODE_SUBAGENT_PROMPT_CACHE_TTL"
 
 def settings_path(ctx) -> Path:
     return ctx.claude / "settings.json"
+
+
+def session_dirs(ctx) -> list:
+    """The Claude config folders whose settings.json the next session reads: the home's `.claude`, then
+    $CLAUDE_CONFIG_DIR when it is set for the real home and names another file (an Orca profile)."""
+    dirs = [ctx.claude]
+    extra = os.environ.get("CLAUDE_CONFIG_DIR")
+    if extra and ctx.home.resolve() == Path.home().resolve():
+        extra = Path(extra).expanduser()
+        if os.path.realpath(extra / "settings.json") != os.path.realpath(settings_path(ctx)):
+            dirs.append(extra)
+    return dirs
 
 
 def plugin_hooks(plugin_root) -> list:
@@ -87,9 +105,10 @@ def dump(data) -> str:
     return json.dumps(data, indent=2, ensure_ascii=False) + "\n"
 
 
-def load(ctx):
-    """(data, error message or None). A missing file is an empty object."""
-    path = settings_path(ctx)
+def load(ctx, path=None):
+    """(data, error message or None) of `path` (default the home's settings.json). A missing file is an
+    empty object."""
+    path = path or settings_path(ctx)
     try:
         data = util.read_json(path, default={})
     except util.JsonError as exc:
@@ -115,9 +134,53 @@ def snapshot(data) -> dict:
     return out
 
 
+def _set_hooks(ctx, new, mode, state, quiet=False):
+    """Orche's hook entries out of `new` in plugin mode (the plugin's hooks.json registers them: settings
+    entries too would run every hook twice), else into it: (changes, added)."""
+    changes, added = [], []
+    if mode == "plugin":
+        changes += [f"remove hook {event} {command} (plugin mode: the plugin registers the hooks)"
+                    for event, command in remove_commands(new, orche_hook_pairs(ctx.plugin_root, state))]
+        return changes, added
+    for event, matcher, command in plugin_hooks(ctx.plugin_root):
+        if has_command(new, event, command):
+            if not quiet:
+                ctx.note(STEP, "ok", None, f"hook {event} already registered: {command}")
+            continue
+        add_hook(new, event, matcher, command)
+        changes.append(f"add hook {event}{f'[{matcher}]' if matcher else ''} {command}")
+        added.append({"event": event, "command": command})
+    return changes, added
+
+
+def _write(ctx, path, new, changes) -> None:
+    if not changes:
+        ctx.note(STEP, "ok", path, "unchanged")
+        return
+    for change in changes:
+        verb, _, detail = change.partition(" ")
+        ctx.note(STEP, verb, None, detail)
+    write_file(ctx, STEP, path, dump(new), f"{len(changes)} change(s)")
+
+
 def install(ctx, mode, state) -> None:
-    """Merge our keys. Outside dry-run, `state` gains `originals` (first time only) and every hook
-    command Orche added (`added_hooks`), recorded only after settings.json was written."""
+    """Merge our keys, and Orche's hook entries by `mode` into every session folder's settings.json
+    (`session_dirs`; the other keys into the home file only). Outside dry-run, `state` gains `originals`
+    (first time only) and every hook command Orche added to the home file (`added_hooks`), recorded only
+    after settings.json was written."""
+    recorded = copy.deepcopy(state)   # the hooks recorded before this run (an older root's, too)
+    _home(ctx, mode, state)
+    for extra in session_dirs(ctx)[1:]:
+        other = extra / "settings.json"
+        data, err = load(ctx, other)
+        if err:
+            ctx.note(STEP, "error", other, f"{err}; left untouched")
+            continue
+        new = copy.deepcopy(data)
+        _write(ctx, other, new, _set_hooks(ctx, new, mode, recorded, quiet=True)[0])
+
+
+def _home(ctx, mode, state) -> None:
     path = settings_path(ctx)
     data, err = load(ctx)
     if err:
@@ -125,7 +188,7 @@ def install(ctx, mode, state) -> None:
         return
     originals = snapshot(data)
     new = copy.deepcopy(data)
-    changes, added = [], []
+    changes = []
     if new.get(ORIG_CLEANUP) != CLEANUP_DAYS:
         changes.append(f"set {ORIG_CLEANUP} {new.get(ORIG_CLEANUP, '(absent)')} -> {CLEANUP_DAYS}")
         new[ORIG_CLEANUP] = CLEANUP_DAYS
@@ -136,28 +199,8 @@ def install(ctx, mode, state) -> None:
             env[key] = value
     ctx.note(STEP, "keep", None, f"env.{ENV_UNTOUCHED} left untouched "
                                  f"({'set' if ENV_UNTOUCHED in env else 'absent'}; Orche never writes it)")
-    replaced = []
-    if mode == "plugin":
-        # The plugin's hooks.json registers the hooks: settings-mode entries left by an earlier
-        # `--mode settings` install would run every hook twice.
-        replaced = remove_commands(new, orche_hook_pairs(ctx.plugin_root, state))
-        changes += [f"remove hook {event} {command} (plugin mode: the plugin registers the hooks)"
-                    for event, command in replaced]
-    else:
-        for event, matcher, command in plugin_hooks(ctx.plugin_root):
-            if has_command(new, event, command):
-                ctx.note(STEP, "ok", None, f"hook {event} already registered: {command}")
-                continue
-            add_hook(new, event, matcher, command)
-            changes.append(f"add hook {event}{f'[{matcher}]' if matcher else ''} {command}")
-            added.append({"event": event, "command": command})
-    if not changes:
-        ctx.note(STEP, "ok", path, "unchanged")
-    else:
-        for change in changes:
-            verb, _, detail = change.partition(" ")
-            ctx.note(STEP, verb, None, detail)
-        write_file(ctx, STEP, path, dump(new), f"{len(changes)} change(s)")
+    hook_changes, added = _set_hooks(ctx, new, mode, state)
+    _write(ctx, path, new, changes + hook_changes)
     if ctx.dry_run:
         return
     state.setdefault("originals", originals)
@@ -255,8 +298,23 @@ def uninstall(ctx, state) -> None:
 
 
 def registered(data, plugin_root) -> list:
-    """Plugin hook commands missing from `data` (empty list = all six registered)."""
+    """Plugin hook commands missing from `data` (empty list = all registered)."""
     return [cmd for ev, _, cmd in plugin_hooks(plugin_root) if not has_command(data, ev, cmd)]
+
+
+def short(ctx, plugin_on) -> list:
+    """The final check: [] when Orche's hooks are on for the next session (the plugin on for every session
+    folder, or every Orche hook in each one's settings.json), else [(path, hooks missing)] per file short of
+    them (an unreadable file misses all)."""
+    if plugin_on:
+        return []
+    out = []
+    for folder in session_dirs(ctx):
+        data, err = load(ctx, folder / "settings.json")
+        missing = len(plugin_hooks(ctx.plugin_root)) if err else len(registered(data, ctx.plugin_root))
+        if missing:
+            out.append((folder / "settings.json", missing))
+    return out
 
 
 def plugin_enabled(data) -> bool:

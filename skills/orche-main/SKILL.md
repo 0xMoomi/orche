@@ -235,6 +235,7 @@ When an `orche` command refuses or fails, relay its line and stop; never redo it
 | The team, who does what | `orche depts <p>` | at most five plain lines: each head and its workers |
 | The queue, what's merging | `orche queue <p>` | at most five plain lines: what lands next, what was returned, what waits |
 | Something's wrong, check the setup | `orche doctor` | each WARN or FAIL row in plain words with the one step that fixes it; take the step when it is yours |
+| Repair the setup (doctor: "Orche's hooks are off") | `orche install` | its `hooks:` line in plain words: on for new sessions, or what still blocks it; never suggest a restart for it |
 | What else can Orche do, what do you recommend | `orche doctor` (its "Next steps" block) | each line in plain words: the feature, on or off, what to say to switch it on |
 | Update | `orche update` with Bash timeout 600000 ms (up to 10 minutes); a failed step: run it once more, it resumes | its version line (`Orche <old> → <new>` or `already up to date`) and the project lines; never pull, reinstall or refresh by hand, never ask the owner to close or reopen a pane |
 | Set up a project, set up again, add a division, change a model | skill orche-apply, section "In plain words (choices)" (set up again: `orche init <p> --refresh`) | the choice dialog, then one result line |

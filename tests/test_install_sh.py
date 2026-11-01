@@ -1,5 +1,6 @@
 """install.sh driven as a subprocess against a fake world: temp HOME, a local bare repo as the
-clone source (no network), fake `claude` / `orca` / `osascript` / `security` on PATH.
+clone source (no network), fake `claude` (support.write_fake_claude, with its plugin CLI) / `orca` /
+`osascript` / `security` on PATH.
 
 The fakes record what they were asked into files next to them. The real `claude plugin` state,
 Orca, the keychain and the developer's home are never reached: PATH is the fake bin folder, then
@@ -17,53 +18,13 @@ import threading
 import unittest
 from pathlib import Path
 
-from support import ABSOLUTE_PYTHONS, ROOT
+from support import ABSOLUTE_PYTHONS, ROOT, plugin_installed, write_fake_claude
 
 INSTALL_SH = ROOT / "install.sh"
 WINDOWS_MSG = ("Windows is not supported: Orca is a macOS app and the Orche CLI relies on POSIX process "
                "control (ps, process groups, signals) and the macOS keychain. WSL2 is unverified.")
 MARKER = "# orche"
 
-FAKE_CLAUDE = r"""#!/bin/sh
-# Fake `claude`: logs every call, keeps marketplace/plugin state in files next to itself.
-d=$(dirname "$0")
-printf '%s\n' "$*" >> "$d/claude-argv.txt"
-case "$*" in
-  --version) echo "2.1.302 (Claude Code)" ;;
-  --help) printf 'Usage: claude [options]\n  --setting-sources <s>\n  --tools <tools...>\n' ;;
-  "plugin --help") cat "$d/plugin-help.txt" ;;
-  "plugin marketplace list --json")
-    if [ -f "$d/marketplace-json" ]; then cat "$d/marketplace-json"
-    elif [ -f "$d/marketplace" ]; then
-      printf '[{"name": "orche", "source": "directory", "path": "%s"}]\n' "$(cat "$d/marketplace")"
-    else echo '[]'; fi ;;
-  "plugin marketplace add "*) printf '%s' "$4" > "$d/marketplace" ;;
-  "plugin marketplace update orche") [ -f "$d/marketplace" ] || exit 1 ;;
-  "plugin list --json")
-    if [ -f "$d/plugin-json" ]; then cat "$d/plugin-json"
-    elif [ -f "$d/installed" ]; then echo '[{"id": "orche@orche", "enabled": true}]'; else echo '[]'; fi ;;
-  "plugin install orche@orche")
-    [ -f "$d/marketplace" ] || { echo "marketplace orche not found" >&2; exit 1; }
-    [ ! -f "$d/fail-install" ] || { echo "install failed" >&2; exit 1; }
-    touch "$d/installed"
-    # Like the real CLI: enable the plugin in ~/.claude/settings.json (doctor's "hooks" row).
-    python3 -c 'import json, os
-p = os.path.expanduser("~/.claude/settings.json")
-data = json.load(open(p)) if os.path.exists(p) else {}
-data.setdefault("enabledPlugins", {})["orche@orche"] = True
-json.dump(data, open(p, "w"), indent=2)' ;;
-  "plugin update orche@orche") [ -f "$d/installed" ] || exit 1 ;;
-  *) echo "fake claude: unexpected: $*" >&2; exit 3 ;;
-esac
-"""
-PLUGIN_HELP = """Usage: claude plugin|plugins [options] [command]
-
-Commands:
-  install|i [options] <plugin>         Install a plugin from available marketplaces
-  list [options]                       List installed plugins
-  marketplace                          Manage Claude Code marketplaces
-  update [options] <plugin>            Update a plugin to the latest version
-"""
 PLUGIN_HELP_OLD = """Usage: claude plugin [options] [command]
 
 Commands:
@@ -167,8 +128,7 @@ class InstallShTest(unittest.TestCase):
         self.orche_home = self.home / ".claude" / "orche"
         self.dir = self.home / "orche"
         self.fake = self.tmp / "fakebin"
-        _write(self.fake / "claude", FAKE_CLAUDE)
-        _write(self.fake / "plugin-help.txt", PLUGIN_HELP, 0o644)
+        write_fake_claude(self.fake)   # `claude plugin ...`: support.FAKE_PLUGIN, state next to it
         _write(self.fake / "orca", FAKE_ORCA)
         _write(self.fake / "osascript", FAKE_OSASCRIPT)
         _write(self.fake / "security", FAKE_SECURITY)
@@ -402,7 +362,7 @@ class InstallShTest(unittest.TestCase):
         # orche listed, but without any recognisable path field: unknown source, no warning, update.
         (self.fake / "marketplace-json").write_text('[{"name": "orche", "source": {"source": "directory"}}, 7]\n')
         (self.fake / "plugin-json").write_text('[null, {"id": "orche@orche"}]\n')
-        again = self.install()
+        again = self.install("--mode", "plugin")   # the first run fell back to settings mode, which a re-run keeps
         self.assertOk(again)
         self.assertNotIn("already points at", again.all)
         calls = self.claude_calls()
@@ -410,7 +370,7 @@ class InstallShTest(unittest.TestCase):
         self.assertIn("plugin update orche@orche", calls)
         # orche listed with a path somewhere else: the warning, and the run still succeeds.
         (self.fake / "marketplace-json").write_text('[{"name": "orche", "path": "/elsewhere/orche"}]\n')
-        third = self.install()
+        third = self.install("--mode", "plugin")
         self.assertOk(third)
         self.assertIn("a marketplace named orche already points at /elsewhere/orche", third.stderr)
 
@@ -540,7 +500,7 @@ class InstallShTest(unittest.TestCase):
         res = self.install("--mode", "settings")
         self.assertOk(res)
         self.assertIn("orche install --mode settings --no-jev", res.stdout)
-        self.assertEqual(self.claude_calls(), ["plugin --help"])
+        self.assertEqual(set(self.claude_calls()), {"plugin --help", "plugin list --json"})   # asked, never changed
 
     def test_failed_plugin_install_falls_back_to_settings(self):
         (self.fake / "fail-install").touch()
@@ -551,6 +511,112 @@ class InstallShTest(unittest.TestCase):
         self.assertIn("note: plugin step failed", res.stdout)
         settings = (self.home / ".claude" / "settings.json").read_text()
         self.assertIn(f"{self.dir}/hooks/run.sh", settings)
+
+    # --- an existing install (c108) ---------------------------------------------------------------
+
+    def settings(self, folder=None):
+        return json.loads(((folder or self.home / ".claude") / "settings.json").read_text())
+
+    def hook_commands(self, folder=None):
+        return [h["command"] for entries in self.settings(folder).get("hooks", {}).values()
+                for entry in entries for h in entry.get("hooks", [])]
+
+    def test_rerun_on_a_settings_mode_mac_keeps_its_clone_and_mode(self):
+        # 2026-11-01: a settings-mode Mac (its clone elsewhere, the plugin installed but turned off on purpose)
+        # ran the README quick start; it must keep that clone and mode and leave the plugin off.
+        dev = self.tmp / "dev" / "orche"
+        self.assertOk(self.install("--mode", "settings", "--dir", str(dev), dir_arg=False))
+        plugin_installed(self.fake, disabled_in=self.home / ".claude")
+        before = self.claude_calls()
+        res = self.install("--yes", dir_arg=False)
+        self.assertOk(res)
+        self.assertIn(f"existing install: keeping settings mode ({self.orche_home / 'install-state.json'})",
+                      res.stdout)
+        self.assertIn(f"update {dev} (main)", res.stdout)
+        self.assertFalse(self.dir.exists())   # no second clone in ~/orche
+        self.assertEqual({c for c in self.claude_calls()[len(before):]}, {"plugin --help", "plugin list --json"})
+        self.assertEqual(sum(f'"{dev}/hooks/run.sh"' in c for c in self.hook_commands()), 7)
+        self.assertIs(self.settings()["enabledPlugins"]["orche@orche"], False)
+        self.assertIn(f"Orche {__import__('orche').__version__} is installed on this Mac (settings mode).", res.stdout)
+        self.assertEqual(json.loads((self.orche_home / "install-state.json").read_text())["mode"], "settings")
+
+    def test_a_development_checkout_is_used_as_is(self):
+        dev = self.tmp / "dev" / "orche"
+        self.private = self.tmp / "private.git"   # this test moves its origin's main
+        _git("clone", "-q", "--bare", str(self.bare), str(self.private))
+        src = ("--source", str(self.private))
+        self.assertOk(self.install(*src, "--mode", "settings", "--dir", str(dev), dir_arg=False))
+        _git("checkout", "-q", "-b", "feature", cwd=dev)
+        head = subprocess.run(["git", "-C", str(dev), "rev-parse", "HEAD"], capture_output=True, text=True).stdout
+        res = self.install(*src, "--yes", dir_arg=False)
+        self.assertOk(res)
+        self.assertIn(f"using the existing install's clone as is: {dev} (on feature, not main)", res.stdout)
+        self.assertNotIn(f"update {dev}", res.stdout)
+        self.assertEqual(subprocess.run(["git", "-C", str(dev), "rev-parse", "HEAD"], capture_output=True,
+                                        text=True).stdout, head)
+        (dev / "README.md").write_text("mine\n")
+        res = self.install(*src, "--yes", dir_arg=False)
+        self.assertOk(res)
+        self.assertIn(f"using the existing install's clone as is: {dev} (uncommitted changes)", res.stdout)
+        _git("checkout", "-q", "README.md", cwd=dev)
+        _git("checkout", "-q", "main", cwd=dev)
+        _git("commit", "-q", "--allow-empty", "-m", "local", cwd=dev)   # main with a local commit
+        other = self.tmp / "other-src"
+        _git("clone", "-q", str(self.private), str(other))
+        _git("commit", "-q", "--allow-empty", "-m", "published", cwd=other)
+        _git("push", "-q", "origin", "main", cwd=other)   # main moved on: no fast-forward
+        res = self.install(*src, "--yes", dir_arg=False)
+        self.assertOk(res)
+        self.assertIn(f"using the existing install's clone as is: {dev} (cannot fast-forward to origin/main)",
+                      res.stdout)
+
+    def test_plugin_mode_turns_a_disabled_plugin_back_on(self):
+        self.assertOk(self.install())
+        plugin_installed(self.fake, disabled_in=self.home / ".claude")   # off, as the update keeps it
+        res = self.install()
+        self.assertOk(res)
+        self.assertIn("existing install: keeping plugin mode", res.stdout)
+        self.assertIn("plugin update orche@orche", self.claude_calls())
+        self.assertIn("plugin enable orche@orche --scope user", self.claude_calls())
+        self.assertIn("plugin orche@orche enabled for ~/.claude", res.stdout)
+        self.assertIs(self.settings()["enabledPlugins"]["orche@orche"], True)
+        self.assertEqual(self.hook_commands(), [])
+        self.assertIn("is installed on this Mac (plugin mode; plugin updated, restart Claude Code to load it).",
+                      res.stdout)
+
+    def test_a_plugin_that_stays_off_means_settings_mode(self):
+        self.assertOk(self.install())
+        plugin_installed(self.fake, disabled_in=self.home / ".claude")
+        (self.fake / "noop-enable").touch()   # `enable` answers 0 and changes nothing
+        res = self.install()
+        self.assertOk(res)
+        self.assertIn("claude plugin list --json does not show orche@orche enabled for ~/.claude after claude plugin "
+                      "enable: registering the hooks in settings.json instead", res.stderr)
+        self.assertIn("orche install --mode settings --no-jev", res.stdout)
+        self.assertIn("(settings mode)", res.stdout)
+        self.assertNotIn("plugin updated", res.stdout)
+        self.assertEqual(sum(f'"{self.dir}/hooks/run.sh"' in c for c in self.hook_commands()), 7)
+        self.assertEqual(json.loads((self.orche_home / "install-state.json").read_text())["mode"], "settings")
+
+    def test_claude_config_dir_gets_the_enable_and_the_hooks(self):
+        # An Orca pane: CLAUDE_CONFIG_DIR is its profile, which Orca refreshes from ~/.claude/settings.json.
+        profile = self.tmp / "profile"
+        profile.mkdir()
+        env = {**self.env, "CLAUDE_CONFIG_DIR": str(profile)}
+        res = self.install(env=env)
+        self.assertOk(res)
+        self.assertEqual(self.claude_calls().count("plugin enable orche@orche --scope user"), 2)
+        self.assertIn(f"plugin orche@orche enabled for {profile} and ~/.claude", res.stdout)
+        self.assertIs(self.settings()["enabledPlugins"]["orche@orche"], True)
+        self.assertIs(self.settings(profile)["enabledPlugins"]["orche@orche"], True)
+        res = self.install("--mode", "settings", env={**env})
+        self.assertOk(res)   # the plugin is on for both folders: it wins, no settings entries
+        self.assertEqual(self.hook_commands(profile), [])
+        plugin_installed(self.fake, disabled_in=profile)
+        res = self.install("--mode", "settings", env={**env})
+        self.assertOk(res)
+        self.assertEqual(sum(f'"{self.dir}/hooks/run.sh"' in c for c in self.hook_commands(profile)), 7)
+        self.assertEqual(sum(f'"{self.dir}/hooks/run.sh"' in c for c in self.hook_commands()), 7)
 
     # --- running from a clone -------------------------------------------------------------------
 

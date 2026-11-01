@@ -4,10 +4,12 @@
 #   curl -fsSL https://raw.githubusercontent.com/0xMoomi/orche/main/install.sh | bash
 #   bash install.sh [options]          # from a clone: that clone is used as is
 #
-# Steps, in order: OS gate, requirements (git, Python 3.11+, claude, orca), clone or update
-# ORCHE_DIR, PATH line in the login profile, `orche install`, the Claude Code plugin (or the settings.json hooks),
-# then `orche doctor` and a short summary.
-# Safe to re-run: a second run updates the clone and changes nothing else that is already in place.
+# Steps, in order: OS gate, requirements (git, Python 3.11+, claude, orca), the existing install (its
+# install-state.json `mode` and `clone`), clone or update ORCHE_DIR, PATH line in the login profile, the
+# Claude Code plugin (plugin mode only once `claude plugin list --json` shows it enabled), `orche install`,
+# then `orche doctor` (hooks off: repaired to settings mode and checked again) and a short summary.
+# Safe to re-run: a Mac with Orche keeps its folder and mode; a clone on main with a clean tree is
+# fast-forwarded, any other is used as is; nothing else that is already in place changes.
 # No sudo, no eval. Exit codes: 0 done, 1 user/environment problem, 2 unexpected failure.
 #
 # Test-only environment, honoured only when set: ORCHE_INSTALL_UNAME stands in for `uname -s`;
@@ -34,10 +36,11 @@ Usage:
 
 Options:
   --dir PATH       where Orche lives (default: $ORCHE_DIR, else this clone when run from one,
-                   else ~/orche)
+                   else the existing install's clone, else ~/orche)
   --ref REF        branch or tag to install (default: main)
-  --mode MODE      plugin (default): hooks via the Claude Code plugin;
-                   settings: hooks registered in ~/.claude/settings.json instead
+  --mode MODE      plugin: hooks via the Claude Code plugin (kept only once it is enabled);
+                   settings: hooks registered in settings.json instead
+                   (default: the existing install's mode, else plugin)
   --no-jev         do not ask for the optional Jev key (add it later: orche jev setup)
   --yes            ask nothing (implies --no-jev)
   --no-profile     do not touch your login profile (print the PATH line instead)
@@ -142,10 +145,6 @@ check_requirements() {
     CLAUDE_PLUGIN=0
     PLUGIN_NOTE="claude not found on PATH: plugin step skipped, hooks registered in settings.json (--mode settings); install Claude Code, then re-run"
   fi
-  if [ "$MODE" = plugin ] && [ "$CLAUDE_PLUGIN" = 0 ]; then
-    MODE=settings
-    warn "$PLUGIN_NOTE"
-  fi
   if command -v orca >/dev/null 2>&1; then
     step "orca: $(command -v orca)"
   else
@@ -153,12 +152,59 @@ check_requirements() {
   fi
 }
 
+# state_field NAME: the existing install's install-state.json string field NAME, or nothing.
+state_field() {
+  [ -f "$STATE" ] || return 0
+  "$PY" -c '
+import json, sys
+try:
+    value = json.load(open(sys.argv[1], encoding="utf-8")).get(sys.argv[2])
+except Exception:
+    value = None
+print(value if isinstance(value, str) else "")
+' "$STATE" "$1" </dev/null 2>/dev/null || true
+}
+
+# The install this Mac already has: its mode (unless --mode) and its clone, when that is an Orche checkout.
+existing_install() {
+  STATE=${ORCHE_HOME:-$HOME/.claude/orche}/install-state.json
+  RECORDED_CLONE=""
+  local mode clone
+  if [ -f "$STATE" ]; then
+    mode=$(state_field mode)
+    clone=$(state_field clone)
+    if [ -z "$MODE" ]; then
+      case $mode in plugin | settings) MODE=$mode; step "existing install: keeping $mode mode ($STATE)" ;; esac
+    fi
+    if [ -n "$clone" ] && [ -e "$clone/.git" ] && [ -x "$clone/bin/orche" ] && [ -f "$clone/.claude-plugin/plugin.json" ]; then
+      RECORDED_CLONE=$(cd "$clone" && pwd -P)
+    fi
+  fi
+  if [ -z "$MODE" ]; then MODE=plugin; fi
+}
+
 clone_or_update() {
-  local shown_source
+  local shown_source recorded=0
   shown_source=$(masked "$SOURCE")
   if [ -n "$SELF_CLONE" ] && [ "$(cd "$ORCHE_DIR" 2>/dev/null && pwd -P)" = "$SELF_CLONE" ]; then
     step "using this clone as is: $ORCHE_DIR (update it with git pull)"
     return 0
+  fi
+  if [ -n "$RECORDED_CLONE" ] && [ "$(cd "$ORCHE_DIR" 2>/dev/null && pwd -P)" = "$RECORDED_CLONE" ]; then
+    local why="" branch
+    branch=$(git -C "$ORCHE_DIR" symbolic-ref -q --short HEAD 2>/dev/null || true)
+    if [ -n "$(git -C "$ORCHE_DIR" status --porcelain 2>/dev/null)" ]; then
+      why="uncommitted changes"
+    elif [ "$branch" != main ]; then
+      why="on ${branch:-a detached HEAD}, not main"
+    elif [ "$(norm_remote "$(git -C "$ORCHE_DIR" remote get-url origin 2>/dev/null || true)")" != "$(norm_remote "$SOURCE")" ]; then
+      why="its origin is not $shown_source"
+    fi
+    if [ -n "$why" ]; then
+      step "using the existing install's clone as is: $ORCHE_DIR ($why)"
+      return 0
+    fi
+    recorded=1
   fi
   # A missing or empty folder is a clone target (git clones into an empty folder).
   if [ ! -e "$ORCHE_DIR" ] || { [ -d "$ORCHE_DIR" ] && [ -z "$(ls -A "$ORCHE_DIR")" ]; }; then
@@ -184,15 +230,25 @@ clone_or_update() {
     die "$ORCHE_DIR has uncommitted changes: commit or stash them (git -C \"$ORCHE_DIR\" stash), then re-run"
   fi
   step "update $ORCHE_DIR ($REF)"
-  run env GIT_TERMINAL_PROMPT=0 git -C "$ORCHE_DIR" fetch --quiet --tags --prune origin </dev/null ||
+  if ! run env GIT_TERMINAL_PROMPT=0 git -C "$ORCHE_DIR" fetch --quiet --tags --prune origin </dev/null; then
+    if [ "$recorded" = 1 ]; then
+      step "using the existing install's clone as is: $ORCHE_DIR (git fetch failed, above)"
+      return 0
+    fi
     die "git fetch in $ORCHE_DIR failed (see above): check the network"
+  fi
   run git -C "$ORCHE_DIR" checkout --quiet "$REF" </dev/null ||
     die "git checkout $REF in $ORCHE_DIR failed (see above): check --ref"
   if [ "$DRY_RUN" = 1 ]; then
     say "   would run: git -C $ORCHE_DIR pull --ff-only (when $REF is a branch)"
   elif git -C "$ORCHE_DIR" symbolic-ref -q HEAD >/dev/null; then
-    GIT_TERMINAL_PROMPT=0 git -C "$ORCHE_DIR" pull --quiet --ff-only </dev/null ||
+    if ! GIT_TERMINAL_PROMPT=0 git -C "$ORCHE_DIR" pull --quiet --ff-only </dev/null; then
+      if [ "$recorded" = 1 ]; then
+        step "using the existing install's clone as is: $ORCHE_DIR (cannot fast-forward to origin/$REF)"
+        return 0
+      fi
       die "cannot fast-forward $ORCHE_DIR to origin/$REF (local commits?): reset or move the clone, then re-run"
+    fi
   fi
 }
 
@@ -233,8 +289,9 @@ setup_path() {
 
 # `orche install`. The Jev question needs a terminal: under `curl | bash` stdin is the script, so
 # (like rustup) the answers are read from /dev/tty when it can be opened and stdout is a terminal.
-# Without one, --no-jev and one line saying so. In plugin mode this script runs the two plugin
-# steps itself, so `orche install` is told not to print them (--no-plugin-hint).
+# Without one, --no-jev and one line saying so. In plugin mode this script runs the plugin steps
+# itself, so `orche install` is told not to print them (--no-plugin-hint). Afterwards MODE is the mode
+# the install recorded (it keeps plugin mode only while the plugin is on).
 orche_install() {
   local orche="$ORCHE_DIR/bin/orche" tty=${ORCHE_INSTALL_TTY:-/dev/tty} hint="" ask=0
   if [ "$MODE" = plugin ]; then hint="--no-plugin-hint"; fi
@@ -252,6 +309,7 @@ orche_install() {
     step "orche install --mode $MODE${hint:+ $hint} (Jev question on the terminal)"
     "$orche" install --mode "$MODE" ${hint:+"$hint"} <"$tty" ||
       die "orche install reported errors (above): fix them and re-run"
+    recorded_mode
     return 0
   fi
   if [ "$YES" = 0 ] && [ "$NO_JEV" = 0 ]; then
@@ -260,12 +318,20 @@ orche_install() {
   step "orche install --mode $MODE --no-jev${hint:+ $hint}"
   "$orche" install --mode "$MODE" --no-jev ${hint:+"$hint"} </dev/null ||
     die "orche install reported errors (above): fix them and re-run"
+  recorded_mode
+}
+
+recorded_mode() {
+  local mode
+  mode=$(state_field mode)
+  case $mode in plugin | settings) MODE=$mode ;; esac
+  if [ "$MODE" != plugin ]; then PLUGIN_UPDATED=""; fi
 }
 
 # json_find KIND JSON: does `claude plugin marketplace list --json` (KIND=marketplace) or
-# `claude plugin list --json` (KIND=plugin) list orche? Prints "found <source>" when it does
-# (a marketplace's path, repo or URL; empty for a plugin), nothing otherwise. Never fails: it runs
-# inside $(...), where a failing command would trip the ERR trap.
+# `claude plugin list --json` (KIND=plugin; KIND=enabled: with `enabled` true) list orche? Prints
+# "found <source>" when it does (a marketplace's path, repo or URL; empty for a plugin), nothing
+# otherwise. Never fails: it runs inside $(...), where a failing command would trip the ERR trap.
 json_find() {
   "$PY" -c '
 import json, sys
@@ -280,26 +346,53 @@ for row in rows if isinstance(rows, list) else []:
     if kind == "marketplace" and row.get("name") == "orche":
         print("found", row.get("path") or row.get("repo") or row.get("url") or "")
         break
-    if kind == "plugin" and row.get("id") == "orche@orche":
+    if kind in ("plugin", "enabled") and row.get("id") == "orche@orche" and (kind == "plugin" or row.get("enabled") is True):
         print("found")
         break
 ' "$1" "$2" </dev/null || true
 }
 
+# claude_in DIR ARGS: `claude ARGS` for the Claude config folder DIR (empty: the default ~/.claude, with
+# CLAUDE_CONFIG_DIR unset). An Orca pane's CLAUDE_CONFIG_DIR is its account profile, whose settings.json
+# Orca refreshes from ~/.claude/settings.json: the plugin steps run for ~/.claude, then the enable for
+# that folder too.
+claude_in() {
+  local dir=$1
+  shift
+  if [ -z "$dir" ]; then env -u CLAUDE_CONFIG_DIR claude "$@"; else CLAUDE_CONFIG_DIR=$dir claude "$@"; fi
+}
+
+# The Claude Code plugin, before `orche install`: plugin mode only once `claude plugin list --json` shows
+# orche@orche enabled for every folder a new session reads (~/.claude and, when set to another folder,
+# $CLAUDE_CONFIG_DIR); anything less is settings mode (plugin_failed), never neither.
 plugin_step() {
   if [ "$MODE" != plugin ]; then
     return 0
+  fi
+  if [ "$CLAUDE_PLUGIN" = 0 ]; then
+    MODE=settings
+    warn "$PLUGIN_NOTE"
+    return 0
+  fi
+  local extra="" d
+  if [ -n "${CLAUDE_CONFIG_DIR:-}" ] &&
+    [ "$(cd "$CLAUDE_CONFIG_DIR" 2>/dev/null && pwd -P)" != "$(cd "$HOME/.claude" 2>/dev/null && pwd -P)" ]; then
+    extra=$CLAUDE_CONFIG_DIR
   fi
   if [ "$DRY_RUN" = 1 ]; then
     step "Claude Code plugin"
     run claude plugin marketplace add "$ORCHE_DIR"
     run claude plugin install orche@orche
     say "   (or, when already there: claude plugin marketplace update orche; claude plugin update orche@orche)"
+    for d in "" ${extra:+"$extra"}; do
+      run claude plugin enable orche@orche --scope user
+      say "   then: claude plugin list --json must show orche@orche enabled for ${d:-~/.claude}, else settings mode"
+    done
     return 0
   fi
   step "Claude Code plugin (orche@orche)"
   local listed found where
-  listed=$(claude plugin marketplace list --json </dev/null 2>/dev/null || true)
+  listed=$(claude_in "" plugin marketplace list --json </dev/null 2>/dev/null || true)
   found=$(json_find marketplace "$listed")
   if [ -n "$found" ]; then
     where=${found#found}
@@ -307,47 +400,75 @@ plugin_step() {
     if [ -n "$where" ] && [ "$(norm_remote "$where")" != "$(norm_remote "$ORCHE_DIR")" ]; then
       warn "a marketplace named orche already points at $(masked "$where"); kept as is (to use this clone: claude plugin marketplace remove orche, then re-run)"
     fi
-    claude plugin marketplace update orche </dev/null || warn "claude plugin marketplace update orche failed; continuing"
-  elif ! claude plugin marketplace add "$ORCHE_DIR" </dev/null; then
-    plugin_failed "claude plugin marketplace add"
+    claude_in "" plugin marketplace update orche </dev/null || warn "claude plugin marketplace update orche failed; continuing"
+  elif ! claude_in "" plugin marketplace add "$ORCHE_DIR" </dev/null; then
+    plugin_failed "claude plugin marketplace add failed (above)"
     return 0
   fi
-  listed=$(claude plugin list --json </dev/null 2>/dev/null || true)
+  listed=$(claude_in "" plugin list --json </dev/null 2>/dev/null || true)
   if [ -n "$(json_find plugin "$listed")" ]; then
-    if claude plugin update orche@orche </dev/null; then
+    if claude_in "" plugin update orche@orche </dev/null; then
       PLUGIN_UPDATED=1
     else
       warn "claude plugin update orche@orche failed; the installed plugin stays as it was"
     fi
-  elif ! claude plugin install orche@orche </dev/null; then
-    plugin_failed "claude plugin install orche@orche"
+  elif ! claude_in "" plugin install orche@orche </dev/null; then
+    plugin_failed "claude plugin install orche@orche failed (above)"
     return 0
+  fi
+  # An update keeps a disabled plugin disabled; `enable` exits 1 when it is already on, so the list decides.
+  for d in "" ${extra:+"$extra"}; do
+    claude_in "$d" plugin enable orche@orche --scope user </dev/null >/dev/null 2>&1 || true
+    listed=$(claude_in "$d" plugin list --json </dev/null 2>/dev/null || true)
+    if [ -z "$(json_find enabled "$listed")" ]; then
+      plugin_failed "claude plugin list --json does not show orche@orche enabled for ${d:-~/.claude} after claude plugin enable"
+      return 0
+    fi
+  done
+  step "plugin orche@orche enabled for ${extra:+$extra and }~/.claude"
+}
+
+# The plugin is not on: the hooks go into settings.json (orche install --mode settings), so they still run.
+plugin_failed() {
+  warn "$1: registering the hooks in settings.json instead (orche install --mode settings)"
+  MODE=settings
+  PLUGIN_UPDATED=""
+  PLUGIN_NOTE="plugin step failed; hooks registered in settings.json. Re-run this installer to retry the plugin"
+}
+
+run_doctor() {
+  local rc=0
+  DOCTOR_OUT=$("$ORCHE_DIR/bin/orche" doctor </dev/null 2>&1) || rc=$?
+  printf '%s\n' "$DOCTOR_OUT" | grep -E '^(WARN|FAIL)' | sed 's/^/   /' || true
+  local fails warns
+  fails=$(printf '%s\n' "$DOCTOR_OUT" | grep -c '^FAIL' || true)
+  warns=$(printf '%s\n' "$DOCTOR_OUT" | grep -c '^WARN' || true)
+  say "   doctor: $warns WARN, $fails FAIL"
+  DOCTOR_FAILED=0
+  if [ "$rc" != 0 ]; then
+    DOCTOR_FAILED=1
   fi
 }
 
-# The plugin could not be installed: register the hooks in settings.json so they still run.
-plugin_failed() {
-  warn "$1 failed (above): registering the hooks in settings.json instead (orche install --mode settings)"
-  MODE=settings
-  PLUGIN_NOTE="plugin step failed; hooks registered in settings.json. Re-run this installer to retry the plugin"
-  "$ORCHE_DIR/bin/orche" install --mode settings --no-jev </dev/null || die "orche install --mode settings reported errors (above)"
-}
+hooks_off() { printf '%s\n' "$DOCTOR_OUT" | grep -q "$(printf '^FAIL\thooks\t')"; }
 
+# The final check (doctor's hooks row): hooks off for new sessions are repaired to settings mode at once
+# and checked again; still off, the run ends saying so, never with the success line.
 doctor() {
   if [ "$DRY_RUN" = 1 ]; then
     step "would run: orche doctor"
     return 0
   fi
   step "orche doctor (WARN and FAIL lines only; run \`orche doctor\` for all)"
-  local out rc=0
-  out=$("$ORCHE_DIR/bin/orche" doctor </dev/null 2>&1) || rc=$?
-  printf '%s\n' "$out" | grep -E '^(WARN|FAIL)' | sed 's/^/   /' || true
-  local fails warns
-  fails=$(printf '%s\n' "$out" | grep -c '^FAIL' || true)
-  warns=$(printf '%s\n' "$out" | grep -c '^WARN' || true)
-  say "   doctor: $warns WARN, $fails FAIL"
-  if [ "$rc" != 0 ]; then
-    DOCTOR_FAILED=1
+  run_doctor
+  if hooks_off; then
+    warn "Orche's hooks are off for new sessions: registering them in settings.json (orche install --mode settings)"
+    "$ORCHE_DIR/bin/orche" install --mode settings --no-jev </dev/null || true
+    MODE=settings
+    run_doctor
+    if hooks_off; then
+      die "Orche's hooks are still off: new sessions would run without Orche (the hooks line above names the file)"
+    fi
   fi
 }
 
@@ -375,7 +496,7 @@ summary() {
 }
 
 parse_args() {
-  DIR_ARG=""; REF=main; SOURCE=$ORCHE_REPO_URL; MODE=plugin
+  DIR_ARG=""; REF=main; SOURCE=$ORCHE_REPO_URL; MODE=""
   DRY_RUN=0; YES=0; NO_JEV=0; NO_PROFILE=0
   while [ $# -gt 0 ]; do
     case $1 in
@@ -396,7 +517,7 @@ parse_args() {
     esac
     shift
   done
-  case $MODE in plugin | settings) ;; *) die "--mode must be plugin or settings, not '$MODE'" ;; esac
+  case $MODE in "" | plugin | settings) ;; *) die "--mode must be plugin or settings, not '$MODE'" ;; esac
   [ -n "$REF" ] || die "--ref needs a branch or tag"
 }
 
@@ -410,6 +531,7 @@ resolve_dir() {
   if [ -n "$DIR_ARG" ]; then ORCHE_DIR=$DIR_ARG
   elif [ -n "${ORCHE_DIR:-}" ]; then :
   elif [ -n "$SELF_CLONE" ]; then ORCHE_DIR=$SELF_CLONE
+  elif [ -n "$RECORDED_CLONE" ]; then ORCHE_DIR=$RECORDED_CLONE
   else ORCHE_DIR=$HOME/orche
   fi
   # A literal ~ (from a quoted --dir "~/x" or ORCHE_DIR) is expanded here on purpose.
@@ -435,11 +557,12 @@ main() {
   if [ "$DRY_RUN" = 1 ]; then say "dry run: printing the steps, writing nothing"; fi
   check_os
   check_requirements
+  existing_install
   resolve_dir
   clone_or_update
   setup_path
-  orche_install
   plugin_step
+  orche_install
   doctor
   summary
 }

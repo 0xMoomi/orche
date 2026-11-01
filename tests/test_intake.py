@@ -686,8 +686,11 @@ class InitClosesItsWindowTest(FakeClaudeMixin, test_hr.HrCase):
         text = self.report().read_text()
         self.assertTrue(text.startswith("# Orche is set up: acme-shop\n\n- Divisions: build (claude-opus-5-5); "
                                         "gtm (claude-sonnet-5-5)\n"), text)
-        for part in ("- Agents: 2 division agents, one Orca tab each, always on. Each unit of work adds one worker "
-                     "while it runs; up to 4 run at once (custom).\n",
+        for part in ("- Agents: 2 divisions, resting: no tab and no cost until Main hands one work. Work Main hands a "
+                     "resting division runs in the background in its workspace, with no tab; its tab opens when it "
+                     'staffs workers (Build does, for code) or when you say "wake <division>", and it rests again when '
+                     'you say "put <division> to sleep". Each unit of work adds one worker while it runs; up to 4 run at '
+                     "once (custom).\n",
                      "- Intake: read the repository once and wrote the project card and the division charters "
                      "(claude-sonnet-5-5, $0.42, 38 s).\n",
                      "nothing is committed to the repository; Orche's own files are excluded from git\n",

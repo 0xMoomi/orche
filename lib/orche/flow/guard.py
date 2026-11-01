@@ -50,15 +50,20 @@ def _local(ts):
     return _dt.datetime.fromtimestamp(ts).astimezone()
 
 
+def last_seen(project):
+    """The owner's last prompt in Main (owner-seen's mtime, epoch seconds), else None."""
+    try:
+        return (folder(project) / "owner-seen").stat().st_mtime
+    except OSError:
+        return None
+
+
 def window(project, now=None):
     """W(p): the later of local midnight and the owner's last prompt (owner-seen's mtime)."""
     now = (now or units.now()).astimezone()
     start = now.replace(hour=0, minute=0, second=0, microsecond=0)
-    try:
-        seen = _local((folder(project) / "owner-seen").stat().st_mtime)
-    except OSError:
-        return start
-    return max(start, seen)
+    seen = last_seen(project)
+    return start if seen is None else max(start, _local(seen))
 
 
 def owner_seen(project):

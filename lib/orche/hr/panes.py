@@ -114,10 +114,17 @@ def pane_command(session, *, resume, cwd=None) -> str:
     """`claude --permission-mode bypassPermissions` + `resume_flag(session, cwd)` for a reopened pane (Main included), `--name <session>` for a fresh
     start: no Orche pane ever stops at a permission prompt.
 
+    A Main pane (`main-<project>`, fresh or resumed) also passes `--model claude-opus-5-5 --effort xhigh`
+    (staff.MAIN_MODEL, staff.MAIN_EFFORT): Opus 5.5 starts at medium effort, and a top-level `effortLevel`
+    in the user's settings does not reach it. Claude Code ranks a level or model picked in the session
+    (`/effort`, `/model`) above the flags, so the owner's own choice still wins in that pane.
+
     Prefixed with `session_env(session)`. The one builder for every Orche pane, Main included."""
+    from .. import staff   # at call time, as in project_pane: hr's import-time modules are pinned
     flag = resume_flag(session, cwd) if resume else f"--name {session}"
+    pin = f"--model {staff.MAIN_MODEL} --effort {staff.MAIN_EFFORT} " if str(session).startswith("main-") else ""
     return (f"{session_env(session)}{config.load().get('claude_bin', 'claude')} "
-            f"--permission-mode bypassPermissions {flag}")
+            f"--permission-mode bypassPermissions {pin}{flag}")
 
 
 def open_pane(worktree_id, session, command, *, dry_run=False):

@@ -6,7 +6,7 @@ Precondition of `wake` and `sleep`: `unit.owns_worktree` (the CLI routes Main to
 import sys
 import time
 
-from .. import cli, orca, roster, units, util, vendors
+from .. import cli, log, orca, roster, units, util, vendors
 from . import book, limits, panes
 
 STALE_HANDOFF_SECONDS = 30 * 60
@@ -49,6 +49,28 @@ def handoff_problem(unit):
     return None
 
 
+RESTING = "Resting: starts when Main hands it work"
+
+
+def resting_note(worktree_id, resting, *, dry_run=False) -> None:
+    """Orca's note on a division's workspace card (the worktree `comment`: a notes icon in the row under the
+    card's name, the text on hover): RESTING while the division rests (created dormant, put to sleep), cleared
+    when it wakes, so the plain shell tab a click on a resting card opens is explained. Only an empty note is
+    set and only RESTING is cleared (`orca worktree show` first): a note someone else wrote stays. Orca's CLI
+    drops an empty `--comment`, so clearing writes a blank one, which the card shows as none. An Orca error
+    is one log line: the transition stands."""
+    text = RESTING if resting else " "
+    try:
+        if not dry_run:
+            item = (orca.worktree("show", "--worktree", f"id:{worktree_id}") or {}).get("worktree") or {}
+            note = str(item.get("comment") or "")
+            if note.strip() if resting else note != RESTING:
+                return
+        orca.worktree("set", "--worktree", f"id:{worktree_id}", "--comment", text, dry_run=dry_run)
+    except orca.OrcaError as exc:
+        log.log("hr", f"resting note on {worktree_id} not {'set' if resting else 'cleared'}: {exc}")
+
+
 def _record(reg, unit, status, verb, **fields) -> None:
     by = roster.actor()
     book.record(reg, f"{verb} {unit.session} by {by}",
@@ -73,6 +95,8 @@ def sleep(reg, unit, *, dry_run=False, require_handoff=True) -> tuple:
         raise book.Refused(cli.EXIT_BLOCKED, f"HANDOFF.md is stale ({problem}); update it before sleeping")
     if dry_run:
         result = orca.terminal("close", "--terminal", f"<{unit.session}>", dry_run=True)
+        if unit.kind == "div":
+            resting_note(unit.entry["worktree"], True, dry_run=True)
         return ({"unit": unit.session, "dry_run": True, "argv": result["argv"]},
                 f"would sleep {unit.session} (dry-run)")
     try:
@@ -82,6 +106,8 @@ def sleep(reg, unit, *, dry_run=False, require_handoff=True) -> tuple:
     except orca.OrcaError as exc:
         raise book.Refused(cli.EXIT_USER, f"could not close the pane for {unit.session}: {exc}") from None
     _record(reg, unit, "paused", "sleep")
+    if unit.kind == "div":
+        resting_note(unit.entry["worktree"], True)
     return ({"unit": unit.session, "status": "paused", "pane_closed": term is not None},
             f"{unit.session} paused" + ("" if term is not None else " (no open pane)"))
 
@@ -109,6 +135,8 @@ def wake(reg, unit, *, dry_run=False) -> tuple:
     argv = panes.unit_argv(unit, resume=unit.status != "dormant")
     if dry_run:
         result = orca.terminal("create", *argv, dry_run=True)
+        if unit.kind == "div":
+            resting_note(unit.entry["worktree"], False, dry_run=True)
         return ({"unit": unit.session, "dry_run": True, "argv": result["argv"]},
                 f"would wake {unit.session} (dry-run)")
     try:
@@ -117,6 +145,8 @@ def wake(reg, unit, *, dry_run=False) -> tuple:
         raise book.Refused(cli.EXIT_USER, f"could not open a pane for {unit.session}: {exc}") from None
     units.touch_activity(unit.session)
     _record(reg, unit, "active", "wake", last_activity=util.now_iso())
+    if unit.kind == "div":
+        resting_note(unit.entry["worktree"], False)
     return {"unit": unit.session, "status": "active"}, f"{unit.session} active"
 
 

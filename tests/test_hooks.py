@@ -1355,6 +1355,29 @@ class ReportInjectTest(HookCase):
         self.assertEqual(self.inbox("main-acme"), [])
         self.assertEqual(len(self.inbox("main-acme", drained=True)), 1)
 
+    def test_a_main_outside_orches_pane_command_is_marked_and_its_own_pane_clears_it(self):
+        """Orca's plain `claude` in Main's tab lacks Orche's env and flags: SessionStart and the prompt hook
+        mark it in Main's inbox folder for the heartbeat, once (a later prompt keeps the first time); a
+        headless run as Main and a division leave the mark; Main's own Orche pane removes it."""
+        marker = self.home / "inbox" / "main-acme" / ".outside"
+        (self.root / "t.jsonl").write_text('{"type":"user"}\n{"type":"custom-title","customTitle":"main-acme"}\n')
+        start = self.payload("session_start_clear.json", cwd=str(self.repo))
+        self.assertEqual(self.run_hook("session_start.py", start, ORCHE_SESSION="").returncode, 0)
+        first = json.loads(marker.read_text())
+        self.assertEqual(list(first), ["at"])
+        for env in ({"ORCHE_SESSION": ""}, {"ORCHE_SESSION": "main-acme", "ORCHE_RUNNER": "1"},
+                    {"ORCHE_SESSION": "div-acme-build"}):
+            with self.subTest(env=env):
+                self.assertEqual(self.run_hook("report_inject.py", self.payload("prompt.json", prompt="[drain]"),
+                                               **env).returncode, 0)
+                self.assertEqual(json.loads(marker.read_text()), first)
+        self.run_hook("session_start.py", start, ORCHE_SESSION="main-acme")
+        self.assertFalse(marker.exists())
+        self.run_hook("report_inject.py", self.payload("prompt.json", prompt="[drain]"), ORCHE_SESSION="")
+        self.assertTrue(marker.exists())                              # relaunched plain again: a new mark
+        self.run_hook("report_inject.py", self.payload("prompt.json", prompt="[drain]"), ORCHE_SESSION="main-acme")
+        self.assertFalse(marker.exists())
+
     def test_identified_prompt_touches_activity_unidentified_does_not(self):
         self.prompt()
         self.assertTrue((self.home / "activity" / "main-acme").is_file())

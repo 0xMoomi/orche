@@ -363,6 +363,17 @@ class GatePullRequestTest(test_hr.HrCase):
                       report)
         self.assertNotIn(verifygate.BRANCH, git_out(self.bare, "branch", "--list"))
 
+    def test_no_origin_remote_is_a_note_not_a_step(self):
+        git_out(self.repo, "remote", "remove", "origin")
+        code, out, err = self.orche("init", "Acme Shop", "--no-intake")
+        self.assertEqual(code, 0, err)
+        self.assertFalse(self.creates())
+        self.assertIn("merge queue: no GitHub remote yet: the merge queue starts once this project is on GitHub", out)
+        report = (self.repo / ".orche" / "SETUP.md").read_text()
+        self.assertIn("this project: no GitHub remote yet: the merge queue starts once this project is on GitHub.\n",
+                      report)
+        self.assertNotIn("set-head", report + out)
+
     def test_dry_run_opens_nothing(self):
         code, _, err = self.orche("--dry-run", "init", "Acme Shop", "--no-intake")
         self.assertEqual(code, 0, err)

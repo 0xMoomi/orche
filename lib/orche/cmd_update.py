@@ -16,9 +16,12 @@ update follows `origin/main`. Steps, each one a progress line on stderr:
    unless the install state records another version than the checkout's (an earlier update stopped
    after the merge): then steps 4-5 run again, so a re-run resumes;
 3. `git merge --ff-only origin/main` (never a reset, never a merge commit);
-4. the NEW code reinstalls: `<this python> <clone>/bin/orche.py install --mode <mode> --no-jev` (the
-   mode of the last install, as doctor reads it), then in plugin mode `claude plugin marketplace update
-   orche` and `claude plugin update orche@orche`, as install.sh does on a re-run;
+4. in plugin mode (the last install's, as doctor reads it) `claude plugin marketplace update orche`,
+   `claude plugin update orche@orche` and `claude plugin enable orche@orche --scope user` for every session
+   folder (install/settings.session_dirs), as install.sh does on a re-run (a failure is a progress line);
+   then the NEW code reinstalls: `<this python> <clone>/bin/orche.py install --mode <mode> --no-jev`, which
+   keeps plugin mode only while the plugin is on and ends with the hooks check: its `hooks:` lines close
+   the update, and a failed check fails the update (new sessions would run without Orche);
 5. the owner's language is cached for the status line (statusline.learn_language), then the NEW code
    refreshes every registered project: `<clone>/bin/orche.py init <key> --refresh` (Orche's
    own files: card link, personas, worktree settings, hooks wiring; no intake, no Orca, never the
@@ -56,9 +59,10 @@ def register(subparsers):
 
 
 class StepFailed(Exception):
-    def __init__(self, step, detail):
+    def __init__(self, step, detail, text=""):
         super().__init__(f"step {step} failed: {detail}")
         self.step = step
+        self.text = text
 
 
 def progress(line) -> None:
@@ -91,8 +95,24 @@ def run_step(step, argv, env=None) -> str:
     for line in text.splitlines():
         print(f"  {line}", file=sys.stderr)
     if res.returncode:
-        raise StepFailed(step, f"exit {res.returncode}")
+        raise StepFailed(step, f"exit {res.returncode}", text)
     return text
+
+
+def hooks_lines(text) -> list:
+    """The install's hooks check lines (`hooks: ok ...` or `hooks: error ...`)."""
+    return [ln for ln in (text or "").splitlines() if ln.startswith("hooks: ok") or ln.startswith("hooks: error")]
+
+
+def plugin_steps() -> list:
+    """Plugin mode's steps before the reinstall: (label, config folder, argv) for the marketplace and plugin
+    update, then the enable for every session folder (an update keeps a disabled plugin disabled)."""
+    from .install import Ctx, plugin, settings
+    dirs = settings.session_dirs(Ctx(Path.home()))
+    steps = [("claude plugin marketplace update orche", dirs[0], ("plugin", "marketplace", "update", "orche")),
+             (f"claude plugin update {plugin.PLUGIN_ID}", dirs[0], ("plugin", "update", plugin.PLUGIN_ID))]
+    return steps + [(f"claude plugin enable {plugin.PLUGIN_ID} --scope user ({d})", d,
+                     ("plugin", "enable", plugin.PLUGIN_ID, "--scope", "user")) for d in dirs]
 
 
 def version_of(text) -> str:
@@ -171,13 +191,12 @@ def cmd_update(args):
     mode, keys = _mode(), sorted(registry.load()["projects"])
     py, orche_py = sys.executable, str(root / "bin" / "orche.py")
     install = [py, orche_py, "install", "--mode", mode, "--no-jev"] + (["--no-plugin-hint"] if mode == "plugin" else [])
-    plugin = [["claude", "plugin", "marketplace", "update", "orche"], ["claude", "plugin", "update", "orche@orche"]] \
-        if mode == "plugin" else []
+    plugin = plugin_steps() if mode == "plugin" else []
     if dry_run:
         lines = [f"Orche {old} → {new} (dry run: nothing changed)"]
         lines += [] if resume else [f"would run: git merge --ff-only origin/{REF}"]
+        lines += [f"would run: {label}" for label, _, _ in plugin]
         lines += [f"would run: orche install --mode {mode} --no-jev"]
-        lines += [f"would run: {' '.join(argv)}" for argv in plugin]
         lines += [f"would refresh {k}: orche init {k} --refresh" for k in keys]
         if changed:
             lines.append(f"then: {RESTART}")
@@ -193,14 +212,19 @@ def cmd_update(args):
         else:
             progress(f"fast-forwarding to origin/{REF} ({new})")
             git(root, "merge", "--ff-only", "--quiet", target)
+        from .install import plugin as plugin_cli
+        for label, folder, argv in plugin:
+            progress(label)
+            res = plugin_cli.claude(folder, *argv, timeout=FETCH_TIMEOUT_S)
+            if not res.ok:   # the install below keeps plugin mode only while the plugin is on
+                progress(f"{label} failed: {mask.redact((res.err or res.out).strip()[:160])[0] or res.code}")
         progress(f"reinstalling ({mode} mode) with the new code")
-        text = run_step("install", install).splitlines()
+        text = run_step("install", install)
+        checked = hooks_lines(text)
+        text = text.splitlines()
         heartbeat = [ln for ln in text if ln.startswith(RECONCILE_STEP)]
         opened = [ln for ln in text if ln.startswith(f"{staff.SESSION} pane ")]   # the install opened Staff
         old_janitor = [ln for ln in text if ln.startswith(f"{JANITOR_STEP}: remove")]
-        for argv in plugin:
-            progress(" ".join(argv))
-            run_step("plugin update", argv)
     except StepFailed as exc:
         return _failed(args, exc, done)
     failed = []
@@ -214,7 +238,7 @@ def cmd_update(args):
         except StepFailed as exc:
             failed.append(exc)
             done.append(f"{key}: {exc}")
-    done += heartbeat[-1:] + old_janitor + opened[-1:]
+    done += heartbeat[-1:] + old_janitor + checked + opened[-1:]
     if changed or plugin or resume:
         done.append(RESTART)
     data = {"status": "failed" if failed else "updated", "old": old, "new": new, "mode": mode, "projects": keys,
@@ -235,7 +259,7 @@ def _refuse(args, why) -> int:
 
 
 def _failed(args, exc, done) -> int:
-    lines = done + [f"orche update: {exc}"]
+    lines = done + hooks_lines(getattr(exc, "text", "")) + [f"orche update: {exc}"]
     if exc.step == "install":
         lines.append("the checkout is updated; run orche update again to finish the install and the refresh")
     out(args, {"status": "failed", "step": exc.step, "error": str(exc), "lines": lines}, lines)

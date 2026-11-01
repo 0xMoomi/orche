@@ -21,6 +21,43 @@ def actor(env=None) -> str:
     return env_session(env) or "user"
 
 
+OUTSIDE = ".outside"   # inbox/<main-p>/: {at[, reopened]}: that Main ran outside Orche's pane command (note_pane)
+
+
+def outside(session):
+    """`session`'s OUTSIDE marker ({at[, reopened]}), else None (none, or unreadable)."""
+    from . import inbox, util
+    try:
+        data = util.read_json(inbox.box(session) / OUTSIDE, default=None)
+    except (OSError, ValueError, util.JsonError):
+        return None
+    return data if isinstance(data, dict) else None
+
+
+def note_pane(who, env=None) -> None:
+    """Record, for a hook (SessionStart, the prompt hook), whether a project's Main runs Orche's own pane
+    command. Main identified without ORCHE_SESSION (the transcript rule: Orca relaunched a plain `claude`
+    in Main's tab, so the pane lacks Orche's env and flags): write the OUTSIDE marker in Main's inbox
+    folder, once (an existing one is kept as it is). Main's own Orche pane (ORCHE_SESSION names it, and
+    no headless run's ORCHE_RUNNER): remove it. The heartbeat reopens a marked Main (reconcile, class
+    `outside`). Never raises."""
+    m = who.member
+    if m is None or m.kind != "main":
+        return
+    env = os.environ if env is None else env
+    try:
+        from . import inbox, util
+        path = inbox.box(m.session) / OUTSIDE
+        if env_session(env) is None:
+            if not path.exists():
+                util.write_json(path, {"at": units.now().isoformat(timespec="seconds")})
+        elif env_session(env) == m.session and not env.get("ORCHE_RUNNER"):
+            path.unlink(missing_ok=True)
+    except Exception as exc:  # noqa: BLE001 - a hook never fails on it
+        from . import log
+        log.log("hooks", f"roster: {m.session} pane marker: {type(exc).__name__}: {exc}")
+
+
 @dataclass(frozen=True)
 class Member:
     """A registered session: a project's Main, a division, or a feature agent.

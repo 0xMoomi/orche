@@ -27,6 +27,11 @@ with open(home / "fake-calls.log", "a") as fh:
 if sys.argv[1] == "install":
     print("settings.json: write (hooks)")
     print("reconcile job: write /h/Library/LaunchAgents/com.orche.reconcile.plist (every 300s, loaded)")
+    if (home / "hooks-off").exists():   # the install's last step: its hooks check failed
+        print("hooks: error /h/.claude/settings.json (new sessions would run without Orche: 0 of 7 hooks registered "
+              "and the orche plugin not enabled)")
+        sys.exit(1)
+    print("hooks: ok (on for new sessions: all 7 in /h/.claude/settings.json)")
     if (home / "fail-install").exists():
         sys.exit(1)
     state = json.loads((home / "install-state.json").read_text())
@@ -115,6 +120,7 @@ class UpdateTest(support.TempHomeCase):
         self.assertIn("refreshed beta: 2 file(s)", lines)
         self.assertIn("reconcile job: write /h/Library/LaunchAgents/com.orche.reconcile.plist (every 300s, loaded)",
                       lines)
+        self.assertIn("hooks: ok (on for new sessions: all 7 in /h/.claude/settings.json)", lines)   # the final check
         self.assertNotIn("settings.json: write (hooks)", lines)
         self.assertEqual(lines[-1], cmd_update.RESTART)
         self.assertIn("update: fast-forwarding", err)
@@ -222,6 +228,40 @@ class UpdateTest(support.TempHomeCase):
         self.assertIn("update: resuming", err)
         self.assertEqual([c["argv"][0] for c in self.calls()], ["install", "install", "init", "init"])
         self.assertEqual(self.update()[1].strip(), "already up to date (0.8.0)")   # the install recorded 0.8.0
+
+    def test_a_failed_hooks_check_fails_the_update_and_says_so(self):
+        self.publish()
+        (self.home / "hooks-off").touch()
+        code, out, _ = self.update()
+        self.assertEqual(code, 1)
+        self.assertIn("hooks: error /h/.claude/settings.json (new sessions would run without Orche: 0 of 7 hooks "
+                      "registered and the orche plugin not enabled)", out.splitlines())
+        self.assertIn("orche update: step install failed: exit 1", out)
+        self.assertEqual([c["argv"][0] for c in self.calls()], ["install"])
+
+    def test_plugin_mode_enables_the_plugin_before_the_reinstall(self):
+        state = json.loads((self.home / "install-state.json").read_text())
+        (self.home / "install-state.json").write_text(json.dumps({**state, "mode": "plugin"}))
+        fake = self.home / "fake-claude"
+        support.write_fake_claude(fake)
+        support.plugin_installed(fake)
+        (fake / "marketplace").write_text(str(self.co))
+        (self.home / "config.json").write_text(json.dumps(support.no_wake({"claude_bin": str(fake / "claude")})))
+        home = self.base / "home"
+        support.plugin_installed(fake, disabled_in=home / ".claude")   # turned off: an update keeps it off
+        self.publish()
+        with mock.patch.dict(os.environ, {"HOME": str(home)}):
+            code, out, err = self.update()
+        self.assertEqual(code, 0, out + err)
+        self.assertEqual((fake / "claude-argv.txt").read_text().splitlines(), [
+            "plugin marketplace update orche", "plugin update orche@orche",
+            "plugin enable orche@orche --scope user", "plugin enable orche@orche --scope user"])
+        self.assertIs(json.loads((home / ".claude" / "settings.json").read_text())["enabledPlugins"]["orche@orche"],
+                      True)
+        self.assertLess(err.index("update: claude plugin enable orche@orche --scope user"),
+                        err.index("update: reinstalling (plugin mode)"))
+        self.assertEqual(self.calls()[0]["argv"], ["install", "--mode", "plugin", "--no-jev", "--no-plugin-hint"])
+        self.assertIn("hooks: ok (on for new sessions: all 7 in /h/.claude/settings.json)", out.splitlines())
 
     def cache_copy(self):
         """A plugin cache copy: the same files, no .git."""

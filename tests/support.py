@@ -194,10 +194,12 @@ def plugin_copy(dest: Path, *rels: str) -> Path:
     return dest
 
 
-# A fake `claude` for runner/doctor tests, selected through config `claude_bin` (never the real one).
+# A fake `claude` for runner/doctor tests, selected through config `claude_bin` (never the real one);
+# `claude plugin ...` goes to the fake plugin CLI next to it (FAKE_PLUGIN).
 FAKE_CLAUDE = """#!/bin/sh
 d=$(dirname "$0")
 case "$1" in
+  plugin) shift; exec "$d/claude-plugin" "$@" ;;
   --help) cat "$d/help.txt"; exit 0 ;;
   --version) if [ -f "$d/version" ]; then cat "$d/version"; else echo "9.9.9 (Claude Code)"; fi; exit 0 ;;
 esac
@@ -217,13 +219,131 @@ exit "$(cat "$d/exit" 2>/dev/null || echo 0)"
 HELP_FULL = "Usage: claude [options]\n" + "".join(f"  {flag} <x>\n" for flag in headless.FLAGS)
 
 
+# The fake `claude plugin` CLI, modelled on Claude Code's plugin reference (code.claude.com/docs/en/plugins/
+# cli-reference): `list --json` prints an array, one object per installation, `id` and `enabled` always there;
+# `install` enables the plugin (no `enabledPlugins` entry means enabled: defaultEnabled defaults to true);
+# `update` keeps the enabled flag; `enable`/`disable` write `enabledPlugins` and exit 1 when the plugin is
+# already in that state. The marketplace and the installation are files next to the fake (shared by every
+# config folder, as Orca links a profile's plugins/ to ~/.claude/plugins); the flag lives in
+# $CLAUDE_CONFIG_DIR/settings.json (else $HOME/.claude/settings.json), and the developer's real ~/.claude is
+# refused. Files a test writes next to it: plugin-help.txt (`--help`), marketplace-json and plugin-json (the
+# listings as given), fail-install, fail-enable, noop-enable (exit 0, nothing written). Every call is
+# logged as `plugin <args>` in claude-argv.txt.
+FAKE_PLUGIN = r"""#!{python}
+import json, os, sys
+HERE, REAL = {here!r}, {real!r}
+PLUGIN_HELP = '''Usage: claude plugin|plugins [options] [command]
+
+Commands:
+  disable [options] [plugin]           Disable a plugin
+  enable [options] <plugin>            Enable a plugin
+  install|i [options] <plugin>         Install a plugin from available marketplaces
+  list [options]                       List installed plugins
+  marketplace                          Manage Claude Code marketplaces
+  update [options] <plugin>            Update a plugin to the latest version
+'''
+args = sys.argv[1:]
+with open(os.path.join(HERE, "claude-argv.txt"), "a") as fh:
+    fh.write(" ".join(["plugin", *args]) + "\n")
+def here(name):
+    return os.path.join(HERE, name)
+def read(name):
+    with open(here(name)) as fh:
+        return fh.read()
+conf = os.environ.get("CLAUDE_CONFIG_DIR") or os.path.join(os.environ["HOME"], ".claude")
+if os.path.realpath(conf) == REAL:
+    print("fake claude: refusing the developer's real ~/.claude", file=sys.stderr); sys.exit(4)
+settings = os.path.join(conf, "settings.json")
+def flags():
+    try:
+        with open(settings) as fh:
+            data = json.load(fh)
+    except (OSError, ValueError):
+        data = {{}}
+    return data if isinstance(data, dict) else {{}}
+def set_flag(plugin, value):
+    data = flags()
+    data.setdefault("enabledPlugins", {{}})[plugin] = value
+    os.makedirs(conf, exist_ok=True)
+    with open(settings, "w") as fh:
+        json.dump(data, fh, indent=2)
+def recorded(plugin):
+    return (flags().get("enabledPlugins") or {{}}).get(plugin)
+cmd = " ".join(args[:2])
+if args[:1] == ["--help"]:
+    print(read("plugin-help.txt") if os.path.exists(here("plugin-help.txt")) else PLUGIN_HELP, end=""); sys.exit(0)
+if cmd == "marketplace list":
+    if os.path.exists(here("marketplace-json")):
+        print(read("marketplace-json"), end="")
+    elif os.path.exists(here("marketplace")):
+        print(json.dumps([{{"name": "orche", "source": "directory", "path": read("marketplace")}}]))
+    else:
+        print("[]")
+    sys.exit(0)
+if cmd == "marketplace add":
+    with open(here("marketplace"), "w") as fh:
+        fh.write(args[2])
+    sys.exit(0)
+if cmd == "marketplace update":
+    sys.exit(0 if os.path.exists(here("marketplace")) else 1)
+if args[:2] == ["list", "--json"]:
+    if os.path.exists(here("plugin-json")):
+        print(read("plugin-json"), end="")
+    elif os.path.exists(here("installed")):
+        print(json.dumps([{{"id": "orche@orche", "version": "1.0.0", "scope": "user",
+                           "enabled": recorded("orche@orche") is not False, "installPath": here("cache")}}]))
+    else:
+        print("[]")
+    sys.exit(0)
+plugin = args[1] if len(args) > 1 else ""
+if args[:1] == ["install"]:
+    if not os.path.exists(here("marketplace")):
+        print("marketplace orche not found", file=sys.stderr); sys.exit(1)
+    if os.path.exists(here("fail-install")):
+        print("install failed", file=sys.stderr); sys.exit(1)
+    open(here("installed"), "w").close()
+    set_flag(plugin, True)
+    sys.exit(0)
+if args[:1] == ["update"]:
+    sys.exit(0 if os.path.exists(here("installed")) else 1)
+if args[:1] in (["enable"], ["disable"]):
+    want = args[0] == "enable"
+    if not os.path.exists(here("installed")):
+        print(f"Plugin {{plugin}} is not installed", file=sys.stderr); sys.exit(1)
+    if os.path.exists(here("fail-enable")):
+        print("enable failed", file=sys.stderr); sys.exit(1)
+    if recorded(plugin) is want:
+        print(f'Plugin "{{plugin}}" is already {{args[0]}}d', file=sys.stderr); sys.exit(1)
+    if not os.path.exists(here("noop-enable")):
+        set_flag(plugin, want)
+    sys.exit(0)
+print(f"fake claude: unexpected: plugin {{' '.join(args)}}", file=sys.stderr); sys.exit(3)
+"""
+
+
 def write_fake_claude(folder: Path, help_text=HELP_FULL) -> Path:
     folder.mkdir(parents=True, exist_ok=True)
     script = folder / "claude"
     script.write_text(FAKE_CLAUDE)
     script.chmod(0o755)
     (folder / "help.txt").write_text(help_text)
+    cli = folder / "claude-plugin"
+    cli.write_text(FAKE_PLUGIN.format(python=sys.executable, here=str(folder),
+                                      real=os.path.realpath(Path.home() / ".claude")))
+    cli.chmod(0o755)
     return script
+
+
+def plugin_installed(folder: Path, disabled_in=None) -> None:
+    """The fake plugin CLI in `folder` has orche@orche installed (enabled unless a config folder records it
+    off); `disabled_in` (a config folder) records it off there (`enabledPlugins` false), as an owner did."""
+    (folder / "installed").touch()
+    if disabled_in is not None:
+        path = Path(disabled_in) / "settings.json"
+        data = json.loads(path.read_text()) if path.exists() else {}
+        data.setdefault("enabledPlugins", {})["orche@orche"] = False
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(data, indent=2) + "\n")
 
 
 # A fake `codex` for tests/test_codex.py. Assumptions about the real codex it encodes (unverified
