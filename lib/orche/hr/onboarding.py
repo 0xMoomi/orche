@@ -116,14 +116,15 @@ def find_worktree(repo_id, name):
     return None
 
 
-def create_worktree(repo_id, name, fallback_branch, *, parent=None, base=None, issue="", rename_to=None,
+def create_worktree(repo_id, name, fallback_branch, *, parent, base=None, issue="", rename_to=None,
                     dry_run=False):
-    """`orca worktree create`: from `origin/<base>` when the project's config names a base (else Orca's
-    repo default), linked to the issue key (`--linear-issue KEY`, `--issue N` for `#N`) when there is one.
+    """`orca worktree create` as a child of the worktree `parent` (Orca's lineage: the sidebar nests it there),
+    from `origin/<base>` when the project's config names a base (else Orca's repo default), linked to the
+    issue key (`--linear-issue KEY`, `--issue N` for `#N`) when there is one.
     `rename_to` (a feature's `<prefix>/<name>` when the project sets `publish.branch_prefix`): the branch
     Orca named is renamed to it right after creation; a failed rename keeps Orca's name (one log line)."""
     argv = ["--repo", f"id:{repo_id}", "--name", name]
-    argv += ["--parent-worktree", f"id:{parent}"] if parent else ["--no-parent"]
+    argv += ["--parent-worktree", f"id:{parent}"]
     argv += ["--base-branch", f"origin/{base}"] if base else []
     argv += (["--issue", issue[1:]] if issue.startswith("#") else ["--linear-issue", issue]) if issue else []
     if dry_run:
@@ -331,7 +332,7 @@ def write_project_marker(key, repo_root, *, dry_run):
     return marker, True
 
 
-def onboard(*, project, repo_root, repo_id, kind, name, model, effort, wake, parent=None, existing=None,
+def onboard(*, project, repo_root, repo_id, kind, name, model, effort, wake, parent, existing=None,
             on_created=None, dry_run=False, custom=None) -> dict:
     """Create one unit's worktree, files and (if `wake`) pane. Returns the partial registry entry.
 
@@ -341,7 +342,8 @@ def onboard(*, project, repo_root, repo_id, kind, name, model, effort, wake, par
     `custom` ({"label", "charter"}) marks a custom division: its persona comes from `div-custom.md`.
     A persona it replaces is first copied to `ORCHE_HOME/backups/<project>/<ts>/` (as `orche init` does).
     `existing` (an `onboarding` registry entry) resumes: only the file steps and the pane run.
-    Otherwise an Orca worktree already named `<kind>-<name>` is adopted, else one is created,
+    Otherwise an Orca worktree already named `<kind>-<name>` is adopted, else one is created as a child of
+    `parent` (a division's: its project's main worktree, where Main's tab lives; a feature's: its division's),
     and `on_created({"worktree", "branch"})` lets the caller save a provisional entry at once.
     """
     from .. import publish   # here, not at the top: hr stays free of the git/gh publish layer at import

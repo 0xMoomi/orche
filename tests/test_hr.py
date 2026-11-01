@@ -139,8 +139,9 @@ class InitTest(HrCase):
         self.assertEqual(code, 0, err)
         dry = [l for l in err.splitlines() if l.startswith("[dry-run] orca ")]
         creates = [l for l in dry if " worktree create " in l]
-        self.assertEqual(creates, [f"[dry-run] orca worktree create --repo id:repo-acme --name div-{d} --no-parent --json"
-                                   for d in registry.DIVISIONS])
+        main = f"repo-acme::{os.path.realpath(self.repo)}"   # a division nests under Main's worktree
+        self.assertEqual(creates, [f"[dry-run] orca worktree create --repo id:repo-acme --name div-{d} "
+                                   f"--parent-worktree id:{main} --json" for d in registry.DIVISIONS])
         panes = [l for l in dry if " terminal create " in l]
         self.assertEqual(len(panes), 2)                        # the CEO Staff opens first, then Main
         self.assertIn("--title staff --command", panes.pop(0))
@@ -363,6 +364,8 @@ class InitTest(HrCase):
         self.assertIn("skipped --wake build (already onboarded; use `orche wake`)", out)
         self.assertEqual([c[c.index("--name") + 1] for c in self.orca_calls("worktree create")],
                          ["div-research", "div-gtm", "div-ops"])
+        self.assertEqual({c[c.index("--parent-worktree") + 1] for c in self.orca_calls("worktree create")},
+                         {f"id:repo-acme::{os.path.realpath(self.repo)}"})   # each under Main's worktree
         self.assertEqual([c[c.index("--title") + 1] for c in self.orca_calls("terminal create")], ["div-acme-shop-gtm"])
         self.assertIn("rnd: skipped (already onboarded)\nbuild: skipped (already onboarded)", out)
         reg = registry.load()
@@ -774,6 +777,65 @@ class RefreshTest(HrCase):
         self.assertEqual(self.state(), before)
         self.assertEqual(registry.path().read_bytes(), reg_bytes)
 
+    def listing(self, **parents):
+        """`orca worktree list`: Main, each division (its parent `parents[name]`, else none), the feature under
+        build and another repo's worktree without a parent."""
+        divs = registry.load()["projects"]["acme-shop"]["divisions"]
+        row = lambda wt, parent, repo="repo-acme": {"id": wt, "repoId": repo, "path": units.worktree_path(wt),
+                                                   "isMainWorktree": False, "parentWorktreeId": parent}
+        return [{**row(f"repo-acme::{self.root}", None), "isMainWorktree": True},
+                *(row(e["worktree"], parents.get(d)) for d, e in divs.items()),
+                row(divs["build"]["features"][0]["worktree"], divs["build"]["worktree"]),
+                row("repo-other::/w/div-build", None, "repo-other")]
+
+    def orca_fails(self, group_sub):
+        def runner(argv, **kw):
+            if " ".join(argv[1:3]) != group_sub:
+                return self.fake_runner(argv, **kw)
+            self.calls.append(argv)
+            return shell.Result(1, json.dumps({"ok": False, "error": {"code": "not_found", "message": "gone"}}), "",
+                                argv)
+        shell.RUNNER = runner
+
+    def moves(self, *divisions):
+        divs = registry.load()["projects"]["acme-shop"]["divisions"]
+        return [["orca", "worktree", "set", "--worktree", f"id:{divs[d]['worktree']}", "--parent-worktree",
+                 f"id:repo-acme::{self.root}", "--json"] for d in divisions]
+
+    def test_divisions_without_an_orca_parent_move_under_main_and_placed_ones_stay(self):
+        self.worktree_list = self.listing(gtm="repo-acme::/elsewhere", rnd="")
+        self.calls.clear()
+        self.refresh()
+        self.assertEqual(len(self.orca_calls("worktree list")), 1)   # one per project, not per division
+        # gtm already has a parent (the owner's), research is retired, the feature and the other repo are no divisions
+        self.assertEqual(self.orca_calls("worktree set"), self.moves("rnd", "build", "design"))
+
+    def test_an_orca_error_is_one_log_line_and_the_refresh_goes_on(self):
+        hr_log = self.home / "logs" / "hr.log"
+        self.outdate("div-acme-shop-build")
+        self.worktree_list = self.listing()
+        self.calls.clear()
+        self.orca_fails("worktree set")
+        ref = self.refresh()
+        self.assertEqual(ref.changed, self.copies("div-acme-shop-build"))   # the personas still refresh
+        self.assertEqual(self.orca_calls("worktree set"), self.moves("rnd", "build", "gtm", "design"))   # each tried
+        self.assertIn("division build not nested under Main: not_found: gone", hr_log.read_text())
+        self.calls.clear()
+        self.orca_fails("worktree list")
+        self.assertEqual(self.refresh(ts="T2").changed, [])
+        self.assertEqual(self.orca_calls("worktree set"), [])
+        self.assertEqual(sum("worktree list failed, divisions not nested under Main: not_found: gone" in ln
+                             for ln in hr_log.read_text().splitlines()), 1)
+
+    def test_a_dry_run_prints_the_moves_and_runs_none(self):
+        self.worktree_list = self.listing(rnd="repo-acme::/elsewhere", design="r::/x")
+        self.calls.clear()
+        code, _, err = self.orche("--dry-run", "init", "acme-shop", "--refresh")
+        self.assertEqual(code, 0, err)
+        self.assertEqual([ln for ln in err.splitlines() if " worktree set " in ln],
+                         ["[dry-run] " + " ".join(argv) for argv in self.moves("build", "gtm")])
+        self.assertEqual(self.orca_calls("worktree set"), [])
+
     def test_an_unsafe_target_refuses(self):
         agents = self.wtroot / "div-gtm" / ".claude" / "agents"
         shutil.rmtree(agents)
@@ -936,23 +998,24 @@ class FeatNewTest(FeatCase):
         self.assertIn(["git", "-C", str(wt), "branch", "-m", "someone/feat-des-47-x", "dev/des-47-x"], self.git_calls)
 
     def test_a_failed_rename_keeps_orcas_branch(self):
-        _, _, branch = onboarding.create_worktree("repo-acme", "feat-z", "dev/z", rename_to="dev/z")
+        _, _, branch = onboarding.create_worktree("repo-acme", "feat-z", "dev/z", parent="r::/b", rename_to="dev/z")
         self.assertEqual(branch, "feat/z")   # the fake's plain folder is no git checkout: the rename fails
         self.assertIn("branch rename failed: ", (self.home / "logs" / "hr.log").read_text())
         self.git_calls.clear()
         self.feature_branch = False
-        _, _, branch = onboarding.create_worktree("repo-acme", "feat-y", "dev/y", rename_to="dev/y")
+        _, _, branch = onboarding.create_worktree("repo-acme", "feat-y", "dev/y", parent="r::/b", rename_to="dev/y")
         self.assertEqual((branch, self.git_calls), ("dev/y", []))   # Orca reported none: the fallback, no git call
 
     def test_division_branch_keeps_div_prefix(self):
         cfg = json.loads((self.home / "config.json").read_text())
         cfg["publish"] = {"branch_prefix": "dev"}
         (self.home / "config.json").write_text(json.dumps(cfg))
-        _, wt_path, branch = onboarding.create_worktree("repo-acme", "div-design", "div/design")
+        _, wt_path, branch = onboarding.create_worktree("repo-acme", "div-design", "div/design",
+                                                        parent="repo-acme::/srv/acme-shop")
         self.assertEqual(branch, "div/design")
         create = self.orca_calls("worktree create")[-1]
         self.assertEqual(create, ["orca", "worktree", "create", "--repo", "id:repo-acme", "--name", "div-design",
-                                  "--no-parent", "--json"])
+                                  "--parent-worktree", "id:repo-acme::/srv/acme-shop", "--json"])
 
     def add_project_acme(self, features=()):
         """A second project keyed `acme` (acme-shop loses its `Acme` alias): `feat-acme-shop-x` is

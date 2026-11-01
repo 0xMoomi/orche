@@ -2,6 +2,7 @@
 import importlib.util
 import re
 import unittest
+import xml.etree.ElementTree as ET
 
 import support
 import test_hooks
@@ -423,7 +424,13 @@ class SkillsTest(unittest.TestCase):
         readme = (support.ROOT / "README.md").read_text()
         self.assertLessEqual(len(readme.splitlines()), 100)
         self.assertTrue(readme.startswith("# Orche\n"))
-        self.assertIn("```mermaid\nflowchart", readme)       # the structure diagram GitHub renders
+        self.assertIn("](docs/orche-architecture.svg)", readme)     # the one picture of the whole of Orche
+        svg = (support.ROOT / "docs" / "orche-architecture.svg").read_text()
+        ET.fromstring(svg)                                            # well-formed, so GitHub shows it
+        for part in ("Main", "Divisions", "Workers", "headless", "worktree", "Merge queue", "hooks", "Heartbeat",
+                     "CEO Staff", "Another project", "Why divisions", "How to read it", "fold under"):
+            self.assertIn(part, svg)
+        self.assertNotRegex(svg, "[\u2013\u2014\uac00-\ud7a3]")
         self.assertIn("merge queue", readme)
         self.assertIn("## Landing your work", (PERSONAS / "feature.md").read_text())
 

@@ -3,6 +3,23 @@
 All notable changes to Orche are listed here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow semantic versioning.
 
+## 0.19.9 — 2026-11-02
+
+### Changed
+
+- A project's divisions nest under its Main in Orca's sidebar, and each division's workers under it, so a
+  folded project takes one row. A new division's workspace is created as a child of the project's main
+  checkout, where Main's tab lives. Divisions made earlier sat beside Main; the next
+  `orche update` (or `orche init <project> --refresh`) moves each one that has no Orca parent under Main, and a
+  division you placed under another row stays there. To fold them away, click the arrow on Main's row; click it
+  again to open them. Orca remembers what is folded, across restarts too.
+- README's "How it works" is one picture of the whole of Orche (`docs/orche-architecture.svg`): Main and the
+  divisions as specialist sessions that brief each other, why divisions are split, which sessions have an Orca
+  tab and which run headless (workers, and work sent to a resting division), every division's and worker's own
+  git worktree and how they fold in Orca's sidebar, the merge queue, the hooks, the heartbeat, notifications,
+  the CEO Staff and other projects' Mains, with a key to read it. The Mermaid diagram it replaces showed only
+  who talks to whom.
+
 ## 0.19.8 — 2026-11-01
 
 ### Fixed

@@ -7,11 +7,12 @@ is regenerated. Units: every division of `registry.divisions_of(proj)` and every
 worktree. A unit whose persona template does not resolve is `kept` (never the minimal fallback over a real
 persona); a missing worktree keeps its copy and refreshes the main one. An overwritten persona is first
 copied to `ORCHE_HOME/backups/<key>/<ts>/`; a dry run writes nothing (no backups either).
+It also moves a division Orca shows without a parent under the project's Main in the sidebar (`nest_divisions`).
 """
 import os
 from typing import NamedTuple
 
-from .. import config, paths, registry, units, vendors
+from .. import config, log, orca, paths, registry, units, vendors
 from . import book, onboarding
 
 SKIP = ("retired", "onboarding")
@@ -61,7 +62,37 @@ def refresh_project(reg, key, *, root, ts, dry_run=False) -> Refresh:
     out = Refresh([], [], [])
     for unit in _units(proj):
         refresh_unit(key, unit, root=root, backup_dir=backup_dir, out=out, dry_run=dry_run)
+    nest_divisions(proj, root, dry_run=dry_run)
     return out
+
+
+def nest_divisions(proj, root, *, dry_run=False) -> None:
+    """Make the project's main worktree (where Main's tab lives) the Orca parent of each of its divisions
+    that has none, so they fold under Main's row in the sidebar: one `orca worktree list`, then one
+    `orca worktree set --parent-worktree` per division whose `parentWorktreeId` is empty. A division with
+    any parent is left alone (the owner may have placed it); a retired one is skipped. A dry run prints the
+    `set` lines it would run. An Orca error is one `hr` log line: the refresh goes on."""
+    entries = proj.get("divisions") or {}
+    divisions = {entry["worktree"]: name for name in registry.divisions_of(proj)
+                 if (entry := entries.get(name) or {}).get("worktree") and entry.get("status") != "retired"}
+    if not divisions:
+        return
+    try:
+        result = orca.worktree("list")
+    except orca.OrcaError as exc:
+        log.log("hr", f"worktree list failed, divisions not nested under Main: {exc}")
+        return
+    items = result.get("worktrees") if isinstance(result, dict) else result
+    orphans = {item["id"] for item in items if isinstance(item, dict) and item.get("id") in divisions
+               and not item.get("parentWorktreeId")} if isinstance(items, list) else set()
+    for wt_id, name in divisions.items():   # in division order
+        if wt_id not in orphans:
+            continue
+        try:
+            orca.worktree("set", "--worktree", f"id:{wt_id}", "--parent-worktree", f"id:{proj['repo_id']}::{root}",
+                          dry_run=dry_run)
+        except orca.OrcaError as exc:
+            log.log("hr", f"division {name} not nested under Main: {exc}")
 
 
 def units_of(proj, division):

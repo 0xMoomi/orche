@@ -7,20 +7,20 @@ hierarchy with fixed names, so you can see the organization at a glance without 
 
 ```
 my-app                                   (Orca repo)
- ├─ main checkout                        1 pane: main-my-app
- ├─ div-rnd                              div-my-app-rnd       (branch div/rnd)
- ├─ div-research                         div-my-app-research  (branch div/research)
- ├─ div-build                            div-my-app-build     (branch div/build)
- │   ├─ feat-pages                       feat-my-app-pages    (branch feat/pages)
- │   └─ feat-billing                     feat-my-app-billing  (branch feat/billing)
- ├─ div-gtm                              div-my-app-gtm       (branch div/gtm)
- └─ div-ops                              div-my-app-ops       (branch div/ops)
+ └─ main checkout                        1 pane: main-my-app
+     ├─ div-rnd                          div-my-app-rnd       (branch div/rnd)
+     ├─ div-research                     div-my-app-research  (branch div/research)
+     ├─ div-build                        div-my-app-build     (branch div/build)
+     │   ├─ feat-pages                   feat-my-app-pages    (branch feat/pages)
+     │   └─ feat-billing                 feat-my-app-billing  (branch feat/billing)
+     ├─ div-gtm                          div-my-app-gtm       (branch div/gtm)
+     └─ div-ops                          div-my-app-ops       (branch div/ops)
 ```
 
 | Item | Name | Where |
 |---|---|---|
 | Main pane | `main-<proj>` | the project's main checkout |
-| Division card / pane | worktree `div-<division>`, pane `div-<proj>-<division>` | its own worktree, branch `div/<division>` |
+| Division card / pane | worktree `div-<division>`, pane `div-<proj>-<division>` | its own worktree, branch `div/<division>`, a child of the main checkout's row |
 | Feature card / pane | worktree `feat-<feature>`, pane `feat-<proj>-<feature>` | child worktree of its head's division, branch: the branch Orca names by default; `<prefix>/<feature>` when the project sets `publish.per_project.<p>.branch_prefix` (Orche renames it right after creation) |
 
 Pane titles equal Claude Code session names. Orche starts a division or feature pane with
@@ -31,9 +31,20 @@ feature worktrees.
 
 ## Lineage
 
-Division worktrees have no Orca parent. Feature worktrees are created with **their head's worktree
-as their Orca parent**, so they nest under `div-<division>` in the sidebar: everything a worker
-produces is reviewed and queued by its head.
+Main's row holds the project's divisions, and each division's row holds its workers. A division's
+worktree is created with **the project's main worktree as its Orca parent** (the checkout where
+Main's tab lives), and a feature's with **its head's worktree as its Orca parent**. So the divisions
+nest under Main and the workers under `div-<division>`: you talk only to Main, and everything a
+worker produces is reviewed and queued by its head.
+
+The fold arrow on Main's row hides its divisions and their workers; click it again to show them.
+Orca remembers which rows are folded, across restarts too, so a project you folded stays folded
+until you open it.
+
+A division made by an older Orche sits beside Main. `orche update` (and
+`orche init <project> --refresh`) moves each division that has no Orca parent under Main
+(`orca worktree set --parent-worktree`). A division you placed under another row stays where you
+put it.
 
 ## Unit states
 

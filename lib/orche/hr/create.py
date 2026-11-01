@@ -133,7 +133,7 @@ def _onboard_division(reg, key, proj, name, *, wake, root, repo_id, spec, by, dr
         book.write(reg, lambda r: r["projects"][key]["divisions"].__setitem__(name, dict(record)))
 
     entry = onboarding.onboard(project=key, repo_root=root, repo_id=repo_id, kind="div", name=name,
-                               model=model, effort=effort, wake=wake, existing=resume,
+                               model=model, effort=effort, wake=wake, parent=f"{repo_id}::{root}", existing=resume,
                                on_created=provisional, dry_run=dry_run,
                                custom={"label": spec["label"], "charter": spec["charter"]} if spec else None)
     if not wake:
