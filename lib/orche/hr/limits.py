@@ -3,7 +3,7 @@
 Creation limits count `create` events whose unit is `<division>/<name>` (workers of any division: one
 per-project budget shared by all divisions), by their `at` time:
 per project in the last 24 h and 7 days, globally in the last 24 h, and per `batch` id. The
-caller applies a `freeze` verdict through `freeze` (set `frozen`, record the event, notify).
+caller applies a `freeze` verdict through `freeze` (set `frozen`, record the event).
 """
 import datetime as _dt
 import re
@@ -113,8 +113,7 @@ def stage_gate(names, stage, key=None) -> None:
 def freeze(reg, by, reason) -> None:
     """The global creation cap was reached: set `frozen` and record it (by hr-limits)."""
     book.record(reg, f"freeze by hr-limits ({reason}; requested by {by})", change=lambda r: r.update(frozen=True),
-                event={"type": "freeze", "project": "*", "unit": "hr", "by": "hr-limits"},
-                note="HR freeze: global feature-agent creation cap reached")
+                event={"type": "freeze", "project": "*", "unit": "hr", "by": "hr-limits"})
 
 
 def set_frozen(reg, frozen, *, dry_run=False) -> tuple:
@@ -123,8 +122,8 @@ def set_frozen(reg, frozen, *, dry_run=False) -> tuple:
     changed = reg["frozen"] != frozen
     if changed and not dry_run:
         by = roster.actor()
-        book.record(reg, f"{verb} by {by}", change=lambda r: r.update(frozen=frozen), event={"type": verb, "project": "*", "unit": "hr", "by": by},
-                    note=f"HR {verb}: feature-agent creation {'stopped' if frozen else 'allowed'}")
+        book.record(reg, f"{verb} by {by}", change=lambda r: r.update(frozen=frozen),
+                    event={"type": verb, "project": "*", "unit": "hr", "by": by})
     state = "frozen" if frozen else "unfrozen"
     line = f"already {state}" if not changed else f"would {verb} (dry-run)" if dry_run else state
     return {"frozen": reg["frozen"], "changed": changed and not dry_run, "dry_run": dry_run}, line

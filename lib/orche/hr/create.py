@@ -220,7 +220,7 @@ def create_feature(reg, key, name, *, scope, reason, by=None, batch=None, strict
     3 with `strict`) -> free disk >= `feature_min_free_disk_mb` (3) -> awake limit (3; the pane unless
     headless: Codex, or `feature_panes` false; plus the head when it must wake) -> a dormant or paused
     Claude head woken (`orche wake`) -> child worktree of the head's worktree, a provisional `onboarding` entry saved at once (a re-run resumes it),
-    unit files, settings, persona, pane -> the `create` record and notification -> Orca unread dot
+    unit files, settings, persona, pane -> the `create` record -> Orca unread dot
     (a failure is a warning). A headless Claude feature is `active` with `pane: false` (no pane, no
     awake slot; `orche feat wake` opens one); a Codex feature is `paused`. Returns (data, line)."""
     proj = reg["projects"][key]
@@ -310,8 +310,7 @@ def create_feature(reg, key, name, *, scope, reason, by=None, batch=None, strict
     event = {"type": "create", "project": key, "unit": f"{division}/{name}", "by": by}
     if batch:
         event["batch"] = batch
-    book.record(reg, f"create {session} by {by}: {reason}", change=change, event=event,
-                note=f"New feature agent {session}: {reason}")
+    book.record(reg, f"create {session} by {by}: {reason}", change=change, event=event)
     try:
         orca.worktree("set", "--worktree", f"id:{entry['worktree']}", "--unread")
     except orca.OrcaError as exc:

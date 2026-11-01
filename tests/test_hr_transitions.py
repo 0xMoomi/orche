@@ -1,4 +1,4 @@
-"""HR transitions: hr.book (record, log, notify), the hr.limits gates, wake and sleep, creating features
+"""HR transitions: hr.book (record, log; no notification), the hr.limits gates, wake and sleep, creating features
 and divisions (stubbed Orca)."""
 import ast
 import contextlib
@@ -28,15 +28,14 @@ class BookTest(test_hr.HrCase):
                 mock.patch.object(registry, "save", lambda r: calls.append(("save",))), \
                 mock.patch.object(book, "log", lambda text: calls.append(("log", text))), \
                 mock.patch.object(statusline, "refresh", lambda r, key: calls.append(("refresh", key))), \
-                mock.patch.object(book, "notify", lambda text, project=None: calls.append(("notify", text))):
+                mock.patch.object(notify, "ring", lambda project, *, kind: calls.append(("ring", kind))):
             book.record(reg, line, **kw)
         return calls
 
     def test_record_runs_every_step_in_order(self):  # B1
         ev = {"type": "sleep", "project": "acme-shop", "unit": "build", "by": "user"}
-        self.assertEqual(self.patched_record({}, "slept build", event=ev, note="build asleep"),
-                         [("event", ev), ("save",), ("log", "slept build"), ("refresh", "acme-shop"),
-                          ("notify", "build asleep")])
+        self.assertEqual(self.patched_record({}, "slept build", event=ev),
+                         [("event", ev), ("save",), ("log", "slept build"), ("refresh", "acme-shop")])
 
     def test_record_star_project_and_no_save(self):  # B2
         ev = {"type": "audit", "project": "*", "unit": "*", "by": "user"}
@@ -54,28 +53,9 @@ class BookTest(test_hr.HrCase):
         self.assertEqual([re.sub(r"^- \S+ ", "- <ts> ", l) for l in text.splitlines()[2:]],
                          ["- <ts> one", "- <ts> two"])
 
-    def test_notify_on_off_and_platform(self):  # B4: through notify.send, the text an argument
-        posted = []
-
-        def runner(argv, *, timeout, input, env=None):
-            if argv[0] == "osascript":
-                posted.append(argv)
-                return shell.Result(0, "", "", argv)
-            return self.fake_runner(argv, timeout=timeout, input=input)
-
-        shell.RUNNER = runner
-        secret = 'token "x" sk-ant-api03-' + "A" * 40
-        for on in (False, True):
-            (self.home / "config.json").write_text(json.dumps({"notify": on}))
-            for platform in ("linux", "darwin"):
-                with mock.patch.object(notify, "PLATFORM", platform), \
-                        mock.patch.object(notify, "orca_running", lambda: False):
-                    book.notify(secret)
-        self.assertEqual(len(posted), 1)
-        self.assertEqual(posted[0][:-2], notify.argv("", "")[:-2])         # the fixed script, no sound
-        self.assertNotIn("A" * 40, " ".join(posted[0]))
-        self.assertTrue(posted[0][-2].startswith('token "x" '))
-        self.assertEqual(posted[0][-1], "Orche")
+    def test_hr_sends_no_notification(self):  # B4: HR lines stay in hr-log.md; Main reports what it ran
+        self.assertFalse(hasattr(book, "notify"))
+        self.assertNotIn("note", inspect.signature(book.record).parameters)
 
 
 class LimitsTest(test_hr.FeatCase):
@@ -140,7 +120,7 @@ class TransitionsCase(test_hr.FeatCase):
         super().setUp()
         self.notes = []
         patches = (mock.patch.object(statusline, "refresh", wraps=statusline.refresh),
-                   mock.patch.object(book, "notify", lambda text, project=None: self.notes.append(text)))
+                   mock.patch.object(notify, "ring", lambda project, *, kind: self.notes.append(kind) or True))
         self.refresh = patches[0].start()
         patches[1].start()
         for p in patches:
@@ -418,13 +398,12 @@ class CreateFeatureTest(TransitionsCase):
 
         shell.RUNNER = runner
         self.refresh.side_effect = lambda reg, key: order.append("refresh")
-        with mock.patch.object(registry, "save", lambda reg: (order.append("save"), save(reg))), \
-                mock.patch.object(book, "notify", lambda text, project=None: order.append(("notify", text))):
+        with mock.patch.object(registry, "save", lambda reg: (order.append("save"), save(reg))):
             data, line = self.create(by="div-acme-shop-build", batch="b1")
         self.assertEqual(line, "feat-acme-shop-pay active (feat/pay)")
         self.assertEqual(data["feature"]["session"], "feat-acme-shop-pay")
-        self.assertEqual(order, ["save", "save", "refresh", ("notify", "New feature agent feat-acme-shop-pay: r"),
-                                 "unread"])
+        self.assertEqual(order, ["save", "save", "refresh", "unread"])
+        self.assertEqual(self.notes, [])                                          # no ring: Main reports it
         reg = registry.load()
         self.assertEqual(reg["events"][-1] | {"at": None}, {"at": None, "type": "create", "project": "acme-shop",
                                                             "unit": "build/pay", "by": "div-acme-shop-build",
@@ -449,7 +428,7 @@ class CreateFeatureTest(TransitionsCase):
         self.assertTrue(reg["frozen"])
         self.assertEqual((reg["events"][-1]["type"], reg["events"][-1]["project"], reg["events"][-1]["by"]),
                          ("freeze", "*", "hr-limits"))
-        self.assertEqual(self.notes, ["HR freeze: global feature-agent creation cap reached"])
+        self.assertEqual(self.notes, [])
         self.assertEqual(self.refresh.call_count, 0)
         self.assertEqual(self.calls, [])
 
@@ -572,7 +551,7 @@ class DivisionsTest(test_hr.HrCase):
         super().setUp()
         self.notes = []
         patches = (mock.patch.object(statusline, "refresh", wraps=statusline.refresh),
-                   mock.patch.object(book, "notify", lambda text, project=None: self.notes.append(text)))
+                   mock.patch.object(notify, "ring", lambda project, *, kind: self.notes.append(kind) or True))
         self.refresh = patches[0].start()
         patches[1].start()
         for p in patches:
@@ -698,7 +677,7 @@ class StageSetTest(TransitionsCase):
         self.assertEqual(lines[0], "set acme-shop stage=public")
         self.assertEqual(lines[1], "div-acme-shop-ops active")
         self.assertEqual(self.refresh.call_count, 2)
-        self.assertEqual(self.notes, ["acme-shop is public — ops woken"])
+        self.assertEqual(self.notes, [])
         self.assertEqual(err, "")
 
     def test_building_with_stale_ops_warns_and_keeps_stage(self):  # G2
@@ -727,7 +706,7 @@ class StageSetTest(TransitionsCase):
         data, lines, err = self.stage("public")
         self.assertIn("onboarding unfinished: re-run `orche init acme-shop`", lines)
         self.assertFalse(data["woke"])
-        self.assertEqual(self.notes, ["acme-shop is public"])
+        self.assertEqual(self.notes, [])
         self.assertEqual(registry.load()["projects"]["acme-shop"]["stage"], "public")
 
     def test_public_over_awake_limit_warns(self):  # G5
@@ -740,19 +719,19 @@ class StageSetTest(TransitionsCase):
                       "(orche sleep <unit>)", err)
         self.assertEqual(registry.load()["projects"]["acme-shop"]["stage"], "public")
         self.assertEqual(self.entry("div-acme-shop-ops")["status"], "dormant")
-        self.assertEqual(self.notes, ["acme-shop is public"])
+        self.assertEqual(self.notes, [])
 
     def test_freeze_records_once(self):  # F1
         data, line = hr.set_frozen(registry.load(), True)
         self.assertEqual((data, line), ({"frozen": True, "changed": True, "dry_run": False}, "frozen"))
         ev = registry.load()["events"][-1]
         self.assertEqual((ev["type"], ev["project"]), ("freeze", "*"))
-        self.assertEqual(self.notes, ["HR freeze: feature-agent creation stopped"])
+        self.assertEqual(self.notes, [])
         self.assertEqual(self.refresh.call_count, 0)
         before, logged = registry.load(), self.log_lines()
         data, line = hr.set_frozen(registry.load(), True)
         self.assertEqual((data["changed"], line), (False, "already frozen"))
-        self.assertEqual((registry.load(), self.log_lines(), len(self.notes)), (before, logged, 1))
+        self.assertEqual((registry.load(), self.log_lines(), self.notes), (before, logged, []))
 
     def test_freeze_dry_run(self):  # F2
         before = registry.load()

@@ -392,19 +392,14 @@ class PaneGateTest(ReconcileCase):
         self.pointer("main-acme-shop", 12)
         util.write_json(inbox.box("main-acme-shop") / deliver.LAST_NUDGE,
                         {"state": "user-typing", "at": "2026-10-16T00:30:00+00:00"})
-        calls = []
-
-        def run(argv, **kw):            # osascript shows it
-            calls.append(argv)
-            return shell.Result(0 if argv[0] == "osascript" else 113, "", "", argv)
-        with mock.patch.object(notify, "PLATFORM", "darwin"), mock.patch.object(shell, "run", run):
+        rings = []
+        with mock.patch.object(shell, "run", lambda argv, **kw: shell.Result(113, "", "", argv)), \
+                mock.patch.object(notify, "ring", lambda project, *, kind: rings.append((project, kind)) or True):
             for m in (0, 10, 30, 70, 80):       # 70: the repair (a composer it cannot read: not reopened)
                 self.run_at(m)
-        notes = [c for c in calls if c[0] == "osascript"]
-        self.assertEqual(len(notes), 1)
-        self.assertEqual(notes[0][:3], ["osascript", "-e", "on run argv"])
-        self.assertIn("last nudge: user-typing at", notes[0][-2])           # an argument, never script
-        self.assertEqual(notes[0][-1], "Orche acme-shop")
+        self.assertEqual(rings, [("acme-shop", "stuck")])                    # Main's tab rings; no text in it
+        stuck = json.loads((guard.folder("acme-shop") / "stuck.json").read_text())
+        self.assertIn("last nudge: user-typing at", stuck["text"])           # the text stays in the notice
         self.assertTrue(any("owner-notified project=acme-shop" in e for e in self.events()))
 
 
@@ -569,27 +564,27 @@ class StatusHintTest(ReconcileCase):
 
 
 class OwnerNoticeTest(ReconcileCase):
-    """S6: the owner notification goes through notify.send, obeys `notify` (`inbox.notify` is gone) and
-    has no sound in quiet hours."""
+    """S6: the owner notification rings Main's tab (notify.ring: one BEL byte to the terminal Main's hooks
+    recorded), obeys `notify` (`inbox.notify` is gone) and rings nothing in quiet hours."""
 
     def notes(self, cfg=None, quiet=False):
         self.now += dt.timedelta(minutes=10)          # past the per-project gap (flow.owner.NOTIFY_GAP_S)
         cfg = {**WAKE, **(cfg or {}), **({"flow": {"quiet_hours": "08:00-10:00"}} if quiet else {})}
         (self.home / "config.json").write_text(json.dumps(cfg))
-        calls = []
-        with mock.patch.object(notify, "PLATFORM", "darwin"), \
-                mock.patch.object(shell, "run",
-                                  lambda argv, **kw: calls.append(argv) or shell.Result(0, "", "", argv)):
+        util.write_json(inbox.box("main-acme-shop") / notify.PANE, {"pid": 4242, "tty": "/dev/ttys013"})
+        rung = []
+        with mock.patch.object(notify, "PS", lambda pid, timeout: (1, "/dev/ttys013") if pid == 4242 else None), \
+                mock.patch.object(notify, "BELL", rung.append):
             reconcile._tell_owner("acme-shop", 'a "quoted" text; do shell script', self.now)
-        return [c for c in calls if c[0] == "osascript"]          # Orca runs: the fake answers pgrep with 0
+        return rung
 
     def test_gates_and_quiet_hours(self):
-        [loud] = self.notes()
-        self.assertEqual(loud[-2:], ['a "quoted" text; do shell script', "Orche acme-shop"])
-        self.assertEqual(loud[4], notify.TELL[0])
-        self.assertIn('sound name "Glass"', loud[6])
-        [hushed] = self.notes(quiet=True)
-        self.assertNotIn("sound", " ".join(hushed[:-2]))
+        self.assertEqual(self.notes(), ["/dev/ttys013"])
+        stuck = json.loads((guard.folder("acme-shop") / "stuck.json").read_text())
+        self.assertEqual(stuck["text"], 'a "quoted" text; do shell script')    # recorded, never rung as text
+        self.assertEqual(self.notes(quiet=True), [])                            # held until quiet hours end
+        self.assertIn("owner held project=acme-shop kind=stuck reason=quiet",
+                      (self.home / "logs" / "events.log").read_text())
         self.assertEqual(self.notes({"notify": False}), [])
         self.assertEqual(len(self.notes({"inbox": {"wake": True, "quiet_s": 0, "notify": False}})), 1)  # ignored
 

@@ -102,8 +102,8 @@ def apply(name, by, *, dry_run=False):
         config.save(raw)
         from .hr import book      # hr imports scale: loaded here, not at import
         limits = target(cfg, name)[1]
-        book.record(reg, f"scale {name} by {by}", change=lambda r: r["limits"].update(limits), event={"type": "scale", "project": "*", "unit": "hr", "by": by},
-                    note=f"HR scale {name}: {summary(cfg, name)}")
+        book.record(reg, f"scale {name} by {by}", change=lambda r: r["limits"].update(limits),
+                    event={"type": "scale", "project": "*", "unit": "hr", "by": by})
     data = {"preset": name, "was": was, "dry_run": dry_run, "changed": bool(diff) and not dry_run,
             "changes": [{"key": k, "old": a, "new": b} for k, a, b in diff]}
     return data, lines

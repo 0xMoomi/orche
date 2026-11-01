@@ -96,7 +96,7 @@ class FakeUI:
     def __init__(self, answers, clipboard=""):
         self.answers = answers if isinstance(answers, dict) else list(answers)
         self.clipboard = clipboard
-        self.asked, self.errors, self.notes, self.cleared = [], [], [], 0
+        self.asked, self.errors, self.cleared = [], [], 0
 
     def ask(self, req, error=None):
         self.asked.append(req["name"])
@@ -110,9 +110,6 @@ class FakeUI:
     def clear_clipboard(self):
         self.cleared += 1
         self.clipboard = ""
-
-    def notify(self, text):
-        self.notes.append(text)
 
 
 class SecretCase(support.TempHomeCase):
@@ -129,8 +126,10 @@ class SecretCase(support.TempHomeCase):
         self.addCleanup(setattr, store, "spawn_dialog", store.spawn_dialog)
         store.spawn_dialog = lambda: self.spawned.append(1) or object()
         self.addCleanup(setattr, dialog, "UI_FACTORY", dialog.UI_FACTORY)
-        self.addCleanup(setattr, notify, "PLATFORM", notify.PLATFORM)
-        notify.PLATFORM = "darwin"          # the Keymaster's notifications reach FakeCloud on any platform
+        self.rings = []                     # notify.ring: a request with no dialog rings Main's tab
+        patcher = mock.patch.object(notify, "ring", lambda project, *, kind: self.rings.append((project, kind)) or True)
+        patcher.start()
+        self.addCleanup(patcher.stop)
         self.outputs = []
         self.repo = self.home / "repo"
         (self.repo / ".git").mkdir(parents=True)
@@ -150,7 +149,7 @@ class SecretCase(support.TempHomeCase):
         return code, out.getvalue(), err.getvalue()
 
     def use_ui(self, ui):
-        dialog.UI_FACTORY = lambda ex: ui
+        dialog.UI_FACTORY = lambda: ui
         return ui
 
     def fill_canary(self, envs="dev,prod"):
@@ -237,7 +236,9 @@ class BackendNamingTest(unittest.TestCase):
 
 
 class RequestTest(SecretCase):
-    def test_request_writes_queue_and_notifies(self):
+    def test_request_writes_queue_and_opens_the_dialog_or_rings_main(self):
+        """The dialog is the request's alert (no notification, no osascript line); with no dialog spawned
+        the project's Main tab rings."""
         code, out, err = self.orche("secret", "request", "STRIPE_SECRET_KEY", "--env", "dev,prod", "--why",
                                     "payments", "--how", "https://x.example/keys", "--project", "acme")
         self.assertEqual((code, err), (0, ""))
@@ -248,11 +249,7 @@ class RequestTest(SecretCase):
         req = json.loads(files[0].read_text())
         self.assertEqual(sorted(req), ["at", "envs", "how_url", "name", "project", "requested_by", "status", "why"])
         self.assertEqual((req["envs"], req["status"], req["project"]), (["dev", "prod"], "pending", "acme-shop"))
-        notes = self.cloud.argvs(["osascript", "-e"])
-        self.assertEqual(len(notes), 1)
-        self.assertEqual(notes[0][:-2], notify.argv("", "", orca=True)[:-2])   # a fixed script; Orca runs (pgrep 0)
-        self.assertTrue(notes[0][-2].startswith("STRIPE_SECRET_KEY needed for acme-shop"))
-        self.assertEqual(notes[0][-1], "Orche Keymaster")
+        self.assertEqual((self.cloud.argvs(["osascript"]), self.rings), ([], []))
         self.assertEqual(self.spawned, [1])
         # a second request for the same name extends the pending one; --no-dialog spawns nothing
         self.orche("secret", "request", "STRIPE_SECRET_KEY", "--env", "preview", "--why", "p", "--project",
@@ -260,13 +257,20 @@ class RequestTest(SecretCase):
         self.assertEqual(len(list((self.home / "secrets" / "requests").glob("*.json"))), 1)
         self.assertEqual(json.loads(files[0].read_text())["envs"], ["dev", "prod", "preview"])
         self.assertEqual(self.spawned, [1])
+        self.assertEqual(self.rings, [("acme-shop", "keymaster")])
+        store.spawn_dialog = lambda: None                   # a dialog already runs: it shows the request
+        with mock.patch.object(store, "dialog_running", lambda: True):
+            self.orche("secret", "request", "API_TOKEN", "--env", "dev", "--why", "p", "--project", "acme")
+            self.orche("secret", "request", "API_KEY", "--env", "dev", "--why", "p", "--project", "acme",
+                       "--no-dialog")
+        self.assertEqual(self.rings, [("acme-shop", "keymaster")])
 
     def test_request_dry_run_and_bad_input(self):
         code, out, _ = self.orche("--dry-run", "secret", "request", "API_TOKEN", "--env", "dev", "--why", "x",
                                   "--project", "acme-shop")
         self.assertEqual(code, 0)
-        self.assertIn("would run: osascript -e", out)
-        self.assertEqual(self.cloud.calls, [])
+        self.assertRegex(out, r"^would request \d{8}T\d{6}-API_TOKEN\n$")      # no osascript line planned
+        self.assertEqual((self.cloud.calls, self.rings), ([], []))
         self.assertFalse(any((self.home / "secrets" / "requests").glob("*.json")))
         self.assertEqual(self.spawned, [])
         self.assertEqual(self.orche("secret", "request", "lower", "--env", "dev", "--why", "x",
@@ -320,7 +324,7 @@ class FillTest(SecretCase):
         self.assertEqual(self.cloud.keychain["orche/acme-shop/dev/STRIPE_SECRET_KEY"], CANARY)
         req = store.list_requests()[0][1]
         self.assertEqual(req["status"], "filled")
-        self.assertEqual(ui.notes, ["STRIPE_SECRET_KEY stored (dev,prod)"])
+        self.assertEqual(self.rings, [("acme-shop", "keymaster")])   # the --no-dialog request's; the fill's none
         audit = (self.home / "secrets" / "audit.log").read_text()
         self.assertEqual(audit.count("\tstore\tacme-shop\tSTRIPE_SECRET_KEY\t"), 6)
         self.assertIsNone(os.environ.get("ORCHE_KEYMASTER"))

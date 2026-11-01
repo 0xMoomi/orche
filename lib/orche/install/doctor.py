@@ -11,8 +11,8 @@ import shutil
 import sys
 from pathlib import Path
 
-from .. import (__version__, config, github, headless, jev_setup, ladder, mask, oauth, orca, paths, procs, registry,
-                runs, shell, units, vendors)
+from .. import (__version__, config, github, headless, jev_setup, ladder, mask, notify, oauth, orca, paths, procs,
+                registry, runs, shell, units, util, vendors)
 from . import plugin, settings, statusline
 
 TOOLS = ("gcloud", "gh", "vercel", "age", "zstd")
@@ -87,6 +87,30 @@ def orche_login():
         return "OK", ORCHE_ROW, found[-1].strip()
     return "WARN", ORCHE_ROW, (f"{sh} -lc cannot find orche; add to your shell profile: "
                                f"export PATH=\"{paths.PLUGIN_ROOT / 'bin'}:$PATH\"")
+
+
+ORCA_DATA = ("Library", "Application Support", "orca", "profiles", "local-default", "orca-data.json")
+BELL_ON = "Orca shows Orche's reminders (Terminal Bell notifications on)"
+BELL_OFF = ("Orca's Terminal Bell notifications are off, so Orche's reminders stay silent. Turn on Orca Settings > "
+            "Notifications > Terminal Bell")
+
+
+def notification_rows(home, cfg) -> list:
+    """`notifications`: Orche's reminders ring Main's tab (notify.ring) and Orca shows a ring only with its
+    Terminal Bell notifications on. Read only from Orca's own file under `home` (ORCA_DATA): OK when its
+    `settings.notifications` has `enabled` and `terminalBell` true, WARN when either is false; `off` with
+    config `notify` false; no row when the file or a key cannot be read."""
+    if not notify.enabled(cfg):
+        return [("OK", "notifications", "off (notify false)")]
+    try:
+        data = util.read_dict(Path(home, *ORCA_DATA)) or {}
+    except OSError:
+        return []
+    found = (data.get("settings") or {}).get("notifications") if isinstance(data.get("settings"), dict) else None
+    on = [found.get(k) for k in ("enabled", "terminalBell")] if isinstance(found, dict) else []
+    if len(on) != 2 or not all(isinstance(v, bool) for v in on):
+        return []
+    return [("OK", "notifications", BELL_ON) if all(on) else ("WARN", "notifications", BELL_OFF)]
 
 
 def claude_checks() -> list:
@@ -495,6 +519,8 @@ def checks(ctx) -> list:
         add("OK", "orca", "orca status answered")
     except orca.OrcaError as exc:
         add("WARN", "orca", f"orca status failed: {exc}")
+    for row in notification_rows(ctx.home, config.load()):
+        add(*row)
     for row in claude_checks():
         add(*row)
     try:

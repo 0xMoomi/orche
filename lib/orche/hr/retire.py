@@ -255,15 +255,14 @@ def retire(reg, unit, *, yes=False, dry_run=False):
         warn(f"could not write the GRAVEYARD row ({exc}); add by hand to {gy}: feature {name}, "
              f"recovery: git checkout -b {branch} {tag}; unit files: {kept}")
     book.record(reg, f"retire {unit.session} by {by} (tag {tag})", change=lambda r: _retired(r, unit),
-                event={"type": "retire", "project": key, "unit": unit.event_unit, "by": by},
-                note=f"Feature agent {unit.session} retired")
+                event={"type": "retire", "project": key, "unit": unit.event_unit, "by": by})
     return ({"feature": name, "status": "retired", "tag": tag, "archive": archived},
             f"{unit.session} retired (tag {tag})")
 
 
 def retire_gone(reg, unit, *, by) -> None:
     """Retire a unit whose worktree Orca no longer lists (`orche janitor run --apply-removed`). The caller
-    has written its GRAVEYARD row first (R-JAN-3); no Orca step, no notification."""
+    has written its GRAVEYARD row first (R-JAN-3); no Orca step."""
     book.record(reg, f"retire {unit.session} by {by} (worktree gone from Orca)", change=lambda r: _retired(r, unit),
                 event={"type": "retire", "project": unit.project, "unit": unit.event_unit, "by": by})
 

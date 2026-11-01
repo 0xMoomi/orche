@@ -695,6 +695,42 @@ class DoctorTest(InstallCase):
         self.assertEqual(data["next_steps"], steps)
         self.assertTrue(all({"check", "level", "detail"} <= set(row) for row in data["checks"]))
 
+    def test_the_notifications_row_reads_orcas_terminal_bell_setting(self):
+        """Read only from Orca's file under the home: OK with Terminal Bell notifications on, WARN with
+        Orca's notifications or its Terminal Bell ones off, `off` with config notify false, no row when the
+        file or a key cannot be read."""
+        registry.save(registry.empty())
+        path = self.h.joinpath(*doctor.ORCA_DATA)
+        path.parent.mkdir(parents=True)
+
+        def row(settings=None, raw=None, cfg=None):
+            if raw is not None or settings is not None:
+                path.write_text(raw if raw is not None else json.dumps({"settings": settings, "other": 1}))
+            return doctor.notification_rows(self.h, cfg or {})
+
+        on = {"notifications": {"enabled": True, "terminalBell": True, "agentTaskComplete": False}}
+        self.assertEqual(row(on), [("OK", "notifications", "Orca shows Orche's reminders (Terminal Bell "
+                                                            "notifications on)")])
+        warn = [("WARN", "notifications", "Orca's Terminal Bell notifications are off, so Orche's reminders stay "
+                                          "silent. Turn on Orca Settings > Notifications > Terminal Bell")]
+        self.assertEqual(row({"notifications": {"enabled": True, "terminalBell": False}}), warn)
+        self.assertEqual(row({"notifications": {"enabled": False, "terminalBell": True}}), warn)
+        self.assertEqual(row(on, cfg={"notify": False}), [("OK", "notifications", "off (notify false)")])
+        for name, case in (("no key", {"settings": {"notifications": {"enabled": True}}}),
+                           ("not a bool", {"settings": {"notifications": {"enabled": True, "terminalBell": "on"}}}),
+                           ("no notifications", {"settings": {}}), ("settings a list", {"settings": []})):
+            with self.subTest(name):
+                self.assertEqual(row(raw=json.dumps(case)), [])
+        self.assertEqual(row(raw="{not json"), [])
+        path.unlink()
+        self.assertEqual(row(), [])
+        self.assertEqual(path.read_bytes() if path.exists() else None, None)     # never written
+        row(on)
+        _, out, _ = self.doctor()
+        self.assertIn("OK\tnotifications\tOrca shows Orche's reminders (Terminal Bell notifications on)",
+                      out.splitlines())
+        self.assertEqual(json.loads(path.read_text()), {"settings": on, "other": 1})
+
     def test_finder_command_runs_the_shared_finder(self):
         res = subprocess.run(["/bin/sh", "-c", doctor.finder_command()], capture_output=True, text=True,
                              timeout=20)

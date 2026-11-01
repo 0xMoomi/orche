@@ -703,38 +703,18 @@ class LineageCloseTest(FlowCase):
                             ORCHE_SESSION="main-acme").stdout
         self.assertIn(f"  report: {md}\n````markdown\n# Lineage {lin}\n", out)    # the wake carries LINEAGE.md
 
-    def test_the_close_sends_one_finish_notice_with_what_finished_and_its_cost(self):
-        from orche import notify
-        from orche.runs import history
+    def test_the_close_rings_nothing_and_touches_the_status_line(self):
+        """No finish notice: the close wakes Main, whose report Orca shows; the status line is refreshed."""
+        from orche import notify, statusline
         lin, (a, b, c) = self.lineage(3)
-        util.write_json(self.units_dir() / b / "RUN.json", {"pr": 41})
-        history.append("acme", {"unit": a, "cost_usd": 1.25, "finished": "2026-10-30T10:00:00+09:00"}, 1)
-        history.append("acme", {"unit": c, "cost_usd": 0.5, "finished": "2026-10-30T10:00:00+09:00"}, 1)
-        with mock.patch.object(inbox, "wake"), mock.patch.object(notify, "send", return_value=True) as send:
+        with mock.patch.object(inbox, "wake"), mock.patch.object(notify, "ring") as ring, \
+                mock.patch.object(statusline, "touch") as touch:
             self.post(a, "done", lin, ledger_row=True)
-            self.post(b, "done", lin)                                 # done without a ledger row
-            self.assertEqual(send.call_count, 0)                      # not before the close
+            self.post(b, "done", lin)
             self.post(c, "failed", lin)
-        send.assert_called_once()
-        (title, body), kw = send.call_args
-        self.assertEqual((title, kw["kind"]), ("acme: finished", "finish"))
-        self.assertEqual(body, "Add field 0 to checkout form. 2 done, 1 failed. PRs #41. Runs cost $1.75. "
-                               "1 not confirmed (no ledger row).")
-
-    def test_no_finish_notice_when_a_member_waits_on_the_owner_or_notify_is_off(self):
-        from orche import notify, shell
-        lin, (a, b) = self.lineage(2)
-        with mock.patch.object(inbox, "wake"), mock.patch.object(notify, "send") as send:
-            self.post(a, "done", lin)
-            self.post(b, "question", lin)
         self.assertEqual(len(self.closes()), 1)
-        send.assert_not_called()                                  # the owner's ask notifies instead
-        calls = []
-        (self.home / "config.json").write_text(json.dumps({"notify": False}))
-        with mock.patch.object(notify, "PLATFORM", "darwin"), \
-                mock.patch.object(shell, "RUNNER", lambda argv, **kw: calls.append(argv)):
-            self.assertFalse(notify.finished("acme", "Ship it.", {"done": 2}, [], 0.0, 0))
-        self.assertEqual(calls, [])
+        ring.assert_not_called()
+        touch.assert_any_call("acme")
 
     def test_a_single_unit_lineage_is_unchanged(self):
         lin, (a,) = self.lineage(1)

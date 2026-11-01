@@ -2,8 +2,8 @@
 
 Every transition — create a division or feature agent, wake, sleep, retire, stage change, freeze —
 runs here end to end: its rules (creation limits, awake limit, stage gate, retired/onboarding
-refusals), its Orca steps and its HR record (event -> registry.json -> HR-log line -> status line ->
-notification). registry.json is written only under lib/orche/hr/. Callers resolve names through the
+refusals), its Orca steps and its HR record (event -> registry.json -> HR-log line -> status line).
+registry.json is written only under lib/orche/hr/. Callers resolve names through the
 Roster and keep argument parsing and output: a transition returns (data, lines) or raises
 Refused(code, msg), `code` being the CLI exit code. HR prints, on stderr, only what happens during a
 transition: `[dry-run]` lines, warnings, retire's progress lines.

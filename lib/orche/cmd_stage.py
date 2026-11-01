@@ -1,7 +1,7 @@
 """`orche stage set <proj> public|building [--yes] [--no-wake]`.
 
 public:   stage -> `stage` event -> wake `ops` (unless --no-wake; the awake limit applies) ->
-          print the ops checklist -> hr-log + notify.
+          print the ops checklist -> hr-log.
 building: stage -> `stage` event -> sleep an active `ops` (R-STAGE-5; HANDOFF.md must be fresh —
           a refusal is reported and the stage change is kept). Ops cannot be woken while building.
 The real run needs --yes (going public opens a pane).

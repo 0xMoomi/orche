@@ -1,7 +1,8 @@
 """The owner's voice (T9, lib/orche/flow/owner.py and lib/orche/notify.py): Main's closing line records
-the ask and sends no notification (Orca shows its own); ask.json; at most one per project per 300 s; a
-parked guard refusal records an ask and notifies; one argv-safe notify path (the text is an osascript
-argument, never script). The Stop-hook path itself is in test_hooks.OwnerVoiceHookTest."""
+the ask and rings nothing (Orca shows its own notification); ask.json; at most one ring per project per
+300 s, none in quiet hours; a parked guard refusal records an ask and rings Main's tab; the bell (one BEL
+byte to the terminal Main's hooks recorded, never text). The Stop-hook path itself is in
+test_hooks.OwnerVoiceHookTest."""
 import datetime as dt
 import json
 import os
@@ -13,9 +14,6 @@ from orche import inbox, notify, shell
 from orche.flow import guard, owner
 
 T0 = dt.datetime(2026, 10, 23, 5, 0, tzinfo=dt.timezone.utc)
-SCRIPT = ["osascript", "-e", "on run argv", "-e",
-          'display notification (item 1 of argv) with title (item 2 of argv) sound name "Glass"', "-e", "end run"]
-ORCA_RUNNING = notify.orca_running      # the real probe (through shell.RUNNER), saved before OwnerCase patches it
 NON_ASCII = '決済キーを入れてください — "STRIPE" \\ 既定: 保留; do shell script "rm -rf ~"'
 
 
@@ -121,28 +119,26 @@ class FitTest(support.TempHomeCase):
 
 
 class OwnerCase(support.TempHomeCase):
-    """A fake clock (`now`), quiet hours off, notifications on macOS and Orca not running
-    (the plain osascript path): every argv is recorded."""
+    """A fake clock (`now`), quiet hours off, notifications on; notify.ring is a fake that records
+    (project, kind) and rings."""
 
     def setUp(self):
         super().setUp()
         self.config({})
-        self.calls = []
+        self.rings = []
 
-        def runner(argv, *, timeout, input, env=None):
-            self.calls.append(list(argv))
-            return shell.Result(0, "", "", list(argv))
-        for obj, name, value in ((shell, "RUNNER", runner), (notify, "PLATFORM", "darwin"),
-                                 (notify, "orca_running", lambda: False)):
-            patcher = mock.patch.object(obj, name, value)
-            patcher.start()
-            self.addCleanup(patcher.stop)
+        def ring(project, *, kind):
+            self.rings.append((project, kind))
+            return True
+        patcher = mock.patch.object(notify, "ring", ring)
+        patcher.start()
+        self.addCleanup(patcher.stop)
 
     def config(self, cfg):
         (self.home / "config.json").write_text(json.dumps(support.no_wake({"flow": {"quiet_hours": ""}, **cfg})))
 
     def notes(self):
-        return [c for c in self.calls if c[0] == "osascript"]
+        return self.rings
 
     def ask(self, project="acme"):
         path = guard.folder(project) / owner.ASK
@@ -203,7 +199,7 @@ class ClosingLineTest(OwnerCase):
         self.assertIn("owner held project=acme kind=guard reason=gap\n", self.log())
         owner.parked("docs", "docs-x-1", "other project", now=at(10))   # per project
         owner.parked("acme", "acme-x-1", "third", now=at(300))
-        self.assertEqual([c[7] for c in self.notes()], ["OWNER: first", "OWNER: other project", "OWNER: third"])
+        self.assertEqual(self.notes(), [("acme", "guard"), ("docs", "guard"), ("acme", "guard")])
 
     def test_a_secret_ask_and_notifications_off(self):
         owner.closing("acme", "OWNER: secret STRIPE_KEY, GH_TOKEN", now=T0)
@@ -214,68 +210,160 @@ class ClosingLineTest(OwnerCase):
         self.assertEqual(self.notes(), [])
         self.assertIn("owner held project=acme kind=guard reason=off\n", self.log())
 
-    def test_no_sound_in_quiet_hours(self):
+    def test_nothing_rings_in_quiet_hours(self):
+        """Orca's notification has a sound Orche cannot turn off: a ring due inside quiet hours is held (the
+        heartbeat rings it at the first pass after them, test_owner_heartbeat.QuietHoursTest)."""
         h = T0.hour                                   # the clock passed, not the host's zone
         self.config({"flow": {"quiet_hours": f"{h:02d}:00-{(h + 1) % 24:02d}:00"}})
         owner.parked("acme", "acme-x-1", "approve", now=T0)
-        [call] = self.notes()
-        self.assertEqual(call[4], notify.SCRIPT[1])
-        self.assertIn("quiet=1", self.log())
+        self.assertEqual(self.notes(), [])
+        self.assertEqual(self.ask()["text"], "approve")
+        self.assertIn("owner held project=acme kind=guard reason=quiet\n", self.log())
+        self.assertFalse((guard.folder("acme") / owner.SENT).exists())      # no try: the first is still due
 
-    def test_a_parked_guard_refusal_records_an_ask_and_notifies_the_body_an_argument(self):
-        """Orca cannot know a runner's refusal: Orche still notifies it, the owner present or not."""
+    def test_a_parked_guard_refusal_records_an_ask_and_rings_mains_tab(self):
+        """Orca cannot know a runner's refusal: Orche still rings it, the owner present or not; the text
+        stays in ask.json, never in the ring."""
         self.owner_seen(10)
         text = f"not started: acme-x-20261023-1 ran 4 times since 10:00 without the owner (cap 4) {NON_ASCII}"
         owner.parked("acme", "acme-x-20261023-1", text, now=T0)
         self.assertEqual(self.ask(), {"text": owner.one_line(text, owner.ASK_MAX), "at": iso(T0), "kind": "guard",
                                       "source": "runner", "unit": "acme-x-20261023-1"})
-        [call] = self.notes()
-        self.assertEqual(call, SCRIPT + [f"OWNER: {self.ask()['text']}", "Orche acme"])   # quotes are data
+        self.assertEqual(self.notes(), [("acme", "guard")])
         notified = json.loads((guard.folder("acme") / owner.SENT).read_text())
         self.assertEqual(notified, {"at": iso(T0), "n": 1, "ask_at": iso(T0), "ask_last": iso(T0), "kind": "guard"})
-        self.assertIn("owner notify project=acme kind=guard n=1 quiet=0\n", self.log())
+        self.assertIn("owner notify project=acme kind=guard n=1\n", self.log())
+
+    def test_a_failed_ring_is_a_try(self):
+        """No live Main terminal: the ring fails; the try counts (the next waits for its slot)."""
+        with mock.patch.object(notify, "ring", lambda project, *, kind: self.rings.append((project, kind)) or False):
+            self.assertFalse(owner.notify("acme", "guard", T0, ask_at=iso(T0)))
+        self.assertEqual(self.notes(), [("acme", "guard")])
+        self.assertEqual(json.loads((guard.folder("acme") / owner.SENT).read_text()),
+                         {"n": 1, "ask_at": iso(T0), "ask_last": iso(T0)})
+        self.assertIn("owner held project=acme kind=guard reason=failed\n", self.log())
 
 
-class NotifySendTest(OwnerCase):
-    def test_one_line_masked_gated_and_never_script(self):
-        secret = "sk-ant-api03-" + "A" * 40
-        self.assertTrue(notify.send("Orche\nacme", f"line one\nline\ttwo\x07 {secret}", kind="t"))
-        [call] = self.notes()
-        self.assertEqual(call[:7], SCRIPT[:4] + [notify.SCRIPT[1]] + SCRIPT[5:])     # no sound unless asked
-        body, title = call[7:]
-        self.assertTrue(body.startswith("line one line two "), body)
-        self.assertNotIn("A" * 40, body)
-        self.assertEqual(title, "Orche acme")
-        self.assertIn("notify kind=t ok=1\n", self.log())
-        with mock.patch.object(notify, "PLATFORM", "linux"):
-            self.assertFalse(notify.send("Orche", "x"))
-        self.config({"notify": False})
-        self.assertFalse(notify.send("Orche", "x"))
-        self.assertEqual(len(self.notes()), 1)
+class BellTest(support.TempHomeCase):
+    """notify.ring: one BEL byte to the terminal Main's hooks recorded (inbox/<main-p>/.pane), only while `ps`
+    still names it that pid's terminal; notify.terminal: the walk up to the first process with one. The ps
+    call and the write are fakes (support.no_ps, no_bell by default): no test reads or rings a real terminal."""
 
-    def test_a_leading_dash_is_never_an_option(self):
-        self.assertTrue(notify.send("-t", "-e do shell script", kind="t"))
-        [call] = self.notes()
-        self.assertEqual(call[7:], [" -e do shell script", " -t"])
+    def setUp(self):
+        super().setUp()
+        from orche import registry
+        registry.save(json.loads((support.FIXTURES / "registry.sample.json").read_text()))
+        self.table, self.rung = {}, []
+        for name, value in (("PS", lambda pid, timeout: self.table.get(pid)),
+                            ("BELL", lambda path: self.rung.append(path))):
+            patcher = mock.patch.object(notify, name, value)
+            patcher.start()
+            self.addCleanup(patcher.stop)
 
-    def test_orca_running_wraps_the_line_in_a_tell_to_orca(self):
-        """A click opens Orca, not Script Editor; one `pgrep -xq Orca` decides (never launch Orca)."""
-        with mock.patch.object(notify, "orca_running", ORCA_RUNNING):
-            self.assertTrue(notify.send("Orche", "-x", sound=True, kind="t", project="acme"))
-        self.assertEqual(self.calls, [["pgrep", "-xq", "Orca"], [
-            "osascript", "-e", "on run argv", "-e", 'tell application id "com.stablyai.orca"',
-            "-e", 'display notification (item 1 of argv) with title (item 2 of argv) sound name "Glass"',
-            "-e", "end tell", "-e", "end run", " -x", "Orche"]])
-        self.calls.clear()
-        with mock.patch.object(shell, "RUNNER", lambda argv, **kw: self.calls.append(list(argv)) or
-                               shell.Result(1 if argv[0] == "pgrep" else 0, "", "", list(argv))), \
-                mock.patch.object(notify, "orca_running", ORCA_RUNNING):
-            self.assertTrue(notify.send("Orche", "x", kind="t"))
-        self.assertEqual(self.calls[1], ["osascript", "-e", "on run argv", "-e", notify.SCRIPT[1], "-e", "end run",
-                                         "x", "Orche"])
+    def pane(self, rec):
+        from orche import util
+        util.write_json(inbox.box("main-acme-shop") / notify.PANE, rec)
 
-    def test_a_failing_osascript_is_logged_without_the_text(self):
-        with mock.patch.object(shell, "RUNNER", lambda argv, **kw: shell.Result(1, "", "boom", argv)):
-            self.assertFalse(notify.send("Orche", "secret plan 42", kind="t"))
-        self.assertIn("notify t: osascript exit 1", self.log("hooks"))
-        self.assertNotIn("secret plan", self.log("hooks") + self.log())
+    def events(self):
+        path = self.home / "logs" / "events.log"
+        return path.read_text() if path.exists() else ""
+
+    def test_the_walk_stops_at_the_first_process_with_a_terminal(self):
+        self.table = {300: (200, ""), 200: (100, ""), 100: (1, "/dev/ttys013"), 7: (1, "/dev/pts/3")}
+        self.assertEqual(notify.terminal(300, now=T0), {"pid": 100, "tty": "/dev/ttys013", "at": T0.isoformat()})
+        self.assertIsNone(notify.terminal(7))                     # a terminal, but not /dev/tty<name>
+        self.assertIsNone(notify.terminal(55))                    # ps cannot say
+        self.table = {i: (i + 1, "") for i in range(2, 20)}
+        self.assertIsNone(notify.terminal(2))                     # none within UP processes
+        self.assertIsNone(notify.terminal(1))
+        seen = []
+        with mock.patch.object(notify, "PS", lambda pid, timeout: seen.append(timeout) or (pid + 1, "")):
+            notify.terminal(10)
+        self.assertEqual(len(seen), notify.UP)
+        self.assertTrue(all(0 < t <= notify.PS_S for t in seen))   # one shared budget for the walk
+
+    def test_ps_reads_the_parent_and_the_terminal_of_one_pid(self):
+        calls, out = [], {"code": 0, "out": " 4242 ttys013\n"}
+
+        def runner(argv, *, timeout, input, env=None):
+            calls.append((list(argv), timeout))
+            return shell.Result(out["code"], out["out"], "", list(argv))
+        with mock.patch.object(shell, "RUNNER", runner):
+            self.assertEqual(notify._ps(77, 0.5), (4242, "/dev/ttys013"))
+            out["out"] = "1 ??\n"
+            self.assertEqual(notify._ps(77, 0.5), (1, ""))
+            for code, text in ((1, ""), (0, "garbage"), (0, "")):
+                out.update(code=code, out=text)
+                self.assertIsNone(notify._ps(77, 0.5))
+        self.assertEqual(calls[0], (["ps", "-o", "ppid=", "-o", "tty=", "-p", "77"], 0.5))
+
+    def test_ring_writes_one_bel_to_the_recorded_live_terminal(self):
+        self.pane({"pid": 4242, "tty": "/dev/ttys013", "at": T0.isoformat()})
+        self.table = {4242: (1, "/dev/ttys013")}
+        self.assertTrue(notify.ring("acme-shop", kind="owner"))
+        self.assertEqual(self.rung, ["/dev/ttys013"])
+        self.assertIn("notify kind=owner project=acme-shop ok=1\n", self.events())
+
+    def test_ring_refuses_what_it_cannot_confirm(self):
+        cases = {"no record": None,
+                 "a dead pid": {"pid": 9, "tty": "/dev/ttys013"},
+                 "another terminal now": {"pid": 4242, "tty": "/dev/ttys014"},
+                 "not a tty path": {"pid": 4242, "tty": "/dev/disk0"},
+                 "a path out of /dev": {"pid": 4242, "tty": "/dev/ttys013/../../tmp/x"},
+                 "a pid that is not a number": {"pid": "4242", "tty": "/dev/ttys013"},
+                 "a pid that is a bool": {"pid": True, "tty": "/dev/ttys013"}}
+        self.table = {4242: (1, "/dev/ttys013"), 1: (0, "/dev/ttys013")}
+        for name, rec in cases.items():
+            with self.subTest(name):
+                (inbox.box("main-acme-shop") / notify.PANE).unlink(missing_ok=True)
+                if rec is not None:
+                    self.pane(rec)
+                self.assertFalse(notify.ring("acme-shop", kind="owner"))
+        self.assertFalse(notify.ring("nope", kind="owner"))                       # no such project's Main
+        self.assertEqual(self.rung, [])
+        self.assertEqual(self.events().count("ok=0 reason=no-pane\n"), len(cases) + 1)
+
+    def test_ring_is_off_with_notify_false_and_never_raises(self):
+        self.pane({"pid": 4242, "tty": "/dev/ttys013"})
+        self.table = {4242: (1, "/dev/ttys013")}
+        (self.home / "config.json").write_text(json.dumps(support.no_wake({"notify": False})))
+        self.assertFalse(notify.ring("acme-shop", kind="hr"))
+        self.assertIn("notify kind=hr project=acme-shop ok=0 reason=off\n", self.events())
+        (self.home / "config.json").write_text(json.dumps(support.no_wake({})))
+
+        def broken(path):
+            raise BlockingIOError(35, "Resource temporarily unavailable", path)
+        with mock.patch.object(notify, "BELL", broken):
+            self.assertFalse(notify.ring("acme-shop", kind="owner"))
+        self.assertIn("notify kind=owner project=acme-shop ok=0 reason=error\n", self.events())
+        hooks = (self.home / "logs" / "hooks.log").read_text()
+        self.assertIn("notify owner: BlockingIOError", hooks)
+        self.assertNotIn("ttys013", hooks)
+        self.assertEqual(self.rung, [])
+
+    def test_the_write_is_one_bel_byte_opened_without_taking_the_terminal(self):
+        """On a plain file (a test never opens a terminal): one BEL byte, O_NOCTTY | O_NONBLOCK."""
+        path = self.home / "not-a-tty"
+        path.write_bytes(b"")
+        opened = []
+        real_open = os.open
+        with mock.patch.object(os, "open", lambda p, flags, *a: opened.append(flags) or real_open(p, flags, *a)):
+            notify._bell(str(path))
+        self.assertEqual(path.read_bytes(), b"\a")
+        self.assertEqual(opened, [os.O_WRONLY | os.O_NOCTTY | os.O_NONBLOCK])
+
+
+class DefaultSeamTest(support.TempHomeCase):
+    def test_no_test_reads_or_rings_a_terminal_by_default(self):
+        """support's fakes stand in for the ps call and the write in every test (and its `ps` on PATH
+        hides terminals from child processes): a recorded pane never rings."""
+        from orche import registry, util
+        self.assertEqual((notify.PS, notify.BELL), (support.no_ps, support.no_bell))
+        registry.save(json.loads((support.FIXTURES / "registry.sample.json").read_text()))
+        util.write_json(inbox.box("main-acme-shop") / notify.PANE, {"pid": os.getpid(), "tty": "/dev/ttys000"})
+        self.assertIsNone(notify.terminal())
+        self.assertFalse(notify.ring("acme-shop", kind="owner"))
+        stub = support.no_claude_dir() + "/ps"
+        res = shell.run([stub, "-o", "ppid=", "-o", "tty=", "-p", str(os.getpid())], timeout=5)
+        self.assertEqual((res.code, res.out), (1, ""))
+        self.assertTrue(shell.run([stub, "-o", "pid=", "-p", str(os.getpid())], timeout=5).ok)   # the real ps

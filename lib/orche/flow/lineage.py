@@ -515,31 +515,18 @@ def close(reg, project, lineage, ms, reads=None):
         inbox.write(ptr)
     _record(project, lineage, ms)
     log.log("events", f"lineage closed {lineage} project={project} n={len(ms)}")
-    _finished(project, lineage, ms)
+    _finished(project, lineage)
     return ptr
 
 
-def _finished(project, lineage, ms):
-    """After Main's close: the owner's finish notice (notify.finished: the root GOAL, the counts, the PRs,
-    the members' headless cost, the reports done without a ledger row), unless a member waits on the
-    owner (that ask notifies already); then the status line. Never raises."""
+def _finished(project, lineage):
+    """After Main's close: the status line. No finish notice: the close wakes Main, whose report Orca
+    shows. Never raises."""
     try:
-        from .. import notify, runs, statusline
-        from .. import project as facts
-        from ..runs import history
-        if not any(s in WAITING for _b, _f, s in ms):
-            prs = set()
-            for b, _f, _s in ms:
-                pr = (runs.last(b.folder) or {}).get("pr")
-                pr = pr.get("number") if isinstance(pr, dict) else pr
-                if isinstance(pr, int):
-                    prs.add(pr)
-            notify.finished(project, facts.goal(ms, lineage), {s: n for s, n in _counts(ms).items() if s in TERMINAL},
-                            sorted(prs), history.units_spend(project, {b.unit for b, _f, _s in ms}),
-                            sum(1 for _b, f, s in ms if f and s == "done" and f[1].get("ledger_row") is False))
+        from .. import statusline
         statusline.touch(project)
-    except Exception as exc:  # noqa: BLE001 - a notice never costs the close
-        log.log("hooks", f"lineage: finish notice {lineage}: {type(exc).__name__}: {exc}")
+    except Exception as exc:  # noqa: BLE001 - the status line never costs the close
+        log.log("hooks", f"lineage: status line after {lineage}: {type(exc).__name__}: {exc}")
 
 
 def _head_close(reads, project, lineage, session, ms):

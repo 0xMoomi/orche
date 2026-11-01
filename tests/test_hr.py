@@ -14,7 +14,7 @@ from pathlib import Path
 from unittest import mock
 
 import support
-from orche import hr, registry, roster, shell, statusline, templates, units
+from orche import hr, notify, registry, roster, shell, statusline, templates, units
 from orche.hr import audit, book, limits, onboarding, refresh
 from orche.paths import PLUGIN_ROOT
 from test_registry import load_cli
@@ -1569,14 +1569,14 @@ class FeatRetireTest(FeatCase):
                 return real(*a, **kw)
             return call
 
-        with mock.patch.object(book, "notify", spy("notify", lambda text, project=None: notes.append(text))), \
+        with mock.patch.object(notify, "ring", spy("ring", lambda project, *, kind: notes.append(kind))), \
                 mock.patch.object(registry, "append_event", spy("event", registry.append_event)), \
                 mock.patch.object(registry, "save", spy("save", registry.save)), \
                 mock.patch.object(book, "log", spy("log", book.log)), \
                 mock.patch.object(statusline, "refresh", wraps=spy("refresh", statusline.refresh)) as refresh:
             self.assertEqual(self.orche("feat", "retire", "acme", "checkout", "--yes")[0], 0)
-        self.assertEqual(notes, ["Feature agent feat-acme-shop-checkout retired"])
-        self.assertEqual(order, ["event", "save", "log", "refresh", "notify"])
+        self.assertEqual(notes, [])                                     # no ring: Main reports the retire
+        self.assertEqual(order, ["event", "save", "log", "refresh"])
         ev = registry.load()["events"][-1]
         self.assertEqual((ev["type"], ev["project"], ev["unit"], ev["by"]), ("retire", "acme-shop", "build/checkout", "user"))
         self.assertIn(f"retire feat-acme-shop-checkout by user (tag {self.tag})", book.log_path().read_text())

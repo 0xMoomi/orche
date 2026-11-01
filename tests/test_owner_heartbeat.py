@@ -1,9 +1,10 @@
 """T10 — the owner's heartbeat (lib/orche/flow/owner.py `heartbeat`, run by `orche reconcile`): an open
-ask is re-notified 30, 60, 120, 240 min after it, then never; quiet hours (a silent first, none inside, one
-at their end); an owner prompt or the filled secrets answer it (Main hears once which unit to resume); the
-10-minute fallback for a Main that did not tag; Main's closing line is Orca's to notify (Orche sends
-none); a held notice or escalation is sent once; repeats; the gap boundary; the `owner:` status line; a dry run writes and sends nothing. A fake clock
-throughout (`now` arguments, backdated mtimes); every osascript argv is recorded, none runs."""
+ask is re-notified 30, 60, 120, 240 min after it, then never; quiet hours (none rings inside, one at their
+end); an owner prompt or the filled secrets answer it (Main hears once which unit to resume); the
+10-minute fallback for a Main that did not tag; Main's closing line is Orca's to notify (Orche rings
+nothing); a held notice or escalation rings once; repeats; the gap boundary; the `owner:` status line; a
+dry run writes and rings nothing. A fake clock throughout (`now` arguments, backdated mtimes); notify.ring
+is a fake that records (project, kind)."""
 import copy
 import datetime as dt
 import io
@@ -14,7 +15,7 @@ from contextlib import redirect_stderr, redirect_stdout
 from unittest import mock
 
 import support
-from orche import inbox, notify, project, reconcile, registry, shell, units, util
+from orche import inbox, notify, project, reconcile, registry, units, util
 from orche.flow import guard, owner
 from orche.secrets import store
 from test_reconcile import T0 as RT0, WAKE, ReconcileCase
@@ -40,32 +41,34 @@ def hm(t):
 
 
 class BeatCase(support.TempHomeCase):
-    """The sample registry, quiet hours off, notifications on macOS, Orca running (the fake runner answers
-    `pgrep` with 0): every osascript argv is recorded."""
+    """The sample registry, quiet hours off, notifications on; every ring is recorded (project, kind) and
+    rings unless `self.ok` is false (no live Main terminal)."""
 
     def setUp(self):
         super().setUp()
         registry.save(copy.deepcopy(SAMPLE))
         self.reg = registry.load()
         self.config()
-        self.calls = []
+        self.rings, self.ok = [], True
 
-        def runner(argv, *, timeout, input, env=None):
-            self.calls.append(list(argv))
-            return shell.Result(0, "", "", list(argv))
-        for obj, name, value in ((shell, "RUNNER", runner), (notify, "PLATFORM", "darwin")):
-            patcher = mock.patch.object(obj, name, value)
-            patcher.start()
-            self.addCleanup(patcher.stop)
+        def ring(project, *, kind):
+            self.rings.append((project, kind))
+            return self.ok
+        patcher = mock.patch.object(notify, "ring", ring)
+        patcher.start()
+        self.addCleanup(patcher.stop)
 
     def config(self, quiet=""):
         (self.home / "config.json").write_text(json.dumps(support.no_wake({"flow": {"quiet_hours": quiet}})))
 
     def notes(self):
-        return [c for c in self.calls if c[0] == "osascript"]
+        return self.rings
 
-    def bodies(self):
-        return [c[-2] for c in self.notes()]
+    def kinds(self):
+        return [k for _p, k in self.rings]
+
+    def notice(self, kind):
+        return json.loads((guard.folder(P) / f"{kind}.json").read_text())["text"]
 
     def beat(self, when, dry_run=False):
         return owner.heartbeat(self.reg, when, dry_run=dry_run, keys={P})
@@ -115,10 +118,10 @@ class RenotifyTest(BeatCase):
         owner.closing(P, "OWNER: pick a plan", now=T0)
         self.assertEqual(self.shown_at([5, 29, 30, 35, 59, 60, 61, 119, 120, 239, 240, 245, 480, 1440, 2880]),
                          [30, 60, 120, 240])
-        self.assertEqual(self.bodies()[0], f"OWNER (asked {hm(T0)}): pick a plan")    # the first was Orca's
+        self.assertEqual(self.notes()[0], (P, "owner"))                     # the first was Orca's; no text
         self.assertEqual((self.sent()["n"], self.sent()["ask_last"]), (5, iso(at(240))))
         self.assertIsNotNone(owner.open_ask(P))                              # the owner: line stays
-        self.assertIn("owner notify project=acme-shop kind=owner n=5 quiet=0\n", self.events())
+        self.assertIn("owner notify project=acme-shop kind=owner n=5\n", self.events())
 
     def test_a_slot_held_by_the_gap_goes_at_the_next_pass(self):
         owner.closing(P, "OWNER: pick a plan", now=T0)
@@ -133,13 +136,11 @@ class RenotifyTest(BeatCase):
 
 
 class FailedShowTest(BeatCase):
-    """A failed show (non-zero exit, the 5 s timeout) is a try: the next waits for the next slot."""
+    """A failed ring (no live Main terminal recorded, a failed write) is a try: the next waits for the
+    next slot."""
 
     def failing(self):
-        def runner(argv, *, timeout, input, env=None):
-            self.calls.append(list(argv))
-            return shell.Result(1, "", "err", list(argv))
-        return mock.patch.object(shell, "RUNNER", runner)
+        return mock.patch.object(self, "ok", False)
 
     def test_an_ask_gets_five_tries_over_the_schedule_not_one_a_pass(self):
         with self.failing():
@@ -157,15 +158,23 @@ class FailedShowTest(BeatCase):
 
 
 class QuietHoursTest(BeatCase):
-    def test_a_silent_first_none_inside_one_at_the_end(self):
+    def test_none_inside_one_at_the_end(self):
+        """Orca's notification has a sound Orche cannot turn off: the parked ask's first ring is held
+        (`reason=quiet`) and goes at the first pass after quiet hours, the slots passed inside folded into it."""
         self.config(quiet="23:00-08:00")
         owner.parked(P, UNIT, "approve the deploy", now=NIGHT)
-        [first] = self.notes()
-        self.assertEqual(first[4:7], [notify.TELL[0], "-e", notify.SCRIPT[1]])  # Orca runs (pgrep 0); no sound
+        self.assertEqual(self.notes(), [])
+        self.assertIn("owner held project=acme-shop kind=guard reason=quiet\n", self.events())
         got = self.shown_at(range(5, 12 * 60 + 1, 5), base=NIGHT)            # every 5 min until 11:10
+        self.assertEqual([hm(at(m, NIGHT)) for m in got], ["08:00"])         # the slots passed fold into one
+        self.assertEqual(self.notes(), [(P, "guard")])
+
+    def test_a_notice_held_by_quiet_hours_rings_after_them(self):
+        self.config(quiet="23:00-08:00")
+        owner.announce(P, "stuck", "Main is closed", NIGHT)
+        got = self.shown_at(range(5, 9 * 60 + 1, 5), base=NIGHT)
         self.assertEqual([hm(at(m, NIGHT)) for m in got], ["08:00"])
-        self.assertIn('sound name "Glass"', self.notes()[-1][6])
-        self.assertEqual(self.bodies()[-1], "OWNER (asked 23:10): approve the deploy")
+        self.assertEqual((self.kinds(), self.notice("stuck")), (["stuck"], "Main is closed"))
 
 
 class AnsweredTest(BeatCase):
@@ -303,13 +312,13 @@ class FallbackTest(BeatCase):
         self.report("question", T0)
         self.assertEqual(self.shown_at([9]), [])
         self.assertEqual([r["target"] for r in self.beat(at(10))], [UNIT])
-        self.assertEqual(self.bodies(), [f"OWNER: {UNIT}: question"])
+        self.assertEqual(self.kinds(), ["fallback"])
         self.assertEqual(self.ask(), {"text": f"{UNIT}: question", "at": iso(at(10)), "kind": "fallback",
                                       "source": "heartbeat", "unit": UNIT})
         self.assertEqual(self.shown_at([15, 20, 25]), [])                        # once per cause
         self.report("blocked", at(26), unit=OTHER)                                # a new cause
         self.assertEqual(self.shown_at([30, 35, 36]), [36])
-        self.assertEqual(self.bodies()[-1], f"OWNER: {OTHER}: blocked")
+        self.assertEqual((self.kinds()[-1], self.ask()["text"]), ("fallback", f"{OTHER}: blocked"))
 
     def test_not_when_main_tagged_a_turn_since_or_the_owner_spoke(self):
         self.report("blocked", T0)
@@ -351,11 +360,11 @@ class FallbackTest(BeatCase):
     def test_a_failed_report_or_a_lineage_close_is_one_notice_not_an_ask(self):
         self.report("failed", T0)
         self.assertEqual(self.shown_at([10, 15, 40, 70, 130]), [10])
-        self.assertEqual((self.bodies(), self.ask()), ([f"{UNIT}: failed"], None))
+        self.assertEqual((self.kinds(), self.notice("fallback"), self.ask()), (["fallback"], f"{UNIT}: failed", None))
         self.report("done", at(100), unit="acme-shop-lin-20261020-3", frm="orche",
                     lineage="acme-shop-lin-20261020-3", lineage_closed=True)
         self.assertEqual(self.shown_at([105, 110, 140]), [110])
-        self.assertEqual(self.bodies()[-1], "acme-shop-lin-20261020-3: lineage closed")
+        self.assertEqual(self.notice("fallback"), "acme-shop-lin-20261020-3: lineage closed")
 
     def test_a_report_its_batch_holds_is_never_a_fallback_cause(self):
         lin = "acme-shop-lin-20261020-3"
@@ -364,7 +373,7 @@ class FallbackTest(BeatCase):
         inbox.drain([p for p, _x in inbox.pending(MAIN)])                        # drained by the close's wake
         self.report("done", at(40), unit=lin, frm="orche", lineage=lin, lineage_closed=True)
         self.assertEqual(self.shown_at([41, 45, 50, 55]), [50])                   # the close is the cause
-        self.assertEqual(self.bodies(), [f"{lin}: lineage closed"])
+        self.assertEqual((self.kinds(), self.notice("fallback")), (["fallback"], f"{lin}: lineage closed"))
 
 
 class HeldTest(BeatCase):
@@ -372,9 +381,9 @@ class HeldTest(BeatCase):
         owner.parked(P, UNIT, "not started: pick a plan", now=T0)
         owner.close(P, at(1))
         owner.announce(P, "stuck", "Main is closed", at(2))                       # inside the 300 s gap
-        self.assertEqual(self.bodies(), ["OWNER: not started: pick a plan"])
+        self.assertEqual(self.kinds(), ["guard"])
         self.assertEqual(self.shown_at([4, 5, 10, 35, 65, 125, 245]), [5])
-        self.assertEqual(self.bodies()[-1], "Main is closed")
+        self.assertEqual((self.kinds()[-1], self.notice("stuck")), ("stuck", "Main is closed"))
         stuck = json.loads((guard.folder(P) / "stuck.json").read_text())
         self.assertEqual((stuck["at"], self.sent()["shown"]), (iso(at(2)), {"stuck": stuck["id"]}))
 
@@ -405,7 +414,7 @@ class HeldTest(BeatCase):
         reconcile._tell_owner(P, "Main has 3 report(s) unread", T0)
         self.assertEqual(len(self.notes()), 1)
         self.assertEqual(self.shown_at([4, 5, 10]), [5])
-        self.assertEqual(self.bodies()[-1], "Main has 3 report(s) unread")
+        self.assertEqual((self.kinds()[-1], self.notice("stuck")), ("stuck", "Main has 3 report(s) unread"))
         self.assertIn("owner notify project=acme-shop kind=stuck n=1", self.events())
 
 
@@ -432,7 +441,7 @@ class BoundaryTest(BeatCase):
     def test_gap_299_s_holds_301_s_shows(self):
         for s, text in ((0, "a"), (299, "b"), (301, "c")):
             owner.parked(P, UNIT, text, now=T0 + dt.timedelta(seconds=s))
-        self.assertEqual(self.bodies(), ["OWNER: a", "OWNER: c"])
+        self.assertEqual((self.kinds(), self.ask()["text"]), (["guard", "guard"], "c"))   # b held by the gap
 
 
 class OwnerLineTest(BeatCase):
@@ -478,11 +487,11 @@ class DryRunTest(BeatCase):
         self.report("question", at(-4), owner="secret GH_TOKEN")
         owner.closing(P, "OWNER: pick a plan", now=T0)
         self.request("GH_TOKEN", "filled", filled=at(20))
-        before, calls = self.snapshot(), len(self.calls)
+        before = self.snapshot()
         rows = self.beat(at(30), dry_run=True)
         self.assertEqual([r["action"] for r in rows], ["resume", "notify"])
         self.assertTrue(all(r["line"].startswith("would ") for r in rows), rows)
-        self.assertEqual((self.snapshot(), len(self.calls)), (before, calls))
+        self.assertEqual((self.snapshot(), self.notes()), (before, []))
         self.assertEqual([r["line"] for r in self.beat(at(30))],
                          [f"tell main-{P}: secret GH_TOKEN filled — resume {UNIT}",
                           f"re-notify the owner: {P} ask from {hm(T0)} (1/4)"])
@@ -499,16 +508,12 @@ class DryRunTest(BeatCase):
 class PassTest(ReconcileCase):
     def test_the_pass_runs_the_owner_step_and_logs_it(self):
         (self.home / "config.json").write_text(json.dumps({**WAKE, "flow": {"quiet_hours": ""}}))
-        calls = []
-
-        def run(argv, *, timeout, input, env=None):
-            calls.append(list(argv))
-            return shell.Result(0 if argv[0] == "osascript" else 113, "", "", list(argv))
-        with mock.patch.object(notify, "PLATFORM", "darwin"), mock.patch.object(shell, "RUNNER", run):
+        rings = []
+        with mock.patch.object(notify, "ring", lambda project, *, kind: rings.append((project, kind)) or True):
             owner.closing(P, "OWNER: pick a plan", now=RT0)
             dry = self.run_at(30, dry_run=True)[1]
             live = self.run_at(30)[1]
         self.assertIn(f"would re-notify the owner: {P} ask from {hm(RT0)} (1/4)", dry)
         self.assertIn(f"re-notify the owner: {P} ask from {hm(RT0)} (1/4)", live)
-        self.assertEqual(len([c for c in calls if c[0] == "osascript"]), 1)
+        self.assertEqual(rings, [(P, "owner")])
         self.assertIn(f"reconcile action=notify project={P} target=owner rev=- attempt=1/4", "\n".join(self.events()))

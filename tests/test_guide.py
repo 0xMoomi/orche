@@ -164,8 +164,8 @@ class GuideTest(support.TempHomeCase):
             "approved PR; lands it by itself when that passes); this project: waiting; no check script on main and "
             "no PR.",
             '- Jev: off; say "turn on Jev" (listed below).',
-            "- Notifications: Orca shows one when Main finishes a reply; Orche reminds you after 30 minutes when a "
-            "decision still waits."])
+            "- Notifications: Orca shows one when Main finishes a reply; Orche rings Main's tab when a decision still "
+            "waits after 30 minutes (Orca shows it when its Terminal Bell notifications are on)."])
         self.cfg["queue"]["land"] = "owner"
         self.assertIn('lands it when you say "merge"', guide.running_lines(self.reg, "acme", root, self.cfg)[2])
         for ln in lines:

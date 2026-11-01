@@ -3,6 +3,43 @@
 All notable changes to Orche are listed here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow semantic versioning.
 
+## 0.19.8 — 2026-11-01
+
+### Fixed
+
+- Orche's notifications are Orca's own: Orca's icon, and a click focuses the project's Main tab. Every reminder
+  used to arrive as Script Editor's notification (a white scroll icon), and a click opened Script Editor:
+  macOS credits a notification to the app that posts it, and `osascript` posted each one itself, inside a
+  `tell application id "com.stablyai.orca"` too. Orca has no command that posts a notification with custom
+  text, so Orche now rings Main's tab: it writes one bell character to the terminal of the project's Main pane,
+  and Orca shows its own notification for it (`Bell in <workspace>`, `<repo> · Attention requested`). Main's own
+  hooks record which terminal that is (`inbox/<main-p>/.pane`), and Orche writes only to that terminal while the
+  same `claude` still has it.
+
+### Changed
+
+- Orca shows a ring only while its Terminal Bell notifications are on (Settings > Notifications > Terminal Bell;
+  Orca's onboarding turns them on). `orche doctor` has a `notifications` row that reads Orca's setting and says
+  when they are off.
+- A ring carries no text. The ask's text and every notice stay where Orche records them: the `owner:` status
+  line, `orche status` and Main's inbox. The setup report's Notifications line says so.
+- Nothing rings inside `flow.quiet_hours`, since Orca's notification has a sound Orche cannot turn off: a ring
+  due then goes at the first heartbeat pass after them (events `owner held … reason=quiet`). Before, the first
+  notification inside them was shown silently.
+- `orche secret request` rings Main's tab only when no dialog shows the request (`--no-dialog` while no
+  dialog runs): the dialog is the request's alert.
+
+### Removed
+
+- The notice at a lineage's close (`<project>: finished`, what finished and what it cost): the close wakes Main,
+  whose report Orca shows.
+- HR's notifications (a feature agent created or retired, freeze, unfreeze, scale, a project gone public): HR's
+  lines stay in hr-log.md, and Main reports what it ran.
+- The Keymaster's notifications (a request, a value stored or refused) and the osascript line a dry run of
+  `orche secret request` planned.
+- The osascript notification path (`notify.send`, its script and tell lines, the Orca probe, the macOS-only
+  gate) and `runs.history.units_spend`, which only the lineage notice used.
+
 ## 0.19.7 — 2026-11-01
 
 ### Added

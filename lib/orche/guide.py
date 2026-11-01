@@ -238,8 +238,8 @@ def running_lines(reg, key, root, cfg, gate=None) -> list:
             f"that script on each approved PR; {lands}); this project: {state}.",
             "- Jev: " + ("on: sorts incoming requests and checks gates before Main spends tokens." if jev_on
                          else 'off; say "turn on Jev" (listed below).'),
-            "- Notifications: Orca shows one when Main finishes a reply; Orche reminds you after 30 minutes when a "
-            "decision still waits."]
+            "- Notifications: Orca shows one when Main finishes a reply; Orche rings Main's tab when a decision still "
+            "waits after 30 minutes (Orca shows it when its Terminal Bell notifications are on)."]
 
 
 def _team_lines(key, root, detected) -> list:

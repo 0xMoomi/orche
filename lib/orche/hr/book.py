@@ -1,10 +1,11 @@
-"""The HR record: refusals, the record of one transition, the HR log, notifications, standing orders."""
+"""The HR record: refusals, the record of one transition, the HR log, standing orders. HR sends no
+notification: its lines stay in hr-log.md, and Main reports what it ran."""
 import copy
 import re
 import sys
 from pathlib import Path
 
-from .. import cli, mask, notify as notice, paths, registry, roster, statusline, templates, util
+from .. import cli, mask, paths, registry, roster, statusline, templates, util
 
 _ORDER = re.compile(r"^(\d+)\.\s")
 
@@ -33,12 +34,6 @@ def log(text: str) -> None:
         fh.write(f"- {util.now_iso()} {text}\n")
 
 
-def notify(text: str, project=None) -> None:
-    """A macOS notification titled Orche (notify.send: masked, an argument to a fixed script; no-op
-    when config `notify` is off or not on macOS); a `project` key makes a click open its Main tab."""
-    notice.send("Orche", text, kind="hr", project=project)
-
-
 def write(reg, change) -> None:
     """Apply `change(r)` to `reg` (the caller's copy) and to a fresh registry under registry.lock,
     which is saved (registry.update): a concurrent writer's changes are kept. `change` finds what it
@@ -57,12 +52,11 @@ def entry_in(reg, unit) -> dict:
                 if all(f.get(k) == unit.entry.get(k) for k in ("name", "created", "worktree")))
 
 
-def record(reg, line, *, change=None, event=None, project=None, note=None) -> None:
+def record(reg, line, *, change=None, event=None, project=None) -> None:
     """The HR record of one transition, in this order: `change` and `event` (registry.append_event
     fields, in the order they are stored: type, project, unit, by[, batch]) -> save (both through
-    `write`) -> HR-log `line` -> the status line of `project` (default: the event's; none for "*") ->
-    notification `note`. Neither `change` nor `event`: a line without a registry change (a re-run of
-    init that adds nothing)."""
+    `write`) -> HR-log `line` -> the status line of `project` (default: the event's; none for "*").
+    Neither `change` nor `event`: a line without a registry change (a re-run of init that adds nothing)."""
     if change is not None or event is not None:
         stored = []
 
@@ -80,8 +74,6 @@ def record(reg, line, *, change=None, event=None, project=None, note=None) -> No
     key = project or (event or {}).get("project")
     if key and key != "*":
         statusline.refresh(reg, key)
-    if note:
-        notify(note, key if key and key != "*" else None)
 
 
 def next_order(text: str) -> int:

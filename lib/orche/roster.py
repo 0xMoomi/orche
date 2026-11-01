@@ -35,24 +35,31 @@ def outside(session):
 
 
 def note_pane(who, env=None) -> None:
-    """Record, for a hook (SessionStart, the prompt hook), whether a project's Main runs Orche's own pane
-    command. Main identified without ORCHE_SESSION (the transcript rule: Orca relaunched a plain `claude`
-    in Main's tab, so the pane lacks Orche's env and flags): write the OUTSIDE marker in Main's inbox
-    folder, once (an existing one is kept as it is). Main's own Orche pane (ORCHE_SESSION names it, and
-    no headless run's ORCHE_RUNNER): remove it. The heartbeat reopens a marked Main (reconcile, class
+    """Record, for a hook (SessionStart, the prompt hook), where a project's Main runs. Main's terminal
+    (notify.terminal: from the hook's parent up to the first process with a controlling terminal, Main's
+    `claude`) goes to notify.PANE in Main's inbox folder, {pid, tty, at}, for the bell (notify.ring): inside
+    and outside Orche's pane command alike (an outside Main sits in the same Orca tab), never for a headless
+    run (ORCHE_RUNNER). Main identified without ORCHE_SESSION (the transcript rule: Orca relaunched a plain
+    `claude` in Main's tab, so the pane lacks Orche's env and flags): write the OUTSIDE marker in Main's
+    inbox folder, once (an existing one is kept as it is). Main's own Orche pane (ORCHE_SESSION names it,
+    and no headless run's ORCHE_RUNNER): remove it. The heartbeat reopens a marked Main (reconcile, class
     `outside`). Never raises."""
     m = who.member
     if m is None or m.kind != "main":
         return
     env = os.environ if env is None else env
     try:
-        from . import inbox, util
-        path = inbox.box(m.session) / OUTSIDE
+        from . import inbox, notify, util
+        folder = inbox.box(m.session)
+        path = folder / OUTSIDE
         if env_session(env) is None:
             if not path.exists():
                 util.write_json(path, {"at": units.now().isoformat(timespec="seconds")})
         elif env_session(env) == m.session and not env.get("ORCHE_RUNNER"):
             path.unlink(missing_ok=True)
+        pane = None if env.get("ORCHE_RUNNER") else notify.terminal()
+        if pane is not None:
+            util.write_json(folder / notify.PANE, pane)
     except Exception as exc:  # noqa: BLE001 - a hook never fails on it
         from . import log
         log.log("hooks", f"roster: {m.session} pane marker: {type(exc).__name__}: {exc}")

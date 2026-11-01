@@ -211,7 +211,7 @@ def set_stage(reg, key, stage, *, wake_ops=True, dry_run=False) -> tuple:
     wake or sleep becomes a note and the stage change is kept.
 
     public:   stage -> `stage` event -> wake `ops` (unless wake_ops=False; an AwakeLimit refusal is
-              also a warning) -> the ops checklist -> notification.
+              also a warning) -> the ops checklist.
     building: stage -> `stage` event -> sleep an active `ops` (HANDOFF.md must be fresh; a refusal
               is a warning).
     """
@@ -229,8 +229,6 @@ def set_stage(reg, key, stage, *, wake_ops=True, dry_run=False) -> tuple:
                 proj["stage"] = "public"   # local copy only: lets the dry-run show the ops wake
             woke, note = _wake_ops(reg, proj, dry_run=dry_run)
             notes.append(note)
-        if changed and not dry_run:
-            book.notify(f"{key} is public" + (" — ops woken" if woke else ""), key)
     else:
         note = _sleep_ops(reg, proj, dry_run=dry_run)
         if note:

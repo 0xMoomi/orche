@@ -5,7 +5,7 @@ new:    session `feat-<proj>-<name>` free registry-wide (hr.session_owner; else 
         frozen? -> limits (hr/limits.py; the global cap freezes) -> scope overlap (warn, or exit 3
         with --strict; every division's workers) -> awake limit -> dormant head woken -> child worktree
         of the head's worktree -> unit files,
-        settings, persona -> pane -> registry entry + `create` event -> notify, hr-log,
+        settings, persona -> pane -> registry entry + `create` event -> hr-log,
         status line, Orca unread dot. A provisional `onboarding` entry is saved as soon as the
         worktree exists; re-running `feat new` resumes it without a second worktree.
 wake: the `orche wake` flow (hr.wake through hr.run_verb); a feature agent sleeps with

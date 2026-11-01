@@ -1,5 +1,7 @@
-"""The owner's voice: Orca's own notification covers Main's closing line; Orche notifies
-only what Orca cannot know (the ask's reminders, a parked guard refusal, notices Main never wrote).
+"""The owner's voice: Orca's own notification covers Main's closing line; Orche rings Main's tab
+(notify.ring, the bell) only for what Orca cannot know (the ask's reminders, a parked guard refusal, notices
+Main never wrote). A ring carries no text: the text stays in ask.json and the notice records, which the
+status line and Main's inbox show.
 
 Main's Stop hook (dispatch.handle_stop, also under stop_hook_active) reads the closing line — the last
 non-empty line outside fenced blocks of the final message (parse; a quote, a bullet, backticks or bold
@@ -7,28 +9,30 @@ around the tag, a space before the colon and a full-width colon are tolerated, t
 case) — and acts on its tag (closing): every tag stamps `flow/<p>/tagged` with the turn's start (the
 prompt hook's turn record; the fallback reads it);
 `OWNER: <the decision or step>` records the project's ask (`flow/<p>/ask.json`, replacing an open one);
-`DONE: <the result>` closes an open ask and records the `done` notice; neither sends a notification:
-Orca shows its own when Main's turn ends, so the first one counts as shown by Orca (_orca: events
-`owner recorded … by=orca`) and the ask's reminders still run from the ask. `RUNNING: …` records nothing. The open ask's own text again, or the last DONE again with no ask since, is a repeat: nothing
-is recorded or sent (the schedule runs on from the first). An untagged line logs `owner untagged`. A
+`DONE: <the result>` closes an open ask and records the `done` notice; neither rings: Orca shows its own
+notification when Main's turn ends, so the first one counts as shown by Orca (_orca: events
+`owner recorded … by=orca`) and the ask's reminders still run from the ask. `RUNNING: …` records nothing.
+The open ask's own text again, or the last DONE again with no ask since, is a repeat: nothing is recorded
+or rung (the schedule runs on from the first). An untagged line logs `owner untagged`. A
 unit's `OWNER:` line (the runner: the last one outside fences, job.owner_of; a pane unit: `orche report
 --owner`) is the pointer field `owner` (step_of, step). A guard refusal the runner parks as a quiet
 pointer records an ask itself (parked).
 
 ask.json {text, at, kind: owner|secret|guard|fallback, source: main|runner|heartbeat[, unit]
-[, closed_at | answered_at]}: text masked, one line, at most ASK_MAX characters; every write under
-`flow/<p>/.notify.lock`, in sequence with a notification, never nested. Answered (answer): the owner
+[, closed_at | answered_at]}: text masked, one line, at most ASK_MAX characters (clean); every write under
+`flow/<p>/.notify.lock`, in sequence with a ring, never nested. Answered (answer): the owner
 prompted Main after the ask (owner-seen; the prompt hook calls answer at once, the heartbeat again),
 or every secret a `secret …` ask names is in — none pending, one filled since FILL_SLACK_S before the
 ask (a fill during Main's own turn counts; secrets.dialog calls secret_filled).
 
-Notifications (notify): at most one per project per NOTIFY_GAP_S; no sound inside flow.quiet_hours; a
-failed show is a try (_note). notified.json {at, kind, n, ask_at, ask_last, shown, tried} under the
-lock: the last one Orche showed (at, kind: the gap), the tries for the ask made at ask_at (n; the last
-at ask_last), per notice kind the id of the last notice shown (by Orche or Orca), and a notice's failed
-tries (its next waits for the next RENOTIFY_S slot). A notice (a DONE, a `stuck` escalation, a fallback
-notice) is recorded in `flow/<p>/<kind>.json` {text, at, id} (one writer each) before it is tried: one
-held back is the heartbeat's to send once.
+Notifications (notify: a ring of Main's tab): at most one per project per NOTIFY_GAP_S; none inside
+flow.quiet_hours (Orca's notification has a sound Orche cannot turn off): one due then is held and goes at
+the first pass after them; a failed ring (no live Main terminal) is a try (_note). notified.json {at,
+kind, n, ask_at, ask_last, shown, tried} under the lock: the last one Orche showed (at, kind: the gap),
+the tries for the ask made at ask_at (n; the last at ask_last), per notice kind the id of the last notice
+shown (by Orche or Orca), and a notice's failed tries (its next waits for the next RENOTIFY_S slot). A
+notice (a DONE, a `stuck` escalation, a fallback notice) is recorded in `flow/<p>/<kind>.json` {text, at,
+id} (one writer each) before it rings: one held back is the heartbeat's to ring once.
 
 The heartbeat (heartbeat, from `orche reconcile`; a dry run writes and sends nothing) per project:
 marks an answered ask; tells Main about each unit a secret filled in the last day still resumes
@@ -36,8 +40,9 @@ marks an answered ask; tells Main about each unit a secret filled in the last da
 unless the project is paused or notifications are off, at most one of: the 10-minute fallback
 (fallback, R26), a held notice (dropped once the owner prompted Main after it, or after a day), the
 ask's next notification (due: the first at once unless Orca showed it, then RENOTIFY_S after the ask:
-30, 60, 120, 240 min; none inside quiet hours and one at the first pass after them, a slot passed unsent folded into the
-next one shown; then none, the `owner:` line stays). Events carry ids, kinds and counts, never text.
+30, 60, 120, 240 min; none inside quiet hours and one at the first pass after them, a slot passed unsent
+folded into the next one shown; then none, the `owner:` line stays). Events carry ids, kinds and counts,
+never text.
 """
 import contextlib
 import datetime as _dt
@@ -46,8 +51,9 @@ import json
 import os
 import re
 import time
+import unicodedata
 
-from .. import config, log, notify as notice, paths, units, util
+from .. import config, log, mask, notify as notice, paths, units, util
 from . import guard
 
 ASK, SENT, NOTIFY_LOCK, TAGGED, RESUMED = "ask.json", "notified.json", ".notify.lock", "tagged", "secret-filled"
@@ -106,9 +112,15 @@ def parse(text):
     return None
 
 
+def clean(text) -> str:
+    """`text` masked, control characters dropped, whitespace runs made one space: one line."""
+    safe = mask.redact(str(text or ""))[0]
+    return " ".join("".join(" " if unicodedata.category(ch) == "Cc" else ch for ch in safe).split())
+
+
 def one_line(text, limit) -> str:
     """Masked, one line, at most `limit` characters (… when cut)."""
-    flat = notice.clean(text)
+    flat = clean(text)
     return flat if len(flat) <= limit else flat[:limit - 1].rstrip() + "…"
 
 
@@ -354,49 +366,51 @@ def _orca(project, kind, now, ask_at=None, notice_id=None) -> None:
     log.log("events", f"owner recorded project={project} kind={kind} by=orca")
 
 
-def _show(project, sent, body, kind, now, ask_at=None, notice_id=None) -> bool:
-    """Under the lock: show one notification, then write notified.json (_note: a failed show is a try too).
-    False when osascript failed (or timed out)."""
-    quiet = _quiet(now)
-    ok = notice.send(f"Orche {project}", body, sound=not quiet, kind=kind, project=project)
+def _show(project, sent, kind, now, ask_at=None, notice_id=None) -> bool:
+    """Under the lock: ring Main's tab (notify.ring), then write notified.json (_note: a failed ring is a try
+    too). False when it did not ring (no live Main terminal recorded, the write failed)."""
+    ok = notice.ring(project, kind=kind)
     n = _note(project, sent, kind, now, ask_at, notice_id, "shown" if ok else "failed")
     if ok:
-        log.log("events", f"owner notify project={project} kind={kind} n={n} quiet={int(quiet)}")
+        log.log("events", f"owner notify project={project} kind={kind} n={n}")
     return ok
 
 
-def notify(project, body, kind, now=None, *, ask_at=None, notice_id=None) -> bool:
-    """One owner notification for `project` (title `Orche <project>`). Held (`owner held`, the next pass
-    tries again): notifications off, the lock busy, the project's last one younger than NOTIFY_GAP_S.
-    osascript failing is a try (`owner held … reason=failed`; the next waits for its slot). notified.json:
-    `ask_at` (an ask's) moves that ask's counters, `notice_id` (a notice's) marks it. True when shown."""
+def notify(project, kind, now=None, *, ask_at=None, notice_id=None) -> bool:
+    """One owner notification for `project`: a ring of Main's tab. Held (`owner held`, a later pass tries
+    again): notifications off, quiet hours (flow.quiet_hours), the lock busy, the project's last one
+    younger than NOTIFY_GAP_S. A failed ring is a try (`owner held … reason=failed`; the next waits for
+    its slot). notified.json: `ask_at` (an ask's) moves that ask's counters, `notice_id` (a notice's)
+    marks it. True when rung."""
     now = now or units.now()
     if not notice.enabled():
         return _held(project, kind, "off")
+    if _quiet(now):
+        return _held(project, kind, "quiet")
     with _locked(_path(project, NOTIFY_LOCK)) as held:
         if not held:
             return _held(project, kind, "lock")
         sent = _sent(project)
         if _gap(sent, now):
             return _held(project, kind, "gap")
-        if _show(project, sent, body, kind, now, ask_at, notice_id):
+        if _show(project, sent, kind, now, ask_at, notice_id):
             return True
     return _held(project, kind, "failed")
 
 
 def _notice(project, kind, body, now) -> dict:
     """Record a one-off notice of `kind` (NOTICES) in `flow/<p>/<kind>.json` {text, at, id}; returns it."""
-    rec = {"text": notice.clean(body), "at": _iso(now), "id": os.urandom(6).hex()}
+    rec = {"text": clean(body), "at": _iso(now), "id": os.urandom(6).hex()}
     util.write_json(_path(project, f"{kind}.json"), rec)
     return rec
 
 
 def announce(project, kind, body, now=None) -> bool:
-    """A one-off notice of `kind` (NOTICES): recorded (_notice) before it is tried, so one held back is
-    the heartbeat's to send once (_flush). True when shown."""
+    """A one-off notice of `kind` (NOTICES): recorded (_notice) before it rings, so one held back is the
+    heartbeat's to ring once (_flush). True when rung."""
     now = now or units.now()
     rec = _notice(project, kind, body, now)
-    return notify(project, rec["text"], kind, now, notice_id=rec["id"])
+    return notify(project, kind, now, notice_id=rec["id"])
 
 
 def usage_notice(project, vendor, hhmm, n, now=None) -> bool:
@@ -412,7 +426,7 @@ def _repeat_done(project, text) -> bool:
     """The same DONE as the last one, with no ask recorded after it."""
     last = util.read_dict(_path(project, "done.json")) or {}
     at = units.parse_iso(last.get("at"))
-    if at is None or last.get("text") != notice.clean(text):
+    if at is None or last.get("text") != clean(text):
         return False
     asked = units.parse_iso((read_ask(project) or {}).get("at"))
     return asked is None or asked <= at
@@ -450,11 +464,11 @@ def closing(project, text, now=None, turn_at=None):
 
 def parked(project, unit, text, now=None) -> None:
     """A guard refusal parked as a quiet pointer (the runner's refused start): it records the ask and
-    notifies — no presence check, the pointer is not on Main's screen. Never raises."""
+    rings Main's tab with no presence check: the pointer is not on Main's screen. Never raises."""
     try:
         now = now or units.now()
         a = record(project, text, kind="guard", source="runner", unit=unit, now=now)
-        notify(project, f"OWNER: {a['text']}", "guard", now, ask_at=a["at"])
+        notify(project, "guard", now, ask_at=a["at"])
     except Exception as exc:  # noqa: BLE001 - the pointer is filed; the ask is best-effort
         log.log("hooks", f"owner: parked ask for {project}: {type(exc).__name__}")
 
@@ -637,15 +651,15 @@ def _resumes(p, now, dry_run) -> list:
 def _fallback(p, cause, now, dry_run) -> dict:
     """A report that asks (blocked, question, an owner step) becomes the ask, re-notified until
     answered; a failed report or a close pointer is one fallback notice. The row is `held`, not `notify`,
-    when the notification was not shown (the gap, the lock, osascript): a later pass sends it."""
+    when it did not ring (the gap, quiet hours, the lock, no live Main terminal): a later pass rings."""
     ptr, text = cause
     unit, step_ = str(ptr["unit"]), ptr.get("owner")
     if dry_run:
-        shown = not _gap(_sent(p), now)
+        shown = not _gap(_sent(p), now) and not _quiet(now)
     elif step_ or ptr.get("status") in ASKING:
         a = record(p, text, kind="secret" if step_ and kind_of(step_) == "secret" else "fallback",
                    source="heartbeat", unit=unit, now=now)
-        shown = notify(p, f"OWNER: {a['text']}", a["kind"], now, ask_at=a["at"])
+        shown = notify(p, a["kind"], now, ask_at=a["at"])
     else:
         shown = announce(p, "fallback", text, now)
     what = f"{unit} waits in main-{p} (fallback: Main did not tag it"
@@ -655,8 +669,8 @@ def _fallback(p, cause, now, dry_run) -> dict:
 
 def _flush(p, now, dry_run):
     """The oldest notice not yet shown whose try is due: dropped (marked shown, unsent) once the owner
-    prompted Main after it or when a day old; else sent once the gap has passed. A failed try waits for the next RENOTIFY_S slot after the
-    notice (at most 5 tries; the day's end drops it)."""
+    prompted Main after it or when a day old; else rung once the gap has passed, outside quiet hours. A
+    failed try waits for the next RENOTIFY_S slot after the notice (at most 5 tries; the day's end drops it)."""
     with (contextlib.nullcontext(True) if dry_run else _locked(_path(p, NOTIFY_LOCK))) as ok:
         if not ok:
             return None
@@ -678,27 +692,26 @@ def _flush(p, now, dry_run):
         if not waiting:
             return None
         at, kind, rec = min(waiting, key=lambda w: w[0])
-        if _gap(sent, now):
+        if _gap(sent, now) or _quiet(now):
             return None
         row = _row(p, kind, f"notify the owner: the held {kind} notice from {units.hhmm(at)}", dry_run)
-        if dry_run or _show(p, sent, str(rec.get("text") or ""), kind, now, notice_id=rec.get("id")):
+        if dry_run or _show(p, sent, kind, now, notice_id=rec.get("id")):
             return row
     return None
 
 
 def _next(p, a, now, dry_run):
-    """The ask's next try when due: the first (held back, or none when Orca showed it), then each
-    re-notification outside quiet hours; the gap first."""
+    """The ask's next try when due, outside quiet hours and after the gap: the first (held back, or none
+    when Orca showed it), then each re-notification."""
     sent = _sent(p)
     n, at = due(a, sent)
-    if at is None or at > now or (n and _quiet(now)) or _gap(sent, now):
+    if at is None or at > now or _quiet(now) or _gap(sent, now):
         return None
     asked = units.hhmm(units.parse_iso(a["at"]))
-    body = f"OWNER (asked {asked}): {a['text']}" if n else f"OWNER: {a['text']}"
     row = (_row(p, "owner", f"re-notify the owner: {p} ask from {asked} ({n}/{len(RENOTIFY_S)})", dry_run,
                 attempt=n, cap=len(RENOTIFY_S)) if n
            else _row(p, "owner", f"notify the owner: {p} ask from {asked} (held back until now)", dry_run))
-    if dry_run or notify(p, body, a["kind"], now, ask_at=a["at"]):
+    if dry_run or notify(p, a["kind"], now, ask_at=a["at"]):
         return row
     return None
 
@@ -736,7 +749,7 @@ def heartbeat(reg, now, dry_run=False, keys=None) -> list:
 def status(project, now=None):
     """The open ask for `orche status`: {text (≤ LINE_MAX), at, since, minutes, kind, source, unit,
     notified, next (HH:MM; None when none is left or notifications are off), quiet (the next one waits
-    for quiet hours to end)}, or None."""
+    for quiet hours to end: none rings inside them)}, or None."""
     now = now or units.now()
     a = open_ask(project)
     asked = units.parse_iso((a or {}).get("at"))
@@ -748,7 +761,7 @@ def status(project, now=None):
     if at is not None and notice.enabled():
         last = units.parse_iso(sent.get("at"))
         at = max([at, now] + ([last + _dt.timedelta(seconds=NOTIFY_GAP_S)] if last else []))
-        quiet = bool(n) and _quiet(at)
+        quiet = _quiet(at)
     else:
         at = None
     return {"text": one_line(a.get("text"), LINE_MAX), "at": a.get("at"), "since": units.hhmm(asked),

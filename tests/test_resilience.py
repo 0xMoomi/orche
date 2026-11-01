@@ -821,7 +821,7 @@ class ReconcileTest(SweepCase):
                                                      "signal.signal(signal.SIGTERM, signal.SIG_IGN); time.sleep(60)")),
                               needle="SIG_IGN")
         self.put_lock(unit, self.dead_pid(), run_id=run)
-        took, res = self.timed_hook(self.fake_ps('sleep 0.8\nexec /bin/ps "$@"'))
+        took, res = self.timed_hook(self.fake_ps(f'sleep 0.8\nexec "{support.no_claude_dir()}/ps" "$@"'))
         self.assertLess(took, 3.0)
         self.assertEqual(res.returncode, 0, res.stderr)
         self.assertIn(f"  summary: runner died: {unit} (pid ", res.stdout)

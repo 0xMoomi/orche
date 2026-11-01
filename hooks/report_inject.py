@@ -6,8 +6,8 @@ division and print `{"decision": "block", ...}` so Main spends no turn; otherwis
 Main and the inbox text (plus any triage note) is printed and injected, within inbox.BUDGET characters
 (Claude Code caps hook stdout at 10,000). The CEO Staff (ORCHE_SESSION `staff`) gets no triage and no
 inbox: only the exchanges between the owner and every Main since its last prompt (lib/orche/staff.py),
-within the same budget. A Main identified without ORCHE_SESSION is marked for the heartbeat, and Main's
-own pane clears the mark (roster.note_pane). Fail-open.
+within the same budget. A Main's terminal is recorded for the bell; a Main identified without
+ORCHE_SESSION is marked for the heartbeat, and Main's own pane clears the mark (roster.note_pane). Fail-open.
 """
 import json
 import os
@@ -68,7 +68,7 @@ def main():
         from orche import inbox, registry, roster, triage
         r = roster.Roster(registry.load())
         who = r.identify(payload.get("cwd") or os.getcwd(), transcript=payload.get("transcript_path"))
-        roster.note_pane(who)   # a Main outside Orche's pane command is marked for the heartbeat
+        roster.note_pane(who)   # Main's terminal for the bell; a Main outside Orche's pane command is marked
         from orche import staff
         if staff.is_staff(who.session):
             text = staff.prompt_text(r.reg, inbox.BUDGET)

@@ -282,19 +282,23 @@ The one waking pointer from `orche` to a session when every unit it waits on in 
 _Avoid_: lineage done, final report.
 
 **Closing line**:
-The last non-empty line outside fences of Main's reply: `RUNNING: …`, `OWNER: …` or `DONE: …`. `OWNER` records the ask and `DONE` closes it (`flow.owner`); Orca's own notification covers the reply, and Orche reminds the owner of an ask still open after 30 minutes.
+The last non-empty line outside fences of Main's reply: `RUNNING: …`, `OWNER: …` or `DONE: …`. `OWNER` records the ask and `DONE` closes it (`flow.owner`); Orca's own notification covers the reply, and Orche rings Main's tab (the bell) for an ask still open after 30 minutes.
 _Avoid_: last line, sign-off, footer.
 
 **Ask**:
 The project's one open owner-facing item, `flow/<p>/ask.json`: written by Main's `OWNER:` closing line, a refused run start (a guard) or a fallback notification, replaced by the next ask, closed by `DONE:`, answered by the owner's next prompt in Main or by the secrets it names being filled.
 _Avoid_: question, ticket, escalation.
 
+**Bell**:
+Orche's one notification path (`notify.ring`): one BEL byte written to the terminal of a project's Main pane, which Main's own hooks record (`inbox/<main-p>/.pane`); Orca shows it as its own notification (`Bell in <workspace>`) while its Terminal Bell notifications are on. It carries no text: that stays in the ask and the notice records.
+_Avoid_: alert, macOS notification, osascript notification.
+
 **Re-notification**:
-The heartbeat's repeat of an open ask's notification, 30, 60, 120 and 240 min after the ask, then never; none inside `flow.quiet_hours`, one at their end. The `owner:` status line stays until the ask is answered or closed.
+The heartbeat's repeat of an open ask's notification (a ring of Main's tab), 30, 60, 120 and 240 min after the ask, then never; none inside `flow.quiet_hours`, one at their end. The `owner:` status line stays until the ask is answered or closed.
 _Avoid_: reminder, retry, nag.
 
 **Fallback notification**:
-The heartbeat's notification for a report to Main that waits on the owner (blocked, question, failed, an owner step, a lineage close) for 10 min with no tagged Main turn, owner prompt or ask since: `<unit>: <owner step or status>`, once per cause (R26). It covers a Main that forgot its closing tag.
+The heartbeat's notification (a ring of Main's tab) for a report to Main that waits on the owner (blocked, question, failed, an owner step, a lineage close) for 10 min with no tagged Main turn, owner prompt or ask since: `<unit>: <owner step or status>`, once per cause (R26). It covers a Main that forgot its closing tag.
 _Avoid_: safety net, auto-escalation.
 
 **Owner step**:
@@ -380,7 +384,7 @@ _Avoid_: setup note (that is the five-line pointer to Main), onboarding summary.
 
 **Transition**: A change of a unit's or project's registry record (§14.12)
 
-**HR record**: Event, registry save, HR-log line, status line, notification, in that order
+**HR record**: Event, registry save, HR-log line, status line, in that order (HR sends no notification)
 
 **Awake limit**: `limits.max_awake_sessions`; active divisions and features count, Main does not
 

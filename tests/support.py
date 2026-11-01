@@ -13,8 +13,22 @@ if str(ROOT / "lib") not in sys.path:
 
 # Process-wide default for every test module (TempHomeCase re-applies it per test): the Jev key
 # store never touches the real keychain and no real dialog opens.
-from orche import headless, jev_setup as _jev_setup, jevkey as _jevkey, reconcile as _reconcile  # noqa: E402
+from orche import headless, jev_setup as _jev_setup, jevkey as _jevkey, notify as _notify  # noqa: E402
+from orche import reconcile as _reconcile  # noqa: E402
 
+
+def no_ps(pid, timeout):
+    """notify.PS for every test: no process has a terminal, so no test records or rings a real one
+    (tests that ring fake PS with their own table; child processes get NO_TTY_PS on PATH)."""
+    return None
+
+
+def no_bell(path):
+    """notify.BELL for every test: never a write to a terminal."""
+    raise OSError("tests never write to a terminal (support.no_bell)")
+
+
+_notify.PS, _notify.BELL = no_ps, no_bell
 _jevkey.PLATFORM = "linux"
 _jevkey.SECURITY = "/nonexistent/orche-test/security"
 _jev_setup.OSASCRIPT = "/nonexistent/orche-test/osascript"
@@ -43,7 +57,7 @@ NO_SECURITY = ("#!/bin/sh\n"
                "echo 'security: The specified item could not be found in the keychain.' >&2\n"
                "exit 44\n")
 SECURITY_CALLS = "security-calls.log"
-# No real notification and no real launchd query: `osascript` succeeds and `launchctl` fails (nothing
+# No real dialog and no real launchd query: `osascript` succeeds and `launchctl` fails (nothing
 # loaded), each recording its argv (one line per call) in $ORCHE_HOME/<name>-calls.log.
 RECORDING = ("#!/bin/sh\n"
              "[ -n \"$ORCHE_HOME\" ] && printf '%s\\n' \"$*\" >> \"$ORCHE_HOME/{name}-calls.log\" 2>/dev/null\n"
@@ -56,6 +70,11 @@ NO_DEFAULTS = ("#!/bin/sh\n"
                "echo 'The domain/default pair does not exist' >&2\n"
                "exit 1\n")
 DEFAULTS_CALLS = "defaults-calls.log"
+# No child process sees a controlling terminal: `ps` fails a query that names `tty` (the bell's walk up from a
+# hook and its check, notify._ps: no test records or rings a real terminal) and runs the real `ps` otherwise.
+NO_TTY_PS = ("#!/bin/sh\n"
+             "case \" $* \" in *tty*) echo 'tests never read a terminal (support.NO_TTY_PS)' >&2; exit 1 ;; esac\n"
+             "exec {ps} \"$@\"\n")
 OSASCRIPT_CALLS = "osascript-calls.log"
 LAUNCHCTL_CALLS = "launchctl-calls.log"
 OPEN_CALLS = "open-calls.log"
@@ -63,8 +82,8 @@ OPEN_CALLS = "open-calls.log"
 
 def no_claude_dir() -> str:
     """A directory whose `claude`, `codex`, `orca`, `security` and `launchctl` always fail, whose `defaults`
-    reads only a test's fake locale, and whose `osascript`
-    and `open` only record their call (no test shows a notification, a Finder window or System
+    reads only a test's fake locale, whose `ps` finds no terminal (NO_TTY_PS), and whose `osascript`
+    and `open` only record their call (no test shows a dialog, a Finder window or System
     Settings). It goes first on PATH for the
     whole test process (below), so code that falls back to the default `claude_bin` (e.g. the intake
     at the end of `orche init`) or `orca_bin` (a nudger) can never start the developer's real Claude
@@ -74,11 +93,13 @@ def no_claude_dir() -> str:
     global _NO_CLAUDE_DIR
     if _NO_CLAUDE_DIR is None:
         import atexit
+        import shlex
         import shutil
+        real_ps = shlex.quote(shutil.which("ps") or "/bin/ps")   # found before this folder is on PATH
         _NO_CLAUDE_DIR = tempfile.mkdtemp(prefix="orche-no-claude-")
         atexit.register(shutil.rmtree, _NO_CLAUDE_DIR, True)
         for name, text in (("claude", NO_CLAUDE), ("codex", NO_CODEX), ("orca", NO_ORCA), ("security", NO_SECURITY),
-                           ("gh", NO_GH), ("defaults", NO_DEFAULTS),
+                           ("gh", NO_GH), ("defaults", NO_DEFAULTS), ("ps", NO_TTY_PS.format(ps=real_ps)),
                            ("osascript", RECORDING.format(name="osascript", code=0)),
                            ("open", RECORDING.format(name="open", code=0)),
                            ("launchctl", RECORDING.format(name="launchctl", code=113))):
@@ -139,8 +160,9 @@ class TempHomeCase(unittest.TestCase):
         os.environ["ORCHE_HOME"] = str(self.home)
         # Claude Code's transcripts (wake resolves a session id there) live in the temp home too.
         os.environ["CLAUDE_CONFIG_DIR"] = str(self.home / "claude")
-        from orche import staff
+        from orche import notify, staff
         staff._AUTO.clear()   # Staff's once-per-process auto open starts fresh in every test
+        notify.PS, notify.BELL = no_ps, no_bell     # no test reads or rings a real terminal
         # The Jev key store must never reach the developer's real keychain nor pop a real dialog:
         # every test starts on the file backend (under this temp ORCHE_HOME) with no `security`
         # or `osascript`; keychain/dialog tests put fakes on PATH and switch these seams back.

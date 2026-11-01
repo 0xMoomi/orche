@@ -62,8 +62,9 @@ reconcile/heartbeat.json last. Classes:
   oldest held pointer is a day old (holds);
 - owner (flow.owner.heartbeat, before the classes above): an answered ask is marked, a filled secret
   no dialog reported is told to Main, then the 10-minute fallback, a held notice or the open ask's
-  re-notification (30, 60, 120, 240 min after it; none in quiet hours, one at their end). A
-  project's escalation to the owner is a `stuck` notice (owner.announce: the same gap and rules).
+  re-notification (30, 60, 120, 240 min after it; none in quiet hours, one at their end), each a
+  ring of Main's tab (the bell). A project's escalation to the owner is a `stuck` notice
+  (owner.announce: the same gap and rules).
 
 Every state key is an episode: `unread|closed:<session>:<oldest waking pointer>`,
 `undelivered|silent|busy:<unit>:<rev>`. Attempts fall due when the condition has held STALL_S, 2×,
@@ -811,8 +812,8 @@ def _last_nudge(session) -> str:
 
 def _tell_owner(project, text, now) -> None:
     """An owner notification: a project's escalation is a `stuck` notice (flow.owner.announce: recorded
-    first, the per-project gap, a held one sent by the next pass, no sound in quiet hours). Text and
-    title travel as osascript arguments. One events line when shown."""
+    first, then the bell rings Main's tab; the per-project gap, none in quiet hours, a held one rung by a
+    later pass). The text stays in the notice record, never in the ring. One events line when rung."""
     if owner.announce(project, "stuck", text, now):
         log.log("events", f"reconcile owner-notified project={project}")
 

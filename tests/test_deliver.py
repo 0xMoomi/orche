@@ -1015,11 +1015,12 @@ class NudgeNotifiesNothingTest(NudgeCase):
     nothing else; the owner hears Main's own closing line (flow.owner, tests/test_owner.py)."""
 
     def test_an_urgent_report_to_main_shows_no_notification(self):
-        with mock.patch.object(notify, "PLATFORM", "darwin"):
+        with mock.patch.object(notify, "ring") as ring:
             for status in inbox.URGENT:
                 self.report(status=status)
                 self.marker().unlink(missing_ok=True)
                 self.assertEqual(self.nudge()[0], 0)
+        ring.assert_not_called()
         self.assertFalse((self.home / support.OSASCRIPT_CALLS).exists())
         self.assertFalse((inbox.box("main-acme") / ".notified").exists())
         self.assertNotIn("owner notify", (self.home / "logs" / "events.log").read_text())

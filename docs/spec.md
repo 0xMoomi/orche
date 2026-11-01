@@ -28,7 +28,7 @@ Orche has two goals. Neither may be traded for the other.
 
 ### 0.2 Summary
 
-Orche runs one orchestrator session ("Main", the most capable model) per project. Main understands requests, decomposes them, and hands out structured dispatch blocks with `orche dispatch`; it does not write code and does not read worker output in full. Hooks — not model turns — relay dispatches to the division sessions (R&D, Research, Build, GTM, Ops) — the heads — and to the workers each head staffs, each in its own Orca worktree. Workers report by writing a small inbox pointer; Main drains pointers in batches at four defined points. Completion is defined by a verification ledger keyed by PR and SHA. Memory lives in files (persona, agent memory, STATUS/DECISIONS/HANDOFF, preserved transcripts), so sessions are cleared at unit boundaries instead of growing. Visibility (status line, Orca sidebar, `orche` CLI, macOS notifications) costs zero tokens. A model-free secrets broker, a state-based janitor, and Git/CI rules complete the system. An optional fast typed-decision model (Jev) gates routine traffic.
+Orche runs one orchestrator session ("Main", the most capable model) per project. Main understands requests, decomposes them, and hands out structured dispatch blocks with `orche dispatch`; it does not write code and does not read worker output in full. Hooks — not model turns — relay dispatches to the division sessions (R&D, Research, Build, GTM, Ops) — the heads — and to the workers each head staffs, each in its own Orca worktree. Workers report by writing a small inbox pointer; Main drains pointers in batches at four defined points. Completion is defined by a verification ledger keyed by PR and SHA. Memory lives in files (persona, agent memory, STATUS/DECISIONS/HANDOFF, preserved transcripts), so sessions are cleared at unit boundaries instead of growing. Visibility (status line, Orca sidebar, `orche` CLI, Orca's notifications) costs zero tokens. A model-free secrets broker, a state-based janitor, and Git/CI rules complete the system. An optional fast typed-decision model (Jev) gates routine traffic.
 
 ### 0.3 What changes
 
@@ -113,7 +113,7 @@ Liaison (headless) ── orche ask <proj> · orche card refresh <proj> (read-on
 | Feature agent | Opus 5.5 / high (exec per TIER) | the branch Orca names by default; `<prefix>/<name>` when the project sets `publish.per_project.<p>.branch_prefix` (Orche renames it right after creation), Orca parent = its head (its division's session) | One slice's code within its scope; a worker of any division but Research, R&D and Ops | No edits outside own worktree (scope hook). `/clear` at unit end. 14 idle days ⇒ sleep |
 | GTM | Opus 5.5 / high | `div/gtm` | Copy, landing pages, launch, marketing, customer-facing text | External publication (post, send) requires user approval |
 | Ops | Opus 5.5 / high (mostly scripts) | `div/ops` | Monitoring, incident first response, release ladder, backup verification, patching, cost, report triage, runbooks | Dormant unless stage=`public`. Automatic rollback only via pre-approved runbook; everything else Always-pause |
-| HR | Sonnet 5.5 / low (audit: Haiku 5.5) | Orche repo | registry, notifications, weekly audit, `/correct` | Rate limits and freeze; every change logged |
+| HR | Sonnet 5.5 / low (audit: Haiku 5.5) | Orche repo | registry, HR log, weekly audit, `/correct` | Rate limits and freeze; every change logged |
 | exec / Explore / deep-reasoner / runner | Opus or Sonnet medium / Sonnet / Opus max / Haiku 5.5 | ephemeral | Hands | Brief ≤300 words, report ≤200 words, `maxTurns` set, auto-compact window 200K |
 
 Rules:
@@ -178,7 +178,7 @@ Limit: Ops executes known runbooks and rollbacks only. Novel incident types are 
 
 ### 2.5 Feature agent lifecycle (HR)
 
-Creation trigger: the head's rule (skill orche-build, "Your team"; teams design §4.3): when a brief arrives, the head staffs one worker per slice (a landed worker whose scope covers it, else a new one); standing workers are `infra` under Build and, only after the same files caused two queue returns in a week, one more owner. The head calls HR (`orche feat new`); HR creates without asking and emits 4 notifications (status line, Orca card dot, macOS, one line to Main). Implementation note: of the four, the status line, the Orca unread dot and the macOS notification are built; the line to Main is not.
+Creation trigger: the head's rule (skill orche-build, "Your team"; teams design §4.3): when a brief arrives, the head staffs one worker per slice (a landed worker whose scope covers it, else a new one); standing workers are `infra` under Build and, only after the same files caused two queue returns in a week, one more owner. The head calls HR (`orche feat new`); HR creates without asking and emits 4 notifications (status line, Orca card dot, macOS, one line to Main). Implementation note: of the four, the status line and the Orca unread dot are built; HR sends no OS notification (its lines stay in hr-log.md and Main reports what it ran), and the line to Main is not built.
 
 | Limit (registry `limits`) | Value | On breach |
 |---|---|---|
@@ -904,11 +904,11 @@ Hierarchy: repo → worktree card → agents (terminal tabs). One card per role.
 
 Implementation note: worktrees are named `div-<division>` (no Orca parent) and `feat-<feature>` (Orca parent = the Build worktree); pane titles equal the session names. R-VIS-2: `orca worktree show` reads the comment first, and only an empty or blank one is set, only that text cleared; Orca's CLI drops an empty `--comment`, so clearing writes one space, which Orca shows as no note (its card shows a note only when the trimmed text is non-empty: a notes icon in the row under the name, the text under Notes on hover; compact cards only with Notes on in Show properties); an Orca error is one `hr` log line and the transition stands. R-VIS-3 (card status) is not set by Orche yet; the unread dot is set when a feature agent is created and on Main's workspace when a Main turn Orche started ends (R-INBOX-4); a turn the owner typed is left to Orca, which marks it only when nobody viewed the pane. See `docs/orca-sidebar.md`.
 
-### 8.3 macOS notifications
+### 8.3 Notifications
 
 Events: feature agent created / retired; HR freeze / unfreeze; project public; secret request; urgent report; confirmation awaiting; Ops incident.
 
-Implementation note: Orca's own notification covers Main's `OWNER:` / `DONE:` closing line (§8.8); the ask's reminders, HR, the Keymaster and the heartbeat's escalations notify through Orche's one path. The 0.6.2 notification per urgent pointer is removed.
+Implementation note: Orca shows every notification. Its own covers Main's `OWNER:` / `DONE:` closing line (§8.8); for the ask's reminders, a parked guard refusal and the heartbeat's notices Orche rings Main's tab (the bell, §8.8), which Orca shows as its own notification while its Terminal Bell notifications are on. A secret request's alert is the Keymaster dialog (Main's tab rings only when no dialog opens); HR sends none (its lines stay in hr-log.md and Main reports what it ran); a lineage's close sends none (the close wakes Main, whose report Orca shows). The 0.6.2 notification per urgent pointer is removed.
 
 ### 8.4 `orche` CLI
 
@@ -1234,9 +1234,10 @@ f failed)` or `[orche] lineage L: open — k of n units running; waiting on <uni
 ### 8.8 Owner's voice
 
 Orca's own notification covers Main's closing line: Orca installs its own Stop hook and notifies
-when an agent's turn ends, so Orche sends none for it and notifies only what Orca cannot know: the reminders of
-an unanswered ask (the heartbeat, below), a runner's parked guard refusal, a secret request (the Keymaster) and HR
-records (`hr.book`). On every stop the done gate allows (also under
+when an agent's turn ends, so Orche sends none for it and rings Main's tab (the bell, below) only for what Orca
+cannot know: the reminders of an unanswered ask (the heartbeat, below), a runner's parked guard refusal and the
+heartbeat's notices (a fallback, a `stuck` escalation, a usage hold). A ring carries no text: the text stays in
+`ask.json` and the notice records, which the status line and Main's inbox show. On every stop the done gate allows (also under
 `stop_hook_active`), a Main session's Stop hook (`dispatch.handle_stop` → `flow.owner.closing`) reads the final
 message's closing line: its last non-empty line outside fenced blocks (``` or ~~~, CommonMark-like; an unclosed
 fence runs to the end; a snippet fence indented inside ```` ```dispatch ```` stays inside, as in the dispatch
@@ -1244,47 +1245,48 @@ grammar). Tags are upper case; tolerated around them: a quote (`> `), a bullet (
 backticks, bold (`**OWNER:** …`, `__OWNER:__ …`), a space before the colon and a full-width colon (`OWNER：`). Every
 tag stamps `flow/<p>/tagged` with the turn's start — the `at` of the prompt hook's turn record (no record: no stamp) —
 so a report that landed during the turn is covered only by a tag from the turn that reads it (the fallback reads it). The open ask's own text again, or the last DONE again with
-no ask since, is a repeat: nothing recorded or sent (events `owner repeat project=<p> tag=<T>`), so the
+no ask since, is a repeat: nothing recorded or rung (events `owner repeat project=<p> tag=<T>`), so the
 re-notification schedule runs on from the first:
 
 | Closing line | Effect |
 |---|---|
-| `OWNER: <the decision or step, with its default>` | records the project's ask (replacing an open one); no notification |
-| `DONE: <the result>` | closes the open ask (`closed_at`) and records the `done` notice; no notification |
+| `OWNER: <the decision or step, with its default>` | records the project's ask (replacing an open one); no ring |
+| `DONE: <the result>` | closes the open ask (`closed_at`) and records the `done` notice; no ring |
 | `RUNNING: <what runs now>` | nothing |
 | anything else | nothing; events `owner untagged project=<p>` |
 
 The ask, `ORCHE_HOME/flow/<p>/ask.json`: `{text, at, kind, source[, unit][, closed_at | answered_at]}` — `text`
 masked, one line, ≤ 160 chars; `kind` `owner`, `secret` (text `secret <NAME>[, <NAME>]`), `guard` or `fallback`;
 `source` `main`, `runner` or `heartbeat`; every write under `flow/<p>/.notify.lock`, in sequence with a
-notification (never nested). An ask is open until `closed_at` (DONE) or `answered_at`. A runner's refused start
+ring (never nested). An ask is open until `closed_at` (DONE) or `answered_at`. A runner's refused start
 (G4/G5: a quiet `info` that waits for Main's next prompt) records a `guard` ask (`not started: <reason>`, with
-`unit`) and notifies: that pointer is not on Main's screen, and Orca does not know it.
+`unit`) and rings Main's tab: that pointer is not on Main's screen, and Orca does not know it.
 
 For an `OWNER:` or `DONE:` closing line Orche counts the first notification as shown by Orca (events `owner
 recorded project=<p> kind=<k> by=orca`): `notified.json` gets the ask's first try (`n` 1, `ask_at`, `ask_last` the
 ask's time) or the DONE notice's id in `shown`, and the gap does not move. So the heartbeat's first reminder of
-the ask comes 30 min after it, and a DONE is never sent by Orche.
+the ask comes 30 min after it, and a DONE never rings.
 
 Answered (`flow.owner.answer`, events `owner answered project=<p> by=prompt|secret after=<m>m`): the owner prompted
 Main after the ask (`owner-seen` over a second newer than `at`; the prompt hook calls it at once, the heartbeat again),
 or every secret a `secret` ask names is in — no request for it pending and one filled since 10 min before the ask
 (a fill during Main's own turn counts; then the ask is answered as it is recorded and nothing is sent).
 
-Notifications (`flow.owner.notify`, title `Orche <p>`): (1) at most one per project per 300 s; no sound inside
-`flow.quiet_hours`; (2) a failed show (osascript non-zero or its 5 s timeout) is a try: the next waits for the
-next slot. `flow/<p>/notified.json` `{at, kind, n, ask_at, ask_last, shown, tried}`, written under
+Notifications (`flow.owner.notify`, a ring of Main's tab): (1) at most one per project per 300 s; none inside
+`flow.quiet_hours` (Orca's notification has a sound Orche cannot turn off): one due then is held (`owner held
+… reason=quiet`) and goes at the first pass after them; (2) a failed ring (no live Main terminal recorded, a
+failed write) is a try: the next waits for the next slot. `flow/<p>/notified.json` `{at, kind, n, ask_at, ask_last, shown, tried}`, written under
 `flow/<p>/.notify.lock`: the last notification Orche showed (`at`, `kind`: the gap), the tries for the ask made at
 `ask_at` (`n`: shown, shown by Orca or failed; the last at `ask_last`), per notice kind the id of the last notice
 shown by Orche or Orca (`shown`), and a notice's failed tries (`tried` `{<kind>: {id, n, last}}`). A notice — a DONE, a `stuck` escalation (the heartbeat's Main-unreachable
 escalations), a fallback notice — is recorded in `flow/<p>/<kind>.json` `{text, at, id}` (one writer each)
 before it is tried (`flow.owner.announce`), so one held back is sent once by the heartbeat. Events: `owner ask
-project=<p> kind=<k> source=<s>[ unit=<u>]`, `owner notify project=<p> kind=<k> n=<n> quiet=<0|1>`, `owner held
-project=<p> kind=<k> reason=gap|off|lock|failed`, `owner recorded project=<p> kind=<k> by=orca`, `owner closed project=<p>`, `owner dropped project=<p>
+project=<p> kind=<k> source=<s>[ unit=<u>]`, `owner notify project=<p> kind=<k> n=<n>`, `owner held
+project=<p> kind=<k> reason=off|quiet|lock|gap|failed`, `owner recorded project=<p> kind=<k> by=orca`, `owner closed project=<p>`, `owner dropped project=<p>
 kind=<k>` — never the text.
 
 The heartbeat's owner step (`flow.owner.heartbeat`, first in each `orche reconcile` pass; `--dry-run` writes and
-sends nothing and prints `would …`), per project: mark an answered ask; post a missed secret resume (below); then,
+rings nothing and prints `would …`), per project: mark an answered ask; post a missed secret resume (below); then,
 unless the project is paused (G8) or notifications are off, at most one of:
 - **Fallback**: the oldest report to Main, 10 min to a day old, that waits on the owner — the newest of its
   unit is `blocked`, `question` or `failed` or carries an owner step and no BRIEF.md revision answered it, or a
@@ -1293,13 +1295,13 @@ unless the project is paused (G8) or notifications are off, at most one of:
   (`kind fallback`, or `secret` for a secret step; `source heartbeat`), re-notified until answered; failed reports
   and close pointers are one fallback notice. Once per cause: what it records is newer than the report. A fallback
   whose notification was held back prints and logs as `held` (`reconcile action=held …`), not `notify`.
-- **A held notice**: the oldest one not yet shown whose try is due, once the gap has passed; after a failed try the next waits for the next slot 30, 60, 120 or 240 min after the
+- **A held notice**: the oldest one not yet shown whose try is due, once the gap has passed and outside quiet hours; after a failed try the next waits for the next slot 30, 60, 120 or 240 min after the
   notice (5 tries); dropped unsent once the owner prompted Main after it (they saw Main) or after a day.
-- **The ask's next notification**: the first (held back by the gap or the lock; none for Main's own ask, whose
-  first Orca showed) at the next pass; then re-notifications 30, 60, 120 and 240 min after the ask (`OWNER (asked
-  HH:MM): <text>`), each the first slot after the last try (shown, shown by Orca or failed), so slots passed unsent fold into one; then none — the `owner:` line stays. Quiet
-  hours (`flow.quiet_hours`, default `23:00-08:00`, `""` none): a first notification inside them is silent,
-  re-notifications wait, and the first pass after them sends one.
+- **The ask's next notification**: the first (held back by the gap, quiet hours or the lock; none for Main's own
+  ask, whose first Orca showed) at the next pass; then re-notifications 30, 60, 120 and 240 min after the ask (each
+  a ring of Main's tab; the ask's text stays in `ask.json`), each the first slot after the last try (shown, shown by Orca or failed), so slots passed unsent fold into one; then none — the `owner:` line stays. Quiet
+  hours (`flow.quiet_hours`, default `23:00-08:00`, `""` none): nothing rings inside them; a first ring or a
+  re-notification due then waits, and the first pass after them rings one.
 
 Secret resume: `secrets/dialog.py`, after `store.mark_filled` (the only fill path), calls
 `flow.owner.secret_filled(project, name, rid)`: the ask is answered when every secret it names is in; then, not while
@@ -1328,15 +1330,28 @@ Unit side: a worker only the owner can unblock ends with `STATUS: blocked` (or `
 field `owner` (masked, one line, ≤ 200 chars), which `inbox.render` prints first under the pointer's header:
 `  OWNER STEP: <text>`.
 
-One notify path, `lib/orche/notify.py` `send(title, body, sound=False, *, kind, project=None)` (`project` is
-accepted and unused): `osascript -e 'on run argv' -e 'display notification (item 1 of argv) with title (item 2 of
-argv)[ sound name "Glass"]' -e 'end run' <body> <title>`, with the display line inside `tell application id
-"com.stablyai.orca"` … `end tell` when `pgrep -xq Orca` finds Orca running: macOS credits a bare osascript
-notification to Script Editor (a click opened Script Editor), the tell makes it Orca's (a click opens Orca), and the
-launch guard keeps a background pass from launching Orca (AppleScript launches a target that is not running). Body
-and title are arguments, never AppleScript or shell text built from text (one starting with `-` gets a leading space, never an
-option); masked; control characters dropped; config `notify` (default on); macOS only; 5 s timeout; events `notify
-kind=<k> ok=<0|1>`. HR, the Keymaster and the heartbeat's escalations use it; a caller with a project passes its key.
+The bell, the one notification path: `lib/orche/notify.py` `ring(project, *, kind)` writes one BEL byte (`\a`)
+to the terminal of the project's Main pane, and Orca shows its own notification for it (source `terminal-bell`:
+`Bell in <workspace>`, `<repo> · Attention requested`; a click focuses that pane) while Orca's Settings >
+Notifications > Terminal Bell is on (Orca's default is off, its onboarding turns it on), except while that
+workspace is the active one in a focused Orca window. Orche's earlier osascript notifications were credited by
+macOS to Script Editor (its icon; a click opened Script Editor), inside a `tell application id
+"com.stablyai.orca"` too, since osascript runs the command itself; Orca has no command that posts a
+notification with Orche's text. Main's terminal: Claude Code runs its hooks without a controlling terminal, so
+Main's SessionStart and prompt hooks (`roster.note_pane`) walk up from the hook's parent to the first process
+that has one, Main's `claude` (at most 8 processes and 0.5 s of `ps`), and write
+`ORCHE_HOME/inbox/<main-p>/.pane` `{pid, tty, at}`, inside and outside Orche's pane command (an outside Main sits
+in the same Orca tab), never for a headless run (`ORCHE_RUNNER`). `ring` writes only to a recorded path matching
+`^/dev/tty[a-z0-9]+$` that `ps -o tty= -p <pid>` still names for that pid (alive, the same terminal), opened
+`O_WRONLY|O_NOCTTY|O_NONBLOCK`; otherwise it does not ring (`no-pane`). Config `notify` (default on); it never
+raises and never blocks; events `notify kind=<k> project=<p> ok=<0|1>[ reason=off|no-pane|error]`, never text.
+Callers: `flow.owner` (above) and a Keymaster request that opened no dialog (`orche secret request`, kind
+`keymaster`). `orche doctor`'s `notifications` row reads Orca's setting, read only, from
+`~/Library/Application Support/orca/profiles/local-default/orca-data.json` (`settings.notifications`
+`enabled` and `terminalBell`): OK `Orca shows Orche's reminders (Terminal Bell notifications on)`; WARN when
+either is false, `Orca's Terminal Bell notifications are off, so Orche's reminders stay silent. Turn on Orca
+Settings > Notifications > Terminal Bell`; `off (notify false)` with config `notify` false; no row when the file
+or a key cannot be read.
 
 | Rule | Requirement |
 |---|---|
@@ -1345,8 +1360,8 @@ kind=<k> ok=<0|1>`. HR, the Keymaster and the heartbeat's escalations use it; a 
 | R-FLOW-3 | Post-time shaping: a unit's report repeating the previous one since W (same sender, unit, inbox, `brief_rev` and `status`) is posted `quiet: true` with `repeat: n`; `orche status` shows `looping:` at n ≥ 3. (§8.7) |
 | R-FLOW-4 | Lineage: every brief carries `lineage: <id>   parent: <unit\|->`; an owner turn starts one lineage, a wake turn naming one lineage joins it, a division's brief inherits its newest brief's lineage with that unit as parent; AMEND keeps both; report pointers carry them. (§8.7) |
 | R-FLOW-5 | Lineage batch and close (R24): a unit's report that would wake waits (`quiet: "batch"`) while its recipient still waits on another unit of the lineage; blocked, question, owner steps and urgent pointers wake at once; the report that settles the last awaited unit (a head's unit only once the head reported after its workers) posts one waking close (Main's writes LINEAGE.md, once per signature); the heartbeat posts a missed close and wakes a hold whose units are past their TIMEBOX or that is 24 h old. Main then gives one full report (outcome · landed · failed · decisions + default · next) — not one per wake. (§8.7) |
-| R-FLOW-6 | Closing line: Main ends every reply with one tagged line — `RUNNING: <what runs>`, `OWNER: <decision or step, default>` or `DONE: <result>`; the Stop hook reads the last non-empty line outside fences. OWNER records the ask, DONE closes it, RUNNING and untagged lines record nothing; none sends an Orche notification (Orca's own covers the reply). Units only the owner can unblock end `STATUS: blocked` and one `OWNER: <exact step>` line (`--owner` on `orche report`). (§8.8) |
-| R-FLOW-7 | Owner notification (the only path): Orca's own notification covers Main's closing line, so Orche sends none for it and notifies only the reminders, guard refusals, secrets, HR and one finish notice per lineage close (`<project>: finished`, then the root GOAL, the counts, the PRs, the members' headless cost and the reports done without a ledger row; none when a member waits on the owner, whose ask notifies; a single-unit lineage has no close); a failed show is a try; ≤ 1 per project per 300 s; re-notify an open ask 30, 60, 120 and 240 min after it, then none (the `owner:` status line stays); quiet hours `flow.quiet_hours` (23:00–08:00): silent first notification, re-notifications wait, one at their end; the heartbeat's 10-minute fallback turns an owner-waiting report with no tagged Main turn into an ask or notice; a `secret` ask is answered when its secrets are filled, and Main gets one resume `info` per asking unit once every secret its step names is filled (such a fill is the owner's word). Text is masked; events never carry it. (§8.8) |
+| R-FLOW-6 | Closing line: Main ends every reply with one tagged line — `RUNNING: <what runs>`, `OWNER: <decision or step, default>` or `DONE: <result>`; the Stop hook reads the last non-empty line outside fences. OWNER records the ask, DONE closes it, RUNNING and untagged lines record nothing; none rings (Orca's own notification covers the reply). Units only the owner can unblock end `STATUS: blocked` and one `OWNER: <exact step>` line (`--owner` on `orche report`). (§8.8) |
+| R-FLOW-7 | Owner notification (the only path, the bell): Orca's own notification covers Main's closing line, so Orche sends none for it and rings Main's tab (one BEL byte to the terminal Main's hooks recorded; Orca shows it as its own notification while its Terminal Bell notifications are on) only for the reminders, guard refusals and the heartbeat's notices; a ring carries no text; no finish notice at a lineage's close (the close wakes Main, whose report Orca shows), no HR notice, and a secret request rings only when no dialog opens; a failed ring is a try; at most 1 per project per 300 s; re-notify an open ask 30, 60, 120 and 240 min after it, then none (the `owner:` status line stays); quiet hours `flow.quiet_hours` (23:00-08:00): nothing rings, one due then goes at the first pass after them; the heartbeat's 10-minute fallback turns an owner-waiting report with no tagged Main turn into an ask or notice; a `secret` ask is answered when its secrets are filled, and Main gets one resume `info` per asking unit once every secret its step names is filled (such a fill is the owner's word). Text is masked; events never carry it. (§8.8) |
 | R-FLOW-8 | Pause and resume: `orche flow pause <p>` writes `pause.json` (G8: every brief and AMEND refused; reconcile only drains; no owner-step notices); `orche flow resume <p>` succeeds only after an owner prompt newer than the pause (else exit 3). (§8.7) |
 
 ### 8.9 Scale
@@ -1424,7 +1439,7 @@ Rule of thumb: "What changes when this is done?" — talk to that project's Main
 | R-KEY-4 | Local processes get secrets via `orche secret run -- <cmd>`, injected only into that process environment. |
 | R-KEY-5 | Agents never handle wallet/treasury private keys (use KMS, hardware wallets, or limited hot wallets). Human-only vaults hold recovery codes and master passwords. |
 | R-KEY-6 | Environment separation by cloud project: `<app>-dev`, `<app>-prod`. |
-| R-KEY-7 | An OS notification carries no report text: an ask's text (masked, ≤ 160 chars) or Orche's own words, always as an osascript argument, never as script (§8.8). |
+| R-KEY-7 | A notification carries no text: the bell is one BEL byte to Main's terminal, and an ask's text (masked, at most 160 chars) stays in `ask.json` and the status line (§8.8). The Keymaster dialog's text is an osascript argument, never script. |
 
 ### 10.2 Backends
 
@@ -1439,14 +1454,14 @@ Rule of thumb: "What changes when this is done?" — talk to that project's Main
 
 ```
 agent     : orche secret request STRIPE_KEY --env dev,prod --why "payments" --how <issuer URL>
-keymaster : queue (name, purpose, envs, link only) → macOS notification + status line 🔑 + Orca card dot
+keymaster : queue (name, purpose, envs, link only) → status line 🔑 + Orca card dot (no dialog: Main's tab rings)
           → dialog [Paste from clipboard] [Type (hidden)]  (process separate from the agent)
           → format check → store per env (Secret Manager | Vercel env --sensitive | gh secret)
           → clear clipboard → mark request fulfilled → append audit.log
 agent     : orche secret wait STRIPE_KEY → READY → orche secret run -- pnpm dev
 ```
 
-- User action: notification → copy from issuer page → one button. No "done" message needed.
+- User action: the dialog → copy from issuer page → one button. No "done" message needed.
 - Backlog: `orche secret fill`.
 - `orche secret ls [--env <env>]` lists the names stored for the project and their envs, never values; a person says it to ask which keys exist.
 - `orche secret rotate <NAME> [--env <envs>]` replaces a stored value through the same dialog and disables older GCP versions; a person says it when a key leaked or expired.
@@ -1970,14 +1985,14 @@ refused with an exit code; the `orche` commands keep argument parsing and output
 |---|---|---|---|---|
 | Register project (init) | `onboard_project` | — | the Main pane when missing | entry; save; `init K (repo R) by B`; status line. Re-run: `init K resumed by B (skipping …)`, status line, save only when custom definitions are added |
 | Create division (init) | `plan_divisions`, `onboard_project` | held session (1); Ops woken while building (3); awake (3); a failed step `init K stopped: …` (3 unsafe target, 1 other) | worktree (adopted when one has the name), pane when woken, else the resting note (R-VIS-2) | provisional `onboarding` entry (save only); then `create` event, save, `create S (status) by B[ (resumed)]`, status line |
-| Create feature | `create_feature` | no build (2); name (1); held session (1); exists (1); frozen or a limit (3; the global cap records `freeze` by hr-limits and notifies); overlap with `--strict` (3); awake (3); `feat new N stopped: …` (3/1) | child worktree of build's, pane, unread dot | provisional entry; `create` event (+batch), save, `create S by B: reason`, status line, notification `New feature agent S: reason` |
+| Create feature | `create_feature` | no build (2); name (1); held session (1); exists (1); frozen or a limit (3; the global cap records `freeze` by hr-limits); overlap with `--strict` (3); awake (3); `feat new N stopped: …` (3/1) | child worktree of build's, pane, unread dot | provisional entry; `create` event (+batch), save, `create S by B: reason`, status line |
 | Wake | `wake` | retired (3); onboarding (3); gated while building (3); awake (3); Orca (1) | pane (`--resume`; `--name` when dormant); a division's resting note cleared after the record | `wake` event, save, `wake S by B`, status line |
 | Wake, already active | `wake` | Orca (1) | a pane only when none carries the title | `reopen S pane by B` (HR log only) |
 | Sleep | `sleep` | retired (3); onboarding (3); stale HANDOFF (3) unless the audit's idle rule; Orca (1) | close the titled pane; a division's resting note after the record | `sleep` event, save, `sleep S by B`, status line |
-| Retire feature | `retire` | onboarding (3); main checkout, uncommitted work, no `final:`, open pane (3); no `--yes` (1); kept files differ (1); a failed step (1, the kept results named) | tag, `worktree rm` | GRAVEYARD rows first; `retire` event, save, `retire S by B (tag T)`, status line, notification `Feature agent S retired` |
+| Retire feature | `retire` | onboarding (3); main checkout, uncommitted work, no `final:`, open pane (3); no `--yes` (1); kept files differ (1); a failed step (1, the kept results named) | tag, `worktree rm` | GRAVEYARD rows first; `retire` event, save, `retire S by B (tag T)`, status line |
 | Retire a unit Orca removed | `retire_gone` (janitor) | — | — | the janitor's GRAVEYARD row first; `retire` event by janitor, save, `retire S by janitor (worktree gone from Orca)`, status line |
-| Stage change | `set_stage` | none (Ops refusals are notes; the stage still changes) | through wake/sleep of Ops | `stage` event, save, `stage K -> X by B`, status line; then Ops' own record; public and changed: notification `K is public[ — ops woken]` |
-| Freeze / unfreeze | `set_frozen` | — | — | `freeze`/`unfreeze` event (project `*`), save, `freeze by B`, notification |
+| Stage change | `set_stage` | none (Ops refusals are notes; the stage still changes) | through wake/sleep of Ops | `stage` event, save, `stage K -> X by B`, status line; then Ops' own record |
+| Freeze / unfreeze | `set_frozen` | — | — | `freeze`/`unfreeze` event (project `*`), save, `freeze by B` |
 | Standing order | `correct` | empty text (1) | — | STANDING.md line; `correct K #N by B: text` (HR log only) |
 | Audit `--apply` | `run_audit` | per-unit refusals become report rows | through sleep | through sleep |
 
@@ -1991,9 +2006,7 @@ refused with an exit code; the `orche` commands keep argument parsing and output
 - registry.json is written only under `lib/orche/hr/`; commands resolve names through the Roster
   (§14.9) and keep parsing and output.
 - Every transition's record is, in order: event, registry save, HR-log line, the project's status
-  line, notification.
-- Notifications: feature created / retired, HR freeze / unfreeze (also by the creation cap),
-  project public — never for divisions, sleep or wake.
+  line. HR sends no notification: its lines stay in hr-log.md, and Main reports what it ran.
 
 ### 14.13 Runs
 

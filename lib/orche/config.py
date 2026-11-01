@@ -7,8 +7,9 @@ from . import log, paths, util
 DEFAULTS = {
     "orca_bin": "orca",
     "claude_bin": "claude",
-    # macOS notifications (lib/orche/notify.py): Main's OWNER:/DONE: closing lines, a parked guard
-    # refusal, HR, the Keymaster and the heartbeat's escalations. false: none.
+    # The bell (lib/orche/notify.py): Orche rings Main's tab, and Orca shows its own notification, for an
+    # open ask's reminders, a parked guard refusal, the heartbeat's notices and a Keymaster request with
+    # no dialog. false: none.
     "notify": True,
     # How the Stop hook delivers a brief to a division/feature: `runner` spawns `orche run <unit>`
     # (headless `claude -p`); `pane` starts `orche deliver <unit>`, which types into the unit's Orca pane.

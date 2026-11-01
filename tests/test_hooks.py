@@ -1378,6 +1378,35 @@ class ReportInjectTest(HookCase):
         self.run_hook("report_inject.py", self.payload("prompt.json", prompt="[drain]"), ORCHE_SESSION="main-acme")
         self.assertFalse(marker.exists())
 
+    def test_mains_hooks_record_its_terminal_for_the_bell(self):
+        """SessionStart and the prompt hook record Main's terminal {pid, tty, at} (the first process up from
+        the hook's parent with one: here a fake `ps` gives the test process ttys777), inside and outside
+        Orche's pane command; never for a headless run or a division; support's own `ps` hides them all."""
+        pane = self.home / "inbox" / "main-acme" / ".pane"
+        fake = self.root / "fakeps"
+        fake.mkdir()
+        (fake / "ps").write_text('#!/bin/sh\ncase " $* " in *tty*) echo "1 ttys777"; exit 0 ;; esac\n'
+                                 f'exec "{support.no_claude_dir()}/ps" "$@"\n')
+        (fake / "ps").chmod(0o755)
+        path = f"{fake}{os.pathsep}{os.environ['PATH']}"
+        (self.root / "t.jsonl").write_text('{"type":"user"}\n{"type":"custom-title","customTitle":"main-acme"}\n')
+        prompt = self.payload("prompt.json", prompt="[drain]")
+        start = self.payload("session_start_clear.json", cwd=str(self.repo))
+        for hook, payload, session in (("session_start.py", start, "main-acme"), ("report_inject.py", prompt, "")):
+            with self.subTest(hook=hook, session=session):
+                pane.unlink(missing_ok=True)
+                self.assertEqual(self.run_hook(hook, payload, PATH=path, ORCHE_SESSION=session).returncode, 0)
+                rec = json.loads(pane.read_text())
+                self.assertEqual((sorted(rec), rec["pid"], rec["tty"]),
+                                 (["at", "pid", "tty"], os.getpid(), "/dev/ttys777"))
+        pane.unlink()
+        for env in ({"ORCHE_SESSION": "main-acme", "ORCHE_RUNNER": "1", "PATH": path},
+                    {"ORCHE_SESSION": "div-acme-build", "PATH": path},
+                    {"ORCHE_SESSION": "main-acme"}):                  # support's own `ps`: no terminal
+            with self.subTest(env=env):
+                self.run_hook("report_inject.py", prompt, **env)
+                self.assertFalse(pane.exists())
+
     def test_identified_prompt_touches_activity_unidentified_does_not(self):
         self.prompt()
         self.assertTrue((self.home / "activity" / "main-acme").is_file())

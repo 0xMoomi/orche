@@ -38,10 +38,8 @@ def _resume(project, name, rid, filled_at) -> None:
 
 
 class OsaUI:
-    """Real UI: osascript dialog with hidden answer, pbpaste/pbcopy, notifications."""
-
-    def __init__(self, ex=None):
-        self.ex = ex or store.Exec()
+    """Real UI: osascript dialog with hidden answer, pbpaste/pbcopy. The dialog is the request's alert:
+    the Keymaster sends no notification."""
 
     def ask(self, req, error=None):
         """(button, typed_text). Cancel (or a closed dialog) returns (CANCEL, "")."""
@@ -60,9 +58,6 @@ class OsaUI:
 
     def clear_clipboard(self) -> None:
         shell.run(["pbcopy"], input="", timeout=5)
-
-    def notify(self, text) -> None:
-        store.notify(self.ex, text)
 
 
 UI_FACTORY = OsaUI
@@ -108,7 +103,6 @@ def handle(rid, req, ui, ex, reg) -> str:
             if ok:
                 break
         else:
-            ui.notify(f"{name}: not stored ({error})")
             return "invalid"
         try:
             cfg = store.project_cfg(reg, req.get("project"))
@@ -118,14 +112,12 @@ def handle(rid, req, ui, ex, reg) -> str:
         except SecretError as exc:
             msg = scrub(str(exc), value)
             log.log("keymaster", f"fill {rid} failed: {msg}")
-            ui.notify(f"{name}: storing failed")
             return "failed"
     finally:
         value = None
     filled = store.mark_filled(rid)
     store.audit("filled", req.get("project"), name, ",".join(envs), "-", "human", rid)
     log.log("keymaster", f"filled {rid} envs={','.join(envs)}")
-    ui.notify(f"{name} stored ({','.join(envs)})")
     _resume(req.get("project"), name, rid, filled.get("filled_at"))
     return "filled"
 
@@ -136,7 +128,7 @@ def run_loop(ui=None, ex=None, project=None, only=None) -> dict:
     Returns {outcome: [request ids]}.
     """
     ex = ex or store.Exec()
-    ui = ui or UI_FACTORY(ex)
+    ui = ui or UI_FACTORY()
     reg = registry.load()
     seen, summary = set(), {}
     while True:

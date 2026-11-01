@@ -11,7 +11,7 @@ import sys
 import time
 from pathlib import Path
 
-from . import cli, log, registry, roster, units, util
+from . import cli, log, notify, registry, roster, units, util
 from .secrets import ENVS, SecretError, parse_envs, share, store
 from .secrets import dialog
 
@@ -32,7 +32,7 @@ def register(subparsers):
         sp.set_defaults(func=_guard(func))
         return sp
 
-    sp = add("request", cmd_request, "ask the human for a secret (queue + notification + dialog)")
+    sp = add("request", cmd_request, "ask the human for a secret (queue + dialog; without one, Main's tab rings)")
     sp.add_argument("name")
     sp.add_argument("--env", required=True, help="comma list of dev|preview|prod")
     sp.add_argument("--why", required=True)
@@ -126,20 +126,22 @@ def _plan_lines(ex):
 
 
 def cmd_request(args):
+    """Queue the request and open the dialog, the request's alert (a dialog already running shows it too);
+    with no dialog at all (--no-dialog while none runs) the project's Main tab rings (notify.ring, kind
+    keymaster). A dry run writes, opens and rings nothing."""
     _, key, _ = _context(args)
     name, envs = store.check_name(args.name), parse_envs(args.env)
-    ex = store.Exec(args.dry_run)
     rid, req, created = store.new_request(key, name, envs, args.why, args.how, roster.actor(),
                                           dry_run=args.dry_run)
-    store.notify(ex, f"{name} needed for {key} ({','.join(req['envs'])}): {req['why']}", key)
     spawned = False
     if not args.dry_run:
         store.audit("request", key, name, ",".join(req["envs"]), "-", req["requested_by"], rid)
         if not args.no_dialog:
             spawned = store.spawn_dialog() is not None
-    data = {"id": rid, "created": created, "request": req, "dialog": spawned, "dry_run": args.dry_run,
-            "planned": ex.planned}
-    lines = (_plan_lines(ex) + [f"would request {rid}"]) if args.dry_run else [f"requested {rid}"]
+        if not spawned and not store.dialog_running():
+            notify.ring(key, kind="keymaster")
+    data = {"id": rid, "created": created, "request": req, "dialog": spawned, "dry_run": args.dry_run}
+    lines = [f"would request {rid}"] if args.dry_run else [f"requested {rid}"]
     cli.out(args, data, lines)
     return EXIT_OK
 

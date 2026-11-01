@@ -137,15 +137,6 @@ def spend(proj, since, unit=None):
     return round(sum(_cost(r) for r in read(proj, since) if unit is None or r.get("unit") == unit), 2)
 
 
-def units_spend(proj, names):
-    """Headless spend (USD) of the units `names` over the whole history; None when the history exists but
-    cannot be read (shown `n/a`, never 0)."""
-    p = path(proj)
-    if p.exists() and not os.access(p, os.R_OK):
-        return None
-    return round(sum(_cost(r) for r in read(proj) if r.get("unit") in names), 2)
-
-
 def runs_of(proj, unit, since):
     """The unit's runs started at or after `since`: busy (never started) lines and the calls inside a run
     (escalation, review) not counted."""
