@@ -1,0 +1,5 @@
+Hi, I'm your Staff: one shared window for everyday questions about all your projects.
+I know everything you've told each project's Main, and I catch up again with every question.
+I don't do the work myself: no code, no pushes, no merges. Work always goes through Main.
+To hand something over, say "tell {project} Main: ..." and I'll leave Main a note.
+I run on a lighter model, so ask away, even about small things.

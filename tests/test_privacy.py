@@ -177,6 +177,7 @@ class FirstPassTest(test_install.InstallCase):
             p.start()
             self.addCleanup(p.stop)
         registry.save(copy.deepcopy(SAMPLE))
+        support.staff_asleep()   # the Staff that opens after the install: tests/test_staff.py
         self.app = privacy.python_app()
 
     def protect(self):
@@ -230,7 +231,7 @@ class FirstPassTest(test_install.InstallCase):
         name = self.app.name
         guidance = [g.format(name=name) for g in privacy.GUIDANCE]
         self.assertEqual(lines[-2:], [*guidance, f"  {name}: {self.app}"])   # last (review #10)
-        self.assertTrue(guidance[0].startswith("ORCHE's background job (the heartbeat) cannot read the project folder"))
+        self.assertTrue(guidance[0].startswith("Orche's background job (the heartbeat) cannot read the project folder"))
         self.assertIn(f"selected in Finder ({name})", guidance[0])
         self.assertLess(lines.index("jev: skipped (--no-jev); add later with `orche jev setup`"),
                         lines.index(privacy.FIRST_PASS_WAIT))
@@ -294,7 +295,7 @@ class FirstPassTest(test_install.InstallCase):
                          "still blocked — switch Python.app on in Full Disk Access, then: orche install --grant")
         steps = privacy.steps(Path("/u/.local/bin/python3.12"))
         self.assertTrue(steps[0].startswith("1. Drag the item selected in the Finder window that just opened (python3.12)"))
-        self.assertEqual(steps[2], "3. Keep this terminal open. ORCHE checks automatically for up to 5 minutes.")
+        self.assertEqual(steps[2], "3. Keep this terminal open. Orche checks automatically for up to 5 minutes.")
         self.assertEqual(steps[-1], "  python3.12: /u/.local/bin/python3.12")
 
     def test_grant_without_the_job_names_the_installed_mode(self):

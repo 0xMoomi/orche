@@ -140,7 +140,7 @@ class InstallTest(InstallCase):
         self.assertIn("  /plugin install orche@orche", out)
         out = self.install("--no-jev", "--no-plugin-hint")
         self.assertNotIn("/plugin", out)
-        self.assertNotIn("Install the ORCHE hooks as a Claude Code plugin", out)
+        self.assertNotIn("Install the Orche hooks as a Claude Code plugin", out)
         self.assertEqual(out.splitlines()[-1], "jev: skipped (--no-jev); add later with `orche jev setup`")
         code, out, err = self.orche("--json", "install", "--home", str(self.h), "--no-jev", "--no-plugin-hint")
         self.assertEqual((code, err), (0, ""), out)
@@ -408,7 +408,7 @@ class SkillsTest(InstallCase):
         (self.skills() / "orche" / "SKILL.md").write_text("mine\n")
         (self.skills() / "orche-main").symlink_to(self.home)
         out = self.install("--mode", "settings")
-        self.assertIn(f"skills: skip {self.skills() / 'orche'} (existing entry, not ORCHE's; left untouched)", out)
+        self.assertIn(f"skills: skip {self.skills() / 'orche'} (existing entry, not Orche's; left untouched)", out)
         self.assertIn(f"skills: skip {self.skills() / 'orche-main'} (existing symlink to", out)
         self.assertEqual((self.skills() / "orche" / "SKILL.md").read_text(), "mine\n")
         self.assertEqual(os.readlink(self.skills() / "orche-main"), str(self.home))
@@ -485,6 +485,10 @@ class SegmentTest(InstallCase):
         (self.home / "status" / "acme-shop.line").write_text("R&D● BUILD●3 · new1\n")
         res = self.run_sh(SEGMENT, repo / "src" / "deep")
         self.assertEqual((res.stdout, res.stderr, res.returncode), ("R&D● BUILD●3 · new1\n", "", 0))
+        coloured = "\033[33m⚠ waiting 1\033[0m · BUILD 0/1 · \033[2mR&D ○\033[0m"   # statusline.segment()
+        (self.home / "status" / "acme-shop.line").write_text(f"{coloured}\nspent 2026-11-01 4.200000\n")
+        res = self.run_sh(SEGMENT, repo / "src" / "deep")
+        self.assertEqual((res.stdout, res.stderr, res.returncode), (coloured + "\n", "", 0))  # as cached, line 1 only
         (repo / ".orche" / "project").write_text("../../etc/passwd\n")  # not a project key
         self.assertEqual(self.run_sh(SEGMENT, repo).stdout, "")
         self.assertEqual(self.run_sh(SEGMENT, self.home / "elsewhere").stdout, "")
@@ -696,7 +700,7 @@ class DoctorTest(InstallCase):
         (self.c / "settings.json").write_text(json.dumps(self.settings, indent=2) + "\n")
         _, out, _ = self.doctor()
         self.assertIn("WARN\tcareful hook\tcareful hook registered in settings.json — its approval dialogs stall "
-                      "unattended ORCHE panes; remove it or keep it only for your own sessions", out.splitlines())
+                      "unattended Orche panes; remove it or keep it only for your own sessions", out.splitlines())
 
     def test_hooks_registered_twice_warns(self):
         registry.save(registry.empty())

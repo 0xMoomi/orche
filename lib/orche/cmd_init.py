@@ -5,7 +5,7 @@ With no argument the project is the git repository holding the current directory
 The divisions come from a setup (`setup_flow`): `--setup-file`, else `--divisions`/`--custom`/
 `--stage`/`--aliases`, else — on a terminal — the interactive checklist, else the setup defaults
 (every standard division but `ops`; a registered project keeps what it has). Re-running adds only
-divisions that are new; nothing is ever removed. Re-running also re-renders the project's ORCHE-owned
+divisions that are new; nothing is ever removed. Re-running also re-renders the project's Orche-owned
 files from the current templates (`hr.refresh_project`: personas in the main checkout and the worktrees,
 worktree settings, the card link; an overwritten persona is first copied to
 `ORCHE_HOME/backups/<key>/<time>/`), never the user's files, stamps `orche_version` in the registry
@@ -32,7 +32,7 @@ project's `publish.per_project.<key>.base` / `.branch_prefix` / `.issues` (confi
 PRs target and its worktrees start from, the first segment of a feature worker's branch and the issue
 tracker's team key; the setup report then names them. Before the flags, each run (and `--refresh`, so
 `orche update`) reads the repository's team conventions (`detect.conventions`: merged PRs' base, issue-keyed
-remote branches, `.entire/`) and writes each one that is still unset (`_detect`; a flag on the same run wins). Each run (and `--refresh`) adds every ORCHE file to the repository's `info/exclude`
+remote branches, `.entire/`) and writes each one that is still unset (`_detect`; a flag on the same run wins). Each run (and `--refresh`) adds every Orche file to the repository's `info/exclude`
 (onboarding.exclude_settings).
 `--new [private|public|local]` (a folder without `.git` only, else exit 2) first makes the repository, each step
 one line and the first failure the end (`_new_repo`): `git init -b main`, a README when the folder is empty, the
@@ -56,7 +56,7 @@ import time
 from pathlib import Path
 
 from . import (__version__, config, github, guide, hr, intake, mask, orca, paths, privacy, publish, registry,
-               setup_flow, shell, templates, units, util, vendors)
+               setup_flow, shell, staff, statusline, templates, units, util, vendors)
 from .cli import EXIT_BLOCKED, EXIT_NOT_FOUND, EXIT_OK, EXIT_USER, dry, fail, out, warn
 from .hr import onboarding
 
@@ -169,7 +169,7 @@ def _registered(needle, reg):
 
 
 def _refresh(args, reg) -> int:
-    """`--refresh`: the ORCHE-owned files of a registered project from the current templates —
+    """`--refresh`: the Orche-owned files of a registered project from the current templates —
     the card link, personas and worktree settings (no project template file) — and the
     `orche_version` stamp. Reads no codebase, touches no Orca, never the user's files."""
     given = _setup_flags(args)
@@ -199,7 +199,7 @@ def _refresh(args, reg) -> int:
     ts = time.strftime("%Y%m%dT%H%M%S")
     try:
         ref = hr.refresh_project(reg, key, root=root, ts=ts, dry_run=dry_run)
-        onboarding.exclude_settings(root, dry_run=dry_run)   # every ORCHE file stays out of git
+        onboarding.exclude_settings(root, dry_run=dry_run)   # every Orche file stays out of git
         if not dry_run:   # origin/HEAD names the base branch a done's PR targets (publish.base); best effort
             shell.git(root, "remote", "set-head", "origin", "-a", timeout=30)
     except onboarding.UnsafeTarget as exc:
@@ -287,7 +287,7 @@ class LinkedWorktree(Exception):
     """The path is a linked git worktree (its `.git` file points into `<main>/.git/worktrees/`)."""
 
     def __init__(self, path, main):
-        super().__init__(f"{path} is a git worktree of {main}; put ORCHE on the main checkout")
+        super().__init__(f"{path} is a git worktree of {main}; put Orche on the main checkout")
 
 
 def _find_repo(needle, reg):
@@ -391,7 +391,7 @@ def _switch_to_main(proj) -> bool:
 
 
 def _init_window(root):
-    """(handle, title, None) for the one connected non-ORCHE pane open on the project folder (the
+    """(handle, title, None) for the one connected non-Orche pane open on the project folder (the
     window that ran init), else (None, None, why)."""
     try:
         terms = orca.terminals_of(orca.terminal("list"))
@@ -781,6 +781,7 @@ def cmd_init(args):
         dry(f"copy templates/project -> {root} (missing files only, *.tmpl skipped)")
     else:
         paths.ensure_dirs()
+        statusline.learn_language(reg)   # before the first HR record renders the status line
         templates.copy_project(root, PROJECT=key)
     detected = _detect(args, key, root)   # before the flags (a flag wins) and the worktrees (they start from the base)
     _set_publish(args, key)
@@ -792,7 +793,7 @@ def cmd_init(args):
         return fail(exc.code, exc.msg)
     _apply_preset(reg, key, setup, dry_run)
     ts = time.strftime("%Y%m%dT%H%M%S")
-    try:   # re-render the ORCHE-owned files of the registered units
+    try:   # re-render the Orche-owned files of the registered units
         ref = hr.refresh_project(reg, key, root=root, ts=ts, dry_run=dry_run)
     except onboarding.UnsafeTarget as exc:
         return fail(EXIT_BLOCKED, f"init {key} stopped: {exc} (re-run orche init {key} to resume)")
@@ -855,6 +856,9 @@ def cmd_init(args):
     report = None if dry_run or key not in reg["projects"] else _report(reg, key, root, intake_line, detected,
                                                                          created=_created_lines(created), gate=gate)
     data["setup_report"] = str(report) if report else None
+    data["staff"] = staff.auto_open(dry_run=dry_run)   # before the switch, so the owner lands on Main
+    if data["staff"]:
+        lines.append(data["staff"])
     if dry_run:
         data["switched"] = False
         lines.append(f"would switch to {proj['main_session']}")

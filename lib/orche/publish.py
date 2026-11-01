@@ -1,6 +1,6 @@
 """A gated unit's verified `done` publishes its work (R6, R7, R28, R29).
 
-ORCHE, not the model, pushes the unit's branch and opens its PR: the runner calls `publish` after the
+Orche, not the model, pushes the unit's branch and opens its PR: the runner calls `publish` after the
 done gate passed (outside any Codex sandbox: the runner process holds the credentials), and
 `orche report done` from a gated pane member calls it after `donegate.for_report`. The push is never
 forced and never targets another ref; the PR is ready, never a draft, and never retargeted.
@@ -12,7 +12,7 @@ The base is config `publish.per_project.<project>.base`, else `publish.base`, el
 the OWNER step (`git remote set-head origin -a`), never a guess (R12); the queue and the Build review
 read the same `base` and refuse with `no_base`. A Build HEAD that changes nothing against the fetched
 origin/<base> (coordination) publishes nothing: Unchanged, and the done is filed with `pr: none` (R5);
-a feature's is a Gap. Otherwise ORCHE publishes only the unit's own recorded branch: the worker's recorded
+a feature's is a Gap. Otherwise Orche publishes only the unit's own recorded branch: the worker's recorded
 branch, Build's `div/build` (or the branch the registry records); a worktree on any other branch is a Gap.
 
 Every gh call and the push go through github (tests replace PATH's `gh` and use a bare repo as origin).
@@ -21,7 +21,7 @@ an OWNER step).
 
 The worker's name carries the issue key (`issue_of`: `des-47-…` -> DES-47, `123-…` -> #123): the PR title
 ends with ` (KEY)` and its body starts with `Fixes KEY`; the tracker's own GitHub automation moves the
-issue (ORCHE never calls the tracker). The body names no writer (no AI-authorship marker: a squash merge can
+issue (Orche never calls the tracker). The body names no writer (no AI-authorship marker: a squash merge can
 copy it into history); its queue sentence appears only when the project's gate applies (`gate`).
 
 In a team repository (registry.team) a gated done publishes nothing: it is filed with `ready_line` and
@@ -45,7 +45,7 @@ REJECTED = ("push rejected: origin/{branch} has commits this worktree lacks (som
 SYNC_NOTE = "## Branch sync: {files} conflict with origin/{base}; merge it yourself first"
 OWNER_AUTH = "gh auth login (then orche run {unit} or report done again)"
 OWNER_PERMISSION = "grant this machine's git/gh account push and PR rights on the repository"
-OWNER_BASE = ("git -C {root} remote set-head origin -a (or set publish.base in ORCHE's config), then orche run "
+OWNER_BASE = ("git -C {root} remote set-head origin -a (or set publish.base in Orche's config), then orche run "
               "{unit} or report done again")
 _PR_URL = re.compile(r"https?://\S+/pull/(\d+)")
 
@@ -154,7 +154,7 @@ def branch(member, worktree):
     """(branch, None) or (None, Gap): the member's own branch (own_branch), which the worktree must be on (R12)."""
     current, recorded = _current(worktree), own_branch(member)
     if not recorded or current != recorded:
-        return None, Gap(f"worktree is on {current or 'nothing'}, recorded {recorded or 'nothing'}: ORCHE publishes "
+        return None, Gap(f"worktree is on {current or 'nothing'}, recorded {recorded or 'nothing'}: Orche publishes "
                          "only the unit's own branch")
     return recorded, None
 
@@ -169,7 +169,7 @@ def gate(root, cfg=None, project=None):
 def no_base(root) -> str:
     """R12's refusal (the queue, the Build review) when nothing names the base: the gap and the OWNER step."""
     return (f"no base branch: publish.base is unset and origin/HEAD is not set in {root}; OWNER: git -C {root} "
-            "remote set-head origin -a (or set publish.base in ORCHE's config), then try again")
+            "remote set-head origin -a (or set publish.base in Orche's config), then try again")
 
 
 def changes(worktree, base_name) -> bool:
@@ -182,7 +182,7 @@ def changes(worktree, base_name) -> bool:
 def title_of(goal, issue="") -> str:
     """The GOAL's first line, masked, within TITLE_MAX; with an issue key it ends with ` (KEY)` (the GOAL
     part is cut, never the key)."""
-    line = next((ln.strip() for ln in str(goal or "").splitlines() if ln.strip()), "ORCHE unit")
+    line = next((ln.strip() for ln in str(goal or "").splitlines() if ln.strip()), "Orche unit")
     line = mask.redact(line)[0]
     tail = f" ({issue})" if issue else ""
     room = TITLE_MAX - len(tail)
@@ -245,7 +245,7 @@ def _ensure_pr(wt, name, base_name, head, title, body, unit):
         pr = prs[0]
         number = int(pr.get("number"))
         if pr.get("baseRefName") != base_name:
-            return Gap(f"PR #{number} targets {pr.get('baseRefName')}, not {base_name}; ORCHE never retargets: "
+            return Gap(f"PR #{number} targets {pr.get('baseRefName')}, not {base_name}; Orche never retargets: "
                        "Build decides")
         if pr.get("isDraft"):
             try:

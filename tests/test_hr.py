@@ -142,7 +142,9 @@ class InitTest(HrCase):
         self.assertEqual(creates, [f"[dry-run] orca worktree create --repo id:repo-acme --name div-{d} --no-parent --json"
                                    for d in registry.DIVISIONS])
         panes = [l for l in dry if " terminal create " in l]
-        self.assertEqual(len(panes), 1)
+        self.assertEqual(len(panes), 2)                        # the CEO Staff opens first, then Main
+        self.assertIn("--title staff --command", panes.pop(0))
+        self.assertIn("would open staff pane (dry-run)", out)
         self.assertIn(f"--title main-acme-shop --command {PANE}ORCHE_SESSION=main-acme-shop CLAUDE_CODE_PROMPT_CACHE_TTL=1h CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1 claude "
                       "--permission-mode bypassPermissions --name main-acme-shop --json", panes[0])
         autos = [l for l in dry if " automations create " in l]
@@ -221,6 +223,14 @@ class InitTest(HrCase):
         self.assertEqual(self.orche("init", "Acme Shop", "--divisions", "build,gtm")[0], 0)  # resumed init
         self.assertEqual(marker.read_text(), "acme-shop\n")
         self.assertEqual(roster.Roster(registry.load()).place(self.repo / "src").project, "acme-shop")
+
+    def test_init_caches_the_owners_language(self):
+        """Before the first status line: no Main prompt yet, so the macOS locale; a dry run writes none."""
+        (self.home / "fake-locale").write_text("ko_KR\n")
+        self.assertEqual(self.orche("--dry-run", "init", "Acme Shop", "--divisions", "build")[0], 0)
+        self.assertFalse((self.home / "status" / "lang").exists())
+        self.assertEqual(self.orche("init", "Acme Shop", "--divisions", "build", "--no-intake")[0], 0)
+        self.assertEqual((self.home / "status" / "lang").read_text(), "ko\n")
 
     def test_wake_ops_refused_while_building(self):
         code, _, err = self.orche("init", "Acme Shop", "--wake", "ops", "--divisions", ALL)
@@ -329,7 +339,7 @@ class InitTest(HrCase):
         generic = "---\nname: {}\n---\n" + header.format("division.md") + "Generic {} medium\n"
         self.assertEqual((agents / "div-acme-shop-research.md").read_text(),
                          generic.format("div-acme-shop-research", "research"))
-        # A persona is ORCHE's: one already at the path is rendered over (T10; was: never overwritten).
+        # A persona is Orche's: one already at the path is rendered over (T10; was: never overwritten).
         self.assertEqual(existing.read_text(), "---\nname: div-acme-shop-gtm\n---\n" + header.format("division.md")
                          + "Generic gtm medium\n")
         self.assertNotIn("persona template missing for division", hr.log_path().read_text())
@@ -488,7 +498,7 @@ class InitTest(HrCase):
         brief.write_text("rev: 1\n")
         status = subprocess.run(["git", "status", "--porcelain", "--untracked-files=all"],
                                 cwd=self.repo, capture_output=True, text=True).stdout
-        self.assertEqual(status, "")   # the templates, .orche/ and SETUP.md: nothing ORCHE wrote shows
+        self.assertEqual(status, "")   # the templates, .orche/ and SETUP.md: nothing Orche wrote shows
         before = exclude_file.read_text()
         self.assertEqual(self.orche("init", "acme-shop", "--refresh")[0], 0)
         self.assertEqual(exclude_file.read_text(), before)   # idempotent: a second run adds nothing
@@ -594,7 +604,7 @@ class InitTest(HrCase):
         self.assertIn("- Read the repository's team conventions: team.\n", report)
         self.assertIn(f'- Team: plugin {support.TEAM_PLUGIN} (installed for you: no, say "install the team plugin"). '
                       'Push, pull request and merge wait for your word: "push <unit>" and "merge <PR>"; the team\'s '
-                      "rules reach every ORCHE session.\n", report)
+                      "rules reach every Orche session.\n", report)
         support.team_plugin(self.home)
         self.assertEqual(self.orche("init", "acme-shop", "--refresh")[0], 0)
         self.assertIn(f"- Team: plugin {support.TEAM_PLUGIN} (installed for you: yes).",
@@ -621,7 +631,7 @@ class InitTest(HrCase):
                          ("r::/w/y", "/w/y", "div/y"))
 
 
-# ---- refresh (T10): re-running init re-renders ORCHE-owned unit files -------------------------------
+# ---- refresh (T10): re-running init re-renders Orche-owned unit files -------------------------------
 
 class RefreshTest(HrCase):
     """A registered project: build (active), gtm (dormant), rnd (no persona template), research (retired),
@@ -831,7 +841,7 @@ class FeatNewTest(FeatCase):
         self.assertTrue((self.repo / ".claude" / "agents" / "feat-acme-shop-payments.md").is_file())
         self.assertIn("create feat-acme-shop-payments by div-acme-shop-build: own payments",
                       hr.log_path().read_text())
-        self.assertIn("BUILD●2", (self.home / "status" / "acme-shop.line").read_text())
+        self.assertIn("BUILD 0/2", statusline.plain((self.home / "status" / "acme-shop.line").read_text()))
 
     def test_failed_onboarding_resumes_without_second_worktree(self):
         wt = self.wtroot / "feat-pay"
@@ -1199,7 +1209,7 @@ class FeatSleepWakeTest(FeatCase):
         line.write_text("stale\n")
         self.assertEqual(self.orche("feat", "wake", "acme", "search")[0], 0)
         self.assertNotEqual(line.read_text(), "stale\n")
-        self.assertTrue(line.read_text().startswith("R&D"), line.read_text())
+        self.assertTrue(statusline.plain(line.read_text()).startswith("BUILD 0/2 · "), line.read_text())
         feat = roster.Roster(registry.load()).member("feat-acme-shop-search").entry
         self.assertGreater(units.parse_iso(feat["last_activity"]), NOW - dt.timedelta(minutes=5))
         self.assertTrue((self.home / "activity" / "feat-acme-shop-search").is_file())
@@ -1249,7 +1259,7 @@ class FeatRetireTest(FeatCase):
     def kept_files(self):
         return {p.name: p.read_text() for p in self.kept.iterdir() if p.is_file()}
 
-    # -- F2: untracked ORCHE files no longer stop `worktree rm`; a re-run completes ------------
+    # -- F2: untracked Orche files no longer stop `worktree rm`; a re-run completes ------------
     def test_untracked_unit_files_are_kept_cleared_and_retire_completes(self):
         memory = self.wt / ".claude" / "agent-memory" / "feat-acme-shop-checkout" / "MEMORY.md"
         memory.parent.mkdir(parents=True)
@@ -1503,9 +1513,9 @@ class FeatRetireTest(FeatCase):
         self.assertEqual(err.splitlines(), [
             "[dry-run] check no Orca pane is titled feat-acme-shop-checkout",
             f"[dry-run] copy {self.wt / '.orche' / 'feat' / 'checkout'} -> {self.kept}",
-            f"[dry-run] copy 2 other ORCHE file(s) -> {self.kept / '_worktree'}",
+            f"[dry-run] copy 2 other Orche file(s) -> {self.kept / '_worktree'}",
             f"[dry-run] git -C {shlex.quote(str(self.wt))} tag {self.tag} feat/checkout",
-            f"[dry-run] delete 6 ORCHE-owned untracked file(s) from {self.wt}",
+            f"[dry-run] delete 6 Orche-owned untracked file(s) from {self.wt}",
             f"[dry-run] orca worktree rm --worktree id:repo-acme::{self.wt} --json",
             "[dry-run] archive 1 transcript file(s) of feat-acme-shop-checkout",
             f"[dry-run] append GRAVEYARD row in {self.repo / 'docs' / 'GRAVEYARD.md'}"])

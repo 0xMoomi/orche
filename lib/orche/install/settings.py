@@ -1,4 +1,4 @@
-"""Merge ORCHE's keys into `~/.claude/settings.json` (and take its hook entries out again).
+"""Merge Orche's keys into `~/.claude/settings.json` (and take its hook entries out again).
 
 Only our keys are touched: `cleanupPeriodDays`, `env.CLAUDE_AUTOCOMPACT_PCT_OVERRIDE`, and hook
 entries matched by their exact command string. Every other key and hook entry is preserved in
@@ -12,7 +12,7 @@ from .. import util
 from . import write_file
 
 STEP = "settings"
-# The gstack careful hook is not ORCHE's: never registered or removed, only flagged by doctor.
+# The gstack careful hook is not Orche's: never registered or removed, only flagged by doctor.
 CAREFUL_MARKER = "check-careful.sh"
 CLEANUP_DAYS = 3650
 ENV_SET = {"CLAUDE_AUTOCOMPACT_PCT_OVERRIDE": "50"}
@@ -106,7 +106,7 @@ ORIG_CLEANUP = "cleanupPeriodDays"
 
 
 def snapshot(data) -> dict:
-    """The user's values of the keys ORCHE sets, recorded once (first install) for uninstall."""
+    """The user's values of the keys Orche sets, recorded once (first install) for uninstall."""
     env = data.get("env") if isinstance(data.get("env"), dict) else {}
     out = {"env_present": "env" in data,
            ORIG_CLEANUP: {"present": ORIG_CLEANUP in data, "value": data.get(ORIG_CLEANUP)}}
@@ -117,7 +117,7 @@ def snapshot(data) -> dict:
 
 def install(ctx, mode, state) -> None:
     """Merge our keys. Outside dry-run, `state` gains `originals` (first time only) and every hook
-    command ORCHE added (`added_hooks`), recorded only after settings.json was written."""
+    command Orche added (`added_hooks`), recorded only after settings.json was written."""
     path = settings_path(ctx)
     data, err = load(ctx)
     if err:
@@ -135,7 +135,7 @@ def install(ctx, mode, state) -> None:
             changes.append(f"set env.{key} {env.get(key, '(absent)')} -> {value}")
             env[key] = value
     ctx.note(STEP, "keep", None, f"env.{ENV_UNTOUCHED} left untouched "
-                                 f"({'set' if ENV_UNTOUCHED in env else 'absent'}; ORCHE never writes it)")
+                                 f"({'set' if ENV_UNTOUCHED in env else 'absent'}; Orche never writes it)")
     replaced = []
     if mode == "plugin":
         # The plugin's hooks.json registers the hooks: settings-mode entries left by an earlier
@@ -172,20 +172,20 @@ def install(ctx, mode, state) -> None:
 
 
 def orche_hook_pairs(plugin_root, state=None) -> set:
-    """(event, command) of every settings-mode ORCHE hook entry: the six plugin hooks
+    """(event, command) of every settings-mode Orche hook entry: the six plugin hooks
     (`"<root>/hooks/run.sh" <hook>`) plus the recorded `added_hooks`."""
     pairs = {(event, command) for event, _, command in plugin_hooks(plugin_root)}
     return pairs | {(event, command) for event, command in _added_pairs(state or {}) if command}
 
 
 def settings_hooks(data, plugin_root) -> list:
-    """[(event, command)] ORCHE hook entries present in settings.json."""
+    """[(event, command)] Orche hook entries present in settings.json."""
     pairs = orche_hook_pairs(plugin_root)
     return [(event, command) for event, command in iter_commands(data) if (event, command) in pairs]
 
 
 def _added_pairs(state) -> set:
-    """Recorded hook commands. A gstack careful entry an older ORCHE recorded is skipped: ORCHE no
+    """Recorded hook commands. A gstack careful entry an older Orche recorded is skipped: Orche no
     longer owns it."""
     hooks = state.get("added_hooks") if isinstance(state.get("added_hooks"), list) else []
     return {(h.get("event"), h.get("command")) for h in hooks
@@ -193,7 +193,7 @@ def _added_pairs(state) -> set:
 
 
 def _restore_one(container, key, label, orig, ours, changes, kept) -> None:
-    """Restore/remove `key` only while it still holds the value ORCHE set; a later user edit is kept."""
+    """Restore/remove `key` only while it still holds the value Orche set; a later user edit is kept."""
     if not isinstance(orig, dict) or not orig or key not in container and not orig.get("present"):
         return
     current = container.get(key)
@@ -224,7 +224,7 @@ def _restore(new, originals):
 
 
 def uninstall(ctx, state) -> None:
-    """Remove only the hook commands ORCHE recorded as added and restore the recorded originals.
+    """Remove only the hook commands Orche recorded as added and restore the recorded originals.
     Outside dry-run, the consumed `added_hooks`/`originals` are dropped from `state`."""
     path = settings_path(ctx)
     if not path.exists():
@@ -241,7 +241,7 @@ def uninstall(ctx, state) -> None:
     for item in kept:
         ctx.note(STEP, "kept", item, "changed after install")
     if not removed and not restored:
-        ctx.note(STEP, "ok", path, "no ORCHE hook entries or values to restore")
+        ctx.note(STEP, "ok", path, "no Orche hook entries or values to restore")
     else:
         for event, command in removed:
             ctx.note(STEP, "remove", None, f"hook {event} {command}")

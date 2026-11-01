@@ -8,7 +8,7 @@ a change it seriously doubts) the two-vendor panel when both vendors are up, els
 other vendor (a ledger row of kind pre, so `orche queue add --pr N` finds it), then on PASS the headless head review;
 both PASS queue the PR. A pre-review RETURN prints its findings and exits 3 (fix, push, review again);
 anything else wakes the Build pane. `--background` starts the same detached and tells the caller its
-pre-review verdict as a waking `review` pointer. Nothing in ORCHE starts a cross-check by itself: after
+pre-review verdict as a waking `review` pointer. Nothing in Orche starts a cross-check by itself: after
 a publish the run and the heartbeat start the head review alone (internally, `--head`).
 """
 import argparse

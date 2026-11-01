@@ -183,7 +183,7 @@ class IntakeRunTest(IntakeCase):
         self.assertIn("at most 2000 characters", stdin)
 
     def test_request_carries_the_precomputed_repo_facts(self):
-        """I1/I2: no shell for the worker, so ORCHE puts the tree, `git log --oneline -30`, the
+        """I1/I2: no shell for the worker, so Orche puts the tree, `git log --oneline -30`, the
         manifests and the env template's variable NAMES (never values) in the request, masked."""
         r = self.repo
         for rel, text in {"package.json": "{}", ".github/workflows/ci.yml": "on: push", "src/app.py": "",
@@ -501,6 +501,7 @@ class InitIntakeTest(FakeClaudeMixin, test_hr.HrCase):
         super().setUp()
         git_repo(self.repo, code=True)
         self.setup_fake()
+        support.staff_asleep()
 
     def test_init_ends_with_the_intake(self):
         self.reply(answer({"build": "Run `make test`.", "gtm": "Audience: shops.", "design": "Figma."}))
@@ -683,24 +684,24 @@ class InitClosesItsWindowTest(FakeClaudeMixin, test_hr.HrCase):
         self.assertEqual(lines[3:], [cmd_init.CLOSED, guide.SETUP_ASK])
         self.assertEqual(len(lines), inbox.MAX_LINES)
         text = self.report().read_text()
-        self.assertTrue(text.startswith("# ORCHE is set up: acme-shop\n\n- Divisions: build (claude-opus-5-5); "
+        self.assertTrue(text.startswith("# Orche is set up: acme-shop\n\n- Divisions: build (claude-opus-5-5); "
                                         "gtm (claude-sonnet-5-5)\n"), text)
         for part in ("- Agents: 2 division agents, one Orca tab each, always on. Each unit of work adds one worker "
                      "while it runs; up to 4 run at once (custom).\n",
                      "- Intake: read the repository once and wrote the project card and the division charters "
                      "(claude-sonnet-5-5, $0.42, 38 s).\n",
-                     "nothing is committed to the repository; ORCHE's own files are excluded from git\n",
+                     "nothing is committed to the repository; Orche's own files are excluded from git\n",
                      "\n## Running now\n\n- Heartbeat: every 300 s (the reconcile job): ",
                      "\n- Notifications: Orca shows one when Main finishes a reply; ",
                      "- Janitor: cleans up daily (the heartbeat starts it when the last pass is a day old); ",
                      "- More agents at once: how many workers may run in parallel. "
                      "Up to 4 at once (custom). ",
                      "- Talk to Main in the main-acme-shop tab, in any language.", "\n## Any time\n\n- ",
-                     'Say "what else can ORCHE do?" to see this list again (Main runs `orche doctor`).'):
+                     'Say "what else can Orche do?" to see this list again (Main runs `orche doctor`).'):
             self.assertIn(part, text)
         self.assertNotRegex(text, "[\u2013\u2014]")
         exclude = (self.repo / ".git" / "info" / "exclude").read_text().splitlines()
-        self.assertIn(".orche/", exclude)     # the setup report with every other ORCHE file
+        self.assertIn(".orche/", exclude)     # the setup report with every other Orche file
         self.assertEqual(json.loads(self.orche("--json", "init", "Acme Shop")[1])["closed_window"], None)  # a re-run
 
     def test_only_orche_panes_on_the_folder_close_nothing(self):
@@ -743,7 +744,7 @@ class InitClosesItsWindowTest(FakeClaudeMixin, test_hr.HrCase):
         self.assertEqual(self.orca_calls("terminal close"), [])
         self.assertEqual(inbox.pending("main-acme-shop"), [])
         self.assertEqual(json.loads(out)["setup_report"], str(self.report()))
-        self.assertTrue(self.report().read_text().startswith("# ORCHE is set up: acme-shop\n"))
+        self.assertTrue(self.report().read_text().startswith("# Orche is set up: acme-shop\n"))
 
 
 class RunnerContextTest(test_runner.RunnerCase):

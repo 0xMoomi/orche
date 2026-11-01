@@ -1,6 +1,6 @@
-# Contributing to ORCHE
+# Contributing to Orche
 
-Thanks for helping. ORCHE is small on purpose; please keep it that way.
+Thanks for helping. Orche is small on purpose; please keep it that way.
 
 ## Ground rules
 
@@ -42,7 +42,7 @@ lib/orche/           top-level modules by theme: dispatch, brief, inbox, deliver
 lib/orche/<package>/ flow, hr, install, janitor, queue, review, runs, secrets: one domain each
 hooks/               hooks.json, run.sh and one .py per Claude Code hook; logic lives in lib/
 skills/, agents/     the plugin's skills and agent definitions
-templates/           files ORCHE writes into projects and prompts it gives to agents
+templates/           files Orche writes into projects and prompts it gives to agents
 tests/               unittest suite, support.py and fixtures; no network, no real orca or gh
 ```
 

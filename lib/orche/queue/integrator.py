@@ -46,7 +46,7 @@ MAX_RETURNS = 3         # a unit's returns inside W before its head gets `blocke
 MAX_STOPS = 3           # passes in a row stopped by git/gh before the queue pauses
 LIVE = "live-ui-verified"
 LIVE_REASON = "user-visible change: live verification required (the check script's verdict was {level})"
-IDENT = ["-c", "user.name=ORCHE queue", "-c", "user.email=queue@orche.invalid", "-c", "commit.gpgsign=false",
+IDENT = ["-c", "user.name=Orche queue", "-c", "user.email=queue@orche.invalid", "-c", "commit.gpgsign=false",
          "-c", "core.hooksPath=/dev/null"]
 
 

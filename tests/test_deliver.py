@@ -22,11 +22,20 @@ from orche import brief, deliver, hr, inbox, notify, orca, procs, registry, rost
 from test_hooks import HookCase
 from test_registry import load_cli
 
+RULE = "─" * 40
+
+
+def screen(prompt="❯", handle="t-main", **extra):
+    """A `terminal read --screen` result: Claude Code's composer row `prompt` between its two rules."""
+    return {"terminal": {"handle": handle, "status": "running", "source": "screen",
+                         "tail": ["● Done.", RULE, prompt, RULE, "  ⏵⏵ bypass permissions on"], **extra}}
+
+
 CANNED = {"terminal list": {"terminals": [{"handle": "t-main", "title": "✳ main-acme"},
                                           {"handle": "t-build", "title": "div-acme-build"}]},
           "terminal wait": {"wait": {"handle": "t-main", "condition": "tui-idle", "satisfied": True,
                                      "status": "running", "exitCode": None}},
-          "terminal read": {"terminal": {"handle": "t-main", "status": "running", "tail": []}},
+          "terminal read": screen(),
           "terminal send": {"send": {"accepted": True, "handle": "t-main", "bytesWritten": 27}}}
 SEND_ARGV = ["orca", "terminal", "send", "--terminal", "t-main", "--text", inbox.WAKE_TEXT,
              "--enter", "--wait-submit", "20", "--json"]
@@ -62,7 +71,9 @@ class DeadPane:
         if sub == "wait":
             return {"wait": {"handle": handle, "satisfied": not self.busy, "status": "running" if live else "exited"}}
         if sub == "read":
-            return {"terminal": {"handle": handle, "status": "running" if live else "exited", "tail": []}}
+            shown = screen(handle=handle)
+            shown["terminal"]["status"] = "running" if live else "exited"
+            return shown
         if sub == "send":
             return {"send": {"accepted": True, "handle": handle,
                              "prompt": {"provider": "claude", "stages": ["input_accepted", "turn_started"]}}}
@@ -127,7 +138,7 @@ class NudgeTest(NudgeCase):
                                         ["terminal", "send"]])
         wait = self.orca_calls()[1]
         self.assertEqual(wait[3:], ["--terminal", "t-main", "--for", "tui-idle", "--timeout-ms", "120000", "--json"])
-        self.assertEqual(self.orca_calls()[2][3:], ["--terminal", "t-main", "--json"])
+        self.assertEqual(self.orca_calls()[2][3:], ["--terminal", "t-main", "--screen", "--json"])
         self.assertEqual(self.orca_calls()[3], SEND_ARGV)
         self.assertTrue(self.marker().is_file())
         self.assertIn("nudge session=main-acme state=nudged pending=1 waited=0s", self.events())
@@ -162,8 +173,7 @@ class NudgeTest(NudgeCase):
             "dialog": {"terminal_wait": {"wait": {"satisfied": False, "status": "running",
                                                   "blockedReason": "permission"}}},
             "no-agent": {"terminal_wait": {"wait": {"satisfied": True, "status": "exited", "exitCode": 0}}},
-            "user-typing": {"terminal_read": {"terminal": {"handle": "t-main", "status": "running",
-                                                           "draft": "half typed", "tail": []}}},
+            "user-typing": {"terminal_read": screen(draft="half typed")},
         }
         self.report()
         for state, over in cases.items():
@@ -313,11 +323,60 @@ class NudgeTest(NudgeCase):
         for draft in (inbox.WAKE_TEXT, "[orche] inbox: acme-x-20261021-1 rev 2"):
             with self.subTest(draft):
                 (self.home / "logs" / "fake-orca.jsonl").unlink(missing_ok=True)
-                self.canned(terminal_read={"terminal": {"handle": "t-main", "status": "running", "draft": draft}})
+                self.canned(terminal_read=screen(draft=draft))
                 self.assertEqual(self.nudge(), (1, "nudge-failed"))
                 self.assertNotIn(["terminal", "send"], self.calls())
                 self.assertFalse(self.marker().exists())
-        self.assertIn("stale ORCHE line", (self.home / "logs" / "hooks.log").read_text())
+        self.assertIn("stale Orche line", (self.home / "logs" / "hooks.log").read_text())
+
+    def test_the_composer_is_read_from_the_rendered_screen(self):
+        """Orca's `draft` when it parsed one, else Claude Code's `❯` row between its rules (Orca parses no draft
+        while the terminal cursor is hidden); None when no screen was rendered or no composer is on it."""
+        two_rows = {"terminal": {"source": "screen", "tail": [RULE, "❯ first line", "  second line", RULE, "  ⏵⏵ footer"]}}
+        below = {"terminal": {"source": "screen", "tail": [RULE, "❯", RULE, "  status", "❯ not under a rule"]}}
+        footer = {"terminal": {"source": "screen", "tail": [RULE, "❯", RULE, "❯ a status line, no rule below"]}}
+        cases = [(screen(draft="half typed"), "half typed"),
+                 (screen(), ""),
+                 (screen("❯ "), ""),
+                 (screen('❯ Try "fix lint errors"'), ""),
+                 (screen("❯ Try “refactor auth”"), ""),
+                 (screen("❯ half typed"), "half typed"),
+                 (screen(f"❯ {inbox.WAKE_TEXT}"), inbox.WAKE_TEXT),
+                 (two_rows, "first line\n  second line"),
+                 (below, ""),
+                 (footer, ""),
+                 ({"terminal": {"source": "screen", "tail": ["● Done.", RULE, "❯ no rule below"]}}, None),
+                 ({"terminal": {"source": "screen", "tail": ["● Done.", "❯ a quoted prompt", "more output"]}}, None),
+                 ({"terminal": {"source": "screen", "tail": []}}, None),
+                 ({"terminal": {"source": "screen-unavailable", "tail": [RULE, "❯", RULE]}}, None),
+                 ({"terminal": {"source": "stream", "draft": "x", "tail": [RULE, "❯", RULE]}}, None),
+                 ({"terminal": {"tail": [RULE, "❯", RULE]}}, None)]
+        for shown, text in cases:
+            with self.subTest(shown=shown):
+                self.assertEqual(deliver._composer(shown["terminal"]), text)
+
+    def test_main_without_a_composer_on_screen_is_nudge_failed_and_typed_nothing(self):
+        self.report()
+        for name, read in (("stream", {"terminal": {"handle": "t-main", "status": "running", "tail": ["❯"]}}),
+                           ("screen-unavailable", {"terminal": {"handle": "t-main", "source": "screen-unavailable"}}),
+                           ("no composer row", {"terminal": {"handle": "t-main", "source": "screen",
+                                                             "tail": ["● Done."]}})):
+            with self.subTest(name):
+                (self.home / "logs" / "fake-orca.jsonl").unlink(missing_ok=True)
+                self.canned(terminal_read=read)
+                self.assertEqual(self.nudge(), (1, "nudge-failed"))
+                self.assertNotIn(["terminal", "send"], self.calls())
+                self.assertFalse(self.marker().exists())
+        self.assertIn("deliver: main-acme shows no composer", (self.home / "logs" / "hooks.log").read_text())
+
+    def test_main_with_text_on_its_rendered_composer_row_is_user_typing(self):
+        """The owner's unsent text without a `draft` field (Claude Code's hidden cursor) is never typed into."""
+        self.report()
+        self.canned(terminal_read=screen("❯ half typed, then the owner looked away"))
+        self.assertEqual(self.nudge(), (1, "user-typing"))
+        self.assertNotIn(["terminal", "send"], self.calls())
+        self.assertFalse(self.marker().exists())
+        self.assertEqual(len(inbox.pending("main-acme")), 1)            # held, never dropped
 
     def test_a_marker_that_cannot_be_removed_is_logged_not_raised(self):
         self.marker().parent.mkdir(parents=True, exist_ok=True)
@@ -437,10 +496,25 @@ class DeliverTest(NudgeCase):
 
     def test_user_typing_is_exit_0_without_a_pointer(self):
         b = self.dispatched()
-        self.canned(terminal_read={"terminal": {"handle": "t-build", "status": "running", "draft": "half", "tail": []}})
+        self.canned(terminal_read=screen(handle="t-build", draft="half"))
         self.assertEqual(self.deliver(b.unit), (0, "user-typing"))
         self.assertNotIn(["terminal", "send"], self.calls())
         self.assertEqual(self.failures(), [])
+
+    def test_a_division_pane_without_a_composer_on_screen_is_typed_as_before(self):
+        b = self.dispatched()
+        self.canned(terminal_read={"terminal": {"handle": "t-build", "status": "running", "tail": []}})
+        self.assertEqual(self.deliver(b.unit), (0, "nudged"))
+        self.assertEqual(self.orca_calls()[-1], self.send_argv(b.unit))
+
+    def test_a_brief_to_main_is_never_typed_into_the_owners_text(self):
+        b = self.dispatched("main-acme", "div-acme-build")
+        for read, state in ((screen("❯ half typed"), "user-typing"), ({"terminal": {"tail": []}}, "nudge-failed")):
+            with self.subTest(state):
+                (self.home / "logs" / "fake-orca.jsonl").unlink(missing_ok=True)
+                self.canned(terminal_read=read)
+                self.assertEqual(self.deliver(b.unit)[1], state)
+                self.assertNotIn(["terminal", "send"], self.calls())
 
     def test_failures_post_an_urgent_pointer_to_the_sender_with_the_fix(self):
         cases = [  # (to, sender, canned, state, hint)
@@ -549,8 +623,7 @@ class DeliverTest(NudgeCase):
                      "provider": "claude", "stages": ["input_accepted"]}}}},
                  "replaced": {"terminal_send": {"send": {"accepted": True, "prompt": {
                      "provider": "claude", "stages": ["input_accepted"], "observation": "incarnation_replaced"}}}},
-                 "stale draft": {"terminal_read": {"terminal": {"handle": "t-build", "status": "running",
-                                                                "draft": "[orche] inbox: acme-y-20261021-1 rev 1"}}}}
+                 "stale draft": {"terminal_read": screen("❯ [orche] inbox: acme-y-20261021-1 rev 1", "t-build")}}
         for name, over in cases.items():
             with self.subTest(name):
                 for path, _x in inbox.pending("main-acme"):
@@ -808,7 +881,8 @@ class QuietTest(NudgeCase):
         self.assertEqual(self.nudge(), (0, "nudged"))
         self.assertEqual(self.clock.now, 110)                      # 90 s after the newest report
         self.assertEqual(self.calls(), [["terminal", "list"], ["terminal", "wait"], ["terminal", "read"],
-                                        ["terminal", "wait"], ["terminal", "read"], ["terminal", "send"]])
+                                        ["terminal", "list"], ["terminal", "wait"], ["terminal", "read"],
+                                        ["terminal", "send"]])       # Main: a fresh list for its activity hold
         self.assertIn("nudge session=main-acme state=nudged pending=3 waited=110s quiet=110s", self.events())
 
     def test_an_urgent_report_wakes_at_once(self):
@@ -843,6 +917,94 @@ class QuietTest(NudgeCase):
         self.assertEqual(self.clock.now, 0)
         self.assertEqual(len(self.calls()), 4)
         self.assertIn("waited=0s quiet=0s", self.events())
+
+
+class UnreadTest(NudgeCase):
+    """`orche nudge --unread` (c103): Main's Orca workspace is marked unread when a turn Orche started ends."""
+
+    def set_argv(self):
+        return ["orca", "worktree", "set", "--worktree", f"id:repo-acme::{self.root}/acme", "--unread", "--json"]
+
+    def test_marks_main_and_stops_when_nothing_waits(self):
+        self.assertEqual(deliver.nudge("main-acme", unread=True), (0, "marked"))
+        self.assertEqual(self.orca_calls(), [self.set_argv()])
+        self.assertIn("unread session=main-acme state=marked", self.events())
+        self.assertNotIn("nudge session=", self.events())             # no wake was needed
+        self.assertFalse((inbox.box("main-acme") / deliver.LAST_NUDGE).exists())
+
+    def test_marks_then_wakes_when_a_report_waits(self):
+        self.report()
+        self.assertEqual(deliver.nudge("main-acme", unread=True), (0, "nudged"))
+        self.assertEqual(self.orca_calls()[0], self.set_argv())
+        self.assertEqual(self.calls()[1:], [["terminal", "list"], ["terminal", "wait"], ["terminal", "read"],
+                                            ["terminal", "send"]])
+        self.assertIn("nudge session=main-acme state=nudged pending=1", self.events())
+
+    def test_only_main_is_marked(self):
+        self.assertEqual(deliver.nudge("div-acme-build", unread=True), (1, "not-main"))
+        self.assertEqual(self.orca_calls(), [])
+        self.assertIn("unread session=div-acme-build state=not-main", self.events())
+
+    def test_a_failed_mark_never_holds_up_the_wake(self):
+        self.report()
+
+        def failing(sub, *args, **kw):
+            raise orca.OrcaError("worktree not found", "not_found")
+        with mock.patch.object(orca, "worktree", failing):
+            self.assertEqual(deliver.nudge("main-acme", unread=True), (0, "nudged"))
+            self.marker().unlink()
+            inbox.drain([p for p, _x in inbox.pending("main-acme")])
+            self.assertEqual(deliver.nudge("main-acme", unread=True), (1, "mark-failed"))
+        self.assertIn("deliver: mark main-acme unread: OrcaError", (self.home / "logs" / "hooks.log").read_text())
+        self.assertEqual(self.events().count("unread session=main-acme state=mark-failed"), 2)
+
+
+class HoldTest(NudgeCase):
+    """Main's activity hold (c103): a wake waits until Main's pane printed nothing for ACTIVE_S, at most
+    HOLD_MAX_S, then the screen read decides; a division's pane is not held."""
+
+    def setUp(self):
+        super().setUp()
+        self.clock = FakeClock()
+        patcher = mock.patch.object(deliver, "time", self.clock)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def printed(self, ago):
+        """Every listed pane last printed `ago` seconds before the fake clock's start."""
+        at = int((self.clock.time() - ago) * 1000)
+        self.canned(terminal_list={"terminals": [{"handle": "t-main", "title": "✳ main-acme", "lastOutputAt": at},
+                                                 {"handle": "t-build", "title": "div-acme-build", "lastOutputAt": at}]})
+
+    def test_main_waits_until_its_pane_was_quiet_for_active_s(self):
+        self.report()
+        self.printed(3)
+        self.assertEqual(self.nudge(), (0, "nudged"))
+        self.assertEqual(self.clock.now, deliver.ACTIVE_S - 3)
+        self.assertEqual(self.calls()[-3:], [["terminal", "wait"], ["terminal", "read"], ["terminal", "send"]])
+        self.assertGreater(self.calls().count(["terminal", "list"]), 1)     # re-listed while it waited
+
+    def test_a_pane_that_never_goes_quiet_is_held_at_most_hold_max_s_then_read(self):
+        self.report()
+
+        def busy_printing(sub, *args, **kw):
+            if sub == "list":
+                return {"terminals": [{"handle": "t-main", "title": "✳ main-acme",
+                                       "lastOutputAt": int(self.clock.time() * 1000)}]}
+            return REAL_TERMINAL(sub, *args, **kw)
+        with mock.patch.object(orca, "terminal", busy_printing):
+            self.assertEqual(self.nudge(), (0, "nudged"))               # the empty composer decides: no stall
+        self.assertEqual(self.clock.now, deliver.HOLD_MAX_S)
+
+    def test_a_quiet_main_and_a_division_are_not_held(self):
+        self.report()
+        self.printed(60)
+        self.assertEqual(self.nudge(), (0, "nudged"))
+        self.printed(1)
+        inbox.write(inbox.make("acme-n-20261021-1", "main-acme", "div-acme-build", "info", via="runner",
+                               urgent=True, summary="note"))
+        self.assertEqual(self.nudge("div-acme-build"), (0, "nudged"))
+        self.assertEqual(self.clock.now, 0)
 
 
 class NudgeNotifiesNothingTest(NudgeCase):
@@ -918,6 +1080,21 @@ class WakeTest(support.TempHomeCase):
         self.assertTrue(path.is_file())
         self.assertIn("OSError: fork failed", (self.home / "logs" / "hooks.log").read_text())
 
+    def test_rearm_after_a_main_turn_orche_started_marks_it_unread(self):
+        """unread: the nudger starts with nothing pending and past a fresh marker; wake off starts nothing."""
+        argv = [*self.ARGV[:-2], "--unread", "--", "main-acme"]
+        inbox.rearm("main-acme", unread=True)
+        self.spawn.assert_called_once_with(argv, self.home / "logs" / "nudge.log")
+        self.spawn.reset_mock()
+        inbox.box("main-acme").mkdir(parents=True, exist_ok=True)
+        (inbox.box("main-acme") / inbox.NUDGED).write_text("x")
+        inbox.rearm("main-acme", unread=True)
+        self.spawn.assert_called_once_with(argv, self.home / "logs" / "nudge.log")
+        self.spawn.reset_mock()
+        self.wake_config(False)
+        inbox.rearm("main-acme", unread=True)
+        self.spawn.assert_not_called()
+
     def test_rearm_wakes_only_for_a_pending_waking_pointer(self):
         inbox.write(self.ptr("info", via=None))
         inbox.rearm("main-acme")
@@ -982,6 +1159,10 @@ class CliTest(NudgeCase):
         self.assertEqual(self.orche("nudge", "--", "main-acme")[:2], (0, "nudged\n"))
         b = self.dispatched()
         self.assertEqual(self.orche("deliver", "--", b.unit)[:2], (0, "nudged\n"))
+
+    def test_orche_nudge_unread_prints_the_mark(self):
+        self.assertEqual(self.orche("nudge", "--unread", "--", "main-acme")[:2], (0, "marked\n"))
+        self.assertEqual(self.orche("nudge", "--unread", "div-acme-build")[:2], (1, "not-main\n"))
 
     def test_a_bad_session_name_exits_2(self):
         code, out, err = self.orche("nudge", "../x")

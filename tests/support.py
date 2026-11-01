@@ -48,13 +48,22 @@ SECURITY_CALLS = "security-calls.log"
 RECORDING = ("#!/bin/sh\n"
              "[ -n \"$ORCHE_HOME\" ] && printf '%s\\n' \"$*\" >> \"$ORCHE_HOME/{name}-calls.log\" 2>/dev/null\n"
              "exit {code}\n")
+# No real macOS locale read: `defaults` prints $ORCHE_HOME/fake-locale when a test wrote one (Staff's
+# language fallback), else fails as an unset key does; each call is recorded in defaults-calls.log.
+NO_DEFAULTS = ("#!/bin/sh\n"
+               "[ -n \"$ORCHE_HOME\" ] && printf '%s\\n' \"$*\" >> \"$ORCHE_HOME/defaults-calls.log\" 2>/dev/null\n"
+               "[ -n \"$ORCHE_HOME\" ] && [ -f \"$ORCHE_HOME/fake-locale\" ] && exec cat \"$ORCHE_HOME/fake-locale\"\n"
+               "echo 'The domain/default pair does not exist' >&2\n"
+               "exit 1\n")
+DEFAULTS_CALLS = "defaults-calls.log"
 OSASCRIPT_CALLS = "osascript-calls.log"
 LAUNCHCTL_CALLS = "launchctl-calls.log"
 OPEN_CALLS = "open-calls.log"
 
 
 def no_claude_dir() -> str:
-    """A directory whose `claude`, `codex`, `orca`, `security` and `launchctl` always fail and whose `osascript`
+    """A directory whose `claude`, `codex`, `orca`, `security` and `launchctl` always fail, whose `defaults`
+    reads only a test's fake locale, and whose `osascript`
     and `open` only record their call (no test shows a notification, a Finder window or System
     Settings). It goes first on PATH for the
     whole test process (below), so code that falls back to the default `claude_bin` (e.g. the intake
@@ -69,7 +78,7 @@ def no_claude_dir() -> str:
         _NO_CLAUDE_DIR = tempfile.mkdtemp(prefix="orche-no-claude-")
         atexit.register(shutil.rmtree, _NO_CLAUDE_DIR, True)
         for name, text in (("claude", NO_CLAUDE), ("codex", NO_CODEX), ("orca", NO_ORCA), ("security", NO_SECURITY),
-                           ("gh", NO_GH),
+                           ("gh", NO_GH), ("defaults", NO_DEFAULTS),
                            ("osascript", RECORDING.format(name="osascript", code=0)),
                            ("open", RECORDING.format(name="open", code=0)),
                            ("launchctl", RECORDING.format(name="launchctl", code=113))):
@@ -77,6 +86,13 @@ def no_claude_dir() -> str:
             stub.write_text(text)
             stub.chmod(0o755)
     return _NO_CLAUDE_DIR
+
+
+def staff_asleep() -> None:
+    """The registry's CEO Staff asleep, so no Main pane, init or update a test runs opens it
+    (tests/test_staff.py covers that it opens by default)."""
+    from orche import registry
+    registry.update(lambda r: r.__setitem__("staff", {"status": "asleep"}))
 
 
 def no_wake(cfg: dict) -> dict:
@@ -114,7 +130,7 @@ class TempHomeCase(unittest.TestCase):
         # (janitor.due); janitor heartbeat tests remove it or set it back and stub the spawn.
         (self.home / "janitor").mkdir()
         (self.home / "janitor" / "last-report.md").touch()
-        # An ORCHE pane exports ORCHE_SESSION / ORCA_TERMINAL_HANDLE (and maybe more): every test
+        # An Orche pane exports ORCHE_SESSION / ORCA_TERMINAL_HANDLE (and maybe more): every test
         # starts without any ORCHE_* / ORCA_* variable (nor a Claude OAuth token, which headless
         # runs and doctor would pick up), and the caller's values come back after.
         self._saved_env = {k: v for k, v in os.environ.items() if k.startswith(SCRUBBED_ENV)}
@@ -123,6 +139,8 @@ class TempHomeCase(unittest.TestCase):
         os.environ["ORCHE_HOME"] = str(self.home)
         # Claude Code's transcripts (wake resolves a session id there) live in the temp home too.
         os.environ["CLAUDE_CONFIG_DIR"] = str(self.home / "claude")
+        from orche import staff
+        staff._AUTO.clear()   # Staff's once-per-process auto open starts fresh in every test
         # The Jev key store must never reach the developer's real keychain nor pop a real dialog:
         # every test starts on the file backend (under this temp ORCHE_HOME) with no `security`
         # or `osascript`; keychain/dialog tests put fakes on PATH and switch these seams back.

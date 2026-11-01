@@ -229,7 +229,7 @@ class DialogTest(OnboardingCase):
         with self.stdin(""):
             self.assertEqual(jev_setup.read_key("prompt: "), KEY)
         argv = (self.bin / "osascript.log").read_text()
-        self.assertIn('with hidden answer with title "ORCHE"', argv)
+        self.assertIn('with hidden answer with title "Orche"', argv)
         self.assertIn(jev_setup.DIALOG_TEXT, argv)
 
     def test_cancel_is_no_key(self):
@@ -492,7 +492,7 @@ class JevCliTest(OnboardingCase):
         self.assertEqual(jev_setup.doctor_row(), (
             "WARN", "jev", "disabled (gateway configured, key: keychain; turn on: orche jev enable)"))
         jev_setup.save_record({"ok": False, "ms": 5, "kind": "gateway", "error": "HTTP401: <value>"})  # as probed
-        failed = ("WARN", "jev", "last probe failed HTTP401: <value>; ORCHE works without Jev; "
+        failed = ("WARN", "jev", "last probe failed HTTP401: <value>; Orche works without Jev; "
                                  "run `orche jev probe`")
         self.assertEqual(jev_setup.doctor_row(), failed)  # off: WARN, never FAIL
         jev_setup.update_config(enabled=True)

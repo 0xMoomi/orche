@@ -1,11 +1,11 @@
 """Retiring units: `orche feat retire` (retire) and the janitor's orca-removed rule (retire_gone).
 
 retire: refuses an onboarding entry, uncommitted work (anything in `git status` except untracked
-        ORCHE-owned files), a HANDOFF.md without `final:` unless the branch head is already in
+        Orche-owned files), a HANDOFF.md without `final:` unless the branch head is already in
         origin/<base> (landed), the main checkout, or an open pane
         titled with the session; lists git-ignored files the removal destroys; needs --yes.
-        copy the unit memory files (+ other ORCHE-owned untracked files under `_worktree/`) to the
-        archive dir -> tag `archive/feat-<name>-<yyyymmdd>` -> delete the ORCHE-owned untracked
+        copy the unit memory files (+ other Orche-owned untracked files under `_worktree/`) to the
+        archive dir -> tag `archive/feat-<name>-<yyyymmdd>` -> delete the Orche-owned untracked
         files from the worktree -> `orca worktree rm` -> archive the unit's transcripts ->
         GRAVEYARD row -> status `retired` + event + hr-log. A re-run reuses byte-identical kept
         files and a tag that already points at the branch head.
@@ -33,15 +33,15 @@ def has_final(handoff) -> bool:
     return any(line.strip().lower().startswith("final:") for line in head)
 
 
-WORKTREE_COPY = "_worktree"   # ORCHE files outside the unit dir, kept under <kept>/_worktree/<rel>
+WORKTREE_COPY = "_worktree"   # Orche files outside the unit dir, kept under <kept>/_worktree/<rel>
 
 
 def _retire_problem(unit, proj, kept):
-    """(problem, owned, why): a refusal text or None, the ORCHE-owned untracked paths of the worktree,
+    """(problem, owned, why): a refusal text or None, the Orche-owned untracked paths of the worktree,
     and why it may retire: "HANDOFF final", or "landed" (its branch head is in origin/<base>).
 
-    Untracked ORCHE-owned paths are expected (they are kept, then cleared before `worktree rm`);
-    anything else — including a tracked ORCHE file with uncommitted changes — is uncommitted work.
+    Untracked Orche-owned paths are expected (they are kept, then cleared before `worktree rm`);
+    anything else — including a tracked Orche file with uncommitted changes — is uncommitted work.
     """
     wt = str(unit.worktree or Path("."))
     if not wt or units.is_within(proj["path"], wt) or discover.real(wt) == discover.real(proj["path"]):
@@ -84,7 +84,7 @@ def _landed(wt, branch, proj, project) -> bool:
 
 
 def _keep_sources(unit, wt, owned) -> dict:
-    """{path inside kept: source file} — the unit dir as is, other ORCHE-owned files under _worktree/."""
+    """{path inside kept: source file} — the unit dir as is, other Orche-owned files under _worktree/."""
     unit_dir = unit.memory
     sources = {}
     if unit_dir.is_dir():
@@ -103,7 +103,7 @@ def _kept_matches(kept, sources) -> bool:
 
 
 def _clear_owned(wt, owned) -> None:
-    """Delete the ORCHE-owned untracked files (already kept) and the directories they leave empty."""
+    """Delete the Orche-owned untracked files (already kept) and the directories they leave empty."""
     root = Path(wt)
     for rel in owned:
         path = root / rel
@@ -192,17 +192,17 @@ def retire(reg, unit, *, yes=False, dry_run=False):
     if dry_run:
         dry(f"reuse {kept} (same unit files)" if reuse else f"copy {unit_dir} -> {kept}")
         if extra and not reuse:
-            dry(f"copy {extra} other ORCHE file(s) -> {kept / WORKTREE_COPY}")
+            dry(f"copy {extra} other Orche file(s) -> {kept / WORKTREE_COPY}")
         dry(f"reuse tag {tag} (points at {branch})" if _tag_at_head(wt, tag, branch) else shlex.join(tag_argv))
         if owned:
-            dry(f"delete {len(owned)} ORCHE-owned untracked file(s) from {wt}")
+            dry(f"delete {len(owned)} Orche-owned untracked file(s) from {wt}")
         orca.worktree("rm", "--worktree", f"id:{unit.entry['worktree']}", dry_run=True)
         dry(f"archive {len(files)} transcript file(s) of {unit.session}" if files
             else f"no transcripts found for {unit.session}")
         dry(f"append GRAVEYARD row in {graveyard.project_file(proj['path'])}")
         return ({"feature": name, "dry_run": True, "tag": tag, "transcripts": len(files)},
                 f"would retire {unit.session} (dry-run)")
-    try:  # an empty leftover dir is reused; on a re-run only the other ORCHE files are (re)copied
+    try:  # an empty leftover dir is reused; on a re-run only the other Orche files are (re)copied
         for rel, src in sources.items():
             if not reuse or rel.parts[0] == WORKTREE_COPY:
                 (kept / rel).parent.mkdir(parents=True, exist_ok=True)
@@ -223,7 +223,7 @@ def retire(reg, unit, *, yes=False, dry_run=False):
     try:
         _clear_owned(wt, owned)
     except OSError as exc:
-        raise book.Refused(EXIT_USER, f"could not clear ORCHE files from {wt}: {exc} (tag {tag} and unit files in "
+        raise book.Refused(EXIT_USER, f"could not clear Orche files from {wt}: {exc} (tag {tag} and unit files in "
                                       f"{kept} kept; nothing else removed)") from None
     try:
         orca.worktree("rm", "--worktree", f"id:{unit.entry['worktree']}")

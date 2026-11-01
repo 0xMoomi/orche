@@ -1,4 +1,4 @@
-"""`orche update` — bring this ORCHE checkout to the newest `main`, reinstall, refresh every project.
+"""`orche update` — bring this Orche checkout to the newest `main`, reinstall, refresh every project.
 
 The checkout is the clone `orche install` recorded (install-state.json `clone`; install.sh runs the
 install from its clone), else the repository holding this package (`paths.PLUGIN_ROOT`): in plugin mode
@@ -19,13 +19,15 @@ update follows `origin/main`. Steps, each one a progress line on stderr:
 4. the NEW code reinstalls: `<this python> <clone>/bin/orche.py install --mode <mode> --no-jev` (the
    mode of the last install, as doctor reads it), then in plugin mode `claude plugin marketplace update
    orche` and `claude plugin update orche@orche`, as install.sh does on a re-run;
-5. the NEW code refreshes every registered project: `<clone>/bin/orche.py init <key> --refresh` (ORCHE's
+5. the owner's language is cached for the status line (statusline.learn_language), then the NEW code
+   refreshes every registered project: `<clone>/bin/orche.py init <key> --refresh` (Orche's
    own files: card link, personas, worktree settings, hooks wiring; no intake, no Orca, never the
    user's files), without ORCHE_SESSION, so a team repository's gate PR is never opened by an update.
 
-The closing block: `ORCHE <old> → <new>`, one line per project, the install's `reconcile job` line (and its
+The closing block: `Orche <old> → <new>`, one line per project, the install's `reconcile job` line (and its
 `janitor: remove` line when it removed the janitor's old 04:00 LaunchAgent), and
-a restart line when a card, skill, template or agent file changed. `--dry-run` fetches without moving
+the install's Staff line when it opened the CEO Staff (`staff.auto_open`; an up-to-date or dry-run
+update opens or prints it itself), and a restart line when a card, skill, template or agent file changed. `--dry-run` fetches without moving
 any ref (FETCH_HEAD only) and prints the plan. Exit 0 ok, 1 a step failed (named; the checkout keeps
 whatever the finished steps did, a re-run resumes), 2 refused. With `--json` every outcome is one JSON
 object on stdout, carrying `development` (the reason, or null) unless refused.
@@ -36,7 +38,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-from . import mask, paths, registry
+from . import mask, paths, registry, staff, statusline
 from .cli import EXIT_OK, EXIT_USER, out
 
 EXIT_REFUSED = 2
@@ -49,7 +51,7 @@ VERSION_RE = re.compile(r'^__version__\s*=\s*"([^"]+)"', re.M)
 
 
 def register(subparsers):
-    p = subparsers.add_parser("update", help="pull the newest ORCHE, reinstall it and refresh every project")
+    p = subparsers.add_parser("update", help="pull the newest Orche, reinstall it and refresh every project")
     p.set_defaults(func=cmd_update)
 
 
@@ -157,7 +159,10 @@ def cmd_update(args):
         resume = new == old and state.get("version") != old
         if new == old and not resume:
             note = "; development checkout, nothing pulled" if why else ""
-            out(args, {"status": "current", "version": old, "development": why}, f"already up to date ({old}{note})")
+            opened = staff.auto_open(dry_run=dry_run)
+            out(args, {"status": "current", "version": old, "development": why,
+                       **({"staff": opened} if opened else {})},
+                [f"already up to date ({old}{note})"] + ([opened] if opened else []))
             return EXIT_OK
     except StepFailed as exc:
         return _failed(args, exc, [])
@@ -169,17 +174,19 @@ def cmd_update(args):
     plugin = [["claude", "plugin", "marketplace", "update", "orche"], ["claude", "plugin", "update", "orche@orche"]] \
         if mode == "plugin" else []
     if dry_run:
-        lines = [f"ORCHE {old} → {new} (dry run: nothing changed)"]
+        lines = [f"Orche {old} → {new} (dry run: nothing changed)"]
         lines += [] if resume else [f"would run: git merge --ff-only origin/{REF}"]
         lines += [f"would run: orche install --mode {mode} --no-jev"]
         lines += [f"would run: {' '.join(argv)}" for argv in plugin]
         lines += [f"would refresh {k}: orche init {k} --refresh" for k in keys]
         if changed:
             lines.append(f"then: {RESTART}")
+        if opened := staff.auto_open(dry_run=True):
+            lines.append(opened)
         out(args, {"status": "dry-run", "old": old, "new": new, "mode": mode, "projects": keys,
                    "session_files": changed, "resume": resume, "development": why}, lines)
         return EXIT_OK
-    done = [f"ORCHE {old} → {new}"]
+    done = [f"Orche {old} → {new}"]
     try:
         if resume:
             progress(f"resuming: the install records {old}, the checkout is {new}")
@@ -189,6 +196,7 @@ def cmd_update(args):
         progress(f"reinstalling ({mode} mode) with the new code")
         text = run_step("install", install).splitlines()
         heartbeat = [ln for ln in text if ln.startswith(RECONCILE_STEP)]
+        opened = [ln for ln in text if ln.startswith(f"{staff.SESSION} pane ")]   # the install opened Staff
         old_janitor = [ln for ln in text if ln.startswith(f"{JANITOR_STEP}: remove")]
         for argv in plugin:
             progress(" ".join(argv))
@@ -196,6 +204,7 @@ def cmd_update(args):
     except StepFailed as exc:
         return _failed(args, exc, done)
     failed = []
+    statusline.learn_language(registry.load())   # the owner's language, before the projects refresh
     as_nobody = {k: v for k, v in os.environ.items() if k != "ORCHE_SESSION"}   # never Main: R-TEAM-5
     for key in keys:
         progress(f"refreshing {key}")
@@ -205,7 +214,7 @@ def cmd_update(args):
         except StepFailed as exc:
             failed.append(exc)
             done.append(f"{key}: {exc}")
-    done += heartbeat[-1:] + old_janitor
+    done += heartbeat[-1:] + old_janitor + opened[-1:]
     if changed or plugin or resume:
         done.append(RESTART)
     data = {"status": "failed" if failed else "updated", "old": old, "new": new, "mode": mode, "projects": keys,

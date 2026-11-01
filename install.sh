@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ORCHE one-command installer (macOS and Linux).
+# Orche one-command installer (macOS and Linux).
 #
 #   curl -fsSL https://raw.githubusercontent.com/0xMoomi/orche/main/install.sh | bash
 #   bash install.sh [options]          # from a clone: that clone is used as is
@@ -20,11 +20,11 @@ ORCHE_REPO_URL="https://github.com/0xMoomi/orche"
 # Same candidates, same order as lib/find_python.sh (the clone does not exist yet when we search).
 ORCHE_PY_CANDIDATES="python3.14 python3.13 python3.12 python3.11 python3 /opt/homebrew/bin/python3 /usr/local/bin/python3"
 PATH_MARKER="# orche"
-WINDOWS_MSG="Windows is not supported: Orca is a macOS app and the ORCHE CLI relies on POSIX process control (ps, process groups, signals) and the macOS keychain. WSL2 is unverified."
+WINDOWS_MSG="Windows is not supported: Orca is a macOS app and the Orche CLI relies on POSIX process control (ps, process groups, signals) and the macOS keychain. WSL2 is unverified."
 
 usage() {
   cat <<'EOF'
-ORCHE installer: clone (or update) ORCHE, put `orche` on PATH, run `orche install`,
+Orche installer: clone (or update) Orche, put `orche` on PATH, run `orche install`,
 install the Claude Code plugin, and check the result with `orche doctor`.
 
 Usage:
@@ -33,7 +33,7 @@ Usage:
   bash install.sh [options]
 
 Options:
-  --dir PATH       where ORCHE lives (default: $ORCHE_DIR, else this clone when run from one,
+  --dir PATH       where Orche lives (default: $ORCHE_DIR, else this clone when run from one,
                    else ~/orche)
   --ref REF        branch or tag to install (default: main)
   --mode MODE      plugin (default): hooks via the Claude Code plugin;
@@ -102,7 +102,7 @@ check_os() {
     Linux) OS_NAME=linux
       warn "Linux: the CLI, runner and hooks work here, but Orca (a macOS app) is still needed for panes and \`orche init\`" ;;
     MINGW* | MSYS* | CYGWIN* | Windows*) die "$WINDOWS_MSG" ;;
-    *) die "unsupported OS '$os' (ORCHE supports macOS; Linux without Orca panes)" ;;
+    *) die "unsupported OS '$os' (Orche supports macOS; Linux without Orca panes)" ;;
   esac
   step "OS: $os"
 }
@@ -120,9 +120,9 @@ check_requirements() {
       have=" (python3 is $(python3 --version 2>&1 </dev/null | head -n 1 || true))"
     fi
     if [ "$OS_NAME" = macos ]; then
-      die "ORCHE needs Python 3.11+, none found$have. Install it with \`brew install python\`, then re-run"
+      die "Orche needs Python 3.11+, none found$have. Install it with \`brew install python\`, then re-run"
     fi
-    die "ORCHE needs Python 3.11+, none found$have. Install it with \`sudo apt install python3.12\` (Debian/Ubuntu) or \`sudo dnf install python3.12\` (Fedora), then re-run"
+    die "Orche needs Python 3.11+, none found$have. Install it with \`sudo apt install python3.12\` (Debian/Ubuntu) or \`sudo dnf install python3.12\` (Fedora), then re-run"
   fi
   step "git: $(command -v git); python: $(command -v "$PY") ($("$PY" -c 'import platform; print(platform.python_version())' </dev/null))"
 
@@ -221,7 +221,7 @@ setup_path() {
   elif [ -f "$PROFILE" ] && { grep -qF "$shown/bin" "$PROFILE" || grep -qF "$ORCHE_DIR/bin" "$PROFILE"; }; then
     step "PATH: already in $PROFILE"
   elif [ -f "$PROFILE" ] && grep -q "$PATH_MARKER\$" "$PROFILE"; then
-    warn "$PROFILE already has an ORCHE PATH line for another folder; change it to: $line"
+    warn "$PROFILE already has an Orche PATH line for another folder; change it to: $line"
   elif [ "$DRY_RUN" = 1 ]; then
     step "PATH: would append to $PROFILE: $line"
   else
@@ -359,7 +359,7 @@ summary() {
   fi
   local version
   version=$("$ORCHE_DIR/bin/orche" version </dev/null)
-  say "ORCHE ${version#orche } is installed on this Mac ($MODE mode${PLUGIN_UPDATED:+; plugin updated, restart Claude Code to load it})."
+  say "Orche ${version#orche } is installed on this Mac ($MODE mode${PLUGIN_UPDATED:+; plugin updated, restart Claude Code to load it})."
   if [ -n "$PLUGIN_NOTE" ]; then say "note: $PLUGIN_NOTE"; fi
   if [ -n "$PROFILE" ]; then
     say "Open a new terminal (or run: source $PROFILE) so \`orche\` is on your PATH."
@@ -367,7 +367,7 @@ summary() {
     say "Add the PATH line above to your login profile, then open a new terminal."
   fi
   say "Next: set up a project."
-  say "  In Claude Code, inside the project, say \"orche init\" (or, in any language, \"set up ORCHE here\")."
+  say "  In Claude Code, inside the project, say \"orche init\" (or, in any language, \"set up Orche here\")."
   say "  In this session: read $ORCHE_DIR/skills/orche-apply/SKILL.md, section \"In plain words (choices)\", and set up the owner's project with the choice dialog."
   if [ "${DOCTOR_FAILED:-0}" = 1 ]; then
     die "orche doctor reported a FAIL line (above): fix it, then run \`orche doctor\` again"

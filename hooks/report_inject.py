@@ -41,7 +41,7 @@ BARE_DRAIN = r"\s*(\[drain\]|/drain)\s*"
 
 def _owner_seen(payload, who):
     """The owner typed in Main: restart the project's autonomy window (lib/orche/flow/guard.py) and
-    answer the project's open ask (lib/orche/flow/owner.py: no more re-notifications). ORCHE's own
+    answer the project's open ask (lib/orche/flow/owner.py: no more re-notifications). Orche's own
     prompts (the inbox wake, the report-due reminder) and a bare drain do not count."""
     try:
         import re

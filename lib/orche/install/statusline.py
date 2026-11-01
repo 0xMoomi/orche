@@ -1,4 +1,4 @@
-"""Guarded ORCHE segment appended to `~/.claude/statusline-command.sh`.
+"""Guarded Orche segment appended to `~/.claude/statusline-command.sh`.
 
 The block (templates/statusline-segment.sh) walks up from `current_dir_path` to the first
 `.orche/project` marker written by `orche init` and prints `<ORCHE_HOME>/status/<key>.line`
@@ -33,7 +33,7 @@ def _final_exit(text):
 
 
 def after_exit(text) -> bool:
-    """True when the ORCHE block sits after a final `exit …` line (so it never runs)."""
+    """True when the Orche block sits after a final `exit …` line (so it never runs)."""
     m = block_re(START, END).search(text)
     return bool(m) and _final_exit(text[:m.start()]) is not None
 
@@ -57,16 +57,16 @@ def install(ctx) -> None:
     if not path.is_file():
         ctx.note(STEP, "skip", path, "not found; point statusLine at a script, then re-run orche install")
         return
-    write_file(ctx, STEP, path, place(read_text(path), block(ctx)), "ORCHE segment block")
+    write_file(ctx, STEP, path, place(read_text(path), block(ctx)), "Orche segment block")
 
 
 def uninstall(ctx) -> None:
     path = script_path(ctx)
     if not path.is_file() or not has_block(read_text(path), START, END):
-        ctx.note(STEP, "ok", path, "no ORCHE block")
+        ctx.note(STEP, "ok", path, "no Orche block")
         return
-    ctx.note(STEP, "remove", None, "ORCHE segment block")
-    write_file(ctx, STEP, path, remove_block(read_text(path), START, END), "ORCHE block removed")
+    ctx.note(STEP, "remove", None, "Orche segment block")
+    write_file(ctx, STEP, path, remove_block(read_text(path), START, END), "Orche block removed")
 
 
 def present(ctx) -> bool:

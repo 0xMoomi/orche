@@ -1,6 +1,6 @@
 """Project intake: one read-only `claude -p` sweep of a project's main checkout, turned into files.
 
-When ORCHE joins a codebase that already exists, every unit would otherwise rediscover it on its
+When Orche joins a codebase that already exists, every unit would otherwise rediscover it on its
 own (tens of thousands of tokens per worker). Intake does it once, like Claude Code's `/init`
 writes CLAUDE.md: a headless Sonnet worker (persona templates/personas/intake.md) reads the repo
 with Read, Glob and Grep only (no shell, no write, no web) and answers with one JSON object
@@ -8,10 +8,10 @@ with Read, Glob and Grep only (no shell, no write, no web) and answers with one 
     {"card": {"what", "stack", "layout", "build_test_run", "conventions", "risks"},
      "divisions": {"<division>": "<what that division needs to know>", ...}, "notes": [...]}
 
-The facts a shell would give it, ORCHE collects first and puts in the request (repo_facts(), each
+The facts a shell would give it, Orche collects first and puts in the request (repo_facts(), each
 part capped, the whole request <= REQUEST_BYTES): the tree to depth 3 without .git, node_modules,
 dist, build, .orche, .venv, __pycache__ and caches (<= 300 entries, then "… n more"); `git log
---oneline -30` (run by ORCHE, no diffs); the manifest/config files found; and the variable NAMES of
+--oneline -30` (run by Orche, no diffs); the manifest/config files found; and the variable NAMES of
 `.env.example` / `.env.sample` / `.env.template` (never a value). All of it masked.
 
 The worker's answer the CLI (never the worker) masks (mask.redact) and writes, untracked, into
@@ -62,7 +62,7 @@ from . import headless, log, mask, paths, procs, registry, shell, templates, uti
 EXIT_OK, EXIT_USER, EXIT_NOT_FOUND, EXIT_BLOCKED = 0, 1, 2, 3
 PERSONA = paths.PLUGIN_ROOT / "templates" / "personas" / "intake.md"
 CARD_TEMPLATE = templates.TEMPLATES_ROOT / "project" / "PROJECT_CARD.md"
-# No shell: the facts a shell would give, ORCHE puts in the request (repo_facts).
+# No shell: the facts a shell would give, Orche puts in the request (repo_facts).
 TOOLS = "Read,Glob,Grep"
 # Claude Code permission rules: `**/x` is relative to the working directory (the checkout),
 # `//**/x` absolute, `~/x` the home directory. Deny beats any allow a settings file might carry.
@@ -337,7 +337,7 @@ def repo_facts(root, tree_bytes=TREE_BYTES) -> str:
     """The pre-computed request section (masked): tree, history, manifests, env variable names."""
     lines, total, manifests, envs = _walk(root)
     log_lines = git_log(root)
-    parts = ["Repository facts (collected by ORCHE before this run: you have no shell; use these instead "
+    parts = ["Repository facts (collected by Orche before this run: you have no shell; use these instead "
              "of listing directories or reading git history):", "",
              f"Tree (depth {TREE_DEPTH}; .git, node_modules, dist, build, .orche, .venv, __pycache__ and "
              "caches left out):"]

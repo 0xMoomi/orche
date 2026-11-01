@@ -95,7 +95,7 @@ def paused(key, now):
 
 
 def overdue_lines(row) -> list:
-    """The project's late deliveries and unread reports (≥ inbox.LATE), each with ORCHE's live repair
+    """The project's late deliveries and unread reports (≥ inbox.LATE), each with Orche's live repair
     while the heartbeat is fresh, else its command (a closed pane: `orche wake`), then the units
     waiting on the owner."""
     from . import reconcile
@@ -195,7 +195,7 @@ def cmd_status(args):
     else:
         for row in rows:
             print(row["line"])
-            # repairs ORCHE is retrying or escalated (lib/orche/reconcile.py); upgrade: the stamp of the
+            # repairs Orche is retrying or escalated (lib/orche/reconcile.py); upgrade: the stamp of the
             # last `orche init` is missing or older
             sub = (overdue_lines(row) + [reconcile.stalled_line(s) for s in row["stalled"]]
                    + ([f"  upgrade: {registry.upgrade_text(row['project'], row['upgrade'])}"] if row["upgrade"] else []))
@@ -214,7 +214,7 @@ def cmd_status(args):
 
 
 def stalled(reg, project) -> list:
-    """The repairs ORCHE is retrying or escalated (reconcile.stalled), then the lineages a blocked or
+    """The repairs Orche is retrying or escalated (reconcile.stalled), then the lineages a blocked or
     question member holds open (flow.lineage.stalled), in one shape."""
     from . import reconcile
     from .flow import lineage

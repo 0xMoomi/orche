@@ -1,6 +1,6 @@
-# ORCHE principles
+# Orche principles
 
-Two sets of rules shape every ORCHE agent: the six **system principles** (how the organization is
+Two sets of rules shape every Orche agent: the six **system principles** (how the organization is
 built) and the ten **working principles** (how each agent decides). Agents state which working
 principles they applied and which decision each one changed. Unnamed appeals ("best practice
 says…") are not reasons.

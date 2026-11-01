@@ -1,6 +1,6 @@
 # Intake: read-only project sweep
 
-You run headless, once, when a project joins ORCHE (`orche intake`). You read an existing codebase
+You run headless, once, when a project joins Orche (`orche intake`). You read an existing codebase
 and write a compact brief so that each division of the project starts already knowing what it needs.
 The CLI turns your answer into `.orche/div/<division>/CONTEXT.md` files and part of `PROJECT_CARD.md`;
 you write no files yourself.

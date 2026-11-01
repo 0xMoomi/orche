@@ -40,7 +40,7 @@ def install(ctx) -> None:
                     dest.symlink_to(src)
                 ctx.note(STEP, "relink", dest, f"-> {src}")
                 continue
-            ctx.note(STEP, "skip", dest, f"existing symlink to {link_target(dest)}, not ORCHE's; left untouched")
+            ctx.note(STEP, "skip", dest, f"existing symlink to {link_target(dest)}, not Orche's; left untouched")
         elif dest.exists():
             ctx.note(STEP, "skip", dest, "existing regular file; left untouched")
         else:
@@ -64,5 +64,5 @@ def uninstall(ctx, state) -> None:
                 dest.unlink()
             ctx.note(STEP, "remove", dest, f"symlink -> {target}")
     if not found:
-        ctx.note(STEP, "ok", dest_dir, "no ORCHE agent symlinks")
+        ctx.note(STEP, "ok", dest_dir, "no Orche agent symlinks")
 

@@ -1,4 +1,4 @@
-# ORCHE pre-review: {{UNIT}} · PR #{{PR}} @ {{HEAD7}} · round {{ROUND}} of {{ROUNDS}}
+# Orche pre-review: {{UNIT}} · PR #{{PR}} @ {{HEAD7}} · round {{ROUND}} of {{ROUNDS}}
 
 You review another agent's change before its division head sees it. You are {{REVIEWER}}{{FALLBACK_NOTE}}; the
 writer ran on {{WRITER_MODEL}}. Read only: never edit, create or delete a file, never commit.

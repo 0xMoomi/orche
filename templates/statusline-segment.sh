@@ -1,5 +1,5 @@
 # >>> orche >>>
-# ORCHE project segment (added by `orche install`, removed by `orche uninstall`).
+# Orche project segment (added by `orche install`, removed by `orche uninstall`).
 # Walks up from the session directory to the first `.orche/project` marker and prints the cached
 # `${ORCHE_HOME:-~/.claude/orche}/status/<project>.line`. Builtins only on the fast path; silent on errors.
 {

@@ -78,10 +78,10 @@ DEFAULTS = {
     # project name, like the queue's (`orche init --base/--branch-prefix/--issues` writes them, and init reads
     # the unset ones from the repository: lib/orche/detect.py).
     "publish": {"base": None, "branch_prefix": None, "issues": None, "per_project": {}},
-    # team.env: environment names and values added to every ORCHE session, panes and headless runs alike (the
-    # team's hook switches, such as the ones that keep its decision log and auto-commit hooks out of ORCHE's
+    # team.env: environment names and values added to every Orche session, panes and headless runs alike (the
+    # team's hook switches, such as the ones that keep its decision log and auto-commit hooks out of Orche's
     # sessions); Main writes them on the owner's words. A name starting with ORCHE_, ORCA_, CLAUDE or ANTHROPIC
-    # is refused at load (one config log line): those belong to ORCHE and Claude Code.
+    # is refused at load (one config log line): those belong to Orche and Claude Code.
     "team": {"env": {}},
     # The merge queue (lib/orche/queue): per_project overrides land by project name. lost_after_s:
     # a testing entry whose integrator's pid still lives while the lock is free counts as lost after this
@@ -188,11 +188,11 @@ _ENV_NAME = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
 
 def team_env_error(name, value) -> str | None:
-    """Why `team.env.<name>` cannot be set in ORCHE's sessions, else None."""
+    """Why `team.env.<name>` cannot be set in Orche's sessions, else None."""
     if not isinstance(name, str) or not _ENV_NAME.match(name):
         return f"team.env.{name}: not an environment variable name"
     if name.startswith(TEAM_OWNED):
-        return f"team.env.{name}: refused (names starting with {', '.join(TEAM_OWNED)} belong to ORCHE and Claude Code)"
+        return f"team.env.{name}: refused (names starting with {', '.join(TEAM_OWNED)} belong to Orche and Claude Code)"
     if not isinstance(value, (str, int, float)) or isinstance(value, bool):
         return f"team.env.{name}: the value must be a string"
     return None

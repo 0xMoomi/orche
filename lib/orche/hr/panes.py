@@ -1,6 +1,6 @@
 """Orca panes of units and projects: the pane command, a unit's create argv, project panes.
 
-Every ORCHE pane (Main, divisions, features) runs `claude --permission-mode bypassPermissions`:
+Every Orche pane (Main, divisions, features) runs `claude --permission-mode bypassPermissions`:
 a woken pane runs with nobody watching and must not stop at a permission prompt. A pane carries no
 autocompact window of its own: the installer's `CLAUDE_AUTOCOMPACT_PCT_OVERRIDE` applies to the
 model's window (with a 200K window it compacted at about 100K, under the fixed prefix of a session
@@ -24,7 +24,7 @@ RESUMED = "resumed: say in five lines what was done last, what runs now and what
 
 
 def session_env(session) -> str:
-    """`PATH=<plugin>/bin:$PATH ORCHE_SESSION=<session> CLAUDE_CODE_PROMPT_CACHE_TTL=1h [NAME=value ...] ` prefix for every ORCHE pane command.
+    """`PATH=<plugin>/bin:$PATH ORCHE_SESSION=<session> CLAUDE_CODE_PROMPT_CACHE_TTL=1h [NAME=value ...] ` prefix for every Orche pane command.
 
     ORCHE_SESSION lets hooks know the pane's role without guessing from cwd; the PATH entry puts
     `orche` on the pane's PATH (`$PATH` stays unexpanded: the pane's shell expands it); each config
@@ -33,7 +33,7 @@ def session_env(session) -> str:
     so a pane waking after a longer idle gap would rewrite its whole context (headless runs have no idle
     gap and do not get it). Main (`main-<project>`) and division heads (`div-<project>-<division>`) also
     get `CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1`: their subagents and shells finish inside the turn, so no
-    finished background task starts a turn that re-reads the pane's whole context (ORCHE wakes them).
+    finished background task starts a turn that re-reads the pane's whole context (Orche wakes them).
     Feature panes do not.
     """
     team = "".join(f"{name}={shlex.quote(value)} " for name, value in config.team_env(config.load()).items())
@@ -112,9 +112,9 @@ def resume_flag(session, cwd) -> str:
 
 def pane_command(session, *, resume, cwd=None) -> str:
     """`claude --permission-mode bypassPermissions` + `resume_flag(session, cwd)` for a reopened pane (Main included), `--name <session>` for a fresh
-    start: no ORCHE pane ever stops at a permission prompt.
+    start: no Orche pane ever stops at a permission prompt.
 
-    Prefixed with `session_env(session)`. The one builder for every ORCHE pane, Main included."""
+    Prefixed with `session_env(session)`. The one builder for every Orche pane, Main included."""
     flag = resume_flag(session, cwd) if resume else f"--name {session}"
     return (f"{session_env(session)}{config.load().get('claude_bin', 'claude')} "
             f"--permission-mode bypassPermissions {flag}")
@@ -173,7 +173,8 @@ def project_pane(proj, *, dry_run, switch=True, resume=True) -> tuple:
     the switch attempt when switching): one Orca no longer has — the list lagged a close — is
     created anew, and a failed switch to a live pane raises. Returns (data, line); data["pane"] is
     "opened", "switched" or (switch=False) "open". Under dry_run the create argv is printed and no
-    writing orca command runs. Raises orca.OrcaError.
+    writing orca command runs. Opening Main's pane first opens the CEO Staff (`staff.auto_open`: unless
+    it is asleep or open; its line in data["staff"]). Raises orca.OrcaError.
     """
     title = proj["main_session"]
     term = orca.find_terminal_by_title(title)
@@ -195,6 +196,9 @@ def project_pane(proj, *, dry_run, switch=True, resume=True) -> tuple:
     if dry_run:
         data["dry_run"] = True
     if term is None:
+        from .. import staff
+        if line := staff.auto_open(dry_run=dry_run):   # before Main's pane, so Main ends in front
+            data["staff"] = line
         command = pane_command(title, resume=resume, cwd=proj["path"])
         result = open_pane(f"{proj['repo_id']}::{proj['path']}", title, command, dry_run=dry_run)
         if dry_run:

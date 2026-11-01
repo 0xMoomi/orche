@@ -633,7 +633,7 @@ def handle(payload, started, r, who) -> Outcome:
             return Outcome()                    # triage routes through the runner only
         from . import inbox
         if inbox.NUDGE_RE.match(payload.get("prompt") or ""):
-            return Outcome()                    # a wake line is ORCHE's own, not the user's: no sample
+            return Outcome()                    # a wake line is Orche's own, not the user's: no sample
         d = decide(payload.get("prompt") or "", project_divisions(r.reg, me.project), cfg,
                    payload.get("transcript_path"))
         out = Outcome(model_s=d.model_s)

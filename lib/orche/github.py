@@ -1,4 +1,4 @@
-"""Every GitHub step ORCHE takes: `gh` run in a checkout (gh finds the repository
+"""Every GitHub step Orche takes: `gh` run in a checkout (gh finds the repository
 from it) and the remote git steps of a PR (push its branch, fetch its head). One runner on shell.run, one
 timeout (TIMEOUT; NET_S for a fetch; PUSH_S for a push: a repository's pre-push hook may run its whole
 verification) and one error, GhError. Tests put a fake `gh` on PATH and use a bare repository as origin

@@ -1,4 +1,4 @@
-"""The only place ORCHE shells out. Tests replace `RUNNER` with a fake."""
+"""The only place Orche shells out. Tests replace `RUNNER` with a fake."""
 import re
 import shutil
 import subprocess

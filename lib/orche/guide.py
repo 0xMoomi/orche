@@ -1,4 +1,4 @@
-"""What ORCHE can switch on any time, as owner words: `orche doctor`'s "Next steps" block and the "Any
+"""What Orche can switch on any time, as owner words: `orche doctor`'s "Next steps" block and the "Any
 time" list of the setup report; and the setup report itself (`.orche/SETUP.md`: `write_report`, which
 `orche init` calls, and `setup_note`, the setup result Main reports to the owner).
 
@@ -44,7 +44,7 @@ def codex_line():
     on = shutil.which("codex") is not None
     state = "On: runs when you ask" if on else "Off: Codex is not installed"
     runs = ("Main runs `orche review --pr 12 --codex`: Codex and Claude read the diff at once and only a defect both name "
-            "sends it back" if on else "you run `npm install -g @openai/codex` and `codex login`; ORCHE then uses it")
+            "sends it back" if on else "you run `npm install -g @openai/codex` and `codex login`; Orche then uses it")
     return on, _line("Codex cross-check", "a second AI vendor reviews a pull request when you ask", state,
                      "cross-check PR 12 with Codex", runs)
 
@@ -53,7 +53,7 @@ def token_line():
     src, _err = oauth.source()
     runs = ("Main runs `orche auth set` to replace it" if src else
             "you run `claude setup-token`, then Main runs `orche auth set`")
-    return bool(src), _line("Background-run token", "lets ORCHE start agents while no Claude window is open",
+    return bool(src), _line("Background-run token", "lets Orche start agents while no Claude window is open",
                             "Set" if src else "Not set", "set the token for background runs", runs)
 
 
@@ -201,14 +201,14 @@ def running_lines(reg, key, root, cfg, gate=None) -> list:
         from .hr import panes
         installed = "yes" if panes.plugin_install_path(plugin) is not None else 'no, say "install the team plugin"'
         team = [f"- Team: plugin {plugin} (installed for you: {installed}). Push, pull request and merge wait for "
-                'your word: "push <unit>" and "merge <PR>"; the team\'s rules reach every ORCHE session.']
+                'your word: "push <unit>" and "merge <PR>"; the team\'s rules reach every Orche session.']
     return [*team, f"- Heartbeat: {beat}.",
             f"- Janitor: {jan}.",
             f"- Merge queue: on when the repository has scripts/verify/ci.sh on {base or 'its base branch'} (runs "
             f"that script on each approved PR; {lands}); this project: {state}.",
             "- Jev: " + ("on: sorts incoming requests and checks gates before Main spends tokens." if jev_on
                          else 'off; say "turn on Jev" (listed below).'),
-            "- Notifications: Orca shows one when Main finishes a reply; ORCHE reminds you after 30 minutes when a "
+            "- Notifications: Orca shows one when Main finishes a reply; Orche reminds you after 30 minutes when a "
             "decision still waits."]
 
 
@@ -239,12 +239,12 @@ def write_report(reg, key, root, intake_line=None, detected=(), created=(), gate
     count, names, where = _divisions_text(proj)
     most, preset = parallel(cfg, reg)
     path = paths.project_local(root) / SETUP_REPORT
-    text = "\n".join([f"# ORCHE is set up: {key}", "", *created,
+    text = "\n".join([f"# Orche is set up: {key}", "", *created,
                       f"- Divisions: {names or 'none'}",
                       *([PRESET_LINES[proj["preset"]]] if proj.get("preset") in PRESET_LINES else []),
                       f"- Agents: {count} division agent{'' if count == 1 else 's'}, one Orca tab each, always on. Each unit of work adds one "
                       f"worker while it runs; up to {most} run at once ({preset}).",
-                      f"- Workspaces: {where}; nothing is committed to the repository; ORCHE's own files are "
+                      f"- Workspaces: {where}; nothing is committed to the repository; Orche's own files are "
                       "excluded from git",
                       f"- Intake: {_intake_text(key, root, intake_line)}", *_team_lines(key, root, detected),
                       f"- Talk to Main in the {proj.get('main_session') or 'main-' + key} tab, in any language. "
@@ -252,6 +252,6 @@ def write_report(reg, key, root, intake_line=None, detected=(), created=(), gate
                       "", "## Running now", "", *running_lines(reg, key, root, cfg, gate),
                       "", "## Any time", "",
                       *lines(cfg, reg, key), "",
-                      'Say "what else can ORCHE do?" to see this list again (Main runs `orche doctor`).', ""])
+                      'Say "what else can Orche do?" to see this list again (Main runs `orche doctor`).', ""])
     util.atomic_write(path, text)
     return path

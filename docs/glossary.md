@@ -1,6 +1,6 @@
-# ORCHE glossary
+# Orche glossary
 
-The domain terms used by ORCHE's code, docs and architecture reviews.
+The domain terms used by Orche's code, docs and architecture reviews.
 
 ## Language
 
@@ -37,11 +37,11 @@ The member that hears from a unit: the sender of its current brief revision when
 _Avoid_: target.
 
 **Held note**:
-A non-urgent `info` pointer that is neither a pane delivery nor a runner filing (ORCHE's dispatch feedback, a pane's `orche report info`). It waits for a drain trigger; every other pointer reaches the next prompt.
+A non-urgent `info` pointer that is neither a pane delivery nor a runner filing (Orche's dispatch feedback, a pane's `orche report info`). It waits for a drain trigger; every other pointer reaches the next prompt.
 _Avoid_: non-urgent pointer.
 
 **Wake**:
-ORCHE typing `[orche] inbox: new reports` into a recipient's idle pane after a waking pointer lands, once per batch, never into a draft or a dialog; it costs the recipient one turn. The command is `orche nudge <session>`.
+Orche typing `[orche] inbox: new reports` into a recipient's idle pane after a waking pointer lands, once per batch, never into a draft or a dialog; it costs the recipient one turn. The command is `orche nudge <session>`.
 _Avoid_: ping; "nudge" for the concept (the brief line `[orche] inbox: <unit> rev <N>` is the nudge a deliverer types).
 
 **Undelivered**:
@@ -53,7 +53,7 @@ An `orche status` line: a session with waking pointers (reports) in its inbox fo
 _Avoid_: undelivered (that is a brief, not a report).
 
 **Stalled**:
-An `orche status` line: a repair `orche reconcile` has tried (`ORCHE retrying (k/cap)`) or escalated (`waiting on you`), e.g. an unread report, an undelivered or silent unit, a closed Main.
+An `orche status` line: a repair `orche reconcile` has tried (`Orche retrying (k/cap)`) or escalated (`waiting on you`), e.g. an unread report, an undelivered or silent unit, a closed Main.
 _Avoid_: stuck, hung.
 
 **Reminder**:
@@ -80,7 +80,7 @@ One dispatched piece of work with a brief, a report and (for code) a ledger row,
 _Avoid_: unit for a division or feature agent (say member); the old `units.Unit` type meant that.
 
 **Headless call**:
-One `claude -p` process that ORCHE starts, feeds, waits for and cleans up (`lib/orche/headless.py`): a unit worker, an intake sweep, a Liaison answer or card refresh, or a triage classification.
+One `claude -p` process that Orche starts, feeds, waits for and cleans up (`lib/orche/headless.py`): a unit worker, an intake sweep, a Liaison answer or card refresh, or a triage classification.
 _Avoid_: worker (say unit worker), runner (that is `orche run`).
 
 **Headless token**:
@@ -92,7 +92,7 @@ The headless call that carries out one unit in its target's worktree. `orche run
 _Avoid_: runner, headless worker.
 
 **Call context**:
-What a headless call may see. *project*: the cwd's project settings, all tools under permission rules, ORCHE's PreToolUse gates. *sealed*: `--restricted`, only the allowed tools, files confined to the cwd. *blank*: an empty directory outside `$HOME`, no tools, its own system prompt.
+What a headless call may see. *project*: the cwd's project settings, all tools under permission rules, Orche's PreToolUse gates. *sealed*: `--restricted`, only the allowed tools, files confined to the cwd. *blank*: an empty directory outside `$HOME`, no tools, its own system prompt.
 _Avoid_: mode, sandbox, profile.
 
 **Run tag**:
@@ -104,7 +104,7 @@ The headless read-only role that answers other projects' questions (`orche ask`)
 _Avoid_: liaison session, liaison pane (gone since 0.5.0).
 
 **CEO Staff**:
-The optional, read-only pane (session `staff`, one per machine, `lib/orche/staff.py`) the owner asks everyday questions; it knows the owner's exchanges with every Main from their transcripts and hands work to Main as a held note. Not a member: no registry record, memory or heartbeat.
+The read-only pane (session `staff`, one per machine, `lib/orche/staff.py`), open by default, the owner asks everyday questions; it knows the owner's exchanges with every Main from their transcripts and hands work to Main as a held note. Not a member: one registry entry (`staff.status`, asleep once closed in words), no memory or heartbeat.
 _Avoid_: assistant, secretary, staff division (it is no division).
 
 **Base commit**:
@@ -119,7 +119,7 @@ Claude Code's `--effort` level. A unit worker's effort comes from its TIER (mech
 _Avoid_: tier (TIER is the brief's field).
 
 **Vendor**:
-Who runs a model string: `codex` for `codex` and `codex:<model id>`, else `claude` (`vendors.vendor_of`). A division's vendor decides how ORCHE starts it; a Codex division runs headless only.
+Who runs a model string: `codex` for `codex` and `codex:<model id>`, else `claude` (`vendors.vendor_of`). A division's vendor decides how Orche starts it; a Codex division runs headless only.
 _Avoid_: provider, backend.
 
 **Recommended model**:
@@ -127,7 +127,7 @@ The model and pane effort config `kinds` gives a new division by its name (a nam
 _Avoid_: default model (Codex's own default is spelled `codex`).
 
 **Model choice**:
-The model a division records (`orche hr add --model`, `orche hr model`); `orche hr choices` builds the owner's questions (which division to add, which model) from the kinds and `models.catalog`. A change applies at the next run or pane start; ORCHE never restarts an awake pane for it.
+The model a division records (`orche hr add --model`, `orche hr model`); `orche hr choices` builds the owner's questions (which division to add, which model) from the kinds and `models.catalog`. A change applies at the next run or pane start; Orche never restarts an awake pane for it.
 _Avoid_: model switch (nothing switches mid-run).
 
 **Division kind**:
@@ -150,11 +150,11 @@ A hard design call sent as one brief to two divisions on different models; a thi
 _Avoid_: council (the dropped command).
 
 **Update**:
-`orche update`: the ORCHE checkout fast-forwarded to `origin/main`, reinstalled by the new code and every project refreshed (`orche init <project> --refresh`); the owner asks Main in plain words, in any language ("update ORCHE"). A development checkout (uncommitted changes, another branch, local commits) is never pulled or reset: the install and the projects are aligned with it when the recorded version differs (R-PLAIN-2).
+`orche update`: the Orche checkout fast-forwarded to `origin/main`, reinstalled by the new code and every project refreshed (`orche init <project> --refresh`); the owner asks Main in plain words, in any language ("update Orche"). A development checkout (uncommitted changes, another branch, local commits) is never pulled or reset: the install and the projects are aligned with it when the recorded version differs (R-PLAIN-2).
 _Avoid_: upgrade, reinstall (the reinstall is one of its steps).
 
 **Dispatch block**:
-One block of text a Main or division sends with `orche dispatch` (stdin or `--file`; a `---` line separates blocks). ORCHE reads it as a new brief, an AMEND (a correction) or a STOP (a halt); `brief.parse` holds the grammar.
+One block of text a Main or division sends with `orche dispatch` (stdin or `--file`; a `---` line separates blocks). Orche reads it as a new brief, an AMEND (a correction) or a STOP (a halt); `brief.parse` holds the grammar.
 _Avoid_: brief (that is the stored file), order, ticket.
 
 **Brief**:
@@ -282,7 +282,7 @@ The one waking pointer from `orche` to a session when every unit it waits on in 
 _Avoid_: lineage done, final report.
 
 **Closing line**:
-The last non-empty line outside fences of Main's reply: `RUNNING: …`, `OWNER: …` or `DONE: …`. `OWNER` records the ask and `DONE` closes it (`flow.owner`); Orca's own notification covers the reply, and ORCHE reminds the owner of an ask still open after 30 minutes.
+The last non-empty line outside fences of Main's reply: `RUNNING: …`, `OWNER: …` or `DONE: …`. `OWNER` records the ask and `DONE` closes it (`flow.owner`); Orca's own notification covers the reply, and Orche reminds the owner of an ask still open after 30 minutes.
 _Avoid_: last line, sign-off, footer.
 
 **Ask**:
@@ -314,7 +314,7 @@ The division session a worker belongs to (its Orca parent): it staffs, briefs, r
 _Avoid_: manager, lead.
 
 **Worker**:
-A feature agent (on the branch Orca names by default; `<prefix>/<name>` when the project sets `publish.per_project.<p>.branch_prefix` (ORCHE renames it right after creation)) under any head but Research, R&D and Ops: one slice per brief; it retires once its work landed. Standing workers are only `infra` under Build and an owner the same files earned by two queue returns in a week.
+A feature agent (on the branch Orca names by default; `<prefix>/<name>` when the project sets `publish.per_project.<p>.branch_prefix` (Orche renames it right after creation)) under any head but Research, R&D and Ops: one slice per brief; it retires once its work landed. Standing workers are only `infra` under Build and an owner the same files earned by two queue returns in a week.
 _Avoid_: Build's feature (features are not Build-only from 0.10.0).
 
 **Publish**:
@@ -369,7 +369,7 @@ One model call inside a run (work, escalation, rework, review, build-review); th
 A named set of caps (`default`, `20`, `30`) applied with `orche hr scale`.
 
 **Setup report**:
-`<project>/.orche/SETUP.md`, written by `orche init` (and `--refresh`): "ORCHE is set up", what was made, and the "Any time" list of optional features with the owner words that switch each on (`lib/orche/guide.py`). Main reports it after the first setup; `orche doctor` ends with the same list.
+`<project>/.orche/SETUP.md`, written by `orche init` (and `--refresh`): "Orche is set up", what was made, and the "Any time" list of optional features with the owner words that switch each on (`lib/orche/guide.py`). Main reports it after the first setup; `orche doctor` ends with the same list.
 _Avoid_: setup note (that is the five-line pointer to Main), onboarding summary.
 
 **Main**: Per-project orchestrator session; decides, never codes

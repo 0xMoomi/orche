@@ -4,11 +4,14 @@
 A waking pointer posted to a session starts `orche nudge <session>` (inbox.wake). The nudger holds
 `inbox/<session>/.wake.lock`, and types the fixed WAKE_TEXT only when a waking pointer is still
 pending, the pane's agent is idle (`orca terminal wait --for tui-idle`: status running, no
-blockedReason, satisfied) and the composer draft is empty (`orca terminal read`). The `.nudged`
+blockedReason, satisfied) and the composer is empty (`orca terminal read --screen`: `_composer`). Into
+Main (a person types there) it first waits until the pane printed nothing for ACTIVE_S (`_hold`), and
+types only into a composer the screen shows empty. The `.nudged`
 marker is written before the send and removed when the send fails (a receipt without a proven
 turn start counts as failed: `_receipt`); the prompt hook removes it after it drains, when the
-wake (or any prompt) arrives. A draft that is ORCHE's own stale line is `nudge-failed`, never typed
-over. The text typed is never pointer content.
+wake (or any prompt) arrives. A draft that is Orche's own stale line is `nudge-failed`, never typed
+over. The text typed is never pointer content. `orche nudge --unread` (the Stop hook, when a Main turn
+Orche started ends) first marks Main's Orca workspace unread (`mark_unread`), then wakes as above.
 
 The Stop hook writes a pane unit's pointer (`via: dispatch`) and starts `orche deliver <unit>`
 (spawn). The deliverer holds the target's own `.deliver.lock` (never the wake lock: a brief is not
@@ -33,16 +36,19 @@ LOCK_WAIT_S = 600.0             # a deliverer waits this long for earlier delive
 POLL_S = 0.5
 LAST_NUDGE = ".last-nudge"  # {state, at} of the session's newest `orche nudge` (reconcile's escalation names it)
 QUIET_POLL_S = 2.0         # the quiet window's poll (config inbox.quiet_s / quiet_max_s)
-SUBMIT_WAIT_S = 20         # `send --wait-submit`: UserPromptSubmit hooks (ORCHE's 3 s budget plus others) run first
+SUBMIT_WAIT_S = 20         # `send --wait-submit`: UserPromptSubmit hooks (Orche's 3 s budget plus others) run first
 SEND = ("--enter", "--wait-submit", str(SUBMIT_WAIT_S))
 IDLE_WAIT_S = 120          # `terminal wait --for tui-idle` before a wake
 DELIVER_WAIT_S = 60        # … before a brief nudge (then it is typed anyway)
 WAIT_SLACK_S = 10          # the wait call's timeout beyond its --timeout-ms
 CALL_S = 20                # list and read (send: SUBMIT_WAIT_S + WAIT_SLACK_S)
-# A nudger holds the wake lock for list + (idle wait + read) twice + send, plus its quiet window
-# (inbox.quiet_max_s at most): a later nudger waits that long (wake_wait_s), then sees the marker
-# (`already-nudged`), never a spurious `locked`.
-WAKE_HOLD_S = CALL_S + 2 * (IDLE_WAIT_S + WAIT_SLACK_S + CALL_S) + SUBMIT_WAIT_S + 2 * WAIT_SLACK_S
+ACTIVE_S = 10              # Main's pane printed within this many seconds: someone may be typing there
+HOLD_MAX_S = 60            # … a typing attempt waits for that quiet this long at most (_hold)
+# A nudger holds the wake lock for list + (idle wait + read) twice + send, plus Main's activity hold and
+# its quiet window (inbox.quiet_max_s at most): a later nudger waits that long (wake_wait_s), then sees
+# the marker (`already-nudged`), never a spurious `locked`.
+WAKE_HOLD_S = (CALL_S + 2 * (IDLE_WAIT_S + WAIT_SLACK_S + CALL_S) + SUBMIT_WAIT_S + 2 * WAIT_SLACK_S
+               + HOLD_MAX_S)
 OK_STATES = ("nudged", "already-nudged", "nothing-pending")
 FAILED = ("no-pane", "needs-wake", "wake-requested", "dialog", "no-agent", "refused", "nudge-failed", "locked")
 
@@ -84,7 +90,8 @@ def _result(res, key) -> dict:
     return inner if isinstance(inner, dict) else res
 
 
-def _type(session, text, *, strict, wait_s, still_needed, before_send=None, on_fail=None, settle=None, reopen=None):
+def _type(session, text, *, strict, wait_s, still_needed, before_send=None, on_fail=None, settle=None, reopen=None,
+          owner=False):
     """Type `text` + Enter into `session`'s pane. (state, waited seconds).
 
     The pane title is the session name. strict: not idle after `wait_s` → `busy` (else send anyway: Claude Code queues typed input,
@@ -96,6 +103,9 @@ def _type(session, text, *, strict, wait_s, still_needed, before_send=None, on_f
     reopen(handle): a dead pane (listed `disconnected`, `no-agent`, or a failed send whose terminal
     is then listed `disconnected`) is closed and reopened once (`reopen_pane`); the new handle, or
     None (the attempt then ends `no-agent`).
+    owner (Main: a person types there): each pass first waits until the pane printed nothing for ACTIVE_S
+    (`_hold`, HOLD_MAX_S in all), and only a composer the screen read shows empty is typed into (no
+    composer on screen: `nudge-failed`). The read stays the last call before the send.
     """
     started = time.monotonic()
 
@@ -119,7 +129,11 @@ def _type(session, text, *, strict, wait_s, still_needed, before_send=None, on_f
         handle = repair(handle)
         if handle is None:
             return done("no-agent")
+    budget, fresh = HOLD_MAX_S, term
     while True:
+        if owner:
+            budget -= _hold(session, fresh, budget)
+            fresh = None
         try:
             wait = _result(orca.terminal("wait", "--terminal", handle, "--for", "tui-idle", "--timeout-ms",
                                          str(int(wait_s * 1000)), timeout=wait_s + WAIT_SLACK_S), "wait")
@@ -141,14 +155,18 @@ def _type(session, text, *, strict, wait_s, still_needed, before_send=None, on_f
         if not still_needed():
             return done("nothing-pending")
         try:
-            draft = _result(orca.terminal("read", "--terminal", handle, timeout=CALL_S), "terminal").get("draft")
+            shown = _result(orca.terminal("read", "--terminal", handle, "--screen", timeout=CALL_S), "terminal")
         except Exception as exc:  # noqa: BLE001 - an unread composer is never typed into
             log.log("hooks", f"deliver: terminal read for {session}: {exc}")
             return done("nudge-failed")
-        draft = str(draft or "").strip()
+        draft = _composer(shown)
+        if draft is None and owner:
+            log.log("hooks", f"deliver: {session} shows no composer (source {shown.get('source')}); not typing")
+            return done("nudge-failed")
+        draft = draft or ""
         if draft and _stale(draft):
-            # ORCHE's own unsubmitted line: it cannot be cleared from here and is never typed again.
-            log.log("hooks", f"deliver: {session} composer holds a stale ORCHE line; not typing")
+            # Orche's own unsubmitted line: it cannot be cleared from here and is never typed again.
+            log.log("hooks", f"deliver: {session} composer holds a stale Orche line; not typing")
             return done("nudge-failed")
         if draft:
             return done("user-typing")
@@ -240,10 +258,55 @@ def reopen_pane(reg, session, handle, done=None):
 
 
 REMIND_RE = re.compile(r"^\s*\[orche\] report due:")
+PROMPT_ROW = re.compile(r"^\s*❯ ?(.*)$")          # Claude Code's composer row
+RULE_ROW = re.compile(r"^\s*[─━-]{8,}\s*$")       # the rules drawn above and below it
+PLACEHOLDER = re.compile(r'^Try\s+["“]')           # its empty-composer hint
+
+
+def _composer(shown):
+    """The composer text of a `terminal read --screen` result ('' when empty), or None when no screen was
+    rendered (`source` other than `screen`) or no composer is on it. Orca's `draft` when it parsed one;
+    else (Orca parses none while the terminal cursor is hidden, Claude Code's default) the last `❯` row
+    between two rules in the rendered tail, with the rows up to the lower rule (a footer row that starts
+    with `❯` has no rule below it). The `Try "…"` hint is empty; other dim text cannot be told from typed
+    text and counts as typed."""
+    if not isinstance(shown, dict) or shown.get("source") != "screen":
+        return None
+    draft = str(shown.get("draft") or "").strip()
+    if draft:
+        return draft
+    rows = [r for r in shown.get("tail") or [] if isinstance(r, str)]
+    for i in range(len(rows) - 1, 0, -1):
+        row = PROMPT_ROW.match(rows[i])
+        if not row or not RULE_ROW.match(rows[i - 1]):
+            continue
+        end = next((j for j in range(i + 1, len(rows)) if RULE_ROW.match(rows[j])), None)
+        if end is not None:
+            text = "\n".join([row.group(1)] + rows[i + 1:end]).strip()
+            return "" if PLACEHOLDER.match(text) else text
+    return None
+
+
+def _hold(session, term, budget) -> float:
+    """Main's activity hold: wait (polling `terminal list` every QUIET_POLL_S) until `session`'s pane last
+    printed (`lastOutputAt`, epoch ms) at least ACTIVE_S ago, for at most `budget` seconds; `term` is a
+    fresh listing to start from (None: list now). Returns the seconds waited. A pane that is not listed,
+    or is listed without the field, is quiet."""
+    started = time.monotonic()
+    while True:
+        if term is None:
+            term = _listed(session)
+        at = (term or {}).get("lastOutputAt")
+        age = time.time() - at / 1000 if isinstance(at, (int, float)) else ACTIVE_S
+        left = min(ACTIVE_S - max(0.0, age), budget - (time.monotonic() - started))
+        if left <= 0:
+            return time.monotonic() - started
+        time.sleep(min(QUIET_POLL_S, left))
+        term = None
 
 
 def _stale(draft: str) -> bool:
-    """The composer holds an ORCHE line (a wake, a brief nudge or a reminder whose Enter never submitted)."""
+    """The composer holds an Orche line (a wake, a brief nudge or a reminder whose Enter never submitted)."""
     return draft == inbox.WAKE_TEXT or bool(inbox.NUDGE_RE.match(draft)) or bool(REMIND_RE.match(draft))
 
 
@@ -336,6 +399,12 @@ def _quiet(session, cfg) -> int:
     return int(time.monotonic() - started)
 
 
+def _is_main(r, session) -> bool:
+    """`session` is a project's Main in roster `r`: a person types in its pane (`_type`'s owner)."""
+    m = r.member(session)
+    return m is not None and m.kind == "main"
+
+
 def _reopener(session):
     """nudge's reopen callback (reopen_pane with the registry read when a pane is found dead)."""
     def fix(handle):
@@ -344,10 +413,36 @@ def _reopener(session):
     return fix
 
 
-def nudge(session) -> tuple:
-    """`orche nudge <session>`: (exit code, state). Raises ValueError for an unsafe
-    session name (before anything is touched); every other failure is a state."""
+def mark_unread(session) -> str:
+    """Mark Main's Orca workspace unread in the sidebar (`orca worktree set --worktree id:<repo_id>::<path>
+    --unread`, the workspace hr.project_pane opens Main in): `marked`, `not-main` (only Main is marked) or
+    `mark-failed`. Never raises; one events line `unread session=<s> state=<state>`."""
+    from . import registry
+    state = "mark-failed"
+    try:
+        reg = registry.load()
+        m = roster.Roster(reg).member(session)
+        if m is None or m.kind != "main":
+            state = "not-main"
+        else:
+            proj = reg["projects"][m.project]
+            orca.worktree("set", "--worktree", f"id:{proj['repo_id']}::{proj['path']}", "--unread", timeout=CALL_S)
+            state = "marked"
+    except Exception as exc:  # noqa: BLE001 - the mark is best-effort; the turn's reply is on screen
+        log.log("hooks", f"deliver: mark {session} unread: {type(exc).__name__}: {exc}")
+    log.log("events", f"unread session={session} state={state}")
+    return state
+
+
+def nudge(session, unread=False) -> tuple:
+    """`orche nudge [--unread] <session>`: (exit code, state). Raises ValueError for an unsafe
+    session name (before anything is touched); every other failure is a state. `unread`: mark_unread
+    first; with no waking pointer pending that is all, and its state is the run's."""
     inbox.box(session)
+    if unread:
+        state = mark_unread(session)
+        if not _waking(session):
+            return (0 if state == "marked" else 1), state
     started, state, waited, quiet = time.monotonic(), "nudge-failed", 0, [0]
 
     def settle():
@@ -364,10 +459,12 @@ def nudge(session) -> tuple:
                     elif not _waking(session):
                         state = "nothing-pending"
                     else:
+                        from . import registry
                         state, waited = _type(session, inbox.WAKE_TEXT, strict=True,
                                               wait_s=IDLE_WAIT_S, still_needed=lambda: _waking(session) > 0,
                                               before_send=lambda: _mark(session), on_fail=lambda: _unmark(session),
-                                              settle=settle, reopen=_reopener(session))
+                                              settle=settle, reopen=_reopener(session),
+                                              owner=_is_main(roster.Roster(registry.load()), session))
                 except Exception as exc:  # noqa: BLE001 - recorded below, under the lock
                     log.log("hooks", f"deliver: nudge {session}: {type(exc).__name__}: {exc}")
                     state, waited = "nudge-failed", int(time.monotonic() - started)
@@ -598,7 +695,8 @@ def _pane(r, b, to, sent, reopened=None):
             drain_dispatch(to, b.unit, b.rev)
             return "already-ran", int(time.monotonic() - started)
         state, waited = _type(to, f"[orche] inbox: {b.unit} rev {b.rev}", strict=False, wait_s=DELIVER_WAIT_S,
-                              still_needed=path.exists, reopen=lambda h: reopen_pane(r.reg, to, h, reopened))
+                              still_needed=path.exists, reopen=lambda h: reopen_pane(r.reg, to, h, reopened),
+                              owner=_is_main(r, to))
         if stop and state == "no-pane":
             drain_dispatch(to, b.unit, b.rev)
             return "stop-idle", waited
@@ -731,7 +829,7 @@ def remind(reg, unit, reason) -> tuple:
                     state, waited = "locked", int(time.monotonic() - started)
                 else:
                     state, waited = _type(to, remind_text(unit, b.rev, reason), strict=False,
-                                          wait_s=DELIVER_WAIT_S, still_needed=needed)
+                                          wait_s=DELIVER_WAIT_S, still_needed=needed, owner=_is_main(r, to))
             if state == "nothing-pending":
                 state = "already-reported"
     except Exception as exc:  # noqa: BLE001 - the events line is always written

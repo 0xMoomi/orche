@@ -13,9 +13,9 @@ vercel.com/docs/ai-gateway/sdks-and-apis/typesafe (gateway). They are encoded on
   with q = `{"type": "noul", "instructions"}`, `{"type": "choice", "instructions", "criteria":
   {option: description or null}}` (descriptions masked like the instructions) or `{"type": "score", "instructions", "criteria": [level labels, low to high]}`.
 - response `{"model", "answers": {id: answer}, "usage"}`: noul `{"type", "noul": 0-1}` (no
-  confidence: ORCHE uses max(p, 1 - p)); choice `{"type", "choice", "probabilities", "confidence"}`
-  (ORCHE keeps `probabilities` for the asked options, as floats in [0, 1]);
-  score `{"type", "score": 0-based level, "legend", "probabilities", "confidence"}` (ORCHE reports
+  confidence: Orche uses max(p, 1 - p)); choice `{"type", "choice", "probabilities", "confidence"}`
+  (Orche keeps `probabilities` for the asked options, as floats in [0, 1]);
+  score `{"type", "score": 0-based level, "legend", "probabilities", "confidence"}` (Orche reports
   `min + score`, so a 1-5 question still answers 1-5).
 - limits (documented in tokens: 64k per request, 32k per question) are enforced here in chars, which
   is stricter; `state` is truncated with a `[truncated]` marker.
@@ -433,7 +433,7 @@ def client(require_enabled=True):
         return None
 
 
-PROBE_STATE = "ORCHE setup check: a short connection test with no user data."
+PROBE_STATE = "Orche setup check: a short connection test with no user data."
 
 
 def probe(c):

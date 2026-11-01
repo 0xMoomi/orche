@@ -2,7 +2,7 @@
 main checkout, persona templates/personas/liaison.md.
 
 - `orche ask <project> "<question>"`: someone (another project's Main, a person) asks about this
-  project; the worker answers from the card, the git history ORCHE collected and the files it
+  project; the worker answers from the card, the git history Orche collected and the files it
   reads with Read, Glob and Grep (intake's sealed tools and secret deny rules).
 - `orche card refresh <project>`: the same worker refreshes PROJECT_CARD.md. A git gate runs first:
   the base commit under `## Last refreshed` must be an ancestor of HEAD, and when no commit outside
@@ -182,7 +182,7 @@ def ask(target, question, cfg) -> dict:
 
 def _bounds(text, heading):
     """(start of body, end of body) of `## heading`, or None. The body ends at the next `## ` heading
-    or the next line starting with `<!-- orche-` (an ORCHE block marker), else at the end."""
+    or the next line starting with `<!-- orche-` (an Orche block marker), else at the end."""
     m = re.search(rf"^## {re.escape(heading)}[ \t]*\n", text, re.MULTILINE)
     if not m:
         return None
@@ -203,14 +203,14 @@ def base_of(text):
 
 
 def _demote(body):
-    """No line of a body may open a section or an ORCHE block: `#`/`##` headings become `###`."""
+    """No line of a body may open a section or an Orche block: `#`/`##` headings become `###`."""
     body = re.sub(r"^#{1,2}(?=[ \t])", "###", body.strip(), flags=re.MULTILINE)
     return re.sub(r"<!--\s*orche-", "<!-- (orche) ", body)
 
 
 def _put(text, heading, body):
     """Replace the body of `## heading`, else insert the section before `## How to ask`, else before
-    the first ORCHE block marker, else at the end."""
+    the first Orche block marker, else at the end."""
     block = f"\n{_demote(body)}\n\n"
     b = _bounds(text, heading)
     if b:

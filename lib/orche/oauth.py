@@ -2,7 +2,7 @@
 
 `claude setup-token` prints a long-lived (one-year) token for a Pro/Max plan; `orche auth set`
 stores it in the Jev key store (`jevkey`, account CLAUDE_CODE_OAUTH_TOKEN: the macOS keychain, else
-ORCHE_HOME/secrets/oauth.token, mode 0600). `headless.env()` then gives every `claude -p` ORCHE
+ORCHE_HOME/secrets/oauth.token, mode 0600). `headless.env()` then gives every `claude -p` Orche
 starts `CLAUDE_CODE_OAUTH_TOKEN`: an inherited value wins (the store is not read), else the stored
 token, else nothing changes and the run uses the login like before. Pane commands never carry it.
 

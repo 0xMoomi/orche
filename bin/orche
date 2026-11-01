@@ -1,5 +1,5 @@
 #!/bin/sh
-# ORCHE command-line launcher: run bin/orche.py under the first Python 3.11+ available.
+# Orche command-line launcher: run bin/orche.py under the first Python 3.11+ available.
 #
 # A login shell's bare `python3` can be macOS's /usr/bin/python3 (3.9); the search in
 # lib/find_python.sh (shared with hooks/run.sh) skips it. With no suitable interpreter the CLI is
@@ -21,5 +21,5 @@ esac
 if [ -r "$dir/../lib/find_python.sh" ] && . "$dir/../lib/find_python.sh" && orche_find_python; then
   exec "$ORCHE_PY" "$dir/orche.py" "$@"
 fi
-echo "orche: ORCHE needs Python 3.11+ (none found; tried $ORCHE_PY_CANDIDATES); brew install python" >&2
+echo "orche: Orche needs Python 3.11+ (none found; tried $ORCHE_PY_CANDIDATES); brew install python" >&2
 exit 1

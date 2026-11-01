@@ -4,12 +4,14 @@ import datetime as dt
 import io
 import json
 import os
+import re
 import subprocess
 import tempfile
 import time
 import unittest
 from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
+from unittest import mock
 
 import support
 from orche import __version__ as VERSION
@@ -35,7 +37,7 @@ class CoreCase(support.TempHomeCase):
         self.reg = copy.deepcopy(SAMPLE)
         self.reg["events"].append({"at": "2026-10-15T18:00:00+09:00", "type": "create",
                                    "project": "acme-shop", "unit": "build/search", "by": "div-acme-shop-build"})
-        for proj in self.reg["projects"].values():   # rendered by this ORCHE: no `upgrade:` line
+        for proj in self.reg["projects"].values():   # rendered by this Orche: no `upgrade:` line
             proj["orche_version"] = VERSION
         registry.save(self.reg)
         (self.home / "config.json").write_text(json.dumps(support.no_wake({"notify": False})))
@@ -192,7 +194,7 @@ class StatusTest(CoreCase):
     def test_status_names_a_project_init_must_upgrade(self):
         reg = registry.load()
         del reg["projects"]["acme-shop"]["orche_version"]          # rendered before the stamp existed
-        reg["projects"]["docs-site"]["orche_version"] = "0.0.1"    # rendered by an older ORCHE
+        reg["projects"]["docs-site"]["orche_version"] = "0.0.1"    # rendered by an older Orche
         registry.save(reg)
         now = VERSION
         code, out, err = self.orche("status")
@@ -303,17 +305,27 @@ class DeptsTest(CoreCase):
 
 
 class StatuslineTest(CoreCase):
+    def line(self, cwd="/srv/orca/acme-shop"):
+        """`orche statusline` for `cwd`, without its colours."""
+        from orche import statusline
+        return statusline.plain(self.orche("statusline", "--cwd", cwd)[1])
+
+    def cached(self):
+        return (self.home / "status" / "acme-shop.line").read_text(encoding="utf-8").splitlines()
+
     def test_unregistered_cwd_prints_nothing(self):
         with tempfile.TemporaryDirectory() as tmp:
             self.assertEqual(self.orche("statusline", "--cwd", tmp), (0, "", ""))
         self.assertFalse((self.home / "status").exists())
 
     def test_registered_path_writes_line(self):
+        from orche import statusline
         self.counters()
         code, out, err = self.orche("statusline", "--cwd", "/srv/orca/acme-shop/src/app")
-        line = "R&D○ BUILD●1 · 🔑1"
-        self.assertEqual((code, out, err), (0, line + "\n", ""))
-        self.assertEqual((self.home / "status" / "acme-shop.line").read_text(), line + "\n")
+        self.assertEqual((code, statusline.plain(out), err), (0, "BUILD 0/1 · R&D ○ · 🔑1\n", ""))
+        self.assertEqual((self.home / "status" / "acme-shop.line").read_text(), out)   # colours and all
+        rec = json.loads(self.orche("--json", "statusline", "--cwd", "/srv/orca/acme-shop")[1])
+        self.assertEqual(rec, {"project": "acme-shop", "line": "BUILD 0/1 · R&D ○ · 🔑1"})   # JSON is plain
 
     def test_one_roster_per_refresh(self):
         from orche import roster
@@ -327,8 +339,7 @@ class StatuslineTest(CoreCase):
         roster.Roster = Counting
         self.addCleanup(setattr, roster, "Roster", orig)
         self.counters()
-        out = self.orche("statusline", "--cwd", "/srv/orca/acme-shop/src/app")[1]
-        self.assertEqual(out, "R&D○ BUILD●1 · 🔑1\n")
+        self.assertEqual(self.line("/srv/orca/acme-shop/src/app"), "BUILD 0/1 · R&D ○ · 🔑1\n")
         self.assertEqual(len(built), 1)
 
     def test_marker_and_zero_cells_omitted(self):
@@ -341,35 +352,99 @@ class StatuslineTest(CoreCase):
         self.assertEqual((code, out), (0, "🔑1\n"))
 
     def test_unit_worktree_resolves_project(self):
-        out = self.orche("statusline", "--cwd", "/srv/orca/acme-shop-checkout")[1]
-        self.assertEqual(out, "R&D○ BUILD●1\n")
+        self.assertEqual(self.line("/srv/orca/acme-shop-checkout"), "BUILD 0/1 · R&D ○\n")
 
     def test_missing_registry_is_silent(self):
         (self.home / "registry.json").unlink()
         self.assertEqual(self.orche("statusline", "--cwd", "/srv/orca/acme-shop"), (0, "", ""))
 
     def test_waiting_spend_and_paused(self):
-        """waitingN first (the open ask plus units blocked on the owner), today's spend last (kept from the
+        """waiting first (the open ask plus units blocked on the owner), today's spend last (kept from the
         last transcript read, dropped the next day), PAUSED in place of the counters while a pause holds."""
         from orche import statusline
         from orche.flow import guard, owner
         self.write("inbox/main-acme-shop/q.json", {"unit": "u9", "status": "question", "at": units.iso(NOW)})
         owner.record("acme-shop", "Approve the plan?", kind="decision", source="main", now=NOW)
         statusline.refresh(registry.load(), "acme-shop", spent=4.2)
-        cached = (self.home / "status" / "acme-shop.line").read_text().splitlines()
-        self.assertEqual(cached, ["waiting2 · R&D○ BUILD●1 · $4.20 today", f"spent {NOW.date()} 4.200000"])
-        out = self.orche("statusline", "--cwd", "/srv/orca/acme-shop")[1]
-        self.assertEqual(out, "waiting2 · R&D○ BUILD●1 · $4.20 today\n")    # the kept spend survives
+        cached = self.cached()
+        self.assertEqual([statusline.plain(cached[0]), cached[1]],
+                         ["⚠ waiting 2 · BUILD 0/1 · R&D ○ · $4.20 today", f"spent {NOW.date()} 4.200000"])
+        self.assertEqual(self.line(), "⚠ waiting 2 · BUILD 0/1 · R&D ○ · $4.20 today\n")   # the kept spend survives
         statusline.refresh(registry.load(), "acme-shop", spent=None)
-        self.assertEqual(self.orche("statusline", "--cwd", "/srv/orca/acme-shop")[1],
-                         "waiting2 · R&D○ BUILD●1 · spend n/a\n")
+        self.assertEqual(self.line(), "⚠ waiting 2 · BUILD 0/1 · R&D ○ · spend n/a\n")
         units.now = lambda: NOW + dt.timedelta(days=1)   # another day: the spend is gone, the question too old
-        self.assertEqual(self.orche("statusline", "--cwd", "/srv/orca/acme-shop")[1], "waiting1 · R&D○ BUILD●1\n")
+        self.assertEqual(self.line(), "⚠ waiting 1 · BUILD 0/1 · R&D ○\n")
         guard.pause("acme-shop", "main-acme-shop")
-        self.assertEqual(self.orche("statusline", "--cwd", "/srv/orca/acme-shop")[1],
-                         'PAUSED by the owner · say "resume" in Main\n')
+        self.assertEqual(self.line(), 'PAUSED by the owner · say "resume" in Main\n')
+
+    def test_colour_marks_what_matters(self):
+        """Yellow what waits on the owner, green bold the live runs, the asleep divisions dimmed, the rest
+        plain; a pause turns the whole line red. A worker's run counts in its division's cell, a head's
+        run only in the total."""
+        from orche import statusline
+        from orche.flow import guard, owner
+        self.counters()
+        owner.record("acme-shop", "Approve the plan?", kind="decision", source="main", now=NOW)
+        for unit, to in (("u1", "feat-acme-shop-checkout"), ("u2", "div-acme-shop-build")):
+            self.write(f"runs/acme-shop/{unit}.lock", {"pid": os.getpid(), "unit": unit, "to": to})
+        statusline.refresh(registry.load(), "acme-shop", spent=10.75)
+        self.assertEqual(self.cached()[0], "\033[33m⚠ waiting 1\033[0m · \033[1;32m▶ running 2\033[0m · BUILD 1/1"
+                                           " · \033[2mR&D ○\033[0m · 🔑1 · $10.75 today")
+        guard.pause("acme-shop", "main-acme-shop")
+        statusline.refresh(registry.load(), "acme-shop")
+        self.assertEqual(self.cached()[0], '\033[31mPAUSED by the owner · say "resume" in Main\033[0m')
+        with mock.patch.object(guard, "spend_status", lambda key, now=None: {"spent": 31.0, "since": "00:00",
+                                                                             "cap": 30.0}):
+            self.assertEqual(self.line(), 'PAUSED spend cap $30 reached · say "resume" in Main\n')
+
+    def test_order_work_then_awake_then_asleep(self):
+        """Divisions with workers first (`running/assigned`), then the awake ones without (`●`, `◐`
+        onboarding), then the asleep ones; zero cells hidden."""
+        reg = registry.load()
+        divs = reg["projects"]["acme-shop"]["divisions"]
+        divs["gtm"] = {**divs["rnd"], "status": "onboarding", "session": "div-acme-shop-gtm", "branch": "div/gtm",
+                       "worktree": "repo-acme::/srv/orca/acme-shop-gtm"}
+        divs["research"] = {**divs["rnd"], "status": "active", "session": "div-acme-shop-research",
+                            "branch": "div/research", "worktree": "repo-acme::/srv/orca/acme-shop-research"}
+        registry.save(reg)
+        self.assertEqual(self.line(), "BUILD 0/1 · RS ● GTM ◐ · R&D ○\n")
+
+    def test_korean_owner_reads_korean_in_the_same_order_and_colours(self):
+        from orche import statusline
+        from orche.flow import guard, owner
+        self.counters()
+        owner.record("acme-shop", "Approve the plan?", kind="decision", source="main", now=NOW)
+        self.write("runs/acme-shop/u1.lock", {"pid": os.getpid(), "unit": "u1", "to": "feat-acme-shop-checkout"})
+        statusline.refresh(registry.load(), "acme-shop", spent=10.75)
+        english = self.cached()[0]
+        (self.home / "status" / "lang").write_text("ko\n")
+        statusline.refresh(registry.load(), "acme-shop")
+        korean = self.cached()[0]
+        self.assertEqual(statusline.plain(korean), "⚠ \ub300\uae30 1 · ▶ \uc2e4\ud589 1 · BUILD 1/1 · R&D ○ · 🔑1"
+                                                   " · \uc624\ub298 $10.75")
+        ansi = "\033\\[[0-9;]*m"
+        self.assertEqual(re.findall(ansi, korean), re.findall(ansi, english))
+        statusline.refresh(registry.load(), "acme-shop", spent=None)
+        self.assertTrue(self.line().endswith(" · \uc624\ub298 \ube44\uc6a9 n/a\n"))
+        guard.pause("acme-shop", "main-acme-shop")
+        self.assertEqual(self.line(), '\uc77c\uc2dc\uc815\uc9c0 \uc9c1\uc811 \uba48\ucda4 · Main\uc5d0 '
+                                      '"\uc7ac\uac1c"\ub77c\uace0 \ub9d0\ud558\uc138\uc694\n')
+        for word in ("fr", "../labels.ko", ""):          # no labels for it: English
+            (self.home / "status" / "lang").write_text(word + "\n")
+            self.assertEqual(self.line(), 'PAUSED by the owner · say "resume" in Main\n', word)
+
+    def test_every_language_has_the_same_labels(self):
+        from orche import staff, statusline
+        keys = {lang: set(statusline.labels(lang)) for lang in staff.LANGUAGES}
+        self.assertEqual(sorted(p.name for p in statusline.LABELS.iterdir()),
+                         sorted(f"labels.{lang}.json" for lang in staff.LANGUAGES))
+        self.assertEqual(len({frozenset(k) for k in keys.values()}), 1, keys)
+        for lang in staff.LANGUAGES:
+            self.assertNotRegex(json.dumps(statusline.labels(lang), ensure_ascii=False), "[\u2013\u2014]")
 
     def test_fast_without_orca(self):
+        (self.home / "status").mkdir()
+        (self.home / "status" / "lang").write_text("ko\n")
         timings = []
         for _ in range(5):        # the best of five: a loaded machine slows some runs, not the code
             start = time.perf_counter()
@@ -377,6 +452,49 @@ class StatuslineTest(CoreCase):
             timings.append(time.perf_counter() - start)
         self.assertLess(min(timings), 0.05)
         self.assertEqual(self.calls, [])
+
+
+class StatuslineLanguageTest(CoreCase):
+    """learn_language caches the owner's language (staff.language over the newest owner prompts to every
+    Main) in status/lang; the heartbeat pass, init and update call it, the status line only reads it."""
+
+    def prompts(self, *texts):
+        from orche.hr import panes
+        from orche.janitor import discover
+        folder = panes.claude_projects() / discover.claude_slug("/srv/orca/acme-shop")
+        folder.mkdir(parents=True, exist_ok=True)
+        base = NOW - dt.timedelta(hours=1)
+        rows = [{"type": "custom-title", "customTitle": "main-acme-shop"}]
+        for i, text in enumerate(texts):
+            ts = (base + dt.timedelta(minutes=i)).isoformat()
+            rows += [{"type": "user", "timestamp": ts, "message": {"role": "user", "content": text}},
+                     {"type": "assistant", "timestamp": ts,
+                      "message": {"id": f"m{i}", "role": "assistant", "content": [{"type": "text", "text": "ok"}]}}]
+        (folder / "s1.jsonl").write_text("".join(json.dumps(r) + "\n" for r in rows))
+
+    def lang(self):
+        return (self.home / "status" / "lang").read_text()
+
+    def test_the_owners_prompts_decide(self):
+        from orche import statusline
+        korean = "\uc624\ub298 \ubc30\ud3ec \uc0c1\ud669 \uc54c\ub824 \uc918"
+        self.prompts(korean, korean, "ship it")
+        statusline.learn_language(registry.load())
+        self.assertEqual(self.lang(), "ko\n")
+        self.assertEqual(statusline.cached_language(), "ko")
+        self.prompts("ship the pricing page", "and the docs", korean)
+        statusline.learn_language(registry.load())
+        self.assertEqual(self.lang(), "en\n")
+        self.assertFalse(any(argv[0] == "defaults" for argv in self.calls))   # prompts decide: no locale read
+
+    def test_no_prompts_read_the_macos_locale(self):
+        from orche import statusline
+        self.assertEqual(statusline.cached_language(), "en")                 # nothing cached yet: English
+        inner = shell.RUNNER
+        shell.RUNNER = lambda argv, **kw: (shell.Result(0, "ko_KR\n", "", argv) if argv[0] == "defaults"
+                                           else inner(argv, **kw))
+        statusline.learn_language(registry.load())
+        self.assertEqual(self.lang(), "ko\n")
 
 
 class RunningVisibilityTest(CoreCase):
@@ -424,9 +542,11 @@ class RunningVisibilityTest(CoreCase):
         self.assertEqual(rows, {"rnd": 0, "build": 1, "build/checkout": 1, "build/search": 0})
         self.assertTrue(self.orche("depts")[1].splitlines()[2].endswith("0d    1"))
 
-    def test_statusline_run_cell(self):
+    def test_statusline_running_cells(self):
+        """Both live runs in the total; in BUILD's cell only its worker's (the head's run is not a worker)."""
+        from orche import statusline
         out = self.orche("statusline", "--cwd", "/srv/orca/acme-shop")[1]
-        self.assertEqual(out, "R&D○ BUILD●1 · run2\n")
+        self.assertEqual(statusline.plain(out), "▶ running 2 · BUILD 1/1 · R&D ○\n")
 
 
 class CustomDivisionTest(CoreCase):
@@ -469,8 +589,9 @@ class CustomDivisionTest(CoreCase):
 
     def test_design_workers_count_in_their_cell(self):  # teams §4.5
         self._design_workers()
-        self.assertEqual(self.orche("statusline", "--cwd", "/srv/orca/acme-shop-design")[1],
-                         "R&D○ BUILD●1 DES●2\n")
+        from orche import statusline
+        self.assertEqual(statusline.plain(self.orche("statusline", "--cwd", "/srv/orca/acme-shop-design")[1]),
+                         "BUILD 0/1 · DES 0/2 · R&D ○\n")
         line = self.orche("status", "--project", "acme")[1]
         self.assertIn("divisions: rnd○ build●1 design●2 · ", line)
         row = json.loads(self.orche("--json", "status", "--project", "acme")[1])[0]
@@ -483,9 +604,9 @@ class CustomDivisionTest(CoreCase):
                           ("design/web-fx", "paused", "claude-opus-5-5", "feat/web-fx")])
 
     def test_statusline_cell_is_the_label_short_form(self):
-        self.assertEqual(self.orche("statusline", "--cwd", "/srv/orca/acme-shop-design")[1],
-                         "R&D○ BUILD●1 DES○\n")
         from orche import statusline
+        self.assertEqual(statusline.plain(self.orche("statusline", "--cwd", "/srv/orca/acme-shop-design")[1]),
+                         "BUILD 0/1 · R&D ○ DES ○\n")
         proj = self.reg["projects"]["acme-shop"]
         for label, cell in (("QA", "QA"), ("Brand & Docs", "BRA"), ("デザイン チーム", "デザイ"), ("--", "DES"),
                             ("Opsy", "OPSY"), ("Builders", "BUI"), ("R2D2", "RD")):
@@ -707,6 +828,10 @@ class ProjectPaneTest(CoreCase):
     WT = "id:repo-acme::/srv/orca/acme-shop"
     ENV = f"PATH={support.ROOT / 'bin'}:$PATH "
 
+    def setUp(self):
+        super().setUp()
+        support.staff_asleep()
+
     def calls_of(self, sub):
         return [c for c in self.calls if c[1:3] == ["terminal", sub]]
 
@@ -818,7 +943,7 @@ class CardTest(CoreCase):
 
 
 class PaneCommandTest(support.TempHomeCase):
-    """F3: every ORCHE pane command puts the plugin's bin/ on PATH next to ORCHE_SESSION."""
+    """F3: every Orche pane command puts the plugin's bin/ on PATH next to ORCHE_SESSION."""
 
     def test_pane_command_prefixes_plugin_bin(self):
         from orche.hr import panes

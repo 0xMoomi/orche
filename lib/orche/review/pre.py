@@ -1,7 +1,7 @@
 """The cross-vendor pre-review of an open PR, run only on request (R-REVIEW-1, 2, 4, 6, 8, 13;
 rulings R3, R11, R33).
 
-Nothing in ORCHE starts one by itself: `orche review --pr N` (review.build.for_pr) is the request, from Main on the
+Nothing in Orche starts one by itself: `orche review --pr N` (review.build.for_pr) is the request, from Main on the
 owner's words or from Build on a change it doubts. One round runs at the PR's head (one_round) and answers PASS or
 RETURN; at most `review.rounds` (2) RETURNs per unit revision count at queue admission. A RETURN is fixed by the
 writer through AMEND, then the PR is reviewed again.

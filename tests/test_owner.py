@@ -167,7 +167,7 @@ class ClosingLineTest(OwnerCase):
         self.assertEqual(self.ask(), {"text": NON_ASCII, "at": iso(T0), "kind": "owner", "source": "main"})
         self.assertEqual(self.notes(), [])                              # Orca shows its own when the turn ends
         notified = json.loads((guard.folder("acme") / owner.SENT).read_text())
-        self.assertEqual(notified, {"n": 1, "ask_at": iso(T0), "ask_last": iso(T0)})   # no gap: ORCHE showed none
+        self.assertEqual(notified, {"n": 1, "ask_at": iso(T0), "ask_last": iso(T0)})   # no gap: Orche showed none
         self.assertIn("owner ask project=acme kind=owner source=main\n", self.log())
         self.assertIn("owner recorded project=acme kind=owner by=orca\n", self.log())
         self.assertNotIn("owner notify", self.log())
@@ -223,14 +223,14 @@ class ClosingLineTest(OwnerCase):
         self.assertIn("quiet=1", self.log())
 
     def test_a_parked_guard_refusal_records_an_ask_and_notifies_the_body_an_argument(self):
-        """Orca cannot know a runner's refusal: ORCHE still notifies it, the owner present or not."""
+        """Orca cannot know a runner's refusal: Orche still notifies it, the owner present or not."""
         self.owner_seen(10)
         text = f"not started: acme-x-20261023-1 ran 4 times since 10:00 without the owner (cap 4) {NON_ASCII}"
         owner.parked("acme", "acme-x-20261023-1", text, now=T0)
         self.assertEqual(self.ask(), {"text": owner.one_line(text, owner.ASK_MAX), "at": iso(T0), "kind": "guard",
                                       "source": "runner", "unit": "acme-x-20261023-1"})
         [call] = self.notes()
-        self.assertEqual(call, SCRIPT + [f"OWNER: {self.ask()['text']}", "ORCHE acme"])   # quotes are data
+        self.assertEqual(call, SCRIPT + [f"OWNER: {self.ask()['text']}", "Orche acme"])   # quotes are data
         notified = json.loads((guard.folder("acme") / owner.SENT).read_text())
         self.assertEqual(notified, {"at": iso(T0), "n": 1, "ask_at": iso(T0), "ask_last": iso(T0), "kind": "guard"})
         self.assertIn("owner notify project=acme kind=guard n=1 quiet=0\n", self.log())
@@ -239,18 +239,18 @@ class ClosingLineTest(OwnerCase):
 class NotifySendTest(OwnerCase):
     def test_one_line_masked_gated_and_never_script(self):
         secret = "sk-ant-api03-" + "A" * 40
-        self.assertTrue(notify.send("ORCHE\nacme", f"line one\nline\ttwo\x07 {secret}", kind="t"))
+        self.assertTrue(notify.send("Orche\nacme", f"line one\nline\ttwo\x07 {secret}", kind="t"))
         [call] = self.notes()
         self.assertEqual(call[:7], SCRIPT[:4] + [notify.SCRIPT[1]] + SCRIPT[5:])     # no sound unless asked
         body, title = call[7:]
         self.assertTrue(body.startswith("line one line two "), body)
         self.assertNotIn("A" * 40, body)
-        self.assertEqual(title, "ORCHE acme")
+        self.assertEqual(title, "Orche acme")
         self.assertIn("notify kind=t ok=1\n", self.log())
         with mock.patch.object(notify, "PLATFORM", "linux"):
-            self.assertFalse(notify.send("ORCHE", "x"))
+            self.assertFalse(notify.send("Orche", "x"))
         self.config({"notify": False})
-        self.assertFalse(notify.send("ORCHE", "x"))
+        self.assertFalse(notify.send("Orche", "x"))
         self.assertEqual(len(self.notes()), 1)
 
     def test_a_leading_dash_is_never_an_option(self):
@@ -261,21 +261,21 @@ class NotifySendTest(OwnerCase):
     def test_orca_running_wraps_the_line_in_a_tell_to_orca(self):
         """A click opens Orca, not Script Editor; one `pgrep -xq Orca` decides (never launch Orca)."""
         with mock.patch.object(notify, "orca_running", ORCA_RUNNING):
-            self.assertTrue(notify.send("ORCHE", "-x", sound=True, kind="t", project="acme"))
+            self.assertTrue(notify.send("Orche", "-x", sound=True, kind="t", project="acme"))
         self.assertEqual(self.calls, [["pgrep", "-xq", "Orca"], [
             "osascript", "-e", "on run argv", "-e", 'tell application id "com.stablyai.orca"',
             "-e", 'display notification (item 1 of argv) with title (item 2 of argv) sound name "Glass"',
-            "-e", "end tell", "-e", "end run", " -x", "ORCHE"]])
+            "-e", "end tell", "-e", "end run", " -x", "Orche"]])
         self.calls.clear()
         with mock.patch.object(shell, "RUNNER", lambda argv, **kw: self.calls.append(list(argv)) or
                                shell.Result(1 if argv[0] == "pgrep" else 0, "", "", list(argv))), \
                 mock.patch.object(notify, "orca_running", ORCA_RUNNING):
-            self.assertTrue(notify.send("ORCHE", "x", kind="t"))
+            self.assertTrue(notify.send("Orche", "x", kind="t"))
         self.assertEqual(self.calls[1], ["osascript", "-e", "on run argv", "-e", notify.SCRIPT[1], "-e", "end run",
-                                         "x", "ORCHE"])
+                                         "x", "Orche"])
 
     def test_a_failing_osascript_is_logged_without_the_text(self):
         with mock.patch.object(shell, "RUNNER", lambda argv, **kw: shell.Result(1, "", "boom", argv)):
-            self.assertFalse(notify.send("ORCHE", "secret plan 42", kind="t"))
+            self.assertFalse(notify.send("Orche", "secret plan 42", kind="t"))
         self.assertIn("notify t: osascript exit 1", self.log("hooks"))
         self.assertNotIn("secret plan", self.log("hooks") + self.log())

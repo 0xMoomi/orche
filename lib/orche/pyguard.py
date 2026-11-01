@@ -1,7 +1,7 @@
 """Python version guard, imported by `bin/orche.py` and every hook BEFORE any other orche module.
 
 Keep this file importable by old interpreters (no annotations, no 3.10+ syntax): it is the one
-thing that must still run on macOS's stock /usr/bin/python3 (3.9) to say why ORCHE is idle.
+thing that must still run on macOS's stock /usr/bin/python3 (3.9) to say why Orche is idle.
 """
 import os
 import sys
@@ -15,7 +15,7 @@ def ok(version=None):
 
 def message(version=None, executable=None):
     v = version or sys.version_info
-    return "ORCHE needs Python 3.11+ (found {}.{} at {})".format(v[0], v[1], executable or sys.executable)
+    return "Orche needs Python 3.11+ (found {}.{} at {})".format(v[0], v[1], executable or sys.executable)
 
 
 def _log(text):

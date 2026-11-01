@@ -178,7 +178,7 @@ def _row_gap(word, head, row, session):
 
 def after_run(member, word, worktree, head_before, head) -> Proof:
     """The runner (R-DISPATCH-9): a done or release-ready claim from a gated target needs, in this
-    order, a new commit, the pre-run HEAD as its ancestor, a clean tree (ORCHE's own untracked files
+    order, a new commit, the pre-run HEAD as its ancestor, a clean tree (Orche's own untracked files
     aside) and the ledger row; `missing` holds the first gap only."""
     # Keyed by the target identity's project (Roster), not the brief's job.project: the row is the target's.
     row = ledger.row_for_sha(member.project, head) if (member is not None and head) else None

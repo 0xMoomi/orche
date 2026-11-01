@@ -75,7 +75,7 @@ def load_state() -> dict:
 
 
 def plugin_enabled(home) -> bool:
-    """The ORCHE plugin is enabled in `home`'s ~/.claude/settings.json (unreadable: no)."""
+    """The Orche plugin is enabled in `home`'s ~/.claude/settings.json (unreadable: no)."""
     from . import settings   # settings imports this package
     try:
         data = util.read_json(settings.settings_path(Ctx(home)), default={})
@@ -85,7 +85,7 @@ def plugin_enabled(home) -> bool:
 
 
 def installed_mode(home) -> str:
-    """The mode the last install used (install-state.json `mode`), else `plugin` when the ORCHE plugin
+    """The mode the last install used (install-state.json `mode`), else `plugin` when the Orche plugin
     is enabled, else `settings`: what `orche setup` installs with and what the --grant refusal names."""
     try:
         mode = load_state().get("mode")

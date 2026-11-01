@@ -1,7 +1,7 @@
 """`orche hr choices` (design 2026-10-23 §10.3, Appendix D): the division kinds and models of a
 project, and the owner's questions built from them (`ask`), each one element of AskUserQuestion's
 `questions` plus the value of every label. Read-only; the only subprocesses are `codex --version`, the RAM
-probe of `ask.scale` (`procs.mem_total_mb`) and, for a project not under ORCHE yet, local git reads of the
+probe of `ask.scale` (`procs.mem_total_mb`) and, for a project not under Orche yet, local git reads of the
 folder the owner is in (detect).
 
 Guardrails (pinned by tests/test_choices.py): never an unavailable model as an option (it is named
@@ -207,7 +207,7 @@ def _kinds(t, cfg, key, proj, rec) -> list:
 
 
 def _project_asks(t, kinds, mlabel) -> tuple:
-    """`ask.add` and `ask.change` of a project under ORCHE."""
+    """`ask.add` and `ask.change` of a project under Orche."""
     addable = [k for k in kinds if k["status"] is None]
     addable.sort(key=lambda k: not k["suggested"])
     opts = [(k["label"], k["desc"], k["key"], k["key"]) for k in addable[:3]]
@@ -247,7 +247,7 @@ def _preset_option(t, name, by, mlabel, rec) -> tuple:
 
 
 def _setup_asks(t, kinds, models, mlabel, custom, avail, rec) -> tuple:
-    """`ask.setup` and `ask.pick` of a project not under ORCHE yet; `rec` is the recommended preset."""
+    """`ask.setup` and `ask.pick` of a project not under Orche yet; `rec` is the recommended preset."""
     by = {k["key"]: k for k in kinds}
     chosen = [n for n in PRESETS[rec] if n in by]
     extras = [k for k in kinds if k["key"] not in chosen]
@@ -292,9 +292,9 @@ def _where_asks(t, here) -> list:
 
 
 def build(reg, cfg, key, avail=None, machine=None, here=None) -> dict:
-    """The choices JSON (Appendix D.1) of project `key` (None: a project not under ORCHE yet);
+    """The choices JSON (Appendix D.1) of project `key` (None: a project not under Orche yet);
     `machine` {ram_mb, free_disk_mb} defaults to machine_info() of the project's path; `here` (a project not
-    under ORCHE yet): the folder the owner is in (no git repository there: `ask.where` first)."""
+    under Orche yet): the folder the owner is in (no git repository there: `ask.where` first)."""
     t = TEXTS
     proj = ((reg or {}).get("projects") or {}).get(key) or {} if key else {}
     divs = proj.get("divisions") or {}

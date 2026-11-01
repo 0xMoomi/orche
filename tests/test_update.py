@@ -72,6 +72,7 @@ class UpdateTest(support.TempHomeCase):
                                     "card": "x", "standing": ".orche/STANDING.md", "stage": "building",
                                     "aliases": [], "divisions": {}}
         registry.save(reg)
+        support.staff_asleep()
         patcher = mock.patch.object(cmd_update, "ROOT", self.co)
         patcher.start()
         self.addCleanup(patcher.stop)
@@ -109,7 +110,7 @@ class UpdateTest(support.TempHomeCase):
         self.assertEqual(code, 0, out + err)
         self.assertEqual(self.head(), self.head("origin/main"))
         lines = out.splitlines()
-        self.assertEqual(lines[0], "ORCHE 0.7.3 → 0.8.0")
+        self.assertEqual(lines[0], "Orche 0.7.3 → 0.8.0")
         self.assertIn("refreshed acme: 2 file(s)", lines)
         self.assertIn("refreshed beta: 2 file(s)", lines)
         self.assertIn("reconcile job: write /h/Library/LaunchAgents/com.orche.reconcile.plist (every 300s, loaded)",
@@ -121,6 +122,7 @@ class UpdateTest(support.TempHomeCase):
         self.assertEqual({c["version"] for c in calls}, {"0.8.0"})   # the NEW code ran every step
         self.assertEqual(calls[0]["argv"], ["install", "--mode", "settings", "--no-jev"])
         self.assertEqual([c["argv"] for c in calls[1:]], [["init", "acme", "--refresh"], ["init", "beta", "--refresh"]])
+        self.assertEqual((self.home / "status" / "lang").read_text(), "en\n")   # the status line's language
 
     def test_refresh_runs_as_no_session(self):  # R-TEAM-5: an update never opens a team repository's gate PR
         self.publish()
@@ -142,9 +144,10 @@ class UpdateTest(support.TempHomeCase):
         self.assertEqual(code, 0)
         self.assertEqual((self.head(), self.head("origin/main")), before)
         self.assertEqual(self.calls(), [])
-        self.assertIn("ORCHE 0.7.3 → 0.8.0 (dry run: nothing changed)", out)
+        self.assertIn("Orche 0.7.3 → 0.8.0 (dry run: nothing changed)", out)
         self.assertIn("would refresh acme: orche init acme --refresh", out)
         self.assertIn("would run: orche install --mode settings --no-jev", out)
+        self.assertFalse((self.home / "status" / "lang").exists())
 
     def test_dry_run_on_a_development_checkout_plans_no_merge(self):
         git(self.co, "checkout", "-qb", "feature")
@@ -153,7 +156,7 @@ class UpdateTest(support.TempHomeCase):
         code, out, err = self.update(dry_run=True)
         self.assertEqual(code, 0, out + err)
         self.assertEqual(self.calls(), [])
-        self.assertEqual(out.splitlines()[0], "ORCHE 0.7.3 → 0.7.4 (dry run: nothing changed)")
+        self.assertEqual(out.splitlines()[0], "Orche 0.7.3 → 0.7.4 (dry run: nothing changed)")
         self.assertIn("would run: orche install --mode settings --no-jev", out)
         self.assertIn("would refresh beta: orche init beta --refresh", out)
         self.assertNotIn("would run: git merge", out)
@@ -164,7 +167,7 @@ class UpdateTest(support.TempHomeCase):
         code, out, err = self.update()
         self.assertEqual(code, 0, out + err)
         lines = out.splitlines()
-        self.assertEqual(lines[0], f"ORCHE 0.7.3 → {version}")
+        self.assertEqual(lines[0], f"Orche 0.7.3 → {version}")
         self.assertIn("refreshed acme: 2 file(s)", lines)
         self.assertIn("refreshed beta: 2 file(s)", lines)
         self.assertEqual(lines[-1], cmd_update.RESTART)
@@ -215,7 +218,7 @@ class UpdateTest(support.TempHomeCase):
         code, out, err = self.update()
         self.assertEqual(code, 0, out + err)
         self.assertNotIn("already up to date", out)
-        self.assertEqual(out.splitlines()[0], "ORCHE 0.7.3 → 0.8.0")
+        self.assertEqual(out.splitlines()[0], "Orche 0.7.3 → 0.8.0")
         self.assertIn("update: resuming", err)
         self.assertEqual([c["argv"][0] for c in self.calls()], ["install", "install", "init", "init"])
         self.assertEqual(self.update()[1].strip(), "already up to date (0.8.0)")   # the install recorded 0.8.0
@@ -278,7 +281,7 @@ class UpdateTest(support.TempHomeCase):
 
 
 class InitRefreshTest(HrCase):
-    """`orche init <project> --refresh`, the step `orche update` runs per project: ORCHE-owned files
+    """`orche init <project> --refresh`, the step `orche update` runs per project: Orche-owned files
     only — no Orca pane, automation, worktree or intake."""
 
     def setUp(self):

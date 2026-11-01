@@ -1,17 +1,33 @@
 # Changelog
 
-All notable changes to ORCHE are listed here. The format follows
+All notable changes to Orche are listed here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow semantic versioning.
+
+## 0.19.4 — 2026-11-01
+
+### Changed
+
+- The CEO Staff opens by default: at the end of `orche install`, `orche update` and `orche init`, and whenever Orche opens a Main pane (Staff first, so Main stays in front; never a second Staff pane; a dry run prints it). "Close the staff window" (`orche sleep staff`) records it asleep in the registry, and nothing opens it again until "open the staff window" (`orche wake staff`).
+- A fresh Staff session greets the owner in the pane in their language (Korean or English, from the owner's prompts to every Main, else the macOS locale): what Staff is, what it knows, what it does not do and how to hand work to Main. The text is fixed (`templates/staff/greeting.<en|ko>.txt`) and shown by the SessionStart hook, with no model call.
+- The status line puts what matters first, in colour and in the owner's language: `⚠ waiting 1 · ▶ running 3 · BUILD 3/8 · RS ● · R&D ○ GTM ○ DES ○ · 🔑1 · $10.75 today` (what waits on you in yellow, the live runs in green bold, each division with workers as running/assigned, then the awake divisions and the asleep ones dimmed; the whole line red while paused). The words are Korean or English, as the owner writes to every Main (else the macOS locale): the heartbeat caches that once a pass, and `orche init` and `orche update` once each, so the status line itself still reads no transcript. `orche statusline --json` prints the line without colours.
+- The product is called Orche (Orca + orchestra: a pod of agents working as one): every display and prose use of the name, from CLI output, notifications and hook messages to the docs, skills and this changelog. The `orche` command, the `ORCHE_*` environment variables, the `[orche]` tag, file names and the markers Orche writes outside the repository stay as they were.
+- The README is rewritten for a first-time reader: compact (90 lines), current through this release, with a structure diagram (you, Main, the division heads, the workers, pull requests, the merge queue, the shared Staff, the heartbeat and Orca).
+- Main's workspace in Orca's sidebar is marked unread whenever a turn Orche started in Main ends (a wake or a delivered report), so a missed notification still shows there until you open Main. The Stop hook starts `orche nudge --unread`, which runs `orca worktree set --unread` on Main's workspace (Main only) and then wakes as before; a turn you typed is left to Orca, which marks it only when nobody was looking.
+- When your own message to Main brings reports from the inbox, Main answers you first: the block ends with `[orche] The owner's message comes first: …` in place of the report order, so the reports are background (one short line, then the next step dispatched). An urgent report or a decision only you can make still comes first; a wake, `[drain]` and a status question keep the report order.
+
+### Fixed
+
+- Orche no longer types into a half-written message in Main's composer. The wake and the deliverer read the composer from the rendered screen (`orca terminal read --screen`): the plain read never carries the draft, so a wake could join your unsent text and submit it. Into Main each attempt first waits until the pane has been quiet for 10 seconds (60 at most), and a screen without a composer row holds the wake; a held wake is retried by the next report, the next turn's end and the heartbeat, and your own next message brings the reports anyway.
 
 ## 0.19.3 — 2026-10-30
 
 ### Added
 
-- The CEO Staff: one optional pane for every project (`orche wake staff`, on the owner's "open the staff window"; `orche sleep staff` closes it) that answers everyday questions on Opus 5.5 at medium effort. It knows what the owner and every Main said to each other (the owner's prompts and Main's final replies from Main's transcripts, masked; the newest at its start, the newer ones with each prompt), runs only reads, and leaves a project's Main a held note when the owner says "tell Main: …" (`orche report info --to <project>`). It lives in the ORCHE checkout, so no project's spend counts it, and the heartbeat never wakes or reopens it.
+- The CEO Staff: one optional pane for every project (`orche wake staff`, on the owner's "open the staff window"; `orche sleep staff` closes it) that answers everyday questions on Opus 5.5 at medium effort. It knows what the owner and every Main said to each other (the owner's prompts and Main's final replies from Main's transcripts, masked; the newest at its start, the newer ones with each prompt), runs only reads, and leaves a project's Main a held note when the owner says "tell Main: …" (`orche report info --to <project>`). It lives in the Orche checkout, so no project's spend counts it, and the heartbeat never wakes or reopens it.
 
 ### Changed
 
-- The specification no longer assumes Main runs Fable: Main runs the owner's Claude Code default model (recommended Opus 5.5, high effort), which the owner switches per session with `/model`; ORCHE never pins Main's model.
+- The specification no longer assumes Main runs Fable: Main runs the owner's Claude Code default model (recommended Opus 5.5, high effort), which the owner switches per session with `/model`; Orche never pins Main's model.
 
 ## 0.19.2 — 2026-10-30
 
@@ -28,7 +44,7 @@ All notable changes to ORCHE are listed here. The format follows
 
 ### Changed
 
-- Every ORCHE pane (Main, division heads, feature panes) starts with `CLAUDE_CODE_PROMPT_CACHE_TTL=1h`, so a pane that wakes after more than five idle minutes on usage credits keeps its one-hour prompt cache instead of rewriting its whole context.
+- Every Orche pane (Main, division heads, feature panes) starts with `CLAUDE_CODE_PROMPT_CACHE_TTL=1h`, so a pane that wakes after more than five idle minutes on usage credits keeps its one-hour prompt cache instead of rewriting its whole context.
 
 ### Fixed
 
@@ -44,7 +60,7 @@ All notable changes to ORCHE are listed here. The format follows
 ### Changed
 
 - A session is woken once per lineage: its units' reports wait until every unit it waits on has ended (a head's unit once the head reported after its workers); blocked, question, owner steps and urgent notes still wake at once; a hold ends when its units pass their TIMEBOX, or after a day. Build hears its workers' results together and Main hears a request once, after every head reported, instead of one wake per report.
-- Main waits through ORCHE only: its pane runs subagents and shells in the foreground (`CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1`), and the env-read gate refuses Main the Monitor tool, background Bash, Agent and Task calls, and foreground wait loops (`sleep` loops, `gh pr checks --watch`, `gh run watch`), because each finished background task started a Main turn that re-read the whole context.
+- Main waits through Orche only: its pane runs subagents and shells in the foreground (`CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1`), and the env-read gate refuses Main the Monitor tool, background Bash, Agent and Task calls, and foreground wait loops (`sleep` loops, `gh pr checks --watch`, `gh run watch`), because each finished background task started a Main turn that re-read the whole context.
 - The wake carries the reports: each REPORT.md and a closed lineage's LINEAGE.md are shown in the injected inbox block (masked, at most 1,800 characters each, then a `not shown in full: read <path>` line), so Main and the heads act on a wake without a Read call per report.
 - STOP stops the subtree: `STOP <unit>` also stops every running unit under it in its lineage, and the queued PRs of that unit and the units under it leave the queue (`stopped`), so nothing of a stopped piece of work lands later; the sender's feedback names the units stopped and the PRs dropped.
 - A runner attempt that ends unverified (no STATUS line, no commit, a dirty tree or no ledger row) is resumed once in the same session (`--resume`, 8 turns, what is left of the TIMEBOX, after the spend cap) with a short prompt naming the gap, before it files or climbs the ladder; its history line (`kind` finish) and RUN.json count only that continuation's own cost.
@@ -57,7 +73,7 @@ All notable changes to ORCHE are listed here. The format follows
 ### Fixed
 
 - The gate PR in a team repository no longer opens itself during `orche update`: only the project's Main opens it, on the owner's "set up the merge queue for <project>"; any other caller prints `gate PR: waits for the owner's word`, and `orche doctor` names the words.
-- The prompt hook's injection stays within 9,500 characters, under Claude Code's 10,000-character hook cap past which Claude saw only a file path: ORCHE's closing lines, urgent pointers and owner steps are always kept, report bodies give way first, and pointers that do not fit stay pending for the next prompt.
+- The prompt hook's injection stays within 9,500 characters, under Claude Code's 10,000-character hook cap past which Claude saw only a file path: Orche's closing lines, urgent pointers and owner steps are always kept, report bodies give way first, and pointers that do not fit stay pending for the next prompt.
 
 ### Removed
 
@@ -67,7 +83,7 @@ All notable changes to ORCHE are listed here. The format follows
 
 ### Changed
 
-- The public surface reads as a tool: the README says what ORCHE is, for whom and how to start, in under 100 lines; the specification and the glossary live under `docs/` (`docs/spec.md`, `docs/glossary.md`) without release or round labels, with the real repository layout and without the author's rollout plan; CONTRIBUTING carries a code map; `orche --help` lists commands in three groups (what you say to Main, what Main and the units run, what ORCHE runs by itself).
+- The public surface reads as a tool: the README says what Orche is, for whom and how to start, in under 100 lines; the specification and the glossary live under `docs/` (`docs/spec.md`, `docs/glossary.md`) without release or round labels, with the real repository layout and without the author's rollout plan; CONTRIBUTING carries a code map; `orche --help` lists commands in three groups (what you say to Main, what Main and the units run, what Orche runs by itself).
 - Main receives the ten principles at session start as text (it could not open the specification they were pointed at); the personas and Main share one wording.
 - Internal seams, no behaviour change: each command module loads once at start (`cmd_sleep_wake` ran twice), the test suite collects each test once (76 were collected twice), no eager import cycles, one `secrets/backends.py`, domain code out of the command modules (`card_text`, the publish and report text, the triage status, the setup report in `guide.py`), no calls into other modules' private names, no references to private design notes in public code.
 
@@ -97,7 +113,7 @@ All notable changes to ORCHE are listed here. The format follows
 
 - A repository that declares its team plugin in its committed `.claude/settings.json` runs in team mode: `orche init` and `orche update` record it, and the setup report and `orche doctor` say whether the plugin is installed for you.
 - In team mode nothing is pushed, opened or merged by itself: a finished unit waits at its commit, "push <unit>" makes Main run `orche queue add`, which pushes the branch, opens the pull request and runs the head review, and "merge PR 12" makes Main run `orche queue approve`.
-- The team plugin's rules and its guard reach ORCHE's headless workers, and the new `team.env` config sets the team's hook switches in every ORCHE session, panes and headless runs alike.
+- The team plugin's rules and its guard reach Orche's headless workers, and the new `team.env` config sets the team's hook switches in every Orche session, panes and headless runs alike.
 
 ### Changed
 
@@ -147,7 +163,7 @@ All notable changes to ORCHE are listed here. The format follows
 
 ### Added
 
-- A new, empty folder can be set up directly: ORCHE asks whether to create the repository there, then makes it end to end (git, a first commit with the merge queue's check script, a private or public GitHub repository, Orca) with `orche init --new`, and skips the intake of an empty repository.
+- A new, empty folder can be set up directly: Orche asks whether to create the repository there, then makes it end to end (git, a first commit with the merge queue's check script, a private or public GitHub repository, Orca) with `orche init --new`, and skips the intake of an empty repository.
 - The first setup offers two presets, build-focused and operations, and recommends the one the repository suggests (code with a deploy config, a release workflow or tags means operations); the build-focused preset adds a standing order that makes Build's workers specialists in front, back and infra.
 - `orche init` opens one pull request adding the merge queue's check script, built from the project's own test command, when the base branch lacks it, so the queue turns on once that pull request is merged.
 - Build's persona carries a craft section: the owner's engineering rules, the questions to answer before slicing, tracer-bullet slices, how to read a diff when a slice reaches the pane, and what counts as evidence.
@@ -185,8 +201,8 @@ All notable changes to ORCHE are listed here. The format follows
 ### Added
 
 - A project can name its own pull request base and branch prefix: `orche init --refresh <project> --base develop --branch-prefix dev` writes `publish.per_project.<project>`, worktrees then start from `origin/develop`, a feature worker's branch is renamed from the one Orca names to `dev/<name>` right after creation, and the setup report names both. Without a prefix the branch Orca names stands, as before.
-- The issue key travels from the worker's name: a worker named `des-47-<topic>` gets the branch `<prefix>/des-47-<topic>` (with a configured prefix), a worktree linked to the issue (Orca `--linear-issue DES-47`, or `--issue 123` for `123-<topic>`), a PR title ending with `(DES-47)` and a body starting with `Fixes DES-47`. The tracker's own GitHub automation moves the issue; ORCHE never calls the tracker.
-- `orche init` and `orche init --refresh` exclude every ORCHE file from git: `.orche/`, `.claude/settings.local.json`, the units' personas and the template files copied outside `.orche/`. Files a project already committed stay tracked.
+- The issue key travels from the worker's name: a worker named `des-47-<topic>` gets the branch `<prefix>/des-47-<topic>` (with a configured prefix), a worktree linked to the issue (Orca `--linear-issue DES-47`, or `--issue 123` for `123-<topic>`), a PR title ending with `(DES-47)` and a body starting with `Fixes DES-47`. The tracker's own GitHub automation moves the issue; Orche never calls the tracker.
+- `orche init` and `orche init --refresh` exclude every Orche file from git: `.orche/`, `.claude/settings.local.json`, the units' personas and the template files copied outside `.orche/`. Files a project already committed stay tracked.
 
 ### Changed
 
@@ -201,7 +217,7 @@ All notable changes to ORCHE are listed here. The format follows
 
 - One rule in one place: ledger gating (`donegate.gated`), unit folders (`lineage.unit_dirs`), the pane lookup, the self-spawn (`procs.spawn_orche`), `units.num`, the queue's defaults, command output (`cli.out`/`cli.fail`) and 13 inline `git -C` calls (`shell.git`) each have one implementation; `hr/choices.build` and `cmd_init` lose their duplicated blocks.
 - `reconcile.py` is about 100 lines lighter: the queue step lives in `queue/heartbeat.py`, quiet hours in `flow.owner`, and a heartbeat pass no longer imports the doctor and Jev modules; install state, the heartbeat job check and the first-pass check moved from `cmd_install` into `install/`, `launchd` and `privacy`; `util.read_dict` replaces six copies of the same JSON read.
-- Main's closing line no longer triggers an ORCHE notification: Orca shows its own when a turn ends, so the owner got two. ORCHE still notifies what Orca cannot know: a decision still waiting after 30 minutes (then 60, 120, 240), a runner's parked refusal, a secret request and HR records.
+- Main's closing line no longer triggers an Orche notification: Orca shows its own when a turn ends, so the owner got two. Orche still notifies what Orca cannot know: a decision still waiting after 30 minutes (then 60, 120, 240), a runner's parked refusal, a secret request and HR records.
 
 ### Fixed
 
@@ -220,23 +236,23 @@ All notable changes to ORCHE are listed here. The format follows
 
 ### Added
 
-- The quick start: one three-line paste installs ORCHE and sets up the project; the installer prints the next steps.
-- `.orche/SETUP.md`, the setup report Main gives the owner after `orche init` ("ORCHE is set up", what was made, what to switch on any time); `orche init --refresh` rewrites it and `--json` names it (`setup_report`).
+- The quick start: one three-line paste installs Orche and sets up the project; the installer prints the next steps.
+- `.orche/SETUP.md`, the setup report Main gives the owner after `orche init` ("Orche is set up", what was made, what to switch on any time); `orche init --refresh` rewrites it and `--json` names it (`setup_report`).
 - `orche doctor` ends with "Next steps (optional, any time)": Jev, the Codex cross-check, the background-run token, the janitor, the merge-queue gate, more agents, and the always-present lines; its `--json` is `{"checks", "next_steps"}`.
-- Main's "what else can ORCHE do" row: the next steps in plain words.
+- Main's "what else can Orche do" row: the next steps in plain words.
 - `orche focus <project|session>`: switch Orca to a pane (a Main is reopened when closed); terminal-notifier is optional (opt-in: say 'make notification clicks open the tab'); doctor and the setup report say what a click does.
 
 ### Changed
 
-- The installer's closing lines say that ORCHE is installed and what to do next.
+- The installer's closing lines say that Orche is installed and what to do next.
 - README is a quick start plus an "Any time" table.
 - Templates, generated file headers and the unit rules use plain punctuation (no en or em dashes), and the intake persona and the unit card forbid them.
 
 ### Fixed
 
-- A click on an ORCHE notification opens Orca (it used to open Script Editor); with terminal-notifier installed it opens the project's Main tab.
+- A click on an Orche notification opens Orca (it used to open Script Editor); with terminal-notifier installed it opens the project's Main tab.
 - Panes no longer pass `--autocompact 200000`: with the installer's 50 % setting a pane compacted at about 100K tokens, under the fixed prefix a session with many plugins carries, so Main compacted every turn ("Autocompact is thrashing"); the model's window decides again. Reading a Claude Code transcript into a session is refused (the env_read_gate).
-- When terminal-notifier cannot show a notification (its macOS permission refused or not yet granted), ORCHE falls back to Orca's own notification instead of showing nothing.
+- When terminal-notifier cannot show a notification (its macOS permission refused or not yet granted), Orche falls back to Orca's own notification instead of showing nothing.
 
 ## 0.11.0 — 2026-10-26
 
@@ -254,7 +270,7 @@ All notable changes to ORCHE are listed here. The format follows
 
 ### Removed
 
-- The install's "restart any main-/div-/feat- panes" notice (a 0.6 migration line) and the "restart the pane or /clear" line after a persona refresh: panes read new files at their next session start, and no ORCHE message asks anyone to close a Main.
+- The install's "restart any main-/div-/feat- panes" notice (a 0.6 migration line) and the "restart the pane or /clear" line after a persona refresh: panes read new files at their next session start, and no Orche message asks anyone to close a Main.
 
 ## 0.10.0 — 2026-10-26
 
@@ -304,7 +320,7 @@ All notable changes to ORCHE are listed here. The format follows
   makes a run wait while free memory is lower. Presets default/20/30 (`scale.presets`) set them at once:
   `orche hr scale [<preset>]` (HR event `scale`; `orche hr choices` offers them). `feature_panes: false` makes
   features pane-less (`orche feat wake` opens one); `feature_min_free_disk_mb` guards `orche feat new`.
-- Publish: after a gated unit's verified done, ORCHE (not the model) pushes the unit's own branch (`feat/*`,
+- Publish: after a gated unit's verified done, Orche (not the model) pushes the unit's own branch (`feat/*`,
   `div/build`; never forced) and opens or reuses one ready PR to the base: config `publish.base` (null), else
   origin/HEAD, else an OWNER step (`git remote set-head origin -a`), never a guess. A failed push or PR, or a
   feature done with nothing to publish, leaves the done unverified, with an OWNER step when only a person can fix
@@ -383,7 +399,7 @@ All notable changes to ORCHE are listed here. The format follows
   Moving an awake division to Codex is refused (exit 3, `sleep its pane first`). One hr-log `model` line.
 - `orche hr choices [<project>] [--lang ko|en]` (global `--json`): the owner's setup questions, built from data
   and written nowhere — keys `project`, `lang`, `stage`, `kinds`, `custom`, `models` and `ask` (`add`, `change`,
-  `model` per kind plus `*` for a new one, `setup` and `pick` for a project not under ORCHE yet). Each question
+  `model` per kind plus `*` for a new one, `setup` and `pick` for a project not under Orche yet). Each question
   is an AskUserQuestion `tool` (question, header, 2–4 options) plus `values` (label → value); the recommended
   option comes first with "(recommended)" (in the owner's language), Codex is offered only when it runs (otherwise its state is
   in the question). An unknown project exits 2. A `--setup-file` may carry each division's model under `models`.
@@ -400,9 +416,9 @@ All notable changes to ORCHE are listed here. The format follows
   then orche run <unit>` — never a silent re-run on Claude. `cost_usd` is the estimate at `models.prices`;
   `orche --dry-run run` prints the codex argv.
 
-- `orche update [--dry-run]`: fast-forwards the ORCHE checkout to `origin/main`, reinstalls with the new code,
-  refreshes every project (`orche init <project> --refresh`, new: ORCHE-owned files only, no Orca call) and reports
-  `ORCHE <old> → <new>` and whether sessions need a restart; a development checkout is refused, nothing changed.
+- `orche update [--dry-run]`: fast-forwards the Orche checkout to `origin/main`, reinstalls with the new code,
+  refreshes every project (`orche init <project> --refresh`, new: Orche-owned files only, no Orca call) and reports
+  `Orche <old> → <new>` and whether sessions need a restart; a development checkout is refused, nothing changed.
 
 ### Changed
 - Every run's spend reaches G4: a run whose worker started but left no cost figure (stopped, timed out, crashed,
@@ -424,7 +440,7 @@ All notable changes to ORCHE are listed here. The format follows
 - A STOP or AMEND reaches a deferred run: a stopped pointer is drained (`stopped`) instead of started, and an
   AMEND stops the live older revision before the heartbeat starts the new one. `orche run` and a delivery retry
   inside a sandbox defer to the heartbeat too (`deferred <unit>: …`, exit 0).
-- `orche init` on an onboarded project refreshes only ORCHE's own files: a project template the owner deleted
+- `orche init` on an onboarded project refreshes only Orche's own files: a project template the owner deleted
   (`.env.example`, `docs/RUBRIC.md`, `.orche/STANDING.md`) is not recreated. A folder macOS privacy blocks is
   named `unreadable (privacy): <path>` (exit 3; any other denial `unreadable (permission): <path>`). A `kinds`
   default model that is not valid refuses init before anything is written (`config kinds.<kind>.model: …`, exit 1).
@@ -463,7 +479,7 @@ All notable changes to ORCHE are listed here. The format follows
   the main thread, and 15 s later a last-resort thread when the signal cannot interrupt a call blocked in the
   kernel (a macOS privacy check; it prints the abort line to reconcile.log before exiting). `ORCHE_HOME/reconcile/
   last-abort.json` records `{at, phase, path, hint}`: `path` is the innermost path the stuck pass held under a
-  project's root, a protected folder or `/Volumes` (never ORCHE's own files), `hint` is `privacy` for a path under
+  project's root, a protected folder or `/Volumes` (never Orche's own files), `hint` is `privacy` for a path under
   Desktop, Documents, Downloads, iCloud Drive, `~/Library/CloudStorage` or `/Volumes`, else `slow`; one events
   line `reconcile abort phase=<phase> hint=<hint>`, the lock is released, exit 3. `heartbeat.json` gains
   `job_at` (the last pass the LaunchAgent itself ran with reconcile on; its plist sets `ORCHE_RECONCILE_JOB=1`),
@@ -484,7 +500,7 @@ All notable changes to ORCHE are listed here. The format follows
   `orche install` (same --mode as before) to get the check; after a Python upgrade the grant may not carry
   over (the doctor says so; run `--grant` again).
 - `orche setup [--project PATH ...] [--no-auth]`: one command for a new machine — the install (`--no-jev`, in
-  the mode the last install used: plugin when the ORCHE plugin is enabled, else settings), the OAuth token
+  the mode the last install used: plugin when the Orche plugin is enabled, else settings), the OAuth token
   status and the two commands to store one, `orche init PATH --no-intake` per project (an unknown repo is
   registered), the heartbeat job's first pass, `orche doctor`. Safe to repeat; exit 1 when a step failed or the
   doctor has a FAIL; when macOS privacy is all that is left the last line is "setup: one step left — …" (in Korean).
@@ -559,7 +575,7 @@ All notable changes to ORCHE are listed here. The format follows
   report`, runner filings, unrun and lost) carry `lineage` and `parent`. G6: a division's brief is refused when
   its parent is already 3 briefs deep or already has 5 child briefs; Main is not capped; STOP passes.
 - Lineage close (C10 T8): in a lineage of two or more units, done and stopped reports arrive quiet; failed,
-  blocked and question still wake Main. When every unit has ended, ORCHE writes `.orche/units/<L>/LINEAGE.md`
+  blocked and question still wake Main. When every unit has ended, Orche writes `.orche/units/<L>/LINEAGE.md`
   (one row per unit) and posts one waking close pointer from `orche` (`lineage L closed: n units — …`), once per
   lineage state; reconcile reposts a close a crash missed (≤ 24 h). Main's inbox block gains one
   `[orche] lineage L: closed|open — …` line per lineage.
@@ -632,13 +648,13 @@ All notable changes to ORCHE are listed here. The format follows
 
 ### Removed
 - `orche install` no longer registers gstack's careful PreToolUse hook (and no longer mentions it): its `ask`
-  dialogs stalled unattended panes. ORCHE's own gates (`env-read-gate`, `scope-gate`) and each brief's FORBID
+  dialogs stalled unattended panes. Orche's own gates (`env-read-gate`, `scope-gate`) and each brief's FORBID
   lines are the safety net. An existing careful entry in `settings.json` is left alone by install and uninstall.
 - The Stop hook no longer relays dispatch blocks from the reply (a fenced block there is plain text); `brief.scan` is removed.
 
 ### Added
 - `orche doctor` WARNs when the careful hook (`check-careful.sh`) is registered in `settings.json`: its approval
-  dialogs stall unattended ORCHE panes; remove it or keep it only for your own sessions.
+  dialogs stall unattended Orche panes; remove it or keep it only for your own sessions.
 
 ### Changed
 - Main hands work out with `orche dispatch` (blocks on stdin or `--file`, `---` between blocks; `orche --dry-run dispatch` checks only); each block's outcome prints in the same turn and a refusal exits 2, so Main fixes and re-runs without an extra Stop-hook turn.
@@ -651,7 +667,7 @@ All notable changes to ORCHE are listed here. The format follows
 
 ### Added
 - A macOS notification when the owner is needed: one per urgent report to Main (`blocked`, `question`, `failed`
-  or `urgent: true`), titled `ORCHE <project>`, holding only the unit's short id and status. `inbox.notify`
+  or `urgent: true`), titled `Orche <project>`, holding only the unit's short id and status. `inbox.notify`
   (default on) turns it off.
 - `orche status` lists `blocked: <unit> (<status>, since HH:MM, N min) — waiting on the owner` for a unit whose
   newest report to Main is `blocked` or `question` (under 24 h, not yet answered by a later pointer or brief).
@@ -662,7 +678,7 @@ All notable changes to ORCHE are listed here. The format follows
 - One wake per quiet batch: the nudger waits until the newest waking report is `inbox.quiet_s` old (90 s, at most
   `inbox.quiet_max_s`, 240 s) before it wakes Main; an urgent report wakes at once.
 - The wake line asks Main for one consolidated report that puts what the owner must do first.
-- The Main rulebook forbids installing a waker, launchd job or polling script; ORCHE wakes Main itself.
+- The Main rulebook forbids installing a waker, launchd job or polling script; Orche wakes Main itself.
 - Main's reply ends with one line to the owner (state, then the decision needed with its default or the question
   what to do next); dispatch blocks go before that line and are relayed wherever they sit in the final reply.
 
@@ -671,7 +687,7 @@ All notable changes to ORCHE are listed here. The format follows
 ### Added
 - Headless runs can use their own Claude OAuth token instead of the pane login: run `claude setup-token`, then
   `orche auth set` (hidden prompt, or stdin from a script; never argv). Stored in the macOS keychain (account
-  `CLAUDE_CODE_OAUTH_TOKEN`), else `~/.claude/orche/secrets/oauth.token` (0600). Every `claude -p` ORCHE starts
+  `CLAUDE_CODE_OAUTH_TOKEN`), else `~/.claude/orche/secrets/oauth.token` (0600). Every `claude -p` Orche starts
   gets it; an inherited `CLAUDE_CODE_OAUTH_TOKEN` wins; panes keep the login. `orche auth status|rm`, and an
   `oauth token` row in `orche doctor` (WARN when not set).
 
@@ -706,12 +722,12 @@ All notable changes to ORCHE are listed here. The format follows
 ## 0.6.0 — 2026-10-22
 
 ### Added
-- Main hears about every finished unit without being asked: when a report lands, ORCHE types `[orche] inbox:
+- Main hears about every finished unit without being asked: when a report lands, Orche types `[orche] inbox:
   new reports` into the recipient's Orca pane once it is idle (`orche nudge <session>`), never into a draft or a
   dialog, once per batch. The Stop hook re-arms it when reports landed during a turn. Config `inbox.wake` (on).
 - `orche deliver <unit>`: delivers a pane unit (detached, started by the Stop hook) or starts a runner unit that
   never ran; the recovery command. `orche status` lists `undelivered:` units and `unread:` reports (10 min).
-- `orche init` on a registered project upgrades it in place: it re-renders ORCHE's own files (division and
+- `orche init` on a registered project upgrades it in place: it re-renders Orche's own files (division and
   feature personas in the main checkout and the worktrees, worktree settings, marker, exclude lines, card link),
   copies each overwritten persona to `~/.claude/orche/backups/<project>/<time>/`, never touches your files
   (PROJECT_CARD.md sections, STANDING.md, LEDGER.tsv, GRAVEYARD.md, RUBRIC.md, `.env.example`, unit memory), and
@@ -731,10 +747,10 @@ All notable changes to ORCHE are listed here. The format follows
   applied`; `orche report question` when blocked. Main reports every completion unasked.
 - A report is an order: every inbox block injected into Main ends with "Act on the inbox above now: read each
   report named, end this turn with your report to the user (outcome · landed · failed · decisions · next step),
-  then the next dispatch or the question. Never only acknowledge." Held notes say "FYI from ORCHE, no action needed".
+  then the next dispatch or the question. Never only acknowledge." Held notes say "FYI from Orche, no action needed".
 - The Main pane starts with `--permission-mode bypassPermissions`, like division panes (a woken Main must not
   stop at a prompt nobody watches). An open Main keeps its mode until reopened.
-- Personas carry a "generated by ORCHE" header line: put project rules in `.orche/STANDING.md`.
+- Personas carry a "generated by Orche" header line: put project rules in `.orche/STANDING.md`.
 
 ### Fixed
 - A turn that ends on an API error (StopFailure) re-arms Main's wake like a normal Stop.
@@ -767,7 +783,7 @@ All notable changes to ORCHE are listed here. The format follows
   unknown project or a missing main checkout. Config section `liaison` (`model`, `effort`, `max_turns`, `timeout_s`).
 - `orche card refresh <project> [--background]`: no model call when no commit outside
   PROJECT_CARD.md and `.orche/` landed since the card's base commit ("fresh"); otherwise one Liaison
-  call returns the Purpose, Stack, Entry points and Recent changes sections, which ORCHE masks, merges
+  call returns the Purpose, Stack, Entry points and Recent changes sections, which Orche masks, merges
   into the card and stamps `## Last refreshed` with `<date>, base <HEAD>`. With no user-visible change
   it writes nothing. `--background` detaches it (log `ORCHE_HOME/logs/liaison/<p>.log`).
 - The card template gains `## Recent changes`; `## How to ask` names `orche card` and `orche ask`.
@@ -850,7 +866,7 @@ downgrading. Entries registered before 0.5.0 keep the key, so they stay downgrad
 - `TO main-<other>` files an external request to that project's Main.
 - In `TO`, a division name of the sender's project beats another project's key or alias.
 - `bin/log.sh` is removed; `orche decide` is the only `DECISIONS.tsv` writer.
-- The SessionStart note in a project's main checkout reads `[orche] this is not an ORCHE pane: Main's
+- The SessionStart note in a project's main checkout reads `[orche] this is not an Orche pane: Main's
   rules apply in the main-<proj> tab — you can run: orche wake main-<proj>`.
 - The SessionStart hook appends `export PATH=<shlex-quoted plugin bin>:"$PATH"` to `$CLAUDE_ENV_FILE`
   (when the plugin bin is not already on PATH and the file does not already hold that line, adding a
@@ -866,15 +882,15 @@ downgrading. Entries registered before 0.5.0 keep the key, so they stay downgrad
   the target's registry model at every TIER.** Mechanical units on the built-in divisions move from
   Sonnet to Opus at low effort; Research's standard and hard units move from Opus to Sonnet.
   RUN.json records `effort`.
-- **Unit workers run ORCHE's secret-read and scope gates** (PreToolUse, through `--settings`).
-  Before, no ORCHE hook ran in a headless call.
-- **`orche doctor` checks every flag ORCHE passes** (row `claude flags` from `headless.check`,
+- **Unit workers run Orche's secret-read and scope gates** (PreToolUse, through `--settings`).
+  Before, no Orche hook ran in a headless call.
+- **`orche doctor` checks every flag Orche passes** (row `claude flags` from `headless.check`,
   replacing `claude --setting-sources`). Claude Code must list all 15: there is no fallback for an
   older claude.
 - **Headless unit workers start with `--permission-mode bypassPermissions`**; the PreToolUse gates
   and the deny list still block; the sealed intake call is unchanged (`--restricted` refuses bypass).
 - **Headless calls no longer inherit the caller's identity or session state.** The intake worker no
-  longer gets the caller's `ORCHE_SESSION`. ORCHE's, Orca's, Claude Code's and Jev's own variables
+  longer gets the caller's `ORCHE_SESSION`. Orche's, Orca's, Claude Code's and Jev's own variables
   reach a worker only when named; `ORCHE_KEYMASTER`, `CLAUDE_EFFORT` and Orca's pane variables used
   to leak. The Jev key variable (`jev.api_key_env`) never reaches a worker; the triage classifier
   used to get it.
@@ -975,7 +991,7 @@ downgrading. Entries registered before 0.5.0 keep the key, so they stay downgrad
 
 - `lib/orche/roster.py` (`Roster`, `Member`, `Place`, `Identity`) is the single read model over `registry.json`.
 - `lib/orche/headless.py` (`Call`, `run`, `argv`, `env`, `Stop`, `check`, `marker`) is the single way
-  ORCHE starts `claude -p`; `call_for` in `runs/job.py` builds the unit worker's `Call`.
+  Orche starts `claude -p`; `call_for` in `runs/job.py` builds the unit worker's `Call`.
 - `lib/orche/donegate.py` (`claim`, `Claim`, `Proof`, `may_stop`, `for_report`, `after_run`) holds the
   one claim grammar and every completion check (the Stop hook, `orche report`, the runner).
 - `lib/orche/hr/` (book, limits, panes, onboarding, transitions, create, retire, audit) performs
@@ -1054,11 +1070,11 @@ downgrading. Entries registered before 0.5.0 keep the key, so they stay downgrad
 - **Dispatch blocks may use `~~~` fences.** One fence scanner (`util.fence_spans`) serves the Stop-hook
   relay and triage: ```` ``` ```` or `~~~`, closed by the same character at least as long.
 - **A dispatch block inside another open fence, or whose closing fence is indented deeper than its
-  opener, is no longer relayed** (0.3.3 relayed it); ORCHE now says so instead of dropping it: "[orche]
+  opener, is no longer relayed** (0.3.3 relayed it); Orche now says so instead of dropping it: "[orche]
   dispatch block not relayed: the block at line N: <reason>; close the earlier fence / outdent the
   closer" (exit 2, or a parked question under `stop_hook_active`), only when the reply holds no
   relayable block: a well-formed block outside any fence is relayed even next to an example. The
-  refusal says nothing in the reply was relayed; it fires in ORCHE sessions only.
+  refusal says nothing in the reply was relayed; it fires in Orche sessions only.
 - **`orche apply-all` never runs the project intake** (and so neither does `install.sh
   --all-projects`): every init gets `--no-intake`, and the run ends with "intake not run for <n>
   projects: run `orche intake <proj>` per project (about $0.1–0.3 each)". In 0.3.3 it ran one paid
@@ -1094,7 +1110,7 @@ downgrading. Entries registered before 0.5.0 keep the key, so they stay downgrad
   `print(dict(os.environ))`, `print({**os.environ})`, `json.dumps(os.environ)`,
   `console.log(process.env)`, `ENV.to_h`, `printenv`, a bare `env`, `export -p`.
 - **The Jev key-store rule is tied to the real store**: ORCHE_HOME's secrets folder (any spelling) and
-  any `secrets/jev.key`. ORCHE's own sources under `lib/orche/secrets/` can be read, edited and searched
+  any `secrets/jev.key`. Orche's own sources under `lib/orche/secrets/` can be read, edited and searched
   with a code glob again (a code-blind search of any `secrets/` folder is still refused).
 - **The Jev key's variable no longer reaches workers.** `JEV_API_KEY` (and the configured
   `jev.api_key_env`) is dropped from every `orche run` and intake worker's environment.
@@ -1133,10 +1149,10 @@ downgrading. Entries registered before 0.5.0 keep the key, so they stay downgrad
   Agent denied; `--restricted` and `--tools Read,Glob,Grep` when the installed claude lists them;
   Read deny rules for `.env*`, `secrets/`, keys, keystores, `.npmrc`/`.netrc` and credential JSON in
   the checkout and by absolute path, and for `~/.ssh`, `~/.aws` and the other credential stores).
-  ORCHE puts what a shell would have shown into the request itself, masked and capped (≤ 12 KB): the
+  Orche puts what a shell would have shown into the request itself, masked and capped (≤ 12 KB): the
   tree to depth 3 (≤ 300 entries, no `.git`/`node_modules`/`dist`/`build`/`.orche`/`.venv`/caches),
   `git log --oneline -30`, the manifest/config files found, and the variable names (never values)
-  of `.env.example`/`.sample`/`.template`. The worker's JSON answer ORCHE masks and writes into the
+  of `.env.example`/`.sample`/`.template`. The worker's JSON answer Orche masks and writes into the
   main checkout: `.orche/div/<division>/CONTEXT.md` per division (≤ `intake.max_chars`, 2000), the
   still-empty Purpose/Stack/Entry points of `PROJECT_CARD.md` plus a delimited `Intake` block, and the
   stamp `.orche/intake.json`. One intake per project at a time; `--dry-run` prints the exact argv;
@@ -1241,7 +1257,7 @@ Jev onboarding: set Jev up once, or skip it and everything works without it.
   a redirect is an error, never followed. `orche uninstall` keeps the key and says how to delete it.
 - **`orche doctor` `jev` row**: OK with the kind and key source, otherwise WARN, never FAIL (Jev is
   optional): not configured (Haiku fallback), disabled, or "last probe failed <masked reason>;
-  ORCHE works without Jev; run `orche jev probe`" (no network call). `orche jev disable` forgets
+  Orche works without Jev; run `orche jev probe`" (no network call). `orche jev disable` forgets
   the failed probe.
 - **Env-read gate** (`lib/orche/jevgate.py`): agents may not read a keychain value (`security
   find-generic-password|find-internet-password` with `-w`/`-g`, `dump-keychain -d`, `security -i`,
@@ -1253,7 +1269,7 @@ Jev onboarding: set Jev up once, or skip it and everything works without it.
   names the key file, shells out to `security … -w` or calls orche's key API, or hand a key to
   `orche` through `--stdin`, `--key-stdin` or `--jev-key-stdin`. Commit messages, search patterns
   and Python comment lines that only mention these pass. A command too nested to check is refused.
-  ORCHE never prints or logs the key; the gate refuses agents' normal read paths, but it is not a
+  Orche never prints or logs the key; the gate refuses agents' normal read paths, but it is not a
   sandbox: inline interpreter code is checked as text, a script file that reads the key is not,
   and the keychain's access control and the OS remain the boundary.
 - **Setup rollback**: if config.json cannot be written after the key was stored, config.json is put
@@ -1548,9 +1564,9 @@ First public release.
 - The janitor has no run lock; do not start two `orche janitor run` passes at once.
 - The env-read gate is best-effort: backtick forms, `bash -c env` and `os.environ` dumps are not caught.
 - Sessions are identified only via `ORCHE_SESSION`, their unit worktree, or an exactly matching Orca pane title; other panes in a main checkout are left alone.
-- A child `claude -p` started from an ORCHE pane inherits `ORCHE_SESSION` and is treated as that session.
+- A child `claude -p` started from an Orche pane inherits `ORCHE_SESSION` and is treated as that session.
 - SessionEnd on `/clear` moves the session's scratch to the janitor trash (recoverable with `orche janitor undo`).
-- With no Python 3.11+ on the machine every hook does nothing; `hooks/run.sh` logs one line per call to `logs/hooks.log` (`orche doctor` reports it), and the `orche` command prints "ORCHE needs Python 3.11+" and exits 1. Both find a Python 3.11+ even when the login shell's `python3` is macOS's 3.9.
+- With no Python 3.11+ on the machine every hook does nothing; `hooks/run.sh` logs one line per call to `logs/hooks.log` (`orche doctor` reports it), and the `orche` command prints "Orche needs Python 3.11+" and exits 1. Both find a Python 3.11+ even when the login shell's `python3` is macOS's 3.9.
 - Per-secret GCP IAM is not implemented: `orche dev add` refuses when one GCP project holds every env.
 - A relay that fails part-way can leave an empty reserved unit directory; an AMEND with the wrong rev becomes max+1.
 - `feat new` can leave an orphan Orca worktree after a partial failure; re-running it resumes the entry.
@@ -1558,7 +1574,7 @@ First public release.
 - `orche ledger check --pr N` without `--sha` checks the cwd HEAD, not the PR head.
 - The UserPromptSubmit hook marks stalled workers (`STALLED`) but does not nudge them.
 - Dotenv values containing `$` are written verbatim; frameworks that expand variables may change them.
-- Orca opens its default "Terminal 1" and "Setup" tabs for every worktree ORCHE creates (setup hooks run there, e.g. `npm install`); they are idle shells, close them with `orca terminal close`.
+- Orca opens its default "Terminal 1" and "Setup" tabs for every worktree Orche creates (setup hooks run there, e.g. `npm install`); they are idle shells, close them with `orca terminal close`.
 - `scope_gate` guards Edit/Write; a worker's shell `cd` outside its worktree is not gated.
 - A ledger row is keyed by head SHA: a unit that changed nothing at an already-verified HEAD passes the done gate.
 - `docs/LEDGER.tsv` in the repo is updated only by `orche ledger export`.

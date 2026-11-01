@@ -56,7 +56,7 @@ def cmd_decide(args):
     else:
         path = resolve_file(roster.Roster(registry.load()), os.getcwd())
         if path is None:
-            print("orche: cannot tell whose DECISIONS.tsv this is: set ORCHE_SESSION (ORCHE panes set it)"
+            print("orche: cannot tell whose DECISIONS.tsv this is: set ORCHE_SESSION (Orche panes set it)"
                   " or pass --file", file=sys.stderr)
             return EXIT_USER
     line = row(args.phase, args.decision, args.why, args.evidence, args.result)

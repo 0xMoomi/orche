@@ -21,7 +21,7 @@ PROTECTED_STEMS = {"LEDGER", "GRAVEYARD", "DECISIONS", "STATUS", "HANDOFF", "CHA
 PROTECTED_DIRS = {"memory", "cards", "agent-memory"}
 UNTOUCHABLE = ("active", "paused", "onboarding")
 CACHE_STATUSES = ("dormant", "retired")
-# Record files ORCHE itself appends to; their edits are not someone's work in progress.
+# Record files Orche itself appends to; their edits are not someone's work in progress.
 RECORD_FILES = {"docs/GRAVEYARD.md", "docs/LEDGER.tsv"}
 RECORD_NAMES_UNDER_ORCHE = {"DECISIONS.tsv", "STATUS.md", "HANDOFF.md"}
 POINTER = re.compile(r"(?:^|\s)(path|session):(\S+)")
@@ -106,7 +106,7 @@ def _wip(ctx, root, ignore=None):
 
 
 def is_record_file(rel) -> bool:
-    """ORCHE ledgers/records (GRAVEYARD, LEDGER, unit DECISIONS/STATUS/HANDOFF under .orche/)."""
+    """Orche ledgers/records (GRAVEYARD, LEDGER, unit DECISIONS/STATUS/HANDOFF under .orche/)."""
     rel = rel.strip("/")
     return rel in RECORD_FILES or (rel.startswith(".orche/") and rel.rsplit("/", 1)[-1] in RECORD_NAMES_UNDER_ORCHE)
 
@@ -338,7 +338,7 @@ def _graveyard_path(ctx, out, key, root, value, why, h):
         ctx.silent_rows.append(h)
         return
     if any(units.is_within(r, target) for r in _registered_roots(ctx)):
-        out.append(Candidate("graveyard", "skip", value, "contains a registered checkout or ORCHE state", **base))
+        out.append(Candidate("graveyard", "skip", value, "contains a registered checkout or Orche state", **base))
         return
     rec = next((u for u in ctx.units if u.worktree == owner), None)
     if rec is not None and rec.status in UNTOUCHABLE and rec.session not in ctx.retired:

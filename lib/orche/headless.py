@@ -1,11 +1,11 @@
-"""Every headless `claude -p` ORCHE starts (SPEC §14.10): one call shape, one environment rule,
+"""Every headless `claude -p` Orche starts (SPEC §14.10): one call shape, one environment rule,
 one kill-and-sweep, one result parser. Callers bring only their policy.
 
 A `Call` names a context:
 
 - `project`: the unit worker. Project settings, `--permission-mode bypassPermissions` (a headless
   worker cannot answer prompts; the gates and the deny list still block), the run's own empty MCP
-  config when tagged, the caller's tool rules, a persona file, ORCHE's PreToolUse gates through
+  config when tagged, the caller's tool rules, a persona file, Orche's PreToolUse gates through
   `--settings` (gates()), then, in a team repository, the team plugin's own (`Call.team`).
 - `sealed`: intake and the Liaison. `--restricted`, `--tools` derived from the allowed rules, no
   session kept.
@@ -63,7 +63,7 @@ class Call:
     system: str | None = None        # --system-prompt (blank: required; others: never)
     env: dict = field(default_factory=dict)  # the caller's own variables, set last; never ORCHE_RUN_ID
     tag: str | None = None           # run tag (procs.run_id): ORCHE_RUN_ID, the marker, the tag sweep
-    team: Path | None = None         # project: the installed team plugin, whose PreToolUse gates join ORCHE's
+    team: Path | None = None         # project: the installed team plugin, whose PreToolUse gates join Orche's
     resume: str | None = None        # project: --resume <session id> (the runner's finishing continuation)
 
 
@@ -199,15 +199,15 @@ def gates(team=None) -> str:
     by the plugin root, then (`team`: the installed team plugin's folder) the team plugin's own
     PreToolUse entries, resolved against its folder. Read on every call, no cache. Headless calls load
     no user settings, so without this a worker runs no gate; only PreToolUse is passed,
-    never a lifecycle hook. An unreadable ORCHE hooks.json or a missing PreToolUse list raises (OSError,
+    never a lifecycle hook. An unreadable Orche hooks.json or a missing PreToolUse list raises (OSError,
     ValueError, KeyError): a project worker without its gates must not start. An unreadable team
-    hooks.json leaves ORCHE's gates alone."""
+    hooks.json leaves Orche's gates alone."""
     entries = _pre_tool_use(paths.PLUGIN_ROOT)
     if team is not None:
         try:
             entries += _pre_tool_use(team)
         except (OSError, ValueError, KeyError, TypeError, AttributeError):
-            log.log("hooks", f"headless: the team plugin's gates at {team} are unreadable; ORCHE's gates alone")
+            log.log("hooks", f"headless: the team plugin's gates at {team} are unreadable; Orche's gates alone")
     return json.dumps({"hooks": {"PreToolUse": entries}}, separators=(",", ":"))
 
 

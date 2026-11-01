@@ -1,19 +1,19 @@
 ---
 name: orche-apply
-description: Apply ORCHE to one project on request. Use when the user names a project and asks to put it under ORCHE ("put X under ORCHE", "/orche-apply X", or the same in any language), or says `orche init` (or `/orche-apply`) with no project named, which means the project of the current directory; to choose or customise its divisions (including a custom division of their own), to add a division to an already-registered project, to change a division's model or to list a project's divisions — also when asked in plain words, in any language ("add a design division", "switch research to Sonnet", "which divisions are there?"); or asks what applying ORCHE to a project does. Never apply to every repo at once.
+description: Apply Orche to one project on request. Use when the user names a project and asks to put it under Orche ("put X under Orche", "/orche-apply X", or the same in any language), or says `orche init` (or `/orche-apply`) with no project named, which means the project of the current directory; to choose or customise its divisions (including a custom division of their own), to add a division to an already-registered project, to change a division's model or to list a project's divisions — also when asked in plain words, in any language ("add a design division", "switch research to Sonnet", "which divisions are there?"); or asks what applying Orche to a project does. Never apply to every repo at once.
 ---
 
-# Apply ORCHE to one project
+# Apply Orche to one project
 
-ORCHE is installed once per machine (plugin + `orche` CLI + hooks). A project joins ORCHE only when the
-user names it: some repos are dormant and some will never use ORCHE.
+Orche is installed once per machine (plugin + `orche` CLI + hooks). A project joins Orche only when the
+user names it: some repos are dormant and some will never use Orche.
 
 ## What applying does (say this before doing it)
 
 `orche init <project>` makes, for that project only:
 
 1. Files in the project's main checkout: `.orche/project`, `PROJECT_CARD.md`, `AGENTS.md`, `.agents/`,
-   `.claude/agents/div-<proj>-*.md` (untracked: every ORCHE file, `.orche/` included, goes into
+   `.claude/agents/div-<proj>-*.md` (untracked: every Orche file, `.orche/` included, goes into
    `.git/info/exclude`). Nothing is committed.
 2. One Orca worktree per chosen division (`div-<division>`) with its charter/status/handoff files. The
    defaults are `rnd`, `research`, `build` and `gtm`; `ops` is opt-in and stays dormant while the stage is
@@ -49,11 +49,11 @@ A path or a project name means that project.
 
 ## In plain words (choices)
 
-When the user asks in plain words, in any language (match the intent, not the wording), to set up ORCHE, add a
+When the user asks in plain words, in any language (match the intent, not the wording), to set up Orche, add a
 division, change a model or see the divisions, do it in this session with the choice dialog (AskUserQuestion).
 Never hand it to the `hr` agent: a subagent cannot ask.
 
-1. Run `orche hr choices <proj> --json` (no `<proj>` for a project not under ORCHE yet); its texts are English:
+1. Run `orche hr choices <proj> --json` (no `<proj>` for a project not under Orche yet); its texts are English:
    ask them in the user's language, translating the labels and descriptions yourself. Ask only what the request leaves open: a division or a model the user named is not asked again.
 2. Ask with the `ask` entries as given: each entry's `tool` is one element of AskUserQuestion's `questions` (up to
    four per call); map each answer through the entry's `values` (by the option it picked, never through label text). Text
@@ -144,7 +144,7 @@ customise. In chat there is no terminal, so the setup goes through a JSON file. 
    re-runs it). `orche status --project <proj>` (the project with its division names, custom ones included,
    `○` = dormant) and `orche depts <proj>` (one row per division) show the result later.
    Only the status-line cell uses the label (`Design` → `DES○`).
-6. `orche init` ends by writing the setup report `.orche/SETUP.md` ("ORCHE is set up": what was made and what
+6. `orche init` ends by writing the setup report `.orche/SETUP.md` ("Orche is set up": what was made and what
    to switch on any time), switching Orca to the `main-<proj>` tab, sending Main the setup result with the
    report (Main reports it to the owner and asks for the first request)
    and closing this window: you do not get to answer, and nothing is lost. Only when init printed `could not close the window that ran init` or `could not
@@ -166,8 +166,8 @@ customise. In chat there is no terminal, so the setup goes through a JSON file. 
   it (`orche sleep div-<proj>-<division>`) or remove it by hand.
 - Wake / sleep a division: `orche wake|sleep div-<proj>-<division>`; a head's workers:
   `orche feat new|sleep|wake|retire` (or ask the `hr` agent).
-- Leave ORCHE: retire the feature agents (`orche feat retire … --yes`), remove the division worktrees with
-  `orca worktree rm`, delete the project's ORCHE files from the main checkout and its registry entry; the
+- Leave Orche: retire the feature agents (`orche feat retire … --yes`), remove the division worktrees with
+  `orca worktree rm`, delete the project's Orche files from the main checkout and its registry entry; the
   user decides this, never a hook or an agent.
 
 ## Do not

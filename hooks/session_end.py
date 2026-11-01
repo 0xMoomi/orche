@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""SessionEnd hook: move an ended ORCHE session's scratchpad into the janitor trash (never deletes).
+"""SessionEnd hook: move an ended Orche session's scratchpad into the janitor trash (never deletes).
 
-Only sessions launched by ORCHE ($ORCHE_SESSION set) are touched; every other session's scratch is
+Only sessions launched by Orche ($ORCHE_SESSION set) are touched; every other session's scratch is
 left to the janitor's age rule. Scratch root: $ORCHE_SCRATCH_ROOT, else /private/tmp/claude-<uid>;
 candidates are <root>/*/<session_id>. Each move is recorded in ORCHE_HOME/graveyard.md and is
 undoable with `orche janitor undo <id>` (30-day trash). Fail-open.

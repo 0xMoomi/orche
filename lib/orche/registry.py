@@ -9,6 +9,10 @@ Every write goes through `update(mutate)`: the change is applied to a registry l
 and saved before the lock is released, so two writers (a heartbeat wake and `orche hr add`) cannot
 lose each other's changes. `save` is called only here.
 
+The optional top-level `staff` ({"status": "awake" | "asleep"}) is the CEO Staff's one record
+(lib/orche/staff.py): `orche sleep staff` makes it asleep, so nothing opens Staff automatically
+until `orche wake staff`.
+
 A project's optional `team` is the team plugin id its repository declares (detect.team; written by
 `orche init` and `orche update`): such a project runs in team mode (`team(reg, key)` is the one read site).
 """
@@ -44,10 +48,11 @@ LABEL_MAX, CHARTER_MAX = 24, 400
 # `onboarding`: the worktree exists but onboarding has not finished (re-run init / feat new to resume).
 DIVISION_STATUSES = ("active", "dormant", "paused", "retired", "onboarding")
 FEATURE_STATUSES = ("active", "paused", "retired", "onboarding")
+STAFF_STATUSES = ("awake", "asleep")
 EVENT_TYPES = ("create", "sleep", "wake", "retire", "freeze", "unfreeze", "stage", "scale")
 
 PROJECT_STR_KEYS = ("repo_id", "path", "main_session", "card", "standing")
-# Optional `orche_version`: the ORCHE version whose templates last rendered the project's files (orche init).
+# Optional `orche_version`: the Orche version whose templates last rendered the project's files (orche init).
 ORCHE_VERSION = re.compile(r"^\d+\.\d+\.\d+$")
 DIVISION_STR_KEYS = ("worktree", "branch", "session", "model", "last_activity")
 FEATURE_STR_KEYS = ("name", "worktree", "branch", "session", "created", "last_activity", "reason")
@@ -348,6 +353,9 @@ def validate(reg) -> list:
                 errors.append(f"limits.{key}: must be a non-negative integer")
     if not isinstance(reg.get("frozen"), bool):
         errors.append("frozen: must be a boolean")
+    if "staff" in reg and not (isinstance(reg["staff"], dict) and set(reg["staff"]) == {"status"}
+                               and reg["staff"]["status"] in STAFF_STATUSES):
+        errors.append(f"staff: must be {{\"status\": {'|'.join(STAFF_STATUSES)}}}")
     projects = reg.get("projects")
     if not isinstance(projects, dict):
         errors.append("projects: must be an object")

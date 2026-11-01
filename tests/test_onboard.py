@@ -28,6 +28,7 @@ class NewRepoTest(test_hr.HrCase):
 
     def setUp(self):
         super().setUp()
+        support.staff_asleep()   # the Staff that opens beside Main: tests/test_staff.py
         patcher = mock.patch.dict(os.environ, GIT_ENV)
         patcher.start()
         self.addCleanup(patcher.stop)
@@ -325,7 +326,7 @@ class GatePullRequestTest(test_hr.HrCase):
         self.assertEqual(create[create.index("--base") + 1], "main")
         self.assertEqual(create[create.index("--title") + 1], "Add the merge queue's check script")
         [pr] = support.gh_state(self.gh)["prs"]
-        self.assertEqual(pr["body"], "Adds scripts/verify/ci.sh, the check ORCHE's merge queue runs on each approved "
+        self.assertEqual(pr["body"], "Adds scripts/verify/ci.sh, the check Orche's merge queue runs on each approved "
                                      "pull request: `pnpm test`.\nThe queue lands pull requests only on the owner's "
                                      "word; merging this one turns it on.\n")
         script = git_out(self.bare, "show", f"{verifygate.BRANCH}:scripts/verify/ci.sh")

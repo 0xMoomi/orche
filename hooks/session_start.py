@@ -6,7 +6,9 @@ Right after the role comes a "Role rules" card: the inject-marked block of skill
 checkout), skills/orche-build (the div-*-build worktree) or skills/orche (every other unit).
 Total output stays under 6,000 characters; the card is trimmed first. The CEO Staff (ORCHE_SESSION
 `staff`, lib/orche/staff.py) gets its own text instead: its persona, one card line per project and the
-newest exchanges between the owner and every Main, within the same cap. Fail-open."""
+newest exchanges between the owner and every Main, within the same cap; on `startup` (a fresh Staff
+session, never a resume) as JSON whose `systemMessage` shows the owner Staff's greeting in their
+language (no model call) and whose `additionalContext` is that text. Fail-open."""
 import json
 import os
 import sys
@@ -73,7 +75,7 @@ def _unit_sections(reg, m):
             f"stage: {proj.get('stage', '?')}")
     standing = _read(os.path.join(root, proj["standing"]))
     skill = "orche-build" if m.kind == "div" and m.name == "build" else "orche"
-    return [("ORCHE role", role), *_role_card(skill),
+    return [("Orche role", role), *_role_card(skill),
             ("STANDING.md", standing or dispatch.standing_text(reg, m.project)),
             *_memory(str(m.memory))]
 
@@ -85,10 +87,10 @@ def _project_sections(reg, key, note=None):
     stage = proj.get("stage", "?")
     standing = ("STANDING.md", dispatch.standing_text(reg, key))
     if note:
-        return [("ORCHE role", f"{note}\nproject: {key}\nstage: {stage}"), *_role_card("orche"), standing]
+        return [("Orche role", f"{note}\nproject: {key}\nstage: {stage}"), *_role_card("orche"), standing]
     role = f"session: {proj.get('main_session', 'main-' + key)}\nproject: {key}\nstage: {stage}"
     principles = (_read(PRINCIPLES) or "").partition("\n")
-    return [("ORCHE role", role), *_role_card("orche-main"), standing,
+    return [("Orche role", role), *_role_card("orche-main"), standing,
             *([(principles[0].lstrip("# "), principles[2])] if principles[2] else [])]
 
 
@@ -102,7 +104,7 @@ def _note(r, who):
         return f"[orche] unidentified session in the {unit.event_unit} worktree — its registry record has no session"
     main = r.main(who.place.project)
     main = main.session if main else "main-" + who.place.project
-    return (f"[orche] this is not an ORCHE pane: Main's rules apply in the {main} tab "
+    return (f"[orche] this is not an Orche pane: Main's rules apply in the {main} tab "
             f"— you can run: orche wake {main}")
 
 
@@ -240,7 +242,12 @@ def main():
         who = r.identify(payload.get("cwd") or os.getcwd())
         from orche import staff
         if staff.is_staff(who.session):
-            print(staff.start_text(r.reg, CAP))
+            if payload.get("source") != "startup":
+                print(staff.start_text(r.reg, CAP))
+                return 0
+            text, greeting = staff.opening(r.reg, CAP)   # a fresh session: the owner sees the greeting
+            print(json.dumps({"systemMessage": greeting, "hookSpecificOutput": {
+                "hookEventName": "SessionStart", "additionalContext": text}}, ensure_ascii=False))
             return 0
         sections = _sections(r, who)
         text = build(sections) if sections else ""

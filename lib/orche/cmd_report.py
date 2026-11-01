@@ -53,7 +53,7 @@ def unidentified_message(r, place) -> str:
     """The refusal for an unidentified reporter, naming the Main of the cwd's project when known."""
     main = r.main(place.project)
     return (f"cannot tell which session is reporting: set ORCHE_SESSION={main.session if main else 'main-<proj>'} "
-            "(ORCHE panes set it automatically) or run inside a unit worktree")
+            "(Orche panes set it automatically) or run inside a unit worktree")
 
 
 def _staff_note(args, r) -> int:

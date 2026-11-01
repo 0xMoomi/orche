@@ -281,7 +281,7 @@ class RunTest(GateCase):
         # R4
         self.assertEqual(self.run_("done", head, self.before),
                          (f"history rewritten ({head[:7]} is not an ancestor of HEAD)",))
-        # R6: ORCHE's own untracked files are not uncommitted work
+        # R6: Orche's own untracked files are not uncommitted work
         self.untracked(".orche/div/build/STATUS.md", ".claude/agents/div-acme-build.md", ".claude/settings.local.json")
         self.assertEqual(self.run_("done", self.before, head), (f"no ledger row for {head[:7]}",))
         # R7

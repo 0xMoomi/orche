@@ -76,6 +76,18 @@ class PassTest(ReconcileCase):
         self.assertEqual(hb["at"], T0.isoformat(timespec="seconds"))
         self.assertTrue(any("action=nudge" in e and "target=main-acme-shop" in e for e in self.events()))
 
+    def test_the_pass_caches_the_owners_language_once(self):
+        """The status line's language: one learn_language per pass over the readable projects, before their
+        lines are refreshed (no Main prompt here: the macOS locale, English when unset); none in a dry run."""
+        from orche import statusline
+        self.run_at(0)
+        self.assertEqual((self.home / "status" / "lang").read_text(), "en\n")
+        calls = []
+        with mock.patch.object(statusline, "learn_language", lambda reg, keys=None: calls.append(keys)):
+            self.run_at(5)
+            self.run_at(10, dry_run=True)
+        self.assertEqual(calls, [["acme-shop", "docs-site"]])
+
     def test_an_abort_mid_apply_still_spends_the_attempt(self):
         # 0.7.2 review #6: recorded before apply(), so a watchdog abort inside it cannot hand out fresh tries
         self.pointer("main-acme-shop", 12)
@@ -391,12 +403,12 @@ class PaneGateTest(ReconcileCase):
         self.assertEqual(len(notes), 1)
         self.assertEqual(notes[0][:3], ["osascript", "-e", "on run argv"])
         self.assertIn("last nudge: user-typing at", notes[0][-2])           # an argument, never script
-        self.assertEqual(notes[0][-1], "ORCHE acme-shop")
+        self.assertEqual(notes[0][-1], "Orche acme-shop")
         self.assertTrue(any("owner-notified project=acme-shop" in e for e in self.events()))
 
 
 class StatusHintTest(ReconcileCase):
-    """§6: `unread:`/`undelivered:` show ORCHE's live repair while the heartbeat is fresh, else the
+    """§6: `unread:`/`undelivered:` show Orche's live repair while the heartbeat is fresh, else the
     command; a pane the last pass found closed names `orche wake`, not `orche nudge`."""
 
     def status(self):
@@ -409,10 +421,10 @@ class StatusHintTest(ReconcileCase):
         self.pointer("main-acme-shop", 12)
         self.assertIn("— run `orche nudge main-acme-shop`", self.status())           # no pass on file
         self.run_at(0)
-        self.assertIn(f"— ORCHE retrying (1/3, next {units.hhmm(T0 + dt.timedelta(minutes=8))})", self.status())
+        self.assertIn(f"— Orche retrying (1/3, next {units.hhmm(T0 + dt.timedelta(minutes=8))})", self.status())
         self.set_panes("div-acme-shop-build", "main-docs-site")                      # Main's pane closes
         self.run_at(1)
-        self.assertIn(f"— pane closed: ORCHE reopens it at {units.hhmm(T0 + dt.timedelta(minutes=11))}",
+        self.assertIn(f"— pane closed: Orche reopens it at {units.hhmm(T0 + dt.timedelta(minutes=11))}",
                       self.status())
         self.now = T0 + dt.timedelta(hours=1)                                         # the heartbeat is stale
         self.assertIn("— pane closed: run `orche wake main-acme-shop`", self.status())
@@ -421,7 +433,7 @@ class StatusHintTest(ReconcileCase):
         self.pointer("div-acme-shop-build", 12, unit="u7", via="dispatch", brief_rev=1, status="info",
                      **{"from": "main-acme-shop"})
         self.run_at(0)
-        self.assertIn(f"undelivered: u7 → div-acme-shop-build (rev 1, 12 min) — ORCHE retrying (1/3, next "
+        self.assertIn(f"undelivered: u7 → div-acme-shop-build (rev 1, 12 min) — Orche retrying (1/3, next "
                       f"{units.hhmm(T0 + dt.timedelta(minutes=8))})", self.status())
         (self.home / "config.json").write_text(json.dumps({**WAKE, "reconcile": {"enabled": False}}))
         self.assertIn("— run `orche deliver u7`", self.status())                     # heartbeat off
@@ -444,7 +456,7 @@ class OwnerNoticeTest(ReconcileCase):
 
     def test_gates_and_quiet_hours(self):
         [loud] = self.notes()
-        self.assertEqual(loud[-2:], ['a "quoted" text; do shell script', "ORCHE acme-shop"])
+        self.assertEqual(loud[-2:], ['a "quoted" text; do shell script', "Orche acme-shop"])
         self.assertEqual(loud[4], notify.TELL[0])
         self.assertIn('sound name "Glass"', loud[6])
         [hushed] = self.notes(quiet=True)
@@ -1164,7 +1176,7 @@ class ScaleHeartbeatTest(RepairCase):
     def test_the_usage_notice_is_appendix_a15(self):
         with mock.patch.object(self.owner, "announce", return_value=True) as ann:
             self.owner.usage_notice("acme-shop", "claude", "15:00", 7, T0)
-        ann.assert_called_once_with("acme-shop", "usage", "Claude usage limit reached (resets 15:00). ORCHE re-runs "
+        ann.assert_called_once_with("acme-shop", "usage", "Claude usage limit reached (resets 15:00). Orche re-runs "
                                     "the 7 held units then. To keep going now: run on an API key, or move some "
                                     "divisions to Codex.", T0)
         self.assertIn("usage", self.owner.NOTICES)                        # a held-back notice is flushed later
@@ -1303,13 +1315,13 @@ class ReopenedWordingTest(ReconcileCase):
     def test_stall_and_undelivered_lines_say_pane_reopened(self):
         base = {"cls": "undelivered", "target": "u7", "rev": 1, "to": "div-acme-shop-build", "tries": 1, "cap": 3,
                 "escalated": False, "next": None}
-        self.assertIn("ORCHE retrying (1/3)", reconcile.stalled_line({**base, "reopened": None}))
-        self.assertIn("ORCHE pane reopened (1/3)", reconcile.stalled_line({**base, "reopened": "2026-10-16T09:00:00+09:00"}))
+        self.assertIn("Orche retrying (1/3)", reconcile.stalled_line({**base, "reopened": None}))
+        self.assertIn("Orche pane reopened (1/3)", reconcile.stalled_line({**base, "reopened": "2026-10-16T09:00:00+09:00"}))
         self.pointer("div-acme-shop-build", 12, unit="u7", via="dispatch", brief_rev=1, status="info",
                      **{"from": "main-acme-shop"})
         self.run_at(0)
         reps = reconcile.repairs()
-        self.assertTrue(reconcile.overdue_hint("undelivered", "u7", reps, True).startswith("ORCHE retrying"))
+        self.assertTrue(reconcile.overdue_hint("undelivered", "u7", reps, True).startswith("Orche retrying"))
         util.write_json(inbox.box("div-acme-shop-build") / f"{deliver.LAST_DELIVER}u7",
                         {"state": "nudged", "rev": 1, "at": T0.isoformat(), "reopened": T0.isoformat()})
-        self.assertTrue(reconcile.overdue_hint("undelivered", "u7", reps, True).startswith("ORCHE pane reopened (1/3"))
+        self.assertTrue(reconcile.overdue_hint("undelivered", "u7", reps, True).startswith("Orche pane reopened (1/3"))

@@ -1,18 +1,30 @@
 """Per-project visibility counts and the compact status-line segment (registry + file counts only).
 
-No orca calls here: `orche statusline` must stay under 50 ms. The status line itself only prints the
-cached ORCHE_HOME/status/<proj>.line (templates/statusline-segment.sh): its first line is the segment;
-a second line `spent <YYYY-MM-DD> <usd|n/a>` keeps the day's spend (project.spent_today) for the
-refreshes that do not read transcripts, and is dropped the next day.
+No orca calls, no transcript read, no subprocess here: `orche statusline` must stay under 50 ms. The
+status line itself only prints the cached ORCHE_HOME/status/<proj>.line (templates/statusline-segment.sh):
+its first line is the segment, with its ANSI colours (the one place they are added is segment(); the
+plain readers, `orche statusline --json` and the tests, strip them with plain()); a second line
+`spent <YYYY-MM-DD> <usd|n/a>` keeps the day's spend (project.spent_today) for the refreshes that do not
+read transcripts, and is dropped the next day.
+
+The words are the owner's language (templates/statusline/labels.<lang>.json, read once per process):
+the one word cached in ORCHE_HOME/status/lang, "en" when absent. The heartbeat pass, `orche init` and
+`orche update` write it (learn_language: staff.language over the owner's newest prompts to every Main).
 """
 import datetime as _dt
+import functools
 import json
+import re
 
 from . import paths, registry, roster, runs, units, util
 
 ACTIVE, ASLEEP, ONBOARDING = "●", "○", "◐"
 SHORT = {"rnd": "R&D", "research": "RS", "build": "BUILD", "gtm": "GTM", "ops": "OPS"}
 NEW_WINDOW = _dt.timedelta(hours=24)
+WAITING, RUNNING = "⚠", "▶"
+RESET, YELLOW, GREEN_BOLD, DIM, RED = "\033[0m", "\033[33m", "\033[1;32m", "\033[2m", "\033[31m"
+_ANSI = re.compile(r"\x1b\[[0-9;]*m")
+LABELS = paths.PLUGIN_ROOT / "templates" / "statusline"   # labels.<lang>.json
 
 
 def _json_files(pattern):
@@ -26,9 +38,10 @@ def _json_files(pattern):
 
 
 def counts(reg: dict, key: str, now=None, r=None) -> dict:
-    """{awake, active_features, workers, new, keys, unverified, running} for project `key` (running = live
-    `orche run` lock files; workers = {division: active workers}, active_features their sum). `r` is the
-    caller's Roster of `reg`, built here when absent."""
+    """{awake, active_features, workers, busy, new, keys, unverified, running} for project `key` (running =
+    live `orche run` lock files; workers = {division: active workers}, active_features their sum; busy =
+    {division: live runs of its workers}, from the locks' `to`). `r` is the caller's Roster of `reg`, built
+    here when absent."""
     now = now or units.now()
     proj = reg["projects"][key]
     workers = {name: n for name, div in (proj.get("divisions") or {}).items()
@@ -51,14 +64,20 @@ def counts(reg: dict, key: str, now=None, r=None) -> dict:
         target = owner(path.parent.name) or owner(ptr.get("to")) or owner(ptr.get("from"))
         if target == key and ptr.get("status") == "done" and ptr.get("ledger_row") is False:
             unverified += 1
+    live, busy = runs.live(key), {}
+    for lock in live:
+        member = r.member(lock.get("to"))
+        if member is not None and member.project == key and member.kind == "feat":
+            busy[member.division] = busy.get(member.division, 0) + 1
     return {
         "awake": len(registry.awake_sessions({"projects": {key: proj}})),
         "active_features": sum(workers.values()),
         "workers": workers,
+        "busy": busy,
         "new": new,
         "keys": keys,
         "unverified": unverified,
-        "running": runs.count(key),
+        "running": len(live),
     }
 
 
@@ -84,15 +103,15 @@ def custom_cells(proj: dict) -> dict:
     return cells
 
 
-def division_cells(proj: dict, workers: dict, short=False) -> list:
-    """One cell per division of the project (`registry.divisions_of`), with its active worker count
-    from `workers` ({division: n}, `counts`); a custom division whose record is missing renders as
-    asleep. `short` uses the status-line names (SHORT, else `custom_cells`)."""
-    cells, names = [], {**custom_cells(proj), **SHORT} if short else {}
+def division_cells(proj: dict, workers: dict) -> list:
+    """`orche status`'s cells: one per division of the project (`registry.divisions_of`), with its active
+    worker count from `workers` ({division: n}, `counts`); a custom division whose record is missing
+    renders as asleep."""
+    cells = []
     for name in registry.divisions_of(proj):
         div = proj.get("divisions", {}).get(name, {})
         glyph = {"active": ACTIVE, "onboarding": ONBOARDING}.get(div.get("status"), ASLEEP)
-        cell = names.get(name, name) + glyph
+        cell = name + glyph
         if workers.get(name):
             cell += str(workers[name])
         cells.append(cell)
@@ -100,32 +119,89 @@ def division_cells(proj: dict, workers: dict, short=False) -> list:
 
 
 def waiting(reg: dict, key: str, now=None) -> tuple:
-    """(what waits on the owner: the open ask plus the units blocked on the owner, the PAUSED reason or
-    None: a spend cap or an owner pause that holds)."""
+    """(what waits on the owner: the open ask plus the units blocked on the owner, why a pause holds: the
+    spend cap reached (its USD), "owner" for an owner pause, else None)."""
     from . import project                # light at import: the status line loads only what it uses
     from .flow import guard, owner
     n = len(project.blocked(reg, key, now)) + (1 if owner.status(key, now) else 0)
     s, p = guard.spend_status(key, now), guard.pause_status(key)
-    return n, (f"spend cap ${s['cap']:g} reached" if s else "by the owner" if p else None)
+    return n, (s["cap"] if s else "owner" if p else None)
+
+
+def _lang_path():
+    return paths.orche_home() / "status" / "lang"
+
+
+def cached_language() -> str:
+    """The owner's language learn_language cached (status/lang); "en" when absent or without labels."""
+    try:
+        word = _lang_path().read_text(encoding="utf-8").strip()
+    except OSError:
+        return "en"
+    return word if word.isalpha() and (LABELS / f"labels.{word}.json").is_file() else "en"
+
+
+def learn_language(reg: dict, keys=None) -> None:
+    """Cache the owner's language (staff.language over the newest exchanges of the Mains of `keys`,
+    default every project) in status/lang. It reads transcripts (or the macOS locale): the heartbeat
+    pass, `orche init` and `orche update` call it, never the status line. Best effort, never raises."""
+    from . import staff                  # not at import: the status line stays light
+    try:
+        keys = sorted(reg.get("projects") or {}) if keys is None else keys
+        rows = [x for key in keys for x in staff.recent(reg, key, limit=staff.PER_PROJECT)]
+        util.atomic_write(_lang_path(), staff.language(rows) + "\n")
+    except Exception:  # noqa: BLE001 - the status line never fails its caller
+        pass
+
+
+@functools.lru_cache(maxsize=None)
+def labels(lang: str) -> dict:
+    """The status-line words in `lang` (templates/statusline/labels.<lang>.json), read once."""
+    with open(LABELS / f"labels.{lang}.json", encoding="utf-8") as fh:
+        return json.load(fh)
+
+
+def _paint(colour, text) -> str:
+    return f"{colour}{text}{RESET}"
+
+
+def plain(line: str) -> str:
+    """`line` without its ANSI colours."""
+    return _ANSI.sub("", line)
 
 
 def segment(reg: dict, key: str, now=None, r=None, spent=None) -> str:
-    """`waiting3 · R&D● RS○ BUILD●3 DES●2 GTM● OPS○ · run2 · 🔑2 · $4.20 today` (zero cells omitted;
-    `spent`: today's USD, "n/a" when unreadable, None when not read today), or, while a spend cap or a
-    pause holds, `PAUSED <why> · say "resume" in Main`."""
-    n, paused = waiting(reg, key, now)
-    if paused:
-        return f'PAUSED {paused} · say "resume" in Main'
-    c = counts(reg, key, now, r)
-    cells = division_cells(reg["projects"][key], c["workers"], short=True)
-    parts = ([f"waiting{n}"] if n else []) + ([" ".join(cells)] if cells else [])
-    for label, k in (("run", c["running"]), ("🔑", c["keys"])):
-        if k:
-            parts.append(f"{label}{k}")
+    """The status line in the owner's language (cached_language), zero cells omitted:
+    `⚠ waiting 1 · ▶ running 3 · BUILD 3/8 · RS ● · R&D ○ GTM ○ DES ○ · 🔑1 · $10.75 today`: what waits on
+    the owner (yellow), the live runs (green bold), one cell per division with active workers (`<cell>
+    running/assigned`: its workers' live runs / its active workers), then the awake divisions without
+    workers (`●`, `◐` onboarding), the asleep ones dimmed, pending secret requests and today's spend
+    (`spent`: USD, "n/a" when unreadable, None when not read today). While a spend cap or a pause holds,
+    the whole line is red: `PAUSED <why> · say "resume" in Main`."""
+    words = labels(cached_language())
+    n, held = waiting(reg, key, now)
+    if held is not None:
+        why = words["owner"] if held == "owner" else words["cap"].format(cap=f"{held:g}")
+        return _paint(RED, words["paused"].format(why=why))
+    c, proj = counts(reg, key, now, r), reg["projects"][key]
+    names = {**custom_cells(proj), **SHORT}
+    work, awake, asleep = [], [], []
+    for name in registry.divisions_of(proj):
+        cell, status = names.get(name, name), (proj.get("divisions", {}).get(name) or {}).get("status")
+        if c["workers"].get(name):
+            work.append(f"{cell} {c['busy'].get(name, 0)}/{c['workers'][name]}")
+        elif status in ("active", "onboarding"):
+            awake.append(f"{cell} {ACTIVE if status == 'active' else ONBOARDING}")
+        else:
+            asleep.append(f"{cell} {ASLEEP}")
+    parts = ([_paint(YELLOW, f"{WAITING} {words['waiting'].format(n=n)}")] if n else []) \
+        + ([_paint(GREEN_BOLD, f"{RUNNING} {words['running'].format(n=c['running'])}")] if c["running"] else []) \
+        + work + ([" ".join(awake)] if awake else []) + ([_paint(DIM, " ".join(asleep))] if asleep else []) \
+        + ([f"🔑{c['keys']}"] if c["keys"] else [])
     if spent == "n/a":
-        parts.append("spend n/a")
+        parts.append(words["spend_na"])
     elif spent:
-        parts.append(f"${spent:.2f} today")
+        parts.append(words["today"].format(usd=f"{spent:.2f}"))
     return " · ".join(parts)
 
 
@@ -199,5 +275,5 @@ def run(cwd, as_json=False) -> int:
     if key is None:
         return 0
     line = _write(reg, key, r=r)
-    print(json.dumps({"project": key, "line": line}, ensure_ascii=False) if as_json else line)
+    print(json.dumps({"project": key, "line": plain(line)}, ensure_ascii=False) if as_json else line)
     return 0

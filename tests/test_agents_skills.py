@@ -288,7 +288,7 @@ class SkillsTest(unittest.TestCase):
         apply_text = (SKILLS / "orche-apply" / "SKILL.md").read_text()
         apply_fm = frontmatter(apply_text)
         self.assertEqual(apply_fm["name"], "orche-apply")
-        self.assertTrue(apply_fm["description"].startswith("Apply ORCHE to one project on request. Use"))
+        self.assertTrue(apply_fm["description"].startswith("Apply Orche to one project on request. Use"))
         self.assertEqual(INJECT.findall(apply_text), [])
         self.assertIn("Do not apply to a project the user did not name", apply_text)
         self.assertIn("Do not commit the generated files", apply_text)
@@ -310,7 +310,7 @@ class SkillsTest(unittest.TestCase):
             text = (SKILLS / skill / "SKILL.md").read_text()
             fm = frontmatter(text)
             self.assertEqual(fm["name"], skill)
-            self.assertTrue(fm["description"].startswith(("ORCHE help. Use", "Main role rulebook. Use",
+            self.assertTrue(fm["description"].startswith(("Orche help. Use", "Main role rulebook. Use",
                                                          "Build division rulebook. Use")), skill)
             blocks = INJECT.findall(text)
             self.assertEqual(len(blocks), 1, skill)
@@ -422,6 +422,8 @@ class SkillsTest(unittest.TestCase):
     def test_readme_is_short_and_the_feature_persona_lands_through_the_queue(self):
         readme = (support.ROOT / "README.md").read_text()
         self.assertLessEqual(len(readme.splitlines()), 100)
+        self.assertTrue(readme.startswith("# Orche\n"))
+        self.assertIn("```mermaid\nflowchart", readme)       # the structure diagram GitHub renders
         self.assertIn("merge queue", readme)
         self.assertIn("## Landing your work", (PERSONAS / "feature.md").read_text())
 
@@ -436,11 +438,11 @@ class SkillsTest(unittest.TestCase):
         for say in ("turn on Jev", "cross-check PR 12 with Codex", "set the token for background runs",
                     "let the janitor clean up", "set up the merge queue for <project>", "run up to 30 agents",
                     "set up again", "update", "what changed in <project>?", "how much did this cost?",
-                    "check the setup", "what else can ORCHE do?"):
+                    "check the setup", "what else can Orche do?"):
             self.assertIn(f'"{say}"', table)
         self.assertIn("## What you get", readme)
         main = " ".join((SKILLS / "orche-main" / "SKILL.md").read_text().split())
-        self.assertIn('| What else can ORCHE do, what do you recommend | `orche doctor` (its "Next steps" block) |', main)
+        self.assertIn('| What else can Orche do, what do you recommend | `orche doctor` (its "Next steps" block) |', main)
         self.assertIn("| Set up a project, set up again, add a division, change a model |", main)
         apply_text = " ".join((SKILLS / "orche-apply" / "SKILL.md").read_text().split())
         self.assertIn("init writes `.orche/SETUP.md` (the setup report) and Main reports it", apply_text)
@@ -567,9 +569,9 @@ class RoleCardTest(test_hooks.HookCase):
         (unit / "HANDOFF.md").write_text("HANDOFF-TOP\nnext: integrate\n")
         out = self.run_hook("session_start.py", self.build_payload()).stdout
         self.assertLessEqual(len(out.rstrip("\n")), 6000)
-        self.assertNotIn("ORCHE Build rules", out)
+        self.assertNotIn("Orche Build rules", out)
         self.assertNotIn("## Role rules", out)
-        for kept in ("STATUS-TOP", "status line 134", "HANDOFF-TOP", "## ORCHE role\nsession: div-acme-build"):
+        for kept in ("STATUS-TOP", "status line 134", "HANDOFF-TOP", "## Orche role\nsession: div-acme-build"):
             self.assertIn(kept, out)
         self.assertTrue(out.rstrip("\n").endswith("[orche] truncated to 6000 chars: dropped Role rules (load the role skill)"),
                         out[-200:])

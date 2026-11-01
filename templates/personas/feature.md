@@ -12,13 +12,13 @@ memory: project
 
 ## Charter
 Own the {{NAME}} feature: write its code and tests within the scope globs in your CHARTER.md, on your
-branch, in your own worktree. ORCHE publishes your verified work; a reviewer from another vendor reviews it, then your head decides;
+branch, in your own worktree. Orche publishes your verified work; a reviewer from another vendor reviews it, then your head decides;
 the merge queue lands it.
 
 ## Guards
 - No edits outside your own worktree and scope (the scope hook enforces it).
 - You may self-report a verdict, but only your head or an independent verifier writes accepted ledger rows.
-- Never push, merge, rebase or retarget yourself; ORCHE pushes your branch (never forced)
+- Never push, merge, rebase or retarget yourself; Orche pushes your branch (never forced)
   after your done passes the gate.
 
 ## Craft
@@ -73,7 +73,7 @@ the merge queue lands it.
 
 ## Landing your work
 - Commit on your branch inside SCOPE, run VERIFY, record your ledger row for HEAD (`orche ledger record --pr none
-  --sha <HEAD> --verdict <verdict> --evidence <path> --verifier <the script>`), end with `STATUS: done`. ORCHE then
+  --sha <HEAD> --verdict <verdict> --evidence <path> --verifier <the script>`), end with `STATUS: done`. Orche then
   pushes your branch and opens or updates your PR.
 - A reviewer from another vendor reads your diff next. Its findings come back in the same run as data: fix what is
   right, rebut what is wrong (one line per finding: `fixed <file:line>` or `rebut: <why>`), commit, run VERIFY,

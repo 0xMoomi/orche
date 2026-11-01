@@ -49,7 +49,7 @@ def write(root) -> Path:
 
 def body(check) -> str:
     runs = f"`{check}`" if check else "no tests yet (no test command was found), so it only reports type-check-only"
-    return (f"Adds {SCRIPT}, the check ORCHE's merge queue runs on each approved pull request: {runs}.\n"
+    return (f"Adds {SCRIPT}, the check Orche's merge queue runs on each approved pull request: {runs}.\n"
             "The queue lands pull requests only on the owner's word; merging this one turns it on.\n")
 
 

@@ -34,7 +34,7 @@ RUN.json count only its own cost: a resumed result reports the whole conversatio
 In a team repository (registry.team) a verified gated done publishes nothing and starts no head review:
 it is filed with publish.ready_line and `pr: none`; `orche queue add <unit>` publishes on the owner's word.
 When the team plugin is installed for this user, its rules text reaches the prompt (`## Team rules`) and its
-PreToolUse gates join ORCHE's (headless.Call.team).
+PreToolUse gates join Orche's (headless.Call.team).
 
 A STOP/AMEND from Main (runs.stop()) writes the unit's STOP marker, which the run polls every
 headless.POLL_S while claude runs, and SIGTERMs `orche run` when `ps` verifies its pid (the fast
@@ -63,7 +63,7 @@ Spend (§7.3): a run whose worker started but left no cost figure (killed, timed
 without a completed turn) records history.reserve() as `cost_usd` (`usage` null), so G4 counts it;
 filing.lost does the same for a lost run. A worker that never started records no cost.
 
-headless.run is the one way ORCHE starts claude (SPEC §14.10), codex.run the one way it starts codex;
+headless.run is the one way Orche starts claude (SPEC §14.10), codex.run the one way it starts codex;
 this module holds the unit-worker policy (call_for) and files the run.
 """
 import math

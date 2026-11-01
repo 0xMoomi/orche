@@ -3,7 +3,7 @@
 A LaunchAgent-started Python (the `com.orche.reconcile` job) cannot read ~/Desktop, ~/Documents,
 ~/Downloads or iCloud Drive (~/Library/Mobile Documents) until its Python.app is switched on in
 System Settings › Privacy & Security › Full Disk Access; a read there can block (a consent check)
-instead of failing. Only the user (or MDM) can grant it, so ORCHE detects, explains, opens the two
+instead of failing. Only the user (or MDM) can grant it, so Orche detects, explains, opens the two
 places and verifies: this module names the protected folders (string checks only: nothing here
 touches a protected path), finds the Python.app to grant, opens Finder and the Full Disk Access pane,
 and waits for a pass of the job itself (heartbeat.json `job_at`, reconcile.write_heartbeat).
@@ -37,7 +37,7 @@ def grant_wait(seconds) -> str:
     """`orche install --grant`'s progress line before a wait of `seconds`."""
     return f"checking access… (up to {seconds // 60} min)" if seconds >= 60 else f"checking access… (up to {seconds} s)"
 GUIDANCE = (   # {name}: what Finder selects (python_app(): Python.app, or a bare python3.x binary)
-    "ORCHE's background job (the heartbeat) cannot read the project folder because of macOS privacy settings. "
+    "Orche's background job (the heartbeat) cannot read the project folder because of macOS privacy settings. "
     "Drag the item selected in Finder ({name}) into System Settings › Privacy & Security › Full Disk Access, "
     "switch it on, then run in the terminal: orche install --grant",
 )
@@ -46,7 +46,7 @@ STEPS = (
     "(if that fails: + below the list → Cmd+Shift+G → paste the path below).",
     "2. Switch the new entry on (password/Touch ID). If a window says 'Python would like to access files in …', "
     "click 'Allow'.",
-    "3. Keep this terminal open. ORCHE checks automatically for up to 5 minutes.",
+    "3. Keep this terminal open. Orche checks automatically for up to 5 minutes.",
 )
 NOTHING_TO_GRANT = "nothing to grant — no project is under a protected folder"
 NOT_LOADED = "the heartbeat job is not loaded — run: orche install --mode {mode}"

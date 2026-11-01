@@ -3,7 +3,7 @@
 `run` stays a dry run until `ORCHE_HOME/janitor.enabled` exists; `--dry-run` always forces one. The
 heartbeat starts it daily (janitor.heartbeat); one pass at a time (`janitor/.pass.lock`, exit 3 while held).
 Unless `--dry-run`, `run` first reconciles lost runner runs and prunes `logs/runs/*.log` older than
-`runner.log_keep_days` (ORCHE's own state, so not gated on `janitor.enabled`), and afterwards
+`runner.log_keep_days` (Orche's own state, so not gated on `janitor.enabled`), and afterwards
 refreshes the intake of every project that has one (`orche intake <proj> --if-stale`; a failure is a
 line in the output, not a failed run). That refresh is deliberately not gated on `janitor.enabled`
 either, although it is a paid model call that rewrites the intake block of the user's
@@ -54,7 +54,7 @@ def cmd_run(args):
 
 def _run(args):
     runs.reconcile_cli(registry.load(), args)
-    if not args.dry_run:      # ORCHE's own run logs: pruned whether or not the janitor is enabled
+    if not args.dry_run:      # Orche's own run logs: pruned whether or not the janitor is enabled
         runs.prune_logs((config.load().get("runner") or {}).get("log_keep_days"))
     res = janitor.run(dry_run=args.dry_run, apply_removed=args.apply_removed,
                       claude_projects=args.claude_projects)

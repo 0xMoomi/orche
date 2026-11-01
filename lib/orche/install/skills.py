@@ -33,9 +33,9 @@ def install(ctx, mode) -> None:
                     dest.symlink_to(src)
                 ctx.note(STEP, "relink", dest, f"-> {src}")
                 continue
-            ctx.note(STEP, "skip", dest, f"existing symlink to {link_target(dest)}, not ORCHE's; left untouched")
+            ctx.note(STEP, "skip", dest, f"existing symlink to {link_target(dest)}, not Orche's; left untouched")
         elif dest.exists():
-            ctx.note(STEP, "skip", dest, "existing entry, not ORCHE's; left untouched")
+            ctx.note(STEP, "skip", dest, "existing entry, not Orche's; left untouched")
         else:
             if not ctx.dry_run:
                 dest_dir.mkdir(parents=True, exist_ok=True)
@@ -62,4 +62,4 @@ def _remove(ctx, roots, why, *, quiet) -> None:
                 dest.unlink()
             ctx.note(STEP, "remove", dest, f"symlink -> {target}" + (f"; {why}" if why else ""))
     if not found and not quiet:
-        ctx.note(STEP, "ok", dest_dir, "no ORCHE skill symlinks")
+        ctx.note(STEP, "ok", dest_dir, "no Orche skill symlinks")

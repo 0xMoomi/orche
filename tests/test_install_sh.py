@@ -20,7 +20,7 @@ from pathlib import Path
 from support import ABSOLUTE_PYTHONS, ROOT
 
 INSTALL_SH = ROOT / "install.sh"
-WINDOWS_MSG = ("Windows is not supported: Orca is a macOS app and the ORCHE CLI relies on POSIX process "
+WINDOWS_MSG = ("Windows is not supported: Orca is a macOS app and the Orche CLI relies on POSIX process "
                "control (ps, process groups, signals) and the macOS keychain. WSL2 is unverified.")
 MARKER = "# orche"
 
@@ -103,7 +103,7 @@ FAKE_RECORDER = """#!/bin/sh
 printf '%s\\n' "$*" >> "$(dirname "$0")/$(basename "$0")-argv.txt"
 exit 0
 """
-# Everything ORCHE or install.sh may run that acts on this machine: each must be a fake in fakebin
+# Everything Orche or install.sh may run that acts on this machine: each must be a fake in fakebin
 # (or nowhere on PATH) before any child starts.
 MACHINE_TOOLS = ("claude", "orca", "osascript", "security", "launchctl", "open", "pbcopy", "pbpaste")
 OLD_PYTHON = """#!/bin/sh
@@ -296,12 +296,12 @@ class InstallShTest(unittest.TestCase):
         self.assertFalse((self.fake / "osascript-called").exists())
         lines = res.stdout.splitlines()
         from orche import __version__
-        at = lines.index(f"ORCHE {__version__} is installed on this Mac (plugin mode).")
+        at = lines.index(f"Orche {__version__} is installed on this Mac (plugin mode).")
         self.assertEqual(lines[at - 1], "")
         self.assertEqual(lines[at + 1:at + 5], [
             f"Open a new terminal (or run: source {self.home / '.profile'}) so `orche` is on your PATH.",
             "Next: set up a project.",
-            '  In Claude Code, inside the project, say "orche init" (or, in any language, "set up ORCHE here").',
+            '  In Claude Code, inside the project, say "orche init" (or, in any language, "set up Orche here").',
             f"  In this session: read {self.dir}/skills/orche-apply/SKILL.md, section \"In plain words (choices)\", "
             "and set up the owner's project with the choice dialog."])
         self.assertTrue((self.dir / "skills" / "orche-apply" / "SKILL.md").is_file())
@@ -479,7 +479,7 @@ class InstallShTest(unittest.TestCase):
     def test_no_python_311_exits_with_a_hint(self):
         res = self.install(env=self._old_python_env("Darwin"))
         self.assertEqual(res.returncode, 1, res.all)
-        self.assertIn("ORCHE needs Python 3.11+, none found (python3 is Python 3.9.6)", res.stderr)
+        self.assertIn("Orche needs Python 3.11+, none found (python3 is Python 3.9.6)", res.stderr)
         self.assertIn("brew install python", res.stderr)
         self.assertFalse(self.dir.exists())
 

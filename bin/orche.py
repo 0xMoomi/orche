@@ -1,4 +1,4 @@
-"""ORCHE command-line entry point, started by the `bin/orche` sh launcher under a Python 3.11+.
+"""Orche command-line entry point, started by the `bin/orche` sh launcher under a Python 3.11+.
 
 Built-in commands: `version`, `projects`. Further commands live in
 `lib/orche/cmd_*.py`; each module exposes `register(subparsers)` and is
@@ -37,7 +37,7 @@ GROUPS = (
      ("init", "status", "projects", "dispatch", "hr", "feat", "sleep", "wake", "stage", "flow", "queue", "review",
       "secret", "dev", "auth", "jev", "metrics", "update", "install", "uninstall", "doctor", "version")),
     ("What Main and the units run", ("ask", "card", "decide", "depts", "discard", "report", "ledger")),
-    ("What ORCHE runs by itself",
+    ("What Orche runs by itself",
      ("nudge", "deliver", "reconcile", "statusline", "run", "janitor", "intake", "triage")),
 )
 
@@ -89,7 +89,7 @@ def _check_global_flags(subparsers, trail=()):
 
 def _register(subparsers, lib_dir=None):
     """Register built-ins, then every `cmd_*.py` module's `register(subparsers)`."""
-    subparsers.add_parser("version", help="print the ORCHE version").set_defaults(func=cmd_version)
+    subparsers.add_parser("version", help="print the Orche version").set_defaults(func=cmd_version)
     subparsers.add_parser("projects", help="list registry projects").set_defaults(func=cmd_projects)
     for path in sorted(Path(lib_dir or LIB / "orche").glob("cmd_*.py")):
         _load_module(path).register(subparsers)

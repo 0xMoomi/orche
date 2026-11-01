@@ -1,11 +1,11 @@
-# ORCHE FAQ
+# Orche FAQ
 
 Short answers; [spec](spec.md) has the rules behind each one.
 
-## Is ORCHE a harness or an orchestrator?
+## Is Orche a harness or an orchestrator?
 
 An orchestration layer. Claude Code is the harness: one agent's loop, tools, hooks and context.
-Orca manages repos, worktrees and terminal panes. ORCHE sits on top of both and decides who does
+Orca manages repos, worktrees and terminal panes. Orche sits on top of both and decides who does
 what, how work is handed over (`orche dispatch` briefs, inbox pointers), and when it counts as done (a
 verification-ledger row). It ships as a Claude Code plugin (agents, skills, hooks) plus the
 `orche` CLI; it does not replace or wrap Claude Code.
@@ -13,7 +13,7 @@ verification-ledger row). It ships as a Claude Code plugin (agents, skills, hook
 ## Why `/clear` at unit boundaries instead of compacting?
 
 Compact asks a model to summarize; what it drops is uncontrolled, it costs an extra call, and the
-context keeps growing. ORCHE keeps memory in files the owner writes on purpose: the persona
+context keeps growing. Orche keeps memory in files the owner writes on purpose: the persona
 (`.claude/agents/<session>.md`), `.orche/STANDING.md`, the unit's `CHARTER.md`, `STATUS.md`,
 `DECISIONS.tsv` and `HANDOFF.md`, inbox pointers, and transcripts that are kept (and archived on
 retire, never deleted). After `/clear` or a resume, the SessionStart hook re-injects them. The
@@ -35,7 +35,7 @@ a closed list: registered projects and their aliases (`orche init --aliases`). M
 `Understood: source = <project>, output = <project>` and asks one line when it is ambiguous.
 Questions go through the project cards (`orche card <proj>`) and `orche ask <proj> "…"`; work requests become
 an `external-request` pointer in the other Main's inbox, which its user confirms. Do not use
-`@`: in Claude Code it mentions a session, so ORCHE never uses it for projects.
+`@`: in Claude Code it mentions a session, so Orche never uses it for projects.
 
 ## What wakes Main?
 
@@ -76,7 +76,7 @@ cleans up old leaks after a backup.
 
 ## What is Jev, and why is it off by default?
 
-Jev is an external, fast model for typed decisions (choice, score, true/false). ORCHE can use it
+Jev is an external, fast model for typed decisions (choice, score, true/false). Orche can use it
 to decide whether a report should interrupt Main. It is never used for code. It is off because
 it sends (masked, code-stripped) text off the machine, has no published independent evaluation
 or SLA, and must first pass offline validation on your own data: `orche jev eval extract`,
@@ -85,7 +85,7 @@ to turn Jev on (it runs `orche jev enable`). Calls time out after 1 s and fail o
 
 ## What does `orche init` leave in my repo, and what should I commit?
 
-Nothing: `orche init` (and `orche init --refresh`) adds every ORCHE file to the repository's
+Nothing: `orche init` (and `orche init --refresh`) adds every Orche file to the repository's
 `.git/info/exclude`: `.orche/` (STANDING.md, the project marker, briefs and reports, the setup
 report), `.claude/settings.local.json`, the units' personas (`.claude/agents/div-*.md`,
 `.claude/agents/feat-*.md`) and the template files `PROJECT_CARD.md`, `docs/RUBRIC.md`,
@@ -100,7 +100,7 @@ Every PR passes two checks before it lands. First the head review, then the
 merge queue gate: `scripts/verify/ci.sh` plus the brief's VERIFY, run on top of the current main. When all are green the
 queue merges it. A second-vendor cross-check runs only when someone asks for one. Set `queue.land: owner` and each PR waits for your approval instead: tell Main to merge the waiting PRs (it runs
 `orche queue approve <p> --all`).
-A merge deploys only if your host deploys main. ORCHE never merges with `--admin` and never force-pushes.
+A merge deploys only if your host deploys main. Orche never merges with `--admin` and never force-pushes.
 
 ## How many agents can run at once?
 
@@ -115,7 +115,7 @@ Tell Main in your language ("up to 20 agents", "30"): it asks the scale question
 A run waits while free memory is below `min_free_mb` (RAM), and `orche feat new` refuses while free disk is below
 `feature_min_free_disk_mb`. Workers run headless without panes in every preset; `orche feat wake` opens one.
 
-With a Claude subscription (Max), many agents share one usage window and soon reach it. ORCHE then holds that vendor
+With a Claude subscription (Max), many agents share one usage window and soon reach it. Orche then holds that vendor
 until the window resets and re-runs the held work. An API key or Codex keeps going meanwhile.
 
 ## Which model does each division use?
@@ -144,5 +144,5 @@ nothing to configure.
 
 ## Can I start in an empty folder?
 
-Yes. ORCHE asks whether to create the repository there (GitHub, private by default) and which preset fits, with the
+Yes. Orche asks whether to create the repository there (GitHub, private by default) and which preset fits, with the
 recommended answers first.

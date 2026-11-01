@@ -612,11 +612,11 @@ def _escalate(reg, action, now) -> None:
     minutes, main = int(c.age_s // 60), f"main-{c.project}"
     if c.cls == "closed" and c.kind == "main" and not c.count:
         _tell_owner(c.project, f"{c.target}'s pane is disconnected after {cap} reopens today — decide: "
-                               f"`orche wake {c.target}` now, or leave it (default: ORCHE reopens it tomorrow)", now)
+                               f"`orche wake {c.target}` now, or leave it (default: Orche reopens it tomorrow)", now)
     elif c.cls == "closed" and c.kind == "main":
         _tell_owner(c.project, f"{c.target} is closed with {c.count} report(s) waiting ({minutes} min) after "
                                f"{cap} reopens today — decide: `orche wake {c.target}` now, or leave it "
-                               f"(default: ORCHE reopens it tomorrow)", now)
+                               f"(default: Orche reopens it tomorrow)", now)
     elif c.cls == "closed":
         how = f"after {cap} wakes today" if c.status == "active" else f"while {c.status or 'asleep'}"
         _post(c.sender or c.target, main, f"closed: {c.target} has {c.count} report(s) waiting ({minutes} min) "
@@ -781,7 +781,7 @@ def stuck_path(frame) -> str:
     absolute path a local holds (a str or os.PathLike, in the frame's own order: arguments first —
     `os.scandir`'s caller holds the directory it lists) that is under a registered project's root
     (ROOTS), a protected folder or a volume under /Volumes (privacy.protected), else the next frame
-    out; "" when none. Values, not the formatted traceback (its file names are ORCHE's own); ORCHE's
+    out; "" when none. Values, not the formatted traceback (its file names are Orche's own); Orche's
     own paths (bin/orche.py's __file__) and other strings never count."""
     from . import privacy
     stop = run_pass.__code__
@@ -1164,11 +1164,13 @@ def _pass(cfg_all, cfg, now, started, dry_run, out, keys=None, as_json=False) ->
         log.log("events", "reconcile action=janitor attempt=1/1" + (f" failed={row['failed']}" if row["failed"] else ""))
         emit(row, row["line"] + (f" (failed: {row['failed']})" if row["failed"] else ""))
         done += 1
-    _phase("statusline")   # today's spend and what waits on the owner: the status line is at most a pass old
+    _phase("statusline")   # today's spend, what waits on the owner and their language: at most a pass old
     from . import project as facts, statusline
-    for key in every:
-        if key not in blocked:
-            statusline.refresh(reg, key, spent=facts.spent_today(reg, key, now))
+    fresh = [k for k in every if k not in blocked]
+    if fresh and not dry_run:
+        statusline.learn_language(reg, fresh)
+    for key in fresh:
+        statusline.refresh(reg, key, spent=facts.spent_today(reg, key, now))
     took = time.monotonic() - started
     if done:
         log.log("events", f"reconcile pass took={took:.1f}s actions={done}")
@@ -1206,7 +1208,7 @@ FIX = {"unread": "check the pane, then `orche nudge {t}`", "closed": "`orche wak
 
 
 def stalled(project) -> list:
-    """`orche status`'s stalled lines' data: the project's repairs on file in state.json that ORCHE has
+    """`orche status`'s stalled lines' data: the project's repairs on file in state.json that Orche has
     tried (attempts) or escalated: [{cls, target, rev, to, tries, cap, escalated, escalated_at, next,
     last, detail}]."""
     state = _state()
@@ -1243,7 +1245,7 @@ def stalled_line(s) -> str:
                 f"reminded {units.hhmm(units.parse_iso(s.get('last')))}")
     nxt = units.parse_iso(s.get("next"))
     how = "pane reopened" if s.get("reopened") else "retrying"    # the deliverer found the pane dead
-    return (f"  stalled: {s['cls']} {s['target']}{rev} — ORCHE {how} ({s['tries']}/{s['cap']}"
+    return (f"  stalled: {s['cls']} {s['target']}{rev} — Orche {how} ({s['tries']}/{s['cap']}"
             + (f", next {units.hhmm(nxt)})" if nxt is not None else ")"))
 
 
@@ -1261,14 +1263,14 @@ def repairs() -> dict:
 
 def overdue_hint(kind, target, reps, fresh) -> str:
     """The tail of an `unread:` (target: session) or `undelivered:` (target: unit) line:
-    ORCHE's live repair while the heartbeat is fresh, else the command; a pane the last pass found
-    closed names `orche wake` (or when ORCHE reopens it)."""
+    Orche's live repair while the heartbeat is fresh, else the command; a pane the last pass found
+    closed names `orche wake` (or when Orche reopens it)."""
     e = reps.get((kind, target))
     closed = reps.get(("closed", target)) if kind == "unread" else None
     if closed is not None and (e is None or str(closed.get("seen") or "") >= str(e.get("seen") or "")):
         nxt = units.parse_iso(closed.get("next"))
         if fresh and not closed.get("escalated") and nxt is not None:
-            return f"pane closed: ORCHE reopens it at {units.hhmm(nxt)}"
+            return f"pane closed: Orche reopens it at {units.hhmm(nxt)}"
         return f"pane closed: run `orche wake {target}`"
     tries = len((e or {}).get("attempts") or [])
     if fresh and e is not None and not e.get("escalated") and tries < CAP:
@@ -1276,7 +1278,7 @@ def overdue_hint(kind, target, reps, fresh) -> str:
         from . import deliver
         last = deliver.last_delivery(e.get("to"), target) if kind == "undelivered" and e.get("to") else None
         how = "pane reopened" if (last or {}).get("reopened") else "retrying"
-        return f"ORCHE {how} ({tries}/{CAP}" + (f", next {units.hhmm(nxt)})" if nxt is not None else ")")
+        return f"Orche {how} ({tries}/{CAP}" + (f", next {units.hhmm(nxt)})" if nxt is not None else ")")
     return f"run `orche {'nudge' if kind == 'unread' else 'deliver'} {target}`"
 
 

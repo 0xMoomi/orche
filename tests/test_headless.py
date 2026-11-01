@@ -254,7 +254,7 @@ def help_without(*flags):
 
 
 class TeamTest(TempHomeCase):
-    """R-TEAM-3: the team plugin's PreToolUse guard joins ORCHE's gates; `team.env` reaches every session."""
+    """R-TEAM-3: the team plugin's PreToolUse guard joins Orche's gates; `team.env` reaches every session."""
 
     def test_gates_add_the_team_plugins_pre_tool_use_resolved(self):
         import support
@@ -268,7 +268,7 @@ class TeamTest(TempHomeCase):
         argv = headless.argv(project(team=folder), {})
         self.assertEqual(argv[argv.index("--settings") + 1], headless.gates(folder))
         (folder / "hooks" / "hooks.json").write_text("{not json")
-        self.assertEqual(headless.gates(folder), headless.gates())   # unreadable: ORCHE's gates alone
+        self.assertEqual(headless.gates(folder), headless.gates())   # unreadable: Orche's gates alone
 
     def test_base_env_carries_team_env_and_config_refuses_owned_names(self):
         from orche import config

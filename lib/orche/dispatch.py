@@ -323,7 +323,7 @@ def check_sender(r, who) -> "roster.Member":
         main = r.main(who.place.project)
         hint = main.session if main else "main-<proj>"
         raise brief.Refusal(f"dispatch requires an identified session: set ORCHE_SESSION={hint} "
-                      "(ORCHE panes set it automatically)")
+                      "(Orche panes set it automatically)")
     role = who.member.role if who.member else "unknown"
     if role not in ("main", "division"):
         article = "an" if role[0] in "aeiou" else "a"
@@ -456,7 +456,7 @@ def handle_stop_failure(payload: dict) -> None:
     Claude Code ignores the output; only the side effect matters."""
     who = roster.Roster(registry.load()).identify(payload.get("cwd") or os.getcwd())
     if who.session:
-        inbox.rearm(who.session)
+        inbox.rearm(who.session, unread=_orche_turn(who))
 
 
 def final_text(payload: dict):
@@ -491,8 +491,21 @@ def handle_stop(payload: dict, started=None):
     if code == 0 and who.member is not None and who.member.kind == "main":
         _closing(who.member.project, text, me)
     if code == 0 and me:
-        inbox.rearm(me)   # reports that landed mid-turn: the turn is over, wake the pane now
+        # reports that landed mid-turn: the turn is over, wake the pane now; Main's turn Orche started is marked unread
+        inbox.rearm(me, unread=_orche_turn(who))
     return code, msg
+
+
+def _orche_turn(who) -> bool:
+    """The turn ending now is Main's and Orche started it (a wake or a delivered line, not the owner's
+    prompt: the prompt hook's turn record says `owner: false`). Never raises."""
+    if who.member is None or who.member.kind != "main":
+        return False
+    try:
+        turn = lineage.read_turn(who.session)
+    except Exception:  # noqa: BLE001 - fail-open: no mark
+        return False
+    return turn is not None and turn.get("owner") is False
 
 
 def _closing(project, text, session) -> None:

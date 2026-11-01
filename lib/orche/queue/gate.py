@@ -57,7 +57,7 @@ def steps(where, commit, verify=()) -> list:
 def secret(name) -> bool:
     """A name the gate never gets (A.13): a secret by its name (TOKEN, SECRET, KEY, PASSWORD, PASSWD,
     CREDENTIAL, an AUTH word such as SSH_AUTH_SOCK, *_PWD; any case), a CLAUDE*/ANTHROPIC*/JEV_* name,
-    or ORCHE's and Codex's own (session, runner, run, ORCHE_HOME, CODEX_HOME, the queue's names)."""
+    or Orche's and Codex's own (session, runner, run, ORCHE_HOME, CODEX_HOME, the queue's names)."""
     up = str(name).upper()
     return up in DROP_ENV or up.startswith(DROP_PREFIXES) or SECRET_RE.search(up) is not None
 

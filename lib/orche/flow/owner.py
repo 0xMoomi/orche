@@ -1,4 +1,4 @@
-"""The owner's voice: Orca's own notification covers Main's closing line; ORCHE notifies
+"""The owner's voice: Orca's own notification covers Main's closing line; Orche notifies
 only what Orca cannot know (the ask's reminders, a parked guard refusal, notices Main never wrote).
 
 Main's Stop hook (dispatch.handle_stop, also under stop_hook_active) reads the closing line — the last
@@ -24,8 +24,8 @@ ask (a fill during Main's own turn counts; secrets.dialog calls secret_filled).
 
 Notifications (notify): at most one per project per NOTIFY_GAP_S; no sound inside flow.quiet_hours; a
 failed show is a try (_note). notified.json {at, kind, n, ask_at, ask_last, shown, tried} under the
-lock: the last one ORCHE showed (at, kind: the gap), the tries for the ask made at ask_at (n; the last
-at ask_last), per notice kind the id of the last notice shown (by ORCHE or Orca), and a notice's failed
+lock: the last one Orche showed (at, kind: the gap), the tries for the ask made at ask_at (n; the last
+at ask_last), per notice kind the id of the last notice shown (by Orche or Orca), and a notice's failed
 tries (its next waits for the next RENOTIFY_S slot). A notice (a DONE, a `stuck` escalation, a fallback
 notice) is recorded in `flow/<p>/<kind>.json` {text, at, id} (one writer each) before it is tried: one
 held back is the heartbeat's to send once.
@@ -52,7 +52,7 @@ from . import guard
 
 ASK, SENT, NOTIFY_LOCK, TAGGED, RESUMED = "ask.json", "notified.json", ".notify.lock", "tagged", "secret-filled"
 NOTICES = ("done", "stuck", "fallback", "usage")     # one-off notices: flow/<p>/<kind>.json
-USAGE_NOTICE = ("{label} usage limit reached (resets {hhmm}). ORCHE re-runs the {n} held units then. "   # Appendix A.15
+USAGE_NOTICE = ("{label} usage limit reached (resets {hhmm}). Orche re-runs the {n} held units then. "   # Appendix A.15
                 "To keep going now: run on an API key, or move some divisions to Codex.")
 VENDOR_LABEL = {"claude": "Claude", "codex": "Codex"}
 ASK_MAX, STEP_MAX, LINE_MAX = 160, 200, 100
@@ -327,7 +327,7 @@ def _tries(sent, kind, notice_id):
 
 def _note(project, sent, kind, now, ask_at, notice_id, outcome) -> int:
     """Under the lock: notified.json after one try, `shown`, `orca` (Orca showed it: _orca) or `failed`.
-    Only one ORCHE showed moves the gap (`at`, `kind`); any try moves an ask's counters (n, ask_at, ask_last),
+    Only one Orche showed moves the gap (`at`, `kind`); any try moves an ask's counters (n, ask_at, ask_last),
     so its schedule runs on; a notice shown (by either) is marked in `shown`, a failed one counted in `tried`
     {kind: {id, n, last}} (its next try waits for the next slot). Returns n (the ask's tries; a notice: 1)."""
     new, n = dict(sent), 1
@@ -346,7 +346,7 @@ def _note(project, sent, kind, now, ask_at, notice_id, outcome) -> int:
 
 
 def _orca(project, kind, now, ask_at=None, notice_id=None) -> None:
-    """Main's closing line: Orca shows its own notification when the turn ends, so ORCHE sends none and
+    """Main's closing line: Orca shows its own notification when the turn ends, so Orche sends none and
     counts this first one as shown (_note `orca`: the ask's reminders run from the ask; the notice is
     never flushed). Under the notify lock, also when it stays busy (as record)."""
     with _locked(_path(project, NOTIFY_LOCK)):
@@ -358,7 +358,7 @@ def _show(project, sent, body, kind, now, ask_at=None, notice_id=None) -> bool:
     """Under the lock: show one notification, then write notified.json (_note: a failed show is a try too).
     False when osascript failed (or timed out)."""
     quiet = _quiet(now)
-    ok = notice.send(f"ORCHE {project}", body, sound=not quiet, kind=kind, project=project)
+    ok = notice.send(f"Orche {project}", body, sound=not quiet, kind=kind, project=project)
     n = _note(project, sent, kind, now, ask_at, notice_id, "shown" if ok else "failed")
     if ok:
         log.log("events", f"owner notify project={project} kind={kind} n={n} quiet={int(quiet)}")
@@ -366,7 +366,7 @@ def _show(project, sent, body, kind, now, ask_at=None, notice_id=None) -> bool:
 
 
 def notify(project, body, kind, now=None, *, ask_at=None, notice_id=None) -> bool:
-    """One owner notification for `project` (title `ORCHE <project>`). Held (`owner held`, the next pass
+    """One owner notification for `project` (title `Orche <project>`). Held (`owner held`, the next pass
     tries again): notifications off, the lock busy, the project's last one younger than NOTIFY_GAP_S.
     osascript failing is a try (`owner held … reason=failed`; the next waits for its slot). notified.json:
     `ask_at` (an ask's) moves that ask's counters, `notice_id` (a notice's) marks it. True when shown."""

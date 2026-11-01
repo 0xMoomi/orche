@@ -220,7 +220,7 @@ def entire_rows(reg, which=shutil.which) -> list:
 
 def team_rows(reg) -> list:
     """`team` per team project (registry.team): OK when its plugin is installed for this user (owner-word mode),
-    WARN when it is not (its rules and guard cannot reach ORCHE's headless workers)."""
+    WARN when it is not (its rules and guard cannot reach Orche's headless workers)."""
     from ..hr import panes
     rows = []
     for key in sorted(reg.get("projects", {})):
@@ -368,7 +368,7 @@ def scale_checks(reg, cfg=None) -> list:
 
 
 def upgrade_checks(reg) -> list:
-    """One WARN row per project whose `orche_version` is missing or older than this ORCHE."""
+    """One WARN row per project whose `orche_version` is missing or older than this Orche."""
     projects = reg.get("projects", {})
     return [("WARN", "upgrade", registry.upgrade_text(key, up)) for key in sorted(projects)
             for up in [registry.upgrade(projects[key], __version__)] if up]
@@ -541,18 +541,18 @@ def checks(ctx) -> list:
             "(run /plugin install orche@orche or orche install --mode settings)")
     script = statusline.script_path(ctx)
     if statusline.present(ctx) and statusline.after_exit(script.read_text(encoding="utf-8")):
-        add("WARN", "statusline", f"ORCHE block in {script} sits after an `exit` line and never runs "
+        add("WARN", "statusline", f"Orche block in {script} sits after an `exit` line and never runs "
                                   "(re-run orche install)")
     else:
         add("OK" if statusline.present(ctx) else "WARN", "statusline",
-            f"ORCHE block {'present' if statusline.present(ctx) else 'missing'} in {script}")
+            f"Orche block {'present' if statusline.present(ctx) else 'missing'} in {script}")
     days = data.get("cleanupPeriodDays")
     add("OK" if days == settings.CLEANUP_DAYS else "WARN", "cleanupPeriodDays",
         f"{days if days is not None else '(absent)'}" + ("" if days == settings.CLEANUP_DAYS
                                                          else f" (want {settings.CLEANUP_DAYS})"))
     if any(settings.CAREFUL_MARKER in cmd for _, cmd in settings.iter_commands(data)):
         add("WARN", "careful hook", "careful hook registered in settings.json — its approval dialogs stall "
-                                    "unattended ORCHE panes; remove it or keep it only for your own sessions")
+                                    "unattended Orche panes; remove it or keep it only for your own sessions")
     return out
 
 

@@ -1,5 +1,5 @@
 #!/bin/sh
-# Run an ORCHE hook under the first Python 3.11+ available: `run.sh <hook>` execs hooks/<hook>.py.
+# Run an Orche hook under the first Python 3.11+ available: `run.sh <hook>` execs hooks/<hook>.py.
 #
 # The interpreter search lives in lib/find_python.sh (shared with bin/orche). With no suitable
 # interpreter this fails open: one timestamped line goes to

@@ -7,7 +7,7 @@ from the unit's brief.
 Assignment for a new brief (AMEND keeps both):
   division  parent = the division's current unit (brief.newest), lineage inherited from it
   triage    starts a lineage
-  Main      joins lineage L when the turn began with an ORCHE line ([orche] …) and the pointers
+  Main      joins lineage L when the turn began with an Orche line ([orche] …) and the pointers
             injected into it carry exactly one lineage L; otherwise the turn's first new brief starts
             a lineage that its later new briefs share (parent: -)
 
@@ -76,7 +76,7 @@ def begin_turn(session, owner):
 
 
 def of_pointer(ptr, reg=None, project=None):
-    """The lineage a pointer names: its `lineage` field; without one (ORCHE's own `relayed …`, deliverer
+    """The lineage a pointer names: its `lineage` field; without one (Orche's own `relayed …`, deliverer
     and heartbeat notes, a report written before lineages) the lineage of its unit's brief in `project`, and "" when no
     brief holds that unit — such a note never names a lineage after its unit. Never raises."""
     if ptr.get("lineage"):

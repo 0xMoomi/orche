@@ -4,7 +4,7 @@ Flow (`setup`): key from the macOS dialog or the hidden terminal prompt (Enter, 
 Ctrl-C skips; a pipe is never read without an explicit stdin flag) -> key type (gateway default, or
 direct) -> ONE probe with the key in memory (`jev.probe`: one Choice question) -> on success only:
 key stored (`jevkey`), then `jev.base_url` / `jev.model` / `jev.enabled` true written. Any failure
-leaves the stored key and config.json as they were. ORCHE works without Jev: triage falls back to
+leaves the stored key and config.json as they were. Orche works without Jev: triage falls back to
 the subscription's Haiku.
 
 The last probe is kept in ORCHE_HOME/jev-probe.json (`{ok, ms, kind, error, at}`, error masked) so
@@ -22,9 +22,9 @@ from . import config, jev, jevkey, paths, shell, util
 
 KEY_PROMPT = "Jev API key (optional, Enter to skip): "
 KIND_PROMPT = "Key type: 1) Vercel AI Gateway (default)  2) TypeSafe direct: "
-SKIP_LINE = ("Jev skipped — ORCHE works without it (triage uses the subscription's Haiku); "
+SKIP_LINE = ("Jev skipped — Orche works without it (triage uses the subscription's Haiku); "
              "add later with `orche jev setup`")
-OFF_LINE = "Jev stays off — ORCHE works without it (triage uses the subscription's Haiku)"
+OFF_LINE = "Jev stays off — Orche works without it (triage uses the subscription's Haiku)"
 NOT_CONFIGURED = "not configured (Haiku fallback)"
 KIND_ANSWERS = {"": "gateway", "1": "gateway", "gateway": "gateway", "2": "direct", "direct": "direct"}
 
@@ -58,8 +58,8 @@ class NoTerminal(Exception):
 # this process, so it never passes through a terminal a Claude session might be reading.
 OSASCRIPT = "osascript"  # seam for tests (resolved on PATH)
 DIALOG_TIMEOUT_S = 120
-DIALOG_TEXT = "Jev API key (stored in your keychain; ORCHE never prints it)"
-DIALOG_SCRIPT = (f'display dialog "{DIALOG_TEXT}" default answer "" with hidden answer with title "ORCHE" '
+DIALOG_TEXT = "Jev API key (stored in your keychain; Orche never prints it)"
+DIALOG_SCRIPT = (f'display dialog "{DIALOG_TEXT}" default answer "" with hidden answer with title "Orche" '
                  'buttons {"Cancel","Save"} default button "Save"')
 CANCELED = "-128"  # osascript: "User canceled. (-128)"
 
@@ -375,7 +375,7 @@ def doctor_row():
     rec = load_record()
     if rec and not rec.get("ok") and rec.get("kind") == kind:
         reason = jevkey.scrub(str(rec.get("error") or "unknown error"))
-        return "WARN", "jev", f"last probe failed {reason}; ORCHE works without Jev; run `orche jev probe`"
+        return "WARN", "jev", f"last probe failed {reason}; Orche works without Jev; run `orche jev probe`"
     if not cfg.get("enabled"):
         return "WARN", "jev", f"disabled ({kind} configured, key: {src}; turn on: orche jev enable)"
     return "OK", "jev", f"{kind} (key: {src})"

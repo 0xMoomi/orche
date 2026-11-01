@@ -107,7 +107,7 @@ class CardTest(FlowCase):
     def test_a_division_session_gets_no_card(self):
         self.three()
         out = self.session("clear", "div-acme-build", self.root / "acme-build").stdout
-        self.assertTrue(out.startswith("## ORCHE role\nsession: div-acme-build"))
+        self.assertTrue(out.startswith("## Orche role\nsession: div-acme-build"))
         self.assertNotIn("[orche] resume", out)
 
 

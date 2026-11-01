@@ -56,7 +56,7 @@ def register(subparsers):
     p.add_argument("model")
     p.set_defaults(func=cmd_model)
     p = sub.add_parser("choices", help="division kinds, models and the owner's questions (read-only)")
-    p.add_argument("project", nargs="?", help="omit for a project not under ORCHE yet")
+    p.add_argument("project", nargs="?", help="omit for a project not under Orche yet")
     p.set_defaults(func=cmd_choices)
     p = sub.add_parser("scale", help="print the scale presets, or set one (default, 20, 30)")
     p.add_argument("preset", nargs="?", help="omit to print the presets and the current one")
@@ -225,7 +225,7 @@ def cmd_choices(args):
     if args.project:
         found = registry.project(reg, args.project)
         if found is None:
-            return fail(EXIT_NOT_FOUND, f"unknown project {args.project}; for a project not under ORCHE yet, "
+            return fail(EXIT_NOT_FOUND, f"unknown project {args.project}; for a project not under Orche yet, "
                                         "run it without a project")
         key = found[0]
     cfg = config.load()

@@ -251,7 +251,7 @@ class CliTest(support.TempHomeCase):
         return cp.returncode, cp.stdout, cp.stderr
 
     def test_version(self):
-        self.assertEqual(self.orche("version"), (0, "orche 0.19.3\n", ""))
+        self.assertEqual(self.orche("version"), (0, "orche 0.19.4\n", ""))
 
     def test_projects_json_empty_home(self):
         self.assertEqual(self.orche("projects", "--json"), (0, "[]\n", ""))
@@ -341,8 +341,8 @@ class DiscoveryTest(support.TempHomeCase):
         text = parser.format_help()
         self.assertNotIn("Other:", text)
         self.assertLess(text.index("What you say to Main"), text.index("What Main and the units run"))
-        self.assertLess(text.index("What Main and the units run"), text.index("What ORCHE runs by itself"))
-        self.assertLess(text.index("What ORCHE runs by itself"), text.index("  nudge "))
+        self.assertLess(text.index("What Main and the units run"), text.index("What Orche runs by itself"))
+        self.assertLess(text.index("What Orche runs by itself"), text.index("  nudge "))
 
     def test_an_ungrouped_command_is_listed_under_other(self):
         self.probe("def register(sub):\n    sub.add_parser('zzprobe', help='a probe')\n")

@@ -275,7 +275,7 @@ class BypassTest(TriageCase):
         self.assertEqual(self.spawned, [])
 
     def test_wake_line_is_not_triaged(self):
-        """ORCHE's own wake line goes to Main untouched: no sample row, no `triage` events line."""
+        """Orche's own wake line goes to Main untouched: no sample row, no `triage` events line."""
         for prompt in (inbox.WAKE_TEXT, "[orche] inbox: acme-a-20261016-1 rev 2"):
             out = self.handle(prompt, classifier=stub(DIRECT))
             self.assertEqual((out.block, out.note, self.spawned), (None, "", []), prompt)

@@ -1,6 +1,6 @@
-# ORCHE in the Orca sidebar
+# Orche in the Orca sidebar
 
-Orca shows **repo → worktree card → agents** (terminal panes). ORCHE maps its roles onto that
+Orca shows **repo → worktree card → agents** (terminal panes). Orche maps its roles onto that
 hierarchy with fixed names, so you can see the organization at a glance without asking a model.
 
 ## Layout
@@ -21,9 +21,9 @@ my-app                                   (Orca repo)
 |---|---|---|
 | Main pane | `main-<proj>` | the project's main checkout |
 | Division card / pane | worktree `div-<division>`, pane `div-<proj>-<division>` | its own worktree, branch `div/<division>` |
-| Feature card / pane | worktree `feat-<feature>`, pane `feat-<proj>-<feature>` | child worktree of its head's division, branch: the branch Orca names by default; `<prefix>/<feature>` when the project sets `publish.per_project.<p>.branch_prefix` (ORCHE renames it right after creation) |
+| Feature card / pane | worktree `feat-<feature>`, pane `feat-<proj>-<feature>` | child worktree of its head's division, branch: the branch Orca names by default; `<prefix>/<feature>` when the project sets `publish.per_project.<p>.branch_prefix` (Orche renames it right after creation) |
 
-Pane titles equal Claude Code session names. ORCHE starts a division or feature pane with
+Pane titles equal Claude Code session names. Orche starts a division or feature pane with
 `PATH=<plugin>/bin:$PATH ORCHE_SESSION=<session> claude --permission-mode bypassPermissions --name <session>`
 (or `--resume <session id>` on wake), and the Main pane with the same command (since 0.6.0 Main also
 starts in bypass, like every pane), so hooks know the pane's role and `orche` is on the pane's PATH. `orche init` creates the division worktrees; `orche feat new` creates
@@ -45,25 +45,33 @@ produces is reviewed and queued by its head.
 | `onboarding` | card, maybe no pane | the worktree exists but setup did not finish; re-run `orche init` or `orche feat new` to resume |
 | `retired` | gone | worktree removed with `orca worktree rm`; memory files and transcripts archived under `~/.claude/orche/archive/<session>/` |
 
-A new feature agent's card gets Orca's **unread dot**. `orche depts` prints the same table in the
-terminal.
+A new feature agent's card gets Orca's **unread dot**. So does Main's workspace whenever a turn Orche
+started there ends (a wake or a delivered report), and it stays until you open it: Orca marks a turn
+only when nobody viewed the pane, and clears the mark when the workspace is on screen in a focused Orca.
+A turn you typed is left to Orca. `orche depts` prints the same table in the terminal.
 
 ## Status line
 
-`orche install` adds an ORCHE segment to `~/.claude/statusline-command.sh`:
+`orche install` adds an Orche segment to `~/.claude/statusline-command.sh`:
 
 ```
-R&D● RS○ BUILD●3 GTM● OPS○ · new1 · 🔑2 · unverified1
+⚠ waiting 1 · ▶ running 3 · BUILD 3/8 · RS ● · R&D ○ GTM ○ DES ○ · 🔑1 · $10.75 today
 ```
+
+Most important first, in the owner's language (Korean or English, as they write to Main) and in
+colour:
 
 | Token | Meaning |
 |---|---|
-| `●` / `○` / `◐` | division active / asleep (dormant, paused, retired) / onboarding |
-| `BUILD●N` | N active workers under that head (any division with workers, e.g. `DES●2`) |
-| `DES○` | a custom division: the first three letters of its label (four or five, then a digit, when that cell is taken; one cell per division the project has) |
-| `newN` | feature agents created in the last 24 hours |
+| `⚠ waiting N` | yellow: the owner's open ask plus the units blocked on the owner |
+| `▶ running N` | green bold: live headless runs of the project |
+| `BUILD 3/8` | a division with active workers: 3 of its 8 workers running now |
+| `RS ●` / `GTM ◐` | an awake division without workers / one still onboarding |
+| `R&D ○ GTM ○` | the asleep divisions (dormant, paused, retired), dimmed, in one group |
+| `DES` | a custom division: the first three letters of its label (four or five, then a digit, when that cell is taken; one cell per division the project has) |
 | `🔑N` | pending secret requests |
-| `unverifiedN` | `done` reports without a ledger row |
+| `$10.75 today` | today's spend |
+| `PAUSED …` | the whole line, red, while a spend cap or a pause holds |
 
 Zero counters are omitted. The snippet walks up from the session directory to the first
 `.orche/project` file (one line: the project key, written by `orche init`) and prints the cached

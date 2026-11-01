@@ -1,7 +1,7 @@
 """T10 — the owner's heartbeat (lib/orche/flow/owner.py `heartbeat`, run by `orche reconcile`): an open
 ask is re-notified 30, 60, 120, 240 min after it, then never; quiet hours (a silent first, none inside, one
 at their end); an owner prompt or the filled secrets answer it (Main hears once which unit to resume); the
-10-minute fallback for a Main that did not tag; Main's closing line is Orca's to notify (ORCHE sends
+10-minute fallback for a Main that did not tag; Main's closing line is Orca's to notify (Orche sends
 none); a held notice or escalation is sent once; repeats; the gap boundary; the `owner:` status line; a dry run writes and sends nothing. A fake clock
 throughout (`now` arguments, backdated mtimes); every osascript argv is recorded, none runs."""
 import copy
@@ -389,7 +389,7 @@ class HeldTest(BeatCase):
         owner.closing(P, "DONE: shipped", now=T0)
         self.assertEqual(self.shown_at([0.5, 5, 10, 60]), [])
         done = json.loads((guard.folder(P) / "done.json").read_text())
-        self.assertEqual(self.sent(), {"shown": {"done": done["id"]}})          # no gap: ORCHE showed nothing
+        self.assertEqual(self.sent(), {"shown": {"done": done["id"]}})          # no gap: Orche showed nothing
         self.assertIn("owner recorded project=acme-shop kind=done by=orca\n", self.events())
 
     def test_a_held_notice_is_dropped_once_the_owner_prompted_after_it(self):

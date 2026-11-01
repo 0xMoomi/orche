@@ -434,7 +434,7 @@ class RunTest(RunnerCase):
         self.assertTrue(stdin.startswith("rev: 1\nunit: " + unit))
         self.assertIn(f"You run headless. Work only inside {self.wt}.", stdin)
         self.assertIn("Commit your work on your branch; do not push, merge or rebase: after your done passes the "
-                      "gate ORCHE pushes the branch and opens the PR.", stdin)       # A.16: Build is gated
+                      "gate Orche pushes the branch and opens the PR.", stdin)       # A.16: Build is gated
         self.assertIn("Do not run `orche report`: the runner files your pointer from your final message.", stdin)
         self.assertIn("`STATUS: done|blocked|failed`", stdin)
         self.assertEqual((self.fake / "session.txt").read_text().strip(), "div-acme-build")
@@ -757,7 +757,7 @@ class RunTest(RunnerCase):
                           "ORCA_PANE_KEY": None, "JEV_API_KEY": None})
 
     def test_main_target_runs_in_the_main_checkout_and_is_not_ledger_gated(self):
-        self.git_init(self.repo, "docs/LEDGER.tsv")       # .orche/ stays untracked: ORCHE's own files
+        self.git_init(self.repo, "docs/LEDGER.tsv")       # .orche/ stays untracked: Orche's own files
         unit = self.brief(to="main-acme")
         self.commit_action(verdict=None)
         self.reply("STATUS: done\nanswered")

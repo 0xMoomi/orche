@@ -1,10 +1,12 @@
 """`orche nudge <session>` and `orche deliver <unit>` — typing into a pane
 (lib/orche/deliver.py).
 
-`orche nudge` types the inbox wake line. ORCHE starts it detached whenever a waking pointer is posted
+`orche nudge` types the inbox wake line. Orche starts it detached whenever a waking pointer is posted
 (inbox.wake); run it by hand to wake a pane whose reports wait (`orche status` names it). Prints the
 state: nudged, already-nudged, nothing-pending (exit 0); no-pane, busy, dialog, no-agent,
-user-typing, refused, nudge-failed, locked (exit 1). An unsafe session name exits 2.
+user-typing, refused, nudge-failed, locked (exit 1). An unsafe session name exits 2. `--unread` (the
+Stop hook, when a Main turn Orche started ends) first marks Main's Orca workspace unread; with no
+report waiting it prints that state only: marked (exit 0), not-main, mark-failed (exit 1).
 
 `orche deliver` delivers a dispatched unit. The Stop hook starts it detached for every pane unit;
 run it by hand after a failed delivery (the urgent pointer and `orche status` name it). Prints the
@@ -24,11 +26,12 @@ from . import cli
 
 def register(subparsers):
     p = subparsers.add_parser("nudge", help="type the inbox wake line into <session>'s pane when it has unread "
-                                            "reports and is idle; ORCHE starts this by itself")
+                                            "reports and is idle; Orche starts this by itself")
     p.add_argument("session", help="the recipient session, e.g. main-<proj>")
+    p.add_argument("--unread", action="store_true", help="first mark Main's Orca workspace unread")
     p.set_defaults(func=cmd_nudge)
     p = subparsers.add_parser("deliver", help="deliver a dispatched unit: start its run, or type its inbox line "
-                                              "into the target pane; ORCHE starts this by itself")
+                                              "into the target pane; Orche starts this by itself")
     p.add_argument("unit", help="the unit id")
     p.add_argument("--retry", action="store_true", help="a retry by reconcile: a failure posts no pointer")
     p.add_argument("--remind", metavar="REASON", help="type the report-due line for a silent unit instead")
@@ -44,7 +47,7 @@ def cmd_nudge(args):
     if args.dry_run:
         cli.dry(f"would nudge {args.session}")
         return cli.EXIT_OK
-    code, state = deliver.nudge(args.session)
+    code, state = deliver.nudge(args.session, unread=args.unread)
     print(state)
     return code
 

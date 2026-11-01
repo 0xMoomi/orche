@@ -133,6 +133,6 @@ def porcelain_path(line: str) -> str:
 
 
 def orche_owned(rel, session) -> bool:
-    """Paths ORCHE itself writes into a unit worktree (expected to be untracked)."""
+    """Paths Orche itself writes into a unit worktree (expected to be untracked)."""
     return (rel == ".orche" or rel.startswith(".orche/") or rel == f".claude/agents/{session}.md"
             or rel == SETTINGS_LOCAL or rel.startswith(".claude/agent-memory/"))

@@ -3,13 +3,13 @@ name: orche-build
 description: Build division rulebook. Use in the Build session when assigning feature work, deciding PASS or RETURN on a finished feature, queueing PRs, recording ledger verdicts, or reading the merge queue.
 ---
 
-# ORCHE Build rules
+# Orche Build rules
 
 Build is traffic control: it splits work into slices, staffs a worker per slice, decides PASS or RETURN on
 finished slices, and lets the merge queue land them. Workers write the code; Build never merges by hand.
 
 <!-- inject:start -->
-ORCHE Build rules (full rulebook: skill orche-build)
+Orche Build rules (full rulebook: skill orche-build)
 - You are traffic control: feature agents write code; their done pushes the branch and opens the PR. Never merge by hand: the merge queue (`orche queue`) tests each PR on main, lands it when green.
 - Each done gets a headless head review; PASS → queued. Own fixes: `orche review --pr N` (Claude only); `--codex` only when you or the owner ask, never routinely (a change you seriously doubt). Take reports in arrival order. PASS = `orche queue add <unit>`; RETURN = `AMEND <unit> rev N` with reasons. Never wait on the queue.
 - Ledger (`orche ledger record|check`): append-only; key (PR, head SHA); a new head voids older rows; no row = unverified. CI green and `[skip ci]` are never evidence. The verifier is never the writer.
@@ -41,7 +41,7 @@ Staff each brief yourself; Main briefs heads, never workers.
   on Haiku and is re-run once at standard if it fails; standard and hard run on the division's model. Pin a model
   only with `MODEL` when the default is wrong.
 - A finished slice reaches you only when a review says RETURN, the two reviews disagree, a review failed, the change
-  is high-risk or large, or the spend cap ended the reviews. Everything else ORCHE queued itself (held notes
+  is high-risk or large, or the spend cap ended the reviews. Everything else Orche queued itself (held notes
   "auto-queued PR #N").
 - Your workers' reports reach you together once every worker of the lineage has ended (a block, a question, an
   owner step or an urgent note wakes you at once): decide them in arrival order, one report at a time, with the
@@ -98,7 +98,7 @@ Review depth, on top of the eight lines:
   queue then lands it only on the check script's `verdict: live-ui-verified` and otherwise returns it to the worker:
   "user-visible change: live verification required (the check script's verdict was <level>)".
 - Cross-check: `orche review --pr N --codex` runs only when you or the owner ask, never routinely (a change you
-  seriously doubt, never your own routine fixes); nothing in ORCHE starts one by itself. With both vendors up it is a panel: two models of different vendors from
+  seriously doubt, never your own routine fixes); nothing in Orche starts one by itself. With both vendors up it is a panel: two models of different vendors from
   `review.order` read the diff at once. Read its report by group: `both` findings first (a defect there is a RETURN
   unless `--accept "<why not>"` says why), then `one` findings (consider). A panel costs two reviews.
 - Blast radius: a high-risk path or more than `review.deep_lines` (400) changed lines, never in a mechanical unit:
@@ -108,7 +108,7 @@ Review depth, on top of the eight lines:
 
 ## Scale
 
-- Many agents share one Claude subscription window; a usage limit holds that vendor until its reset and ORCHE re-runs
+- Many agents share one Claude subscription window; a usage limit holds that vendor until its reset and Orche re-runs
   the held units itself (`orche status` shows `paused: … usage limit until …`). Do not re-send briefs during a hold.
 - For 20–30 agents the owner picks a scale preset through Main; you never raise caps yourself.
 - Sustained 20–30 agents on a Claude subscription reach its usage window within hours; the lasting ways are an API
@@ -133,7 +133,7 @@ Review depth, on top of the eight lines:
 
 1. Scripted verification first: the unit's VERIFY scripts in its run, then the gate in the queue.
 2. Model judges in fresh sessions: a cross-check (when one was asked for) and the headless head review see only the diff, the
-   brief's contract, the report and ORCHE's facts, never the writer's conversation; high-risk and large changes come
+   brief's contract, the report and Orche's facts, never the writer's conversation; high-risk and large changes come
    to you.
 3. Classify findings Act on / Consider / Noted / Dismissed; filter nit inflation. Act-on findings
    become a new brief revision for the writer, not a chat message.

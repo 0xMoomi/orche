@@ -192,7 +192,7 @@ class CliTest(HrCase):
         self.assertEqual((code, "lang" in json.loads(out)), (0, False))
         code, _, err = self.orche("hr", "choices", "nope")
         self.assertEqual(code, 2)
-        self.assertIn("unknown project nope; for a project not under ORCHE yet, run it without a project", err)
+        self.assertIn("unknown project nope; for a project not under Orche yet, run it without a project", err)
 
     def test_first_install_asks_the_recommended_preset_first(self):
         """R-PLAIN-3: the install prompt runs `orche hr choices --json` right after install, before any

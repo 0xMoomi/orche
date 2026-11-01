@@ -300,7 +300,7 @@ def get(ex, cfg, name, env) -> str:
 # ---------------------------------------------------------------- notifications and dialog process
 
 
-KEYMASTER = "ORCHE Keymaster"
+KEYMASTER = "Orche Keymaster"
 
 
 def notify(ex, text: str, project=None) -> None:

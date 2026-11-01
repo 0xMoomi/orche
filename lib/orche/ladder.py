@@ -12,7 +12,7 @@ or stopped attempt, a timeout or a turn cap does not escalate.
 
 audit(): with Jev enabled, Jev's Choice about the brief's TIER; a disagreement at MIN_CONFIDENCE or
 more is one events line. It never changes anything.
-Imports nothing from ORCHE at module top but brief, config, templates and vendors.
+Imports nothing from Orche at module top but brief, config, templates and vendors.
 """
 from typing import NamedTuple
 

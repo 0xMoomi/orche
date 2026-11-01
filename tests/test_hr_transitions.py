@@ -75,7 +75,7 @@ class BookTest(test_hr.HrCase):
         self.assertEqual(posted[0][:-2], notify.argv("", "")[:-2])         # the fixed script, no sound
         self.assertNotIn("A" * 40, " ".join(posted[0]))
         self.assertTrue(posted[0][-2].startswith('token "x" '))
-        self.assertEqual(posted[0][-1], "ORCHE")
+        self.assertEqual(posted[0][-1], "Orche")
 
 
 class LimitsTest(test_hr.FeatCase):
@@ -261,6 +261,7 @@ class WakeTest(TransitionsCase):
     def test_wake_main_after_its_pane_closed_opens_it(self):  # 0.7.2: was "pane switched to", nothing opened
         self.terminals = [{"handle": "t-main", "title": "✳ main-acme-shop"}]
         self._read_says({"ok": False, "error": {"code": "terminal_not_found", "message": "no such terminal"}})
+        support.staff_asleep()   # the Staff that opens beside Main: tests/test_staff.py
         code, out, err = self.orche("wake", "main-acme-shop")
         self.assertEqual((code, out, err), (0, "main-acme-shop pane opened\n", NO_TRANSCRIPT))
         self.assertEqual(self.orca_calls("terminal switch"),

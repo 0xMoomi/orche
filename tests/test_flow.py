@@ -202,7 +202,7 @@ class OwnerSeenTest(FlowCase):
                      now=_dt.datetime.now().astimezone() - _dt.timedelta(minutes=5))
         self.run_hook("report_inject.py", self.payload("prompt.json", prompt="[orche] inbox: 1 report"),
                       ORCHE_SESSION="main-acme")
-        self.assertIsNotNone(owner.open_ask("acme"))                    # ORCHE's own prompt is not the owner's
+        self.assertIsNotNone(owner.open_ask("acme"))                    # Orche's own prompt is not the owner's
         self.run_hook("report_inject.py", self.payload("prompt.json"), ORCHE_SESSION="main-acme")
         self.assertIsNone(owner.open_ask("acme"))
         self.assertIn("answered_at", owner.read_ask("acme"))

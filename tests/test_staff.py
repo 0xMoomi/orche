@@ -1,5 +1,6 @@
 """The CEO Staff (lib/orche/staff.py): its pane, what it knows of every Main, its gates and its notes."""
 import datetime as dt
+import hashlib
 import json
 import os
 import subprocess
@@ -15,6 +16,16 @@ from orche.janitor import discover
 CANARY = "sk-" + "CANARY" + "abcdefghijklmnop" + "0123456789"
 FIXTURE = support.FIXTURES / "transcripts" / "staff_main.jsonl"
 ROOT = os.path.realpath(str(paths.PLUGIN_ROOT))
+GREETING_EN = (
+    "Hi, I'm your Staff: one shared window for everyday questions about all your projects.\n"
+    "I know everything you've told each project's Main, and I catch up again with every question.\n"
+    "I don't do the work myself: no code, no pushes, no merges. Work always goes through Main.\n"
+    'To hand something over, say "tell acme Main: ..." and I\'ll leave Main a note.\n'
+    "I run on a lighter model, so ask away, even about small things.")
+# The Korean greeting lives only in templates/staff/greeting.ko.txt (Hangul only in such per-language
+# text files, HangulTest): pinned by its hash here, its shape below.
+GREETING_KO_SHA256 = "619cdbbbf24c0988c48c6678da5a0febc8faa84d7e6a4f0075f17b7f10abac22"
+KO_PROMPT = "\uc624\ub298 \ubc30\ud3ec \uc0c1\ud669 \uc54c\ub824 \uc918"   # a Korean owner prompt
 
 
 class StaffCase(test_hooks.HookCase):
@@ -96,6 +107,131 @@ class PaneTest(StaffCase):
         self.assertIn("not in orca repo list", res.stderr)
         self.assertIn(["repo", "add", "--path", ROOT, "--json"], [c[1:] for c in self.orca_calls()])
         self.assertFalse(any(c[1:3] == ["terminal", "create"] for c in self.orca_calls()))
+
+
+class AutoOpenTest(PaneTest):
+    """Staff opens by default with every Main pane Orche opens, once, and stays off once put to sleep."""
+
+    def creates(self):
+        return [c[c.index("--title") + 1] for c in self.orca_calls() if c[1:3] == ["terminal", "create"]]
+
+    def test_opening_main_opens_staff_first_once(self):
+        self.fake_repos()
+        res = self.orche("wake", "main-acme")
+        self.assertEqual((res.returncode, res.stdout.splitlines()), (0, ["main-acme pane opened", "staff pane opened"]),
+                         res.stderr)
+        self.assertEqual(self.creates(), ["staff", "main-acme"])    # Staff first: Main ends in front
+        self.fake_repos(terminals=[{"handle": "t-staff", "title": "staff"}])
+        res = self.orche("wake", "main-acme")
+        self.assertEqual(res.stdout.splitlines(), ["main-acme pane opened"])
+        self.assertEqual(self.creates(), ["staff", "main-acme", "main-acme"])   # never a second Staff
+        self.assertFalse(any(c[1:3] == ["terminal", "switch"] for c in self.orca_calls()))
+
+    def test_asleep_stays_off_until_woken_in_words(self):
+        self.fake_repos()
+        self.assertEqual(self.orche("sleep", "staff").stdout.strip(), "staff pane is not open")
+        self.assertEqual(self.reg()["staff"], {"status": "asleep"})
+        self.assertEqual(self.orche("wake", "main-acme").stdout.splitlines(), ["main-acme pane opened"])
+        self.assertEqual(self.creates(), ["main-acme"])
+        self.assertEqual(self.orche("wake", "staff").stdout.strip(), "staff pane opened")
+        self.assertEqual(self.reg()["staff"], {"status": "awake"})
+        self.assertEqual(self.creates(), ["main-acme", "staff"])
+
+    def test_a_dry_run_prints_what_it_would_open(self):
+        self.fake_repos()
+        res = self.orche("wake", "main-acme", "--dry-run")
+        self.assertEqual(res.stdout.splitlines(), ["would open main-acme pane (dry-run)",
+                                                   "would open staff pane (dry-run)"], res.stderr)
+        self.assertEqual(self.creates(), [])
+        self.orche("sleep", "staff", "--dry-run")
+        self.assertNotIn("staff", self.reg())                      # a dry run records nothing
+
+    def test_auto_open_never_raises_and_answers_once_per_process(self):
+        line = staff.auto_open()   # in process the PATH's failing `orca` answers: Orca is down
+        self.assertTrue(line.startswith("staff pane not opened ("), line)
+        self.assertIs(staff.auto_open(), line)
+
+    def test_the_registry_entry_is_checked(self):
+        from orche import registry
+        reg = registry.empty()
+        self.assertEqual(registry.validate({**reg, "staff": {"status": "asleep"}}), [])
+        self.assertTrue(registry.validate({**reg, "staff": {"status": "gone"}}))
+        self.assertTrue(registry.validate({**reg, "staff": "asleep"}))
+
+
+class GreetingTest(StaffCase):
+    def prompts(self, *texts):
+        base = dt.datetime(2026, 10, 30, tzinfo=dt.timezone.utc)
+        self.main_transcript(json.dumps({"type": "custom-title", "customTitle": "main-acme"}) + "\n"
+                             + "".join(json.dumps(r) + "\n" for i, t in enumerate(texts)
+                                     for r in self.turn((base + dt.timedelta(minutes=i)).isoformat(), t, "ok", f"g{i}")))
+
+    def test_both_texts_are_pinned_short_and_plain(self):
+        reg = self.reg()
+        self.assertEqual(staff.greeting(reg, "en"), GREETING_EN)
+        raw = Path(staff.GREETING.format(language="ko")).read_text(encoding="utf-8")
+        self.assertEqual(hashlib.sha256(raw.encode()).hexdigest(), GREETING_KO_SHA256)
+        ko = staff.greeting(reg, "ko")
+        self.assertTrue(staff.is_korean(ko))
+        self.assertIn('"acme Main', ko)
+        for text in (GREETING_EN, ko):
+            self.assertLessEqual(len(text.splitlines()), 6)
+            self.assertNotRegex(text, "[\u2013\u2014]")
+            self.assertIn("Main", text)
+
+    def test_the_language_follows_the_owners_prompts(self):
+        self.assertTrue(staff.is_korean(KO_PROMPT + " PIKIT build PR"))
+        self.assertFalse(staff.is_korean("check the build PR for " + KO_PROMPT[:2]))
+        rows = lambda *ps: [{"prompt": p} for p in ps] + [{"prompt": None}]
+        self.assertEqual(staff.language(rows(KO_PROMPT, KO_PROMPT, "ok ship it")), "ko")
+        self.assertEqual(staff.language(rows(KO_PROMPT, "ship it", "and the docs")), "en")
+        self.assertFalse((self.home / support.DEFAULTS_CALLS).exists())   # prompts decide: no locale read
+
+    def test_no_prompts_fall_back_to_the_macos_locale(self):
+        self.assertEqual(staff.language([{"prompt": None}]), "en")         # no locale set: English
+        (self.home / "fake-locale").write_text("ko_KR\n")
+        self.assertEqual(staff.language([]), "ko")
+        self.assertEqual((self.home / support.DEFAULTS_CALLS).read_text().splitlines()[-1], "read -g AppleLocale")
+        (self.home / "fake-locale").write_text("en_KR\n")
+        self.assertEqual(staff.language([]), "en")
+
+    def test_a_fresh_session_shows_the_greeting_a_resume_does_not(self):
+        self.prompts(KO_PROMPT, KO_PROMPT)
+        res = self.staff_hook("session_start.py", "session_start_clear.json", source="startup")
+        self.assertEqual(res.returncode, 0, res.stderr)
+        out = json.loads(res.stdout)
+        self.assertEqual(out["systemMessage"], staff.greeting(self.reg(), "ko"))
+        context = out["hookSpecificOutput"]
+        self.assertEqual(context["hookEventName"], "SessionStart")
+        self.assertIn("session: staff", context["additionalContext"])
+        self.assertIn(KO_PROMPT, context["additionalContext"])
+        for source in ("resume", "compact"):
+            res = self.staff_hook("session_start.py", "session_start_clear.json", source=source)
+            self.assertIn("session: staff", res.stdout)
+            self.assertNotIn("systemMessage", res.stdout)
+
+    def test_an_english_owner_gets_english(self):
+        self.prompts("ship the pricing page", "what about the docs?")
+        res = self.staff_hook("session_start.py", "session_start_clear.json", source="startup")
+        self.assertEqual(json.loads(res.stdout)["systemMessage"], GREETING_EN)
+
+
+class HangulTest(StaffCase):
+    def test_only_the_korean_text_files_carry_hangul(self):
+        """Hangul only in the per-language text files (`templates/**/*.ko.*`): never in code, tests or docs."""
+        tracked = subprocess.run(["git", "ls-files", "-z", "--cached", "--others", "--exclude-standard"], cwd=support.ROOT, capture_output=True, text=True,
+                                 check=True).stdout.split("\0")
+        found = []
+        for rel in filter(None, tracked):
+            try:
+                text = (support.ROOT / rel).read_text(encoding="utf-8")
+            except (OSError, UnicodeDecodeError):
+                continue
+            if any(staff._hangul(c) for c in text):
+                found.append(rel)
+        self.assertIn("templates/staff/greeting.ko.txt", found)
+        self.assertEqual([rel for rel in found if not (rel.startswith("templates/") and ".ko." in rel.rsplit("/", 1)[-1])],
+                         [])
 
 
 class KnowledgeTest(StaffCase):

@@ -6,7 +6,7 @@ config `models.catalog`), `codex`
 (Codex's own default model) or `codex:<model id>`. A division records one (`divisions.<d>.model`); a
 feature agent has none of its own and runs on its division's. No effort is stored: a headless run's
 effort is its TIER's rung (ladder.py), a pane's is its persona's (the recommendation table or the custom spec).
-Imports nothing from ORCHE at module top.
+Imports nothing from Orche at module top.
 """
 import unicodedata
 from typing import NamedTuple
@@ -47,7 +47,7 @@ def errors(model, cfg=None) -> list:
 
 def _cfg(cfg):
     if cfg is None:
-        from . import config   # late: this module imports nothing from ORCHE at its top
+        from . import config   # late: this module imports nothing from Orche at its top
         cfg = config.DEFAULTS
     return cfg
 

@@ -1,4 +1,4 @@
-"""Every `codex exec` ORCHE starts: one call shape, one
+"""Every `codex exec` Orche starts: one call shape, one
 environment rule, the process lifecycle of headless.spawn(), one JSONL parser, one cost estimate.
 
 argv() and env() have no side effects: what a dry run prints is what runs. run() starts the call,

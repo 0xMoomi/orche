@@ -94,7 +94,7 @@ class PublishTest(PublishCase):
                                                    "baseRefName": "release", "isDraft": False}]})
         out = self.run_publish()
         self.assertIsInstance(out, publish.Gap)
-        self.assertIn("PR #4 targets release, not main; ORCHE never retargets", out.text)
+        self.assertIn("PR #4 targets release, not main; Orche never retargets", out.text)
         self.assertEqual(self.gh_verbs(), [["pr", "list"]])
 
     def test_draft_pr_is_made_ready(self):
@@ -156,7 +156,7 @@ class PublishTest(PublishCase):
         self.commit(self.repo, "b.txt", "b\n")
         out = self.run_publish()
         self.assertIsInstance(out, publish.Gap)
-        self.assertIn("worktree is on feat/other, recorded div/build: ORCHE publishes only the unit's own branch",
+        self.assertIn("worktree is on feat/other, recorded div/build: Orche publishes only the unit's own branch",
                       out.text)
         self.git(self.repo, "checkout", "-q", "main")
         self.commit(self.repo, "c.txt", "c\n")
@@ -168,7 +168,7 @@ class PublishTest(PublishCase):
         self.assertEqual(self.git(self.bare, "branch", "--list", "feat/other"), "")
 
     def test_no_origin_head_is_refused_with_the_owner_step_never_main(self):
-        """R12: without origin/HEAD (or publish.base) ORCHE never assumes main."""
+        """R12: without origin/HEAD (or publish.base) Orche never assumes main."""
         self.commit(self.repo, "b.txt", "b\n")
         self.git(self.repo, "remote", "set-head", "origin", "-d")
         out = self.run_publish()

@@ -53,7 +53,7 @@ class GuideTest(support.TempHomeCase):
         self.assertIn("Codex cross-check: a second AI vendor reviews a pull request when you ask. "
                       "Off: Codex is not installed. ", lines[1])
         self.assertIn("`npm install -g @openai/codex`", lines[1])
-        self.assertIn("Background-run token: lets ORCHE start agents while no Claude window is open. Not set.", lines[2])
+        self.assertIn("Background-run token: lets Orche start agents while no Claude window is open. Not set.", lines[2])
         self.assertIn("Janitor: cleans up daily (the heartbeat starts it when the last pass is a day old); "
                       "retired agents' workspaces and build caches or scratch files idle 7 "
                       "days go to a trash emptied after 30 days. Off.", lines[3])
@@ -157,7 +157,7 @@ class GuideTest(support.TempHomeCase):
             "approved PR; lands it by itself when that passes); this project: waiting; no check script on main and "
             "no PR.",
             '- Jev: off; say "turn on Jev" (listed below).',
-            "- Notifications: Orca shows one when Main finishes a reply; ORCHE reminds you after 30 minutes when a "
+            "- Notifications: Orca shows one when Main finishes a reply; Orche reminds you after 30 minutes when a "
             "decision still waits."])
         self.cfg["queue"]["land"] = "owner"
         self.assertIn('lands it when you say "merge"', guide.running_lines(self.reg, "acme", root, self.cfg)[2])

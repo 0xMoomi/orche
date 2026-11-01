@@ -1,11 +1,11 @@
 ---
 name: orche
-description: ORCHE help. Use when the user asks how to work with ORCHE: its commands, how to phrase cross-project requests, [project] tags, [drain], or what a unit session should do.
+description: Orche help. Use when the user asks how to work with Orche: its commands, how to phrase cross-project requests, [project] tags, [drain], or what a unit session should do.
 ---
 
-# ORCHE
+# Orche
 
-ORCHE runs a company-style agent organization for each project: one **Main** that decides, the
+Orche runs a company-style agent organization for each project: one **Main** that decides, the
 project's **divisions** (`orche depts`; standard: R&D, Research, Build, GTM, Ops, plus any custom ones
 the project defines; a custom division gets this card too), **workers** each head staffs, a
 headless **Liaison** that answers other projects (`orche ask`), and one global **HR**. Work moves as briefs, reports and ledger rows,
@@ -15,7 +15,7 @@ The owner says what they want in words to Main, in any language, and Main runs t
 are for sessions and scripts.
 
 <!-- inject:start -->
-ORCHE unit rules (full help: /orche)
+Orche unit rules (full help: /orche)
 - Your work is `<project root>/.orche/units/<unit>/BRIEF.md` (your inbox entry's `report:` path; first line `rev: N`). Stay in SCOPE, meet ACCEPT, run VERIFY yourself.
 - Work inside your own worktree (BRIEF header `worktree:`); never `cd` into the main checkout or another unit's worktree.
 - A newer rev supersedes the old one: check at checkpoints, log receipt with `orche decide`, revert conflicting work. `STOP <unit>` = safe boundary, `wip:` commit, HANDOFF.md, `orche report stop`.
@@ -63,7 +63,7 @@ Every command takes `--json`; mutating ones take `--dry-run`.
 - `[project]`: name or alias in square brackets (e.g. `[shop]`) marks the source project. Main
   resolves `[project]` tags against the registry (closed list + aliases); the hook resolves only the
   dispatch `TO` field. Never use the at-sign for projects: it mentions a session.
-- `[drain]`: at the start of a message: also deliver ORCHE's held notes (reports always arrive by themselves).
+- `[drain]`: at the start of a message: also deliver Orche's held notes (reports always arrive by themselves).
 
 ## Cross-project requests
 

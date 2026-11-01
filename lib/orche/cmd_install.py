@@ -1,4 +1,4 @@
-"""`orche install|uninstall|doctor` — set up (and take down) ORCHE in the user's home.
+"""`orche install|uninstall|doctor` — set up (and take down) Orche in the user's home.
 
 install patches only: `~/.claude/settings.json`, `~/.claude/statusline-command.sh`,
 `~/.claude/agents/<ours>.md` (symlinks), `~/.claude/skills/<ours>` (symlinks, settings mode only;
@@ -21,12 +21,14 @@ opened) when a project is under a protected folder, else where to look; the inst
 granted? else the steps, Finder at the job's Python.app (or its bare interpreter) and System Settings
 at Full Disk Access, then up to 5 min for a job pass (privacy.GRANTED / privacy.BLOCKED, exit 1).
 Ctrl-C during a wait: one line, exit 130.
+On the real home a finished install opens the CEO Staff pane (`staff.auto_open`) unless the owner closed
+it with `orche sleep staff`; a dry run prints it.
 """
 import os
 import sys
 from pathlib import Path
 
-from . import jev_setup, paths, privacy, reconcile, registry, units, util
+from . import jev_setup, paths, privacy, reconcile, registry, staff, units, util
 from .cli import EXIT_OK, EXIT_USER, fail, out
 from .install import (JANITOR_STEP, RECONCILE_STEP, STATE_FILE, Ctx, StateUnreadable, backup, agents,
                       doctor, installed_mode, launchd, load_state, settings, skills,
@@ -53,7 +55,7 @@ def register(subparsers):
                         "iCloud Drive, cloud storage or /Volumes (opens Finder and Full Disk Access, then "
                         "checks); installs nothing")
     p.set_defaults(func=cmd_install)
-    p = subparsers.add_parser("uninstall", help="remove ORCHE blocks, hook entries and agent symlinks")
+    p = subparsers.add_parser("uninstall", help="remove Orche blocks, hook entries and agent symlinks")
     p.add_argument("--home", help="home directory (default: $HOME)")
     p.set_defaults(func=cmd_uninstall)
     p = subparsers.add_parser("doctor", help="check the installation (OK/WARN/FAIL per line)")
@@ -223,7 +225,7 @@ def _jev_step(args, state, new_state):
 
     `--no-jev` skips, `--jev-key-stdin [--jev-kind]` configures without prompts; on a terminal the
     question is asked unless an earlier install asked it or Jev is already set up. Never fails the
-    install: ORCHE works without Jev."""
+    install: Orche works without Jev."""
     if args.dry_run:
         return None
     if args.no_jev:
@@ -277,13 +279,17 @@ def cmd_install(args):
             _save_state(ctx, new_state)
     instructions = []
     if args.mode == "plugin" and not args.no_plugin_hint:
-        instructions = ["Install the ORCHE hooks as a Claude Code plugin (inside Claude Code):",
+        instructions = ["Install the Orche hooks as a Claude Code plugin (inside Claude Code):",
                         f"  /plugin marketplace add {ctx.plugin_root}",
                         "  /plugin install orche@orche"]
     lines = ([f"dry run: nothing written (home {ctx.home})"] if ctx.dry_run else []) + ctx.lines()
     lines += (jev_result or {}).get("lines", []) + instructions
+    # Last, on the real home only (as the reconcile job): the CEO Staff opens unless the owner closed it.
+    real = ctx.home.resolve() == Path.home().resolve()
+    opened = staff.auto_open(dry_run=ctx.dry_run) if real and not ctx.errors and state is not None else None
+    lines += [opened] if opened else []
     data = {"home": str(ctx.home), "dry_run": ctx.dry_run, "mode": args.mode, "actions": ctx.actions,
-            "instructions": instructions, "errors": ctx.errors}
+            "instructions": instructions, "errors": ctx.errors, "staff": opened}
     if jev_result is not None:
         data["jev"] = {k: v for k, v in jev_result.items() if k != "lines"}
     if not args.json:

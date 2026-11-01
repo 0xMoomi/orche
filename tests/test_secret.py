@@ -252,7 +252,7 @@ class RequestTest(SecretCase):
         self.assertEqual(len(notes), 1)
         self.assertEqual(notes[0][:-2], notify.argv("", "", orca=True)[:-2])   # a fixed script; Orca runs (pgrep 0)
         self.assertTrue(notes[0][-2].startswith("STRIPE_SECRET_KEY needed for acme-shop"))
-        self.assertEqual(notes[0][-1], "ORCHE Keymaster")
+        self.assertEqual(notes[0][-1], "Orche Keymaster")
         self.assertEqual(self.spawned, [1])
         # a second request for the same name extends the pending one; --no-dialog spawns nothing
         self.orche("secret", "request", "STRIPE_SECRET_KEY", "--env", "preview", "--why", "p", "--project",

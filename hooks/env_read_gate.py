@@ -15,7 +15,7 @@ A fourth rule keeps Main's turns few: for Main (ORCHE_SESSION `main-<project>`) 
 a Bash, Agent or Task call with `run_in_background: true`, and a foreground Bash wait loop (`sleep`
 in a `while`/`until`/`for` loop, `gh pr checks --watch`, `gh run watch`) are refused. Each finished
 background task starts a Main turn that re-reads the whole context, while units report and the
-merge queue lands or fails into Main's inbox and ORCHE wakes Main once per lineage.
+merge queue lands or fails into Main's inbox and Orche wakes Main once per lineage.
 
 A fifth rule keeps the CEO Staff read-only: for ORCHE_SESSION `staff` a Bash command that runs
 `orche dispatch`, a queue action, an HR change, `git commit|push` or `gh pr merge|create` is refused
@@ -45,7 +45,7 @@ TRANSCRIPT_REASON = ("[orche] transcripts are never read into a session: one ref
                      "compaction. orche metrics summarizes them; orche status carries the state.")
 TRANSCRIPT = re.compile(r"/(?:\.claude/projects|claude-profiles)/\S*\.jsonl")
 WAIT_REASON = ("[orche] Main does not wait or watch: units report and the merge queue lands or fails into your "
-               "inbox, and ORCHE wakes you once per lineage. Dispatch the work (orche dispatch), ask a project "
+               "inbox, and Orche wakes you once per lineage. Dispatch the work (orche dispatch), ask a project "
                "(orche ask), or end the turn.")
 _WORD = r"(?:^|[;&|(){}\n]|\bdo|\bthen|\belse)\s*"   # a command word's start
 LOOP = re.compile(_WORD + r"(?:while|until|for)\b")

@@ -1,0 +1,9 @@
+{
+  "waiting": "waiting {n}",
+  "running": "running {n}",
+  "today": "${usd} today",
+  "spend_na": "spend n/a",
+  "paused": "PAUSED {why} · say \"resume\" in Main",
+  "cap": "spend cap ${cap} reached",
+  "owner": "by the owner"
+}

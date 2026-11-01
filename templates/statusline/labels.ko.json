@@ -1,0 +1,9 @@
+{
+  "waiting": "대기 {n}",
+  "running": "실행 {n}",
+  "today": "오늘 ${usd}",
+  "spend_na": "오늘 비용 n/a",
+  "paused": "일시정지 {why} · Main에 \"재개\"라고 말하세요",
+  "cap": "지출 한도 ${cap} 도달",
+  "owner": "직접 멈춤"
+}
