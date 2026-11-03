@@ -3,6 +3,13 @@
 All notable changes to Orche are listed here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow semantic versioning.
 
+## 0.19.11 — 2026-11-03
+
+### Changed
+
+- The README's picture of how Orche works has a dark background, so it sits well on GitHub's dark theme;
+  its layout and words are unchanged.
+
 ## 0.19.10 — 2026-11-03
 
 ### Fixed

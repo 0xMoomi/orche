@@ -1,33 +1,33 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1000 1020" width="1000" height="1020" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="12.5" fill="#1f2328">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1000 1020" width="1000" height="1020" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="12.5" fill="#e6edf3">
   <title>How Orche works</title>
   <defs>
     <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
-      <path d="M0 0 L10 5 L0 10 z" fill="#57606a"/>
+      <path d="M0 0 L10 5 L0 10 z" fill="#9198a1"/>
     </marker>
     <style>
       .b { font-weight: 600; font-size: 13.5px; }
-      .s { fill: #57606a; }
-      .m { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11.5px; fill: #57606a; }
+      .s { fill: #9198a1; }
+      .m { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11.5px; fill: #9198a1; }
       .h { font-weight: 700; font-size: 14.5px; }
-      .lbl { font-size: 11.5px; fill: #57606a; }
-      .line { stroke: #57606a; stroke-width: 1.4; fill: none; }
-      .dot { stroke: #8c959f; stroke-width: 1.3; fill: none; stroke-dasharray: 4 3; }
+      .lbl { font-size: 11.5px; fill: #9198a1; }
+      .line { stroke: #9198a1; stroke-width: 1.4; fill: none; }
+      .dot { stroke: #6e7681; stroke-width: 1.3; fill: none; stroke-dasharray: 4 3; }
     </style>
   </defs>
 
-  <rect x="0" y="0" width="1000" height="1020" rx="14" fill="#ffffff"/>
+  <rect x="0.5" y="0.5" width="999" height="1019" rx="14" fill="#0d1117" stroke="#30363d"/>
 
   <!-- top row: Staff, You, notifications -->
-  <rect x="30" y="20" width="235" height="72" rx="10" fill="#fff7e6" stroke="#d48806"/>
+  <rect x="30" y="20" width="235" height="72" rx="10" fill="#2a1f0d" stroke="#d29922"/>
   <text x="46" y="42" class="b">CEO Staff · read-only</text>
   <text x="46" y="61" class="s">one tab for all your projects</text>
   <text x="46" y="78" class="s">answers, leaves Main a note</text>
 
-  <rect x="335" y="28" width="110" height="48" rx="24" fill="#1f2328"/>
-  <text x="390" y="49" text-anchor="middle" class="b" fill="#ffffff">You</text>
-  <text x="390" y="66" text-anchor="middle" font-size="11.5" fill="#d0d7de">any language</text>
+  <rect x="335" y="28" width="110" height="48" rx="24" fill="#e6edf3"/>
+  <text x="390" y="49" text-anchor="middle" class="b" fill="#0d1117">You</text>
+  <text x="390" y="66" text-anchor="middle" font-size="11.5" fill="#57606a">any language</text>
 
-  <rect x="745" y="20" width="225" height="72" rx="10" fill="#e6fffb" stroke="#13a8a8"/>
+  <rect x="745" y="20" width="225" height="72" rx="10" fill="#0b2a2a" stroke="#2fb8b8"/>
   <text x="761" y="42" class="b">Orca notifications</text>
   <text x="761" y="61" class="s">when Main ends a reply, and a</text>
   <text x="761" y="78" class="s">reminder bell from the heartbeat</text>
@@ -36,12 +36,12 @@
   <line x1="745" y1="52" x2="448" y2="52" class="dot" marker-end="url(#arrow)"/>
 
   <!-- project frame -->
-  <rect x="20" y="112" width="755" height="705" rx="14" fill="#f6f8fa" stroke="#c9d1d9"/>
+  <rect x="20" y="112" width="755" height="705" rx="14" fill="#10151c" stroke="#3d444d"/>
   <text x="36" y="134" class="h">Your project</text>
   <text x="36" y="151" class="s">one git repository</text>
 
   <!-- Main -->
-  <rect x="200" y="146" width="380" height="72" rx="10" fill="#ddf4ff" stroke="#0969da" stroke-width="1.4"/>
+  <rect x="200" y="146" width="380" height="72" rx="10" fill="#0f2340" stroke="#4493f8" stroke-width="1.4"/>
   <text x="216" y="168" class="b">Main · Opus 5.5 xhigh · an Orca tab in the project folder</text>
   <text x="216" y="187" class="s">keeps one long conversation with you; turns your words</text>
   <text x="216" y="204" class="s">into briefs and hands them out; never edits code</text>
@@ -52,7 +52,7 @@
   <text x="104" y="114" class="lbl">note</text>
 
   <!-- another project -->
-  <rect x="790" y="146" width="180" height="88" rx="10" fill="#ffffff" stroke="#0969da"/>
+  <rect x="790" y="146" width="180" height="88" rx="10" fill="#161b22" stroke="#4493f8"/>
   <text x="804" y="167" class="b">Another project's Main</text>
   <text x="804" y="186" class="s">orche ask: a headless,</text>
   <text x="804" y="202" class="s">read-only answer</text>
@@ -67,7 +67,7 @@
   <text x="488" y="246" class="lbl">report; Main wakes once per finished batch</text>
 
   <!-- divisions band -->
-  <rect x="32" y="265" width="731" height="172" rx="12" fill="#fbf8ff" stroke="#8250df" stroke-dasharray="0"/>
+  <rect x="32" y="265" width="731" height="172" rx="12" fill="#17132a" stroke="#a371f7" stroke-dasharray="0"/>
   <text x="46" y="287" class="h">Divisions</text>
   <text x="122" y="287" class="s">specialist sessions that brief each other</text>
 
@@ -75,40 +75,40 @@
   <text x="326" y="305" text-anchor="middle" class="lbl">brief ⇄ report</text>
 
   <g>
-    <rect x="44" y="340" width="132" height="86" rx="9" fill="#ffffff" stroke="#8250df"/>
+    <rect x="44" y="340" width="132" height="86" rx="9" fill="#161b22" stroke="#a371f7"/>
     <text x="56" y="360" class="b">R&amp;D · Opus</text>
     <text x="56" y="377" class="s">plans, prototypes</text>
     <text x="56" y="394" class="m">div-rnd</text>
-    <text x="56" y="414" font-size="11.5" fill="#6e7781">○ resting</text>
+    <text x="56" y="414" font-size="11.5" fill="#8b949e">○ resting</text>
 
-    <rect x="188" y="340" width="132" height="86" rx="9" fill="#ffffff" stroke="#8250df"/>
+    <rect x="188" y="340" width="132" height="86" rx="9" fill="#161b22" stroke="#a371f7"/>
     <text x="200" y="360" class="b">Research · Sonnet</text>
     <text x="200" y="377" class="s">sourced reports</text>
     <text x="200" y="394" class="m">div-research</text>
-    <text x="200" y="414" font-size="11.5" fill="#1a7f37">● tab open</text>
+    <text x="200" y="414" font-size="11.5" fill="#3fb950">● tab open</text>
 
-    <rect x="332" y="340" width="132" height="86" rx="9" fill="#ffffff" stroke="#8250df" stroke-width="1.8"/>
+    <rect x="332" y="340" width="132" height="86" rx="9" fill="#161b22" stroke="#a371f7" stroke-width="1.8"/>
     <text x="344" y="360" class="b">Build · Opus</text>
     <text x="344" y="377" class="s">slices, reviews PRs</text>
     <text x="344" y="394" class="m">div-build</text>
-    <text x="344" y="414" font-size="11.5" fill="#1a7f37">● tab open</text>
+    <text x="344" y="414" font-size="11.5" fill="#3fb950">● tab open</text>
 
-    <rect x="476" y="340" width="132" height="86" rx="9" fill="#ffffff" stroke="#8250df"/>
+    <rect x="476" y="340" width="132" height="86" rx="9" fill="#161b22" stroke="#a371f7"/>
     <text x="488" y="360" class="b">GTM · Sonnet</text>
     <text x="488" y="377" class="s">copy, launch</text>
     <text x="488" y="394" class="m">div-gtm</text>
-    <text x="488" y="414" font-size="11.5" fill="#6e7781">○ resting</text>
+    <text x="488" y="414" font-size="11.5" fill="#8b949e">○ resting</text>
 
-    <rect x="620" y="340" width="132" height="86" rx="9" fill="#ffffff" stroke="#c8b6f5"/>
+    <rect x="620" y="340" width="132" height="86" rx="9" fill="#161b22" stroke="#6e5494"/>
     <text x="632" y="360" class="b">and more</text>
     <text x="632" y="377" class="s">Ops, Design,</text>
     <text x="632" y="394" class="s">Content, your own</text>
-    <text x="632" y="414" font-size="11.5" fill="#6e7781">○ resting</text>
+    <text x="632" y="414" font-size="11.5" fill="#8b949e">○ resting</text>
   </g>
 
   <!-- a resting division's work -->
   <line x1="110" y1="428" x2="110" y2="481" class="line" marker-end="url(#arrow)"/>
-  <rect x="36" y="483" width="148" height="66" rx="9" fill="#ffffff" stroke="#8250df" stroke-dasharray="6 4"/>
+  <rect x="36" y="483" width="148" height="66" rx="9" fill="#161b22" stroke="#a371f7" stroke-dasharray="6 4"/>
   <text x="48" y="503" class="s">work for a resting</text>
   <text x="48" y="520" class="s">division runs headless</text>
   <text x="48" y="537" class="s">in its own worktree</text>
@@ -120,17 +120,17 @@
   <text x="424" y="458" class="lbl">pull request, tests, ledger row</text>
 
   <!-- workers band -->
-  <rect x="196" y="483" width="404" height="122" rx="12" fill="#fbf8ff" stroke="#8250df"/>
+  <rect x="196" y="483" width="404" height="122" rx="12" fill="#17132a" stroke="#a371f7"/>
   <text x="210" y="503" class="h">Workers</text>
   <text x="276" y="503" class="s">under Build, one per area</text>
   <g>
-    <rect x="212" y="514" width="116" height="50" rx="8" fill="#ffffff" stroke="#8250df" stroke-dasharray="6 4"/>
+    <rect x="212" y="514" width="116" height="50" rx="8" fill="#161b22" stroke="#a371f7" stroke-dasharray="6 4"/>
     <text x="224" y="535" class="b">front</text>
     <text x="224" y="553" class="m">feat-front</text>
-    <rect x="340" y="514" width="116" height="50" rx="8" fill="#ffffff" stroke="#8250df" stroke-dasharray="6 4"/>
+    <rect x="340" y="514" width="116" height="50" rx="8" fill="#161b22" stroke="#a371f7" stroke-dasharray="6 4"/>
     <text x="352" y="535" class="b">back</text>
     <text x="352" y="553" class="m">feat-back</text>
-    <rect x="468" y="514" width="116" height="50" rx="8" fill="#ffffff" stroke="#8250df" stroke-dasharray="6 4"/>
+    <rect x="468" y="514" width="116" height="50" rx="8" fill="#161b22" stroke="#a371f7" stroke-dasharray="6 4"/>
     <text x="480" y="535" class="b">infra</text>
     <text x="480" y="553" class="m">feat-infra</text>
   </g>
@@ -139,19 +139,19 @@
   <!-- merge queue -->
   <line x1="398" y1="607" x2="398" y2="641" class="line" marker-end="url(#arrow)"/>
   <text x="406" y="629" class="lbl">approved by Build (PASS)</text>
-  <rect x="248" y="643" width="300" height="70" rx="10" fill="#eaeef2" stroke="#8c959f"/>
+  <rect x="248" y="643" width="300" height="70" rx="10" fill="#21262d" stroke="#6e7681"/>
   <text x="262" y="664" class="b">Merge queue · no model</text>
   <text x="262" y="682" class="s">runs scripts/verify/ci.sh on each approved PR</text>
   <text x="262" y="699" class="s">and lands it on the base branch when green</text>
 
   <!-- hooks strip -->
-  <rect x="32" y="733" width="731" height="70" rx="10" fill="#f0f7ff" stroke="#9ec5fe"/>
+  <rect x="32" y="733" width="731" height="70" rx="10" fill="#0f1b2b" stroke="#2f5a8f"/>
   <text x="46" y="754" class="b">Claude Code hooks, in every session</text>
   <text x="46" y="773" class="s">carry briefs and reports between sessions · show new reports at the session's next prompt</text>
   <text x="46" y="791" class="s">keep each session inside its own worktree · count work as done only with a ledger row</text>
 
   <!-- heartbeat -->
-  <rect x="790" y="340" width="180" height="140" rx="10" fill="#eaeef2" stroke="#8c959f"/>
+  <rect x="790" y="340" width="180" height="140" rx="10" fill="#21262d" stroke="#6e7681"/>
   <text x="804" y="361" class="b">Heartbeat</text>
   <text x="804" y="379" class="s">a LaunchAgent every 5 min,</text>
   <text x="804" y="395" class="s">no model call</text>
@@ -163,15 +163,15 @@
   <path d="M 972 340 L 984 340 L 984 56 L 972 56" class="dot" marker-end="url(#arrow)"/>
 
   <!-- legend -->
-  <line x1="20" y1="835" x2="980" y2="835" stroke="#d0d7de"/>
+  <line x1="20" y1="835" x2="980" y2="835" stroke="#30363d"/>
   <text x="30" y="862" class="h">How to read it</text>
-  <rect x="30" y="876" width="34" height="18" rx="4" fill="#ffffff" stroke="#8250df"/>
+  <rect x="30" y="876" width="34" height="18" rx="4" fill="#161b22" stroke="#a371f7"/>
   <text x="74" y="890" class="s">a session with its own Orca tab</text>
-  <rect x="30" y="902" width="34" height="18" rx="4" fill="#ffffff" stroke="#8250df" stroke-dasharray="6 4"/>
+  <rect x="30" y="902" width="34" height="18" rx="4" fill="#161b22" stroke="#a371f7" stroke-dasharray="6 4"/>
   <text x="74" y="916" class="s">headless: claude -p, no tab</text>
-  <rect x="30" y="928" width="34" height="18" rx="4" fill="#eaeef2" stroke="#8c959f"/>
+  <rect x="30" y="928" width="34" height="18" rx="4" fill="#21262d" stroke="#6e7681"/>
   <text x="74" y="942" class="s">a background job, no model</text>
-  <text x="30" y="968" font-size="11.5" fill="#6e7781">○ resting</text>
+  <text x="30" y="968" font-size="11.5" fill="#8b949e">○ resting</text>
   <text x="96" y="968" class="s">no tab and no cost until work arrives</text>
   <line x1="30" y1="988" x2="62" y2="988" class="dot"/>
   <text x="74" y="992" class="s">a note or a notification, not work</text>
