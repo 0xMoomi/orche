@@ -3,6 +3,17 @@
 All notable changes to Orche are listed here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow semantic versioning.
 
+## 0.19.10 — 2026-11-03
+
+### Fixed
+
+- When a division's (or Main's) input box still held Orche's own unsent line (a wake, a brief or a reminder whose
+  Enter never went through), every later brief, wake and reminder to that pane stopped there until you pressed
+  Enter in the pane yourself. Orche now presses Enter on its own line, the same key you would press, and reads
+  the box again to check that the line went through; it never types the line again, and it asks for help (as a
+  failed delivery) only when the line is still there a few seconds later. Text you typed yourself is never sent,
+  also when it follows one of Orche's lines.
+
 ## 0.19.9 — 2026-11-02
 
 ### Changed

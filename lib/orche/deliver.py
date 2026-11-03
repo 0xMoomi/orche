@@ -9,9 +9,10 @@ Main (a person types there) it first waits until the pane printed nothing for AC
 types only into a composer the screen shows empty. The `.nudged`
 marker is written before the send and removed when the send fails (a receipt without a proven
 turn start counts as failed: `_receipt`); the prompt hook removes it after it drains, when the
-wake (or any prompt) arrives. A draft that is Orche's own stale line is `nudge-failed`, never typed
-over. The text typed is never pointer content. `orche nudge --unread` (the Stop hook, when a Main turn
-Orche started ends) first marks Main's Orca workspace unread (`mark_unread`), then wakes as above.
+wake (or any prompt) arrives. A draft that is exactly Orche's own line whose Enter never landed gets one
+Enter press instead of the text (`_press_enter`); that line is never typed again or cleared. The text
+typed is never pointer content. `orche nudge --unread` (the Stop hook, when a Main turn Orche started
+ends) first marks Main's Orca workspace unread (`mark_unread`), then wakes as above.
 
 The Stop hook writes a pane unit's pointer (`via: dispatch`) and starts `orche deliver <unit>`
 (spawn). The deliverer holds the target's own `.deliver.lock` (never the wake lock: a brief is not
@@ -37,6 +38,7 @@ POLL_S = 0.5
 LAST_NUDGE = ".last-nudge"  # {state, at} of the session's newest `orche nudge` (reconcile's escalation names it)
 QUIET_POLL_S = 2.0         # the quiet window's poll (config inbox.quiet_s / quiet_max_s)
 SUBMIT_WAIT_S = 20         # `send --wait-submit`: UserPromptSubmit hooks (Orche's 3 s budget plus others) run first
+ENTER_WAIT_S = 5           # after an Enter on Orche's own stale line: its composer is read again this long
 SEND = ("--enter", "--wait-submit", str(SUBMIT_WAIT_S))
 IDLE_WAIT_S = 120          # `terminal wait --for tui-idle` before a wake
 DELIVER_WAIT_S = 60        # … before a brief nudge (then it is typed anyway)
@@ -44,7 +46,8 @@ WAIT_SLACK_S = 10          # the wait call's timeout beyond its --timeout-ms
 CALL_S = 20                # list and read (send: SUBMIT_WAIT_S + WAIT_SLACK_S)
 ACTIVE_S = 10              # Main's pane printed within this many seconds: someone may be typing there
 HOLD_MAX_S = 60            # … a typing attempt waits for that quiet this long at most (_hold)
-# A nudger holds the wake lock for list + (idle wait + read) twice + send, plus Main's activity hold and
+# A nudger holds the wake lock for list + (idle wait + read) twice + send (an Enter on Orche's stale line
+# and its reads, each read at most ENTER_WAIT_S, take no longer), plus Main's activity hold and
 # its quiet window (inbox.quiet_max_s at most): a later nudger waits that long (wake_wait_s), then sees
 # the marker (`already-nudged`), never a spurious `locked`.
 WAKE_HOLD_S = (CALL_S + 2 * (IDLE_WAIT_S + WAIT_SLACK_S + CALL_S) + SUBMIT_WAIT_S + 2 * WAIT_SLACK_S
@@ -165,9 +168,13 @@ def _type(session, text, *, strict, wait_s, still_needed, before_send=None, on_f
             return done("nudge-failed")
         draft = draft or ""
         if draft and _stale(draft):
-            # Orche's own unsubmitted line: it cannot be cleared from here and is never typed again.
-            log.log("hooks", f"deliver: {session} composer holds a stale Orche line; not typing")
-            return done("nudge-failed")
+            # Exactly Orche's own line whose Enter never landed (no person's text): press Enter on it once, as a
+            # person would. Submitted, it carries this delivery too (the prompt hook injects every pending
+            # pointer), so `text` is not typed; the line is never typed again nor cleared.
+            if before_send is not None:
+                before_send()
+            state = "nudged" if _press_enter(session, handle, draft) else "queued" if busy else "nudge-failed"
+            break
         if draft:
             return done("user-typing")
         if settle is not None:
@@ -258,6 +265,7 @@ def reopen_pane(reg, session, handle, done=None):
 
 
 REMIND_RE = re.compile(r"^\s*\[orche\] report due:")
+BRIEF_LINE = re.compile(r"\[orche\] inbox: \S+ rev \d+")   # the line `orche deliver` types
 PROMPT_ROW = re.compile(r"^\s*❯ ?(.*)$")          # Claude Code's composer row
 RULE_ROW = re.compile(r"^\s*[─━-]{8,}(?:\s+\S.*\s+[─━-]+)?\s*$")   # its rules; a named session's top rule ends `─ main-<p> ─`
 PLACEHOLDER = re.compile(r'^Try\s+["“]')           # its empty-composer hint
@@ -306,8 +314,33 @@ def _hold(session, term, budget) -> float:
 
 
 def _stale(draft: str) -> bool:
-    """The composer holds an Orche line (a wake, a brief nudge or a reminder whose Enter never submitted)."""
-    return draft == inbox.WAKE_TEXT or bool(inbox.NUDGE_RE.match(draft)) or bool(REMIND_RE.match(draft))
+    """The composer holds exactly Orche's own line whose Enter never submitted: the wake, a brief line (with
+    nothing after it) or a reminder (long, it may wrap over the composer's rows)."""
+    return draft == inbox.WAKE_TEXT or bool(BRIEF_LINE.fullmatch(draft)) or bool(REMIND_RE.match(draft))
+
+
+def _press_enter(session, handle, draft) -> bool:
+    """One bare Enter into `handle` (`terminal send --enter`, no text: the byte the Enter key sends), then the
+    screen read every POLL_S for up to ENTER_WAIT_S: True once a rendered composer no longer holds `draft`
+    (submitted). A send that raises is False and is never resent; an unread screen proves nothing."""
+    try:
+        orca.terminal("send", "--terminal", handle, "--enter", timeout=CALL_S)
+    except Exception as exc:  # noqa: BLE001 - never resend on silence
+        log.log("hooks", f"deliver: terminal send to {session}: {exc}")
+        return False
+    end = time.monotonic() + ENTER_WAIT_S
+    while True:
+        time.sleep(POLL_S)
+        try:
+            now = _composer(_result(orca.terminal("read", "--terminal", handle, "--screen", timeout=ENTER_WAIT_S),
+                                    "terminal"))
+        except Exception:  # noqa: BLE001 - read again until ENTER_WAIT_S
+            now = None
+        gone = now is not None and now != draft
+        if gone or time.monotonic() >= end:
+            log.log("hooks", f"deliver: {session} composer held a stale Orche line; pressed Enter "
+                             f"({'submitted' if gone else 'still there'})")
+            return gone
 
 
 def lock_free(session, name=DELIVER_LOCK) -> bool:
