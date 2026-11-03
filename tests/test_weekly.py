@@ -4,7 +4,7 @@ import datetime as dt
 import re
 from unittest import mock
 
-import support  # noqa: F401 - puts lib/ on sys.path
+import support
 
 from orche import janitor, procs, registry
 from orche.janitor import weekly
@@ -21,9 +21,10 @@ class WeeklyTest(RunnerCase):
         self.spawned = []
 
         def fake_popen(argv, **kw):
-            if argv[:3] != SPAWN:
+            cmd = support.detached(argv) or []
+            if cmd[:3] != SPAWN:
                 return REAL_POPEN(argv, **kw)
-            self.spawned.append(argv)
+            self.spawned.append(cmd)
             return mock.Mock(pid=4242)
         patcher = mock.patch.object(procs.subprocess, "Popen", fake_popen)
         patcher.start()

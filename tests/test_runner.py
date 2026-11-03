@@ -1146,15 +1146,18 @@ class RelayRunnerTest(RunnerCase):
 
     def relay(self, to="div-acme-build", tier="standard", body=None, popen=None, deliverer=None):
         def fake_popen(argv, **kw):   # only the runner and deliverer spawns are faked (git still runs)
-            if argv[:3] == DELIVER:
-                self.deliverers.append((argv, kw))
+            cmd = support.detached(argv) or []
+            if cmd[:3] == DELIVER:
+                self.deliverers.append((cmd, kw))
                 self.captured_deliverers = len(self.deliverers)     # HookCase.tearDown waits for no process
-                return deliverer(argv, **kw) if deliverer is not None else mock.Mock(pid=4343)
-            if argv[:3] != SPAWN:
+                if deliverer is not None:
+                    deliverer(cmd, **kw)
+                return mock.Mock(pid=4343)                  # the short-lived sh, gone at once
+            if cmd[:3] != SPAWN:
                 return REAL_POPEN(argv, **kw)
-            self.spawned.append((argv, kw))
-            if popen is not None:
-                return popen(argv, **kw)
+            self.spawned.append((cmd, kw))
+            if popen is not None:                          # starts (or fails to start) the command itself
+                popen(cmd, **kw)
             return mock.Mock(pid=4242)
         with mock.patch.object(procs.subprocess, "Popen", fake_popen):
             started = time.monotonic()
@@ -1234,9 +1237,10 @@ class RelayRunnerTest(RunnerCase):
         self.assertEqual([(p["brief_rev"], p["deferred"]) for p in self.pointers("div-acme-build")],
                          [(2, "codex-sandbox")])
         def popen(argv, **kw):                                # `ps` still runs
-            if argv[:3] != SPAWN:
+            cmd = support.detached(argv) or []
+            if cmd[:3] != SPAWN:
                 return REAL_POPEN(argv, **kw)
-            self.spawned.append((argv, kw))
+            self.spawned.append((cmd, kw))
             return mock.Mock(pid=4242)
         with mock.patch.object(procs.subprocess, "Popen", popen):
             self.assertEqual(deliver.deliver_unit(registry.load(), unit, retry=True), (0, "runner-started"))

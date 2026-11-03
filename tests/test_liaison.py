@@ -405,7 +405,7 @@ class CardRefreshTest(LiaisonCase):
     def test_background_spawns_detached(self):
         from orche import paths, procs
         seen = []
-        with mock.patch.object(procs.subprocess, "Popen", lambda argv, **kw: seen.append((argv, kw))):
+        with mock.patch.object(procs.subprocess, "Popen", support.recording_popen(seen)):
             code, out, err = self.orche("card", "refresh", "acme", "--background")
         self.assertEqual((code, err), (0, ""))
         log = self.home / "logs" / "liaison" / "acme.log"

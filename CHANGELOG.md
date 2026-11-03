@@ -3,6 +3,19 @@
 All notable changes to Orche are listed here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow semantic versioning.
 
+## 0.19.12 — 2026-11-03
+
+### Fixed
+
+- After a first install, Main's setup summary could arrive only about 10 minutes later, from the heartbeat,
+  leaving Main's tab empty: closing the install window also ended the helper that brings it. Helpers Orche
+  starts in the background now outlive the tab that started them.
+
+### Changed
+
+- Main's first message after install opens with an "installed" banner and a short guide to how Orche works,
+  then what was set up and what you can switch on any time.
+
 ## 0.19.11 — 2026-11-03
 
 ### Changed

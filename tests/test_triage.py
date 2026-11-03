@@ -58,12 +58,13 @@ class TriageCase(RunnerCase):
 
     def handle(self, prompt, classifier=None, popen=None, session="main-acme", transcript=None):
         def fake_popen(argv, **kw):
-            if argv[:3] != SPAWN:
+            cmd = support.detached(argv) or []
+            if cmd[:3] != SPAWN:
                 return REAL_POPEN(argv, **kw)
-            self.spawned.append((argv, kw))
+            self.spawned.append((cmd, kw))
             if popen is not None:
-                return popen(argv, **kw)
-            return mock.Mock(pid=4242)
+                popen(cmd, **kw)
+            return mock.Mock(pid=4242)                     # the short-lived sh, gone at once
         payload = {"session_id": "sess-main-0001", "prompt": prompt, "cwd": str(self.repo),
                    "transcript_path": transcript or str(self.root / "none.jsonl")}
         env = {"ORCHE_SESSION": session} if session else {}
@@ -918,7 +919,7 @@ class HookTest(TriageCase):
         spec.loader.exec_module(hook)
 
         def fake_popen(argv, **kw):
-            return mock.Mock(pid=4242) if argv[:3] == SPAWN else REAL_POPEN(argv, **kw)
+            return mock.Mock(pid=4242) if (support.detached(argv) or [])[:3] == SPAWN else REAL_POPEN(argv, **kw)
 
         def run(prompt):
             payload = {"session_id": "sess-main-0001", "transcript_path": str(self.root / "none.jsonl"),

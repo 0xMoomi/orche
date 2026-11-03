@@ -194,6 +194,45 @@ class GuideTest(support.TempHomeCase):
         for ln in (resting, mixed, awake):
             self.assertNotRegex(ln, "[\u2013\u2014]")
 
+    def test_the_banner_frame_stays_aligned_and_names_this_version(self):
+        """The setup report's banner, which Main copies as it is: every framed line equally wide, the logo
+        whole, the version line this release's."""
+        from orche import __version__
+        lines = guide.banner().splitlines()
+        framed, prompt = lines[:-1], lines[-1]
+        self.assertEqual({len(ln) for ln in framed}, {guide.BANNER_W + 2})
+        self.assertEqual((framed[0][0], framed[0][-1], framed[-1][0], framed[-1][-1]), ("\u2554", "\u2557", "\u255a", "\u255d"))
+        self.assertTrue(all(ln[0] == ln[-1] == "\u2551" for ln in framed[1:-1]))
+        [version] = [ln for ln in framed if "INSTALLER" in ln]
+        self.assertEqual(version, f"║   ORCHE INSTALLER  Version {__version__}".ljust(guide.BANNER_W + 1) + "║")
+        self.assertIn(" \u2588\u2588\u2588\u2588\u2588\u2588\u2557 \u2588\u2588\u2588\u2588\u2588\u2588\u2557  "
+                      "\u2588\u2588\u2588\u2588\u2588\u2588\u2557\u2588\u2588\u2557  \u2588\u2588\u2557"
+                      "\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2557", lines[2])    # the logo's top row
+        self.assertEqual(prompt, "C:\\ORCHE> _")
+        self.assertNotRegex(guide.banner(), "[\u2013\u2014\uac00-\ud7a3]")
+
+    def test_how_orche_works_names_the_projects_tab_and_divisions(self):
+        """The setup report's "How Orche works": Main's tab, the divisions that are not retired, the Build
+        line only with Build, the heartbeat's own interval; every Main reply's closing line words."""
+        proj = {"main_session": "main-acme", "divisions": {"rnd": {"status": "dormant"}, "build": {"status": "active"},
+                                                           "research": {"status": "retired"}}}
+        lines = guide.how_lines(proj, "acme", self.cfg)
+        self.assertEqual(len(lines), 7)
+        self.assertIn("in the main-acme tab, in any language", lines[0])
+        self.assertIn("- Divisions are specialists (R&D, Build), each its own Claude session", lines[1])
+        self.assertTrue(lines[2].startswith("- Build splits code work among workers"), lines[2])
+        self.assertIn("The heartbeat, every 5 minutes, reopens closed tabs", lines[3])
+        self.assertIn("RUNNING (what runs now), OWNER (a decision or step for you, with its default) or DONE", lines[5])
+        no_build = guide.how_lines({"divisions": {"gtm": {"status": "dormant"}}},
+                                   "shop", {**self.cfg, "reconcile": {"every_s": 90}})
+        self.assertEqual(len(no_build), 6)
+        self.assertIn("in the main-shop tab", no_build[0])
+        self.assertIn("(GTM)", no_build[1])
+        self.assertFalse(any(ln.startswith("- Build") for ln in no_build))
+        self.assertIn("The heartbeat, every 90 s, ", no_build[2])
+        for ln in lines + no_build:
+            self.assertNotRegex(ln, "[\u2013\u2014]")
+
     def test_a_folder_that_is_not_a_git_checkout_is_skipped(self):
         root = self.home / "plain"
         root.mkdir()

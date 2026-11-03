@@ -368,7 +368,7 @@ class BackgroundTest(IntakeCase):
     def test_spawns_detached_and_creates_the_log_dir(self):
         from orche import paths, procs
         seen = []
-        with mock.patch.object(procs.subprocess, "Popen", lambda argv, **kw: seen.append((argv, kw))):
+        with mock.patch.object(procs.subprocess, "Popen", support.recording_popen(seen)):
             code, out, err = self.orche("intake", "acme", "--background", "--if-stale")
         self.assertEqual((code, err), (0, ""))
         log = self.home / "logs" / "intake" / "acme.log"
@@ -684,8 +684,8 @@ class InitClosesItsWindowTest(FakeClaudeMixin, test_hr.HrCase):
         self.assertEqual(lines[3:], [cmd_init.CLOSED, guide.SETUP_ASK])
         self.assertEqual(len(lines), inbox.MAX_LINES)
         text = self.report().read_text()
-        self.assertTrue(text.startswith("# Orche is set up: acme-shop\n\n- Divisions: build (claude-opus-5-5); "
-                                        "gtm (claude-sonnet-5-5)\n"), text)
+        self.assertTrue(text.startswith(f"# Orche is set up: acme-shop\n\n```text\n{guide.banner()}\n```\n\n"
+                                        "- Divisions: build (claude-opus-5-5); gtm (claude-sonnet-5-5)\n"), text)
         for part in ("- Agents: 2 divisions, resting: no tab and no cost until Main hands one work. Work Main hands a "
                      "resting division runs in the background in its workspace, with no tab; its tab opens when it "
                      'staffs workers (Build does, for code) or when you say "wake <division>", and it rests again when '
@@ -699,9 +699,14 @@ class InitClosesItsWindowTest(FakeClaudeMixin, test_hr.HrCase):
                      "- Janitor: cleans up daily (the heartbeat starts it when the last pass is a day old); ",
                      "- More agents at once: how many workers may run in parallel. "
                      "Up to 4 at once (custom). ",
-                     "- Talk to Main in the main-acme-shop tab, in any language.", "\n## Any time\n\n- ",
+                     "\n## How Orche works\n\n- You talk only to Main, in the main-acme-shop tab, in any language. ",
+                     "- Divisions are specialists (Build, GTM), each its own Claude session ",
+                     "\n- Build splits code work among workers, one per slice, ",
+                     "- Hooks carry briefs and reports between the sessions. The heartbeat, every 5 minutes, ",
+                     "\n## Any time\n\n- ",
                      'Say "what else can Orche do?" to see this list again (Main runs `orche doctor`).'):
             self.assertIn(part, text)
+        self.assertLess(text.index("\n## How Orche works\n"), text.index("\n## Running now\n"))
         self.assertNotRegex(text, "[\u2013\u2014]")
         exclude = (self.repo / ".git" / "info" / "exclude").read_text().splitlines()
         self.assertIn(".orche/", exclude)     # the setup report with every other Orche file

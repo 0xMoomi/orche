@@ -368,19 +368,31 @@ def sweep(rid, timeout=TABLE_S, wait_s=WAIT_S, claude=None, deadline=None):
     return kill(pids, min(wait_s, max(0.0, end - time.monotonic() - MARGIN_S)))
 
 
+SH = "/bin/sh"
+DETACH = '"$@" &'    # SH -c DETACH sh <argv...>: starts argv in the background and exits at once
+DETACH_WAIT_S = 5.0  # reaping that sh
+
+
 def spawn_detached(argv, log, **extra_env) -> None:
     """Start `argv` detached: its own session (it outlives the caller, a Bash tool call included),
     stdin closed, output appended to `log` (its folder created), the plugin bin first on PATH,
     `extra_env` set and ENV (ORCHE_RUN_ID) dropped, so the end-of-run sweep of a run whose worker
-    started it never takes it along. Never waits."""
+    started it never takes it along. It starts through a short-lived SH that exits (reaped here)
+    at once, so `argv` already belongs to launchd (ppid 1) on return: Orca's `terminal close` kills
+    the closed tab's process tree by parent pid, and a child whose parent was still alive died with
+    the tab even in its own session. Never waits for `argv`."""
     log = Path(log)
     log.parent.mkdir(parents=True, exist_ok=True)
     env = {k: v for k, v in os.environ.items() if k != ENV}
     env.update(extra_env)
     env["PATH"] = f"{paths.PLUGIN_ROOT / 'bin'}{os.pathsep}{env.get('PATH', '')}"
     with open(log, "ab") as fh:
-        subprocess.Popen(argv, stdin=subprocess.DEVNULL, stdout=fh, stderr=subprocess.STDOUT,
-                         start_new_session=True, close_fds=True, env=env)
+        sh = subprocess.Popen([SH, "-c", DETACH, "sh", *argv], stdin=subprocess.DEVNULL, stdout=fh,
+                              stderr=subprocess.STDOUT, start_new_session=True, close_fds=True, env=env)
+    try:
+        sh.wait(timeout=DETACH_WAIT_S)
+    except subprocess.TimeoutExpired:
+        pass
 
 
 def orche_argv(*args) -> list:

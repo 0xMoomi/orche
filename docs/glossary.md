@@ -373,7 +373,7 @@ One model call inside a run (work, escalation, rework, review, build-review); th
 A named set of caps (`default`, `20`, `30`) applied with `orche hr scale`.
 
 **Setup report**:
-`<project>/.orche/SETUP.md`, written by `orche init` (and `--refresh`): "Orche is set up", what was made, and the "Any time" list of optional features with the owner words that switch each on (`lib/orche/guide.py`). Main reports it after the first setup; `orche doctor` ends with the same list.
+`<project>/.orche/SETUP.md`, written by `orche init` (and `--refresh`): "Orche is set up", the install banner, what was made, how Orche works, what runs now, and the "Any time" list of optional features with the owner words that switch each on (`lib/orche/guide.py`). Main reports it after the first setup, as its first message: the banner as it is, then the rest in the owner's language; `orche doctor` ends with the same list.
 _Avoid_: setup note (that is the five-line pointer to Main), onboarding summary.
 
 **Main**: Per-project orchestrator session; decides, never codes

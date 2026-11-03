@@ -304,9 +304,41 @@ class EnvSweepTest(SweepCase):
     def test_the_hook_spawn_never_hands_its_run_id_to_a_new_run(self):
         seen = []
         with mock.patch.dict(os.environ, {procs.ENV: rid("outer")}), \
-                mock.patch.object(procs.subprocess, "Popen", lambda argv, **kw: seen.append(kw["env"])):
+                mock.patch.object(procs.subprocess, "Popen", support.recording_popen(seen)):
             runs.start("acme-coupon-field-20261018-1")
-        self.assertNotIn(procs.ENV, seen[0])
+        self.assertNotIn(procs.ENV, seen[0][1]["env"])
+
+    def test_spawn_detached_starts_the_command_through_a_short_lived_sh(self):
+        """Orca's `terminal close` kills the closed tab's process tree by parent pid: the command starts
+        behind an sh that exits at once and is reaped before spawn_detached returns."""
+        seen, sh = [], mock.Mock(pid=4242)
+        log = self.home / "logs" / "detached.log"
+        with mock.patch.object(procs.subprocess, "Popen", lambda argv, **kw: seen.append((argv, kw)) or sh):
+            procs.spawn_detached(["/bin/echo", "hi there"], log)
+        [(argv, kw)] = seen
+        self.assertEqual(argv, ["/bin/sh", "-c", '"$@" &', "sh", "/bin/echo", "hi there"])
+        self.assertEqual((kw["start_new_session"], kw["stdin"], kw["stderr"]),
+                         (True, subprocess.DEVNULL, subprocess.STDOUT))
+        self.assertEqual(kw["stdout"].name, str(log))
+        sh.wait.assert_called_once_with(timeout=procs.DETACH_WAIT_S)
+        with mock.patch.object(procs.subprocess, "Popen", return_value=mock.Mock(
+                wait=mock.Mock(side_effect=subprocess.TimeoutExpired("sh", procs.DETACH_WAIT_S)))):
+            procs.spawn_detached(["/bin/echo"], log)        # a slow sh is left behind, never an error
+
+    def test_a_detached_command_is_no_child_of_its_caller(self):
+        pid_file = self.home / "detached.pid"
+        code = "import os, sys, time; open(sys.argv[1], 'w').write(str(os.getpid())); time.sleep(30)"
+        procs.spawn_detached([sys.executable, "-c", code, str(pid_file)], self.home / "logs" / "detached.log")
+        deadline = time.monotonic() + 10
+        while not (pid_file.exists() and pid_file.read_text()) and time.monotonic() < deadline:
+            time.sleep(0.05)
+        pid = int(pid_file.read_text())
+        try:
+            ppid = int(subprocess.run(["ps", "-o", "ppid=", "-p", str(pid)], capture_output=True, text=True,
+                                      timeout=10).stdout)
+            self.assertNotEqual(ppid, os.getpid())        # a tab close that kills our tree leaves it running
+        finally:
+            os.kill(pid, signal.SIGKILL)
 
 
 class ReconcileTest(SweepCase):

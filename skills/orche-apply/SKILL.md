@@ -144,9 +144,10 @@ customise. In chat there is no terminal, so the setup goes through a JSON file. 
    re-runs it). `orche status --project <proj>` (the project with its division names, custom ones included,
    `○` = dormant) and `orche depts <proj>` (one row per division) show the result later.
    Only the status-line cell uses the label (`Design` → `DES○`).
-6. `orche init` ends by writing the setup report `.orche/SETUP.md` ("Orche is set up": what was made and what
-   to switch on any time), switching Orca to the `main-<proj>` tab, sending Main the setup result with the
-   report (Main reports it to the owner and asks for the first request)
+6. `orche init` ends by writing the setup report `.orche/SETUP.md` ("Orche is set up": the install banner, what
+   was made, how Orche works and what to switch on any time), switching Orca to the `main-<proj>` tab, sending
+   Main the setup result with the report (Main's first message is the install banner, how Orche works, what was
+   made and what to switch on any time; then it asks for the first request)
    and closing this window: you do not get to answer, and nothing is lost. Only when init printed `could not close the window that ran init` or `could not
    switch`: hand over in at most four lines (registered, the intake line, the `setup report:` path it printed,
    `orche wake main-<proj>` if needed, close this window and talk to Main there) and stop.

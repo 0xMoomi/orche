@@ -14,7 +14,26 @@ if str(ROOT / "lib") not in sys.path:
 # Process-wide default for every test module (TempHomeCase re-applies it per test): the Jev key
 # store never touches the real keychain and no real dialog opens.
 from orche import headless, jev_setup as _jev_setup, jevkey as _jevkey, notify as _notify  # noqa: E402
-from orche import reconcile as _reconcile  # noqa: E402
+from orche import procs as _procs, reconcile as _reconcile  # noqa: E402
+
+DETACHED = [_procs.SH, "-c", _procs.DETACH, "sh"]   # what procs.spawn_detached puts before the command
+
+
+def detached(argv):
+    """The command procs.spawn_detached started behind its short-lived sh (DETACHED); None for any other argv."""
+    argv = list(argv)
+    return argv[len(DETACHED):] if argv[:len(DETACHED)] == DETACHED else None
+
+
+def recording_popen(seen):
+    """A subprocess.Popen stand-in for procs.spawn_detached: appends (the command unwrapped from its sh,
+    the keyword arguments) to `seen` and returns a process standing for that sh, which exits at once."""
+    from unittest import mock
+
+    def popen(argv, **kw):
+        seen.append((detached(argv), kw))
+        return mock.Mock(pid=4242, returncode=0)
+    return popen
 
 
 def no_ps(pid, timeout):

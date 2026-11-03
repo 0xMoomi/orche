@@ -245,7 +245,7 @@ class StartRestartTest(support.TempHomeCase):
 
     def spawn(self, call):
         seen = []
-        with mock.patch.object(procs.subprocess, "Popen", lambda argv, **kw: seen.append((argv, kw))):
+        with mock.patch.object(procs.subprocess, "Popen", support.recording_popen(seen)):
             result = call()
         [(argv, kw)] = seen
         kw["stdout"].close()

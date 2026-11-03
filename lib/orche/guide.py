@@ -11,7 +11,7 @@ lines read no stored secret and call no network; only write_report writes a file
 import shutil
 from pathlib import Path
 
-from . import config, intake, jev, jevkey, oauth, orca, paths, publish, registry, scale, units, util
+from . import __version__, config, intake, jev, jevkey, oauth, orca, paths, publish, registry, scale, units, util
 
 MAX_LINES = 12
 MAX_GATES = 2   # more projects without a gate share one line
@@ -126,12 +126,29 @@ def lines(cfg, reg, project=None) -> list:
 
 # ---- the setup report (`.orche/SETUP.md`, written by `orche init`)
 
-SETUP_ASK = ('read the report at report: and tell the owner, in their language, what was set up and the "Any time" '
-             "list as short lines: translate every line, keep the numbers and the quoted owner words; then ask for "
-             "the first request")
+SETUP_ASK = ("read the report at report: and start your reply with its banner in a code block, copied exactly and "
+             "never translated; then tell the owner, in their language, the \"How Orche works\" lines, what was set "
+             "up and the \"Any time\" list as short lines: translate every line, keep the numbers and the quoted "
+             "owner words; then ask for the first request")
 SETUP_REPORT = "SETUP.md"
 PRESET_LINES = {"build": "- Preset: build-focused (Build's workers specialise in front, back and infra).",
                 "operations": "- Preset: operations."}
+BANNER_W = 52   # columns inside the frame
+LOGO = (        # "ORCHE" in the ANSI Shadow font: six rows per letter
+    (" ██████╗ ", "██╔═══██╗", "██║   ██║", "██║   ██║", "╚██████╔╝", " ╚═════╝ "),
+    ("██████╗ ", "██╔══██╗", "██████╔╝", "██╔══██╗", "██║  ██║", "╚═╝  ╚═╝"),
+    (" ██████╗", "██╔════╝", "██║     ", "██║     ", "╚██████╗", " ╚═════╝"),
+    ("██╗  ██╗", "██║  ██║", "███████║", "██╔══██║", "██║  ██║", "╚═╝  ╚═╝"),
+    ("███████╗", "██╔════╝", "█████╗  ", "██╔══╝  ", "███████╗", "╚══════╝"),
+)
+
+
+def banner() -> str:
+    """The setup report's opening art: an old installer screen, every framed line BANNER_W wide."""
+    inner = ["", *("   " + "".join(row) for row in zip(*LOGO)), "", f"   ORCHE INSTALLER  Version {__version__}", "",
+             f"   Installing ... [{'█' * 24}] 100%", "   All agents are in place. Setup is complete.", ""]
+    return "\n".join(["╔" + "═" * BANNER_W + "╗", *(f"║{text.ljust(BANNER_W)}║" for text in inner),
+                      "╚" + "═" * BANNER_W + "╝", "C:\\ORCHE> _"])
 
 
 def setup_note(proj, key, intake_line, window_line) -> str:
@@ -180,6 +197,30 @@ def agents_line(proj, most, preset) -> str:
              for state, names in sorted(groups.items(), key=lambda g: list(STATE_TEXT).index(g[0]))]
     return (f"- Agents: {'; '.join(parts) or 'no divisions'}." + (f" {RESTING_HOW}" if "resting" in groups else "")
             + f" Each unit of work adds one worker while it runs; up to {most} run at once ({preset}).")
+
+
+def how_lines(proj, key, cfg) -> list:
+    """The setup report's "How Orche works": the README's "How it works" in short lines, with this project's
+    Main tab, its divisions (retired ones left out) and the heartbeat's interval; the Build line only with Build."""
+    from . import reconcile
+    status = {name: (d or {}).get("status") for name, d in (proj.get("divisions") or {}).items()}
+    live = {name: label for name, label, _charter, _custom in intake.divisions(proj) if STATES.get(status.get(name))}
+    every = reconcile.every_s(reconcile.settings(cfg))
+    beat = f"every {every // 60} minutes" if every % 60 == 0 and every > 60 else f"every {every} s"
+    build = ("- Build splits code work among workers, one per slice, each on its own branch in its own worktree; "
+             "a worker opens a pull request, Build reviews it and the merge queue lands it when its checks pass.")
+    return [f"- You talk only to Main, in the {proj.get('main_session') or 'main-' + key} tab, in any language. "
+            "Main turns your words into briefs for the divisions and reports back to you; it never edits code.",
+            f"- Divisions are specialists ({', '.join(live.values()) or 'none yet'}), each its own Claude session "
+            "with its own workspace and memory. A resting one has no tab and costs nothing; work sent to it runs in "
+            "the background.",
+            *([build] if "build" in live else []),
+            f"- Hooks carry briefs and reports between the sessions. The heartbeat, {beat}, reopens closed tabs and "
+            "re-delivers anything stuck, so only decisions wait on you.",
+            "- The CEO Staff tab answers questions about every project and changes nothing.",
+            "- Every Main reply ends with one line: RUNNING (what runs now), OWNER (a decision or step for you, with "
+            "its default) or DONE (the result).",
+            "- The status line in Main's pane shows what waits on you, what runs and today's spend."]
 
 
 def _intake_text(key, root, intake_line):
@@ -269,15 +310,14 @@ def write_report(reg, key, root, intake_line=None, detected=(), created=(), gate
     _count, names, where = _divisions_text(proj)
     most, preset = parallel(cfg, reg)
     path = paths.project_local(root) / SETUP_REPORT
-    text = "\n".join([f"# Orche is set up: {key}", "", *created,
+    text = "\n".join([f"# Orche is set up: {key}", "", "```text", banner(), "```", "", *created,
                       f"- Divisions: {names or 'none'}",
                       *([PRESET_LINES[proj["preset"]]] if proj.get("preset") in PRESET_LINES else []),
                       agents_line(proj, most, preset),
                       f"- Workspaces: {where}; nothing is committed to the repository; Orche's own files are "
                       "excluded from git",
                       f"- Intake: {_intake_text(key, root, intake_line)}", *_team_lines(key, root, detected),
-                      f"- Talk to Main in the {proj.get('main_session') or 'main-' + key} tab, in any language. "
-                      "Main plans and decides; divisions do the work; you only get decisions.",
+                      "", "## How Orche works", "", *how_lines(proj, key, cfg),
                       "", "## Running now", "", *running_lines(reg, key, root, cfg, gate),
                       "", "## Any time", "",
                       *lines(cfg, reg, key), "",

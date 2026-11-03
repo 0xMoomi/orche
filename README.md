@@ -35,7 +35,7 @@ Re-running it on a Mac that already has Orche keeps that install (its folder and
 ## What you get
 
 - A `main-<project>` tab in Orca with the Staff tab beside it. Divisions stay dormant (no pane, no cost) until work arrives.
-- A setup report from Main: what was made and what you can switch on any time (also in `<project>/.orche/SETUP.md`).
+- A first message from Main: the install banner, how Orche works, what was made and what you can switch on any time (also in `<project>/.orche/SETUP.md`).
 - Nothing committed to your repository: the project's Orche files (`.orche/`, `PROJECT_CARD.md`, `AGENTS.md`) stay untracked.
 - A status line in Main's pane, in your language (English or Korean) and in colour: what waits on you and what runs first, then each division's running/assigned workers and today's spend (`⚠ waiting 2 · ▶ running 3 · BUILD 3/8 · … · $4.20 today`).
 - Notifications: Orca shows one when Main ends a reply, and Orche rings Main's tab when a decision still waits after 30 minutes; Orca shows that ring as its own notification when its Terminal Bell notifications are on (Settings > Notifications > Terminal Bell; `orche doctor` says if they are off). Missed one? Main's workspace stays marked unread in Orca's sidebar after every turn Orche started there, until you open it.
