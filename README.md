@@ -5,6 +5,16 @@ Orca + orchestra: a pod of agents working as one, inside the Orca terminal app.
 Orche runs a small team of Claude Code sessions on each of your git projects. You talk to one of them, **Main**, in plain words and in any language; the others plan, build, review and land the work.
 For developers on macOS who want several agents on one repository without watching each one. Orche is a Claude Code plugin plus an `orche` command.
 
+## What's new
+
+<!-- whats-new: scripts/release.py keeps the three newest -->
+- **0.19.14** (2026-11-09): every version has its GitHub release, and the README shows what's new. [Notes](https://github.com/0xMoomi/orche/releases/tag/v0.19.14)
+- **0.19.13** (2026-11-09): one CEO Staff per project, under its Main. [Notes](https://github.com/0xMoomi/orche/releases/tag/v0.19.13)
+- **0.19.12** (2026-11-03): Main greets a new install at once, with a banner and a guide. [Notes](https://github.com/0xMoomi/orche/releases/tag/v0.19.12)
+<!-- /whats-new -->
+
+Every version: [releases](https://github.com/0xMoomi/orche/releases) and [CHANGELOG.md](CHANGELOG.md).
+
 ## How it works
 
 ![How Orche works: you talk to Main; Main briefs specialist divisions, each in its own git worktree; Build splits the work among headless workers whose pull requests the merge queue lands; hooks carry briefs and reports, and a heartbeat keeps it all running](docs/orche-architecture.svg)

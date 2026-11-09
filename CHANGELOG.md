@@ -3,6 +3,14 @@
 All notable changes to Orche are listed here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow semantic versioning.
 
+## 0.19.14 — 2026-11-09
+
+### Added
+
+- Every version since 0.3.0 has a GitHub release with its notes, and the README opens with what's new.
+  `scripts/release.py` keeps both in step with CHANGELOG.md at each release, and a test fails when a version
+  ships without its README line.
+
 ## 0.19.13 — 2026-11-09
 
 ### Changed

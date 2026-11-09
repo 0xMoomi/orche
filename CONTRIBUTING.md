@@ -44,6 +44,7 @@ hooks/               hooks.json, run.sh and one .py per Claude Code hook; logic 
 skills/, agents/     the plugin's skills and agent definitions
 templates/           files Orche writes into projects and prompts it gives to agents
 tests/               unittest suite, support.py and fixtures; no network, no real orca or gh
+scripts/release.py   the release helper (see Releasing below)
 ```
 
 ## Adding a command
@@ -72,3 +73,12 @@ tests/               unittest suite, support.py and fixtures; no network, no rea
 
 Describe the behavior change and link the SPEC rule (e.g. `R-INBOX-3`) it implements or changes.
 When code and spec diverge, change the rule in docs/spec.md in place; no implementation notes.
+
+## Releasing (maintainers)
+
+1. Notes go under `## Unreleased` in CHANGELOG.md as the work lands. README sections a change touches
+   change in the same commit.
+2. Run `python3 scripts/release.py bump <version> "<one-line summary>"`, then the full suite, then commit
+   `chore(release): <version>`.
+3. Tag `v<version>`, push, and publish the GitHub release from the same notes:
+   `python3 scripts/release.py notes <version> | gh release create v<version> --title "<version>: <summary>" --notes-file -`
