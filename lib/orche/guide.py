@@ -217,7 +217,7 @@ def how_lines(proj, key, cfg) -> list:
             *([build] if "build" in live else []),
             f"- Hooks carry briefs and reports between the sessions. The heartbeat, {beat}, reopens closed tabs and "
             "re-delivers anything stuck, so only decisions wait on you.",
-            "- The CEO Staff tab answers questions about every project and changes nothing.",
+            "- The CEO Staff tab, under Main, answers questions about this project and changes nothing.",
             "- Every Main reply ends with one line: RUNNING (what runs now), OWNER (a decision or step for you, with "
             "its default) or DONE (the result).",
             "- The status line in Main's pane shows what waits on you, what runs and today's spend."]

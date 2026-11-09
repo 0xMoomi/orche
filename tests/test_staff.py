@@ -1,4 +1,5 @@
-"""The CEO Staff (lib/orche/staff.py): its pane, what it knows of every Main, its gates and its notes."""
+"""The CEO Staff (lib/orche/staff.py), one per project: its pane in its own workspace under Main, what it
+knows of that project's Main, its gates and its notes."""
 import datetime as dt
 import hashlib
 import json
@@ -6,39 +7,51 @@ import os
 import subprocess
 import sys
 from pathlib import Path
+from unittest import mock
 
 import support
 import test_hooks
-from orche import inbox, mask, paths, staff
-from orche.hr import panes
+from orche import inbox, mask, orca, registry, staff
 from orche.janitor import discover
 
 CANARY = "sk-" + "CANARY" + "abcdefghijklmnop" + "0123456789"
 FIXTURE = support.FIXTURES / "transcripts" / "staff_main.jsonl"
-ROOT = os.path.realpath(str(paths.PLUGIN_ROOT))
 GREETING_EN = (
-    "Hi, I'm your Staff: one shared window for everyday questions about all your projects.\n"
-    "I know everything you've told each project's Main, and I catch up again with every question.\n"
+    "Hi, I'm the Staff of acme: a window under its Main for your everyday questions.\n"
+    "I know everything you've told acme's Main and what it answered, and I catch up again with every question.\n"
     "I don't do the work myself: no code, no pushes, no merges. Work always goes through Main.\n"
-    'To hand something over, say "tell acme Main: ..." and I\'ll leave Main a note.\n'
+    'To hand something over, say "tell Main: ..." and I\'ll leave acme\'s Main a note.\n'
     "I run on a lighter model, so ask away, even about small things.")
 # The Korean greeting lives only in templates/staff/greeting.ko.txt (Hangul only in such per-language
 # text files, HangulTest): pinned by its hash here, its shape below.
-GREETING_KO_SHA256 = "619cdbbbf24c0988c48c6678da5a0febc8faa84d7e6a4f0075f17b7f10abac22"
+GREETING_KO_SHA256 = "4c61dc4e94bc589e81958bd84bc9f3f0f3ceef91e32ce4f149dbce094b251724"
 KO_PROMPT = "\uc624\ub298 \ubc30\ud3ec \uc0c1\ud669 \uc54c\ub824 \uc918"   # a Korean owner prompt
 
 
+def child_env(home, claude, session):
+    """The test's own environment minus Orca/Orche/Claude names, pointed at the temp home and fake Orca."""
+    env = {k: v for k, v in os.environ.items() if not k.startswith(("ORCA_", "ORCHE_", "CLAUDE"))}
+    env.update({"ORCHE_HOME": str(home), "ORCHE_FAKE_ORCA": "1", "CLAUDE_CONFIG_DIR": str(claude)})
+    if session:
+        env["ORCHE_SESSION"] = session
+    return env
+
+
 class StaffCase(test_hooks.HookCase):
-    """The hooks' temp project `acme` (main-acme in <root>/acme) with Main's transcript in its Claude dir."""
+    """The hooks' temp project `acme` (main-acme in <root>/acme, repo `repo-acme`) with Main's transcript in
+    its Claude dir; its Staff's workspace, when Orca has one, is <root>/staff."""
 
     def setUp(self):
         super().setUp()
         self.claude = self.home / "claude"
         self.folder = self.claude / "projects" / discover.claude_slug(str(self.repo))
         self.folder.mkdir(parents=True)
+        self.ws = self.root / "staff"
+        self.ws.mkdir()
+        self.ws_id = f"repo-acme::{self.ws}"
 
-    def main_transcript(self, text=None, name="s1.jsonl"):
-        path = self.folder / name
+    def main_transcript(self, text=None, name="s1.jsonl", folder=None):
+        path = (folder or self.folder) / name
         path.write_text(text if text is not None else FIXTURE.read_text().replace("@CANARY_KEY@", CANARY))
         return path
 
@@ -51,132 +64,220 @@ class StaffCase(test_hooks.HookCase):
                 {"type": "assistant", "timestamp": ts,
                  "message": {"id": mid, "role": "assistant", "content": [{"type": "text", "text": reply}]}}]
 
-    def staff_hook(self, hook, fixture, **over):
-        return self.run_hook(hook, self.payload(fixture, cwd=ROOT, **over), ORCHE_SESSION="staff",
+    def named(self, session, *turns):
+        return (json.dumps({"type": "custom-title", "customTitle": session}) + "\n"
+                + "".join(json.dumps(r) + "\n" for t in turns for r in t))
+
+    def staff_hook(self, hook, fixture, session="staff-acme", **over):
+        return self.run_hook(hook, self.payload(fixture, cwd=str(self.ws), **over), ORCHE_SESSION=session,
                              CLAUDE_CONFIG_DIR=str(self.claude))
 
     def reg(self):
-        from orche import registry
         return registry.load()
+
+    def add_beta(self):
+        """A second project `beta` (main-beta in <root>/beta) with its own Main transcript."""
+        beta = self.root / "beta"
+        beta.mkdir()
+        registry.update(lambda r: r["projects"].__setitem__("beta", {
+            "repo_id": "repo-beta", "path": str(beta), "stage": "building", "aliases": [],
+            "main_session": "main-beta", "card": "x", "standing": ".orche/STANDING.md", "divisions": {}}))
+        folder = self.claude / "projects" / discover.claude_slug(str(beta))
+        folder.mkdir(parents=True)
+        self.main_transcript(self.named("main-beta", self.turn("2026-10-29T08:00:00Z", "beta question",
+                                                               "beta answer", "b1")), folder=folder)
 
 
 class PaneTest(StaffCase):
-    def fake_repos(self, listed=True, terminals=()):
-        repos = [{"id": "repo-orche", "path": ROOT}] if listed else []
-        self.fake_orca({"repo list": {"repos": repos}, "terminal list": {"terminals": list(terminals)},
+    def fake(self, listed=False, terminals=()):
+        """Orca with the Staff workspace listed (else created on demand) and `terminals` open."""
+        item = {"id": self.ws_id, "repoId": "repo-acme", "path": str(self.ws), "displayName": "staff",
+                "branch": "staff"}
+        self.fake_orca({"worktree list": {"worktrees": [item] if listed else []},
+                        "worktree create": {"worktree": item},
+                        "terminal list": {"terminals": list(terminals)},
                         "terminal read": {"terminal": {"status": "running"}}})
 
-    def orche(self, *argv):
-        env = {k: v for k, v in os.environ.items() if not k.startswith(("ORCA_", "ORCHE_", "CLAUDE"))}
-        env.update({"ORCHE_HOME": str(self.home), "ORCHE_FAKE_ORCA": "1", "CLAUDE_CONFIG_DIR": str(self.claude),
-                    "ORCHE_SESSION": "main-acme"})
-        return subprocess.run([sys.executable, str(support.ROOT / "bin" / "orche.py"), *argv], env=env,
-                              capture_output=True, text=True, timeout=30)
+    def orche(self, *argv, session="main-acme"):
+        return subprocess.run([sys.executable, str(support.ROOT / "bin" / "orche.py"), *argv],
+                              env=child_env(self.home, self.claude, session), capture_output=True, text=True,
+                              timeout=30)
+
+    def calls(self, group_sub):
+        return [c[1:] for c in self.orca_calls() if " ".join(c[1:3]) == group_sub]
+
+    def creates(self):
+        return [c[c.index("--title") + 1] for c in self.calls("terminal create")]
+
+    def test_one_session_per_project_named_like_main_and_the_divisions(self):
+        reg = self.reg()
+        self.assertEqual(staff.session_of("acme"), "staff-acme")
+        for session, ok in (("staff-acme", True), ("staff-gone", True), ("staff", False), ("staff-", False),
+                            ("main-acme", False), ("div-acme-build", False), (None, False)):
+            self.assertIs(staff.is_staff(session), ok, session)
+        self.assertEqual(staff.project_of(reg, "staff-acme"), "acme")
+        for session in ("staff-gone", "staff", "main-acme", None):
+            self.assertIsNone(staff.project_of(reg, session), session)
 
     def test_the_pane_command_pins_opus_medium_with_the_pane_env(self):
-        cmd = staff.pane_command(ROOT)
-        self.assertIn("ORCHE_SESSION=staff ", cmd)
+        cmd = staff.pane_command("staff-acme", str(self.ws))
+        self.assertIn("ORCHE_SESSION=staff-acme ", cmd)
         self.assertIn("CLAUDE_CODE_PROMPT_CACHE_TTL=1h ", cmd)
         self.assertNotIn("CLAUDE_CODE_DISABLE_BACKGROUND_TASKS", cmd)
         self.assertTrue(cmd.endswith("claude --permission-mode bypassPermissions --model claude-opus-5-5 "
-                                     "--effort medium --name staff"), cmd)
-        mine = self.claude / "projects" / discover.claude_slug(ROOT)
+                                     "--effort medium --name staff-acme"), cmd)
+        mine = self.claude / "projects" / discover.claude_slug(str(self.ws))
         mine.mkdir(parents=True)
-        (mine / "abc123.jsonl").write_text(json.dumps({"type": "custom-title", "customTitle": "staff"}) + "\n")
-        self.assertTrue(staff.pane_command(ROOT).endswith("--effort medium --resume abc123"))
+        (mine / "abc123.jsonl").write_text(json.dumps({"type": "custom-title", "customTitle": "staff-acme"}) + "\n")
+        self.assertTrue(staff.pane_command("staff-acme", str(self.ws)).endswith("--effort medium --resume abc123"))
 
-    def test_on_opens_in_the_orche_checkout_and_off_closes_it(self):
-        self.fake_repos()
-        res = self.orche("wake", "staff")
-        self.assertEqual((res.returncode, res.stdout.strip()), (0, "staff pane opened"), res.stderr)
-        [create] = [c for c in self.orca_calls() if c[1:3] == ["terminal", "create"]]
-        self.assertEqual(create[create.index("--worktree") + 1], f"id:repo-orche::{ROOT}")
-        self.assertEqual(create[create.index("--title") + 1], "staff")
-        self.assertIn("--model claude-opus-5-5 --effort medium", create[create.index("--command") + 1])
-        self.fake_repos(terminals=[{"handle": "t-staff", "title": "✳ staff"}])
-        self.assertEqual(self.orche("wake", "staff").stdout.strip(), "staff pane switched to")
-        self.assertEqual(self.orche("sleep", "staff").stdout.strip(), "staff pane closed")
-        self.assertIn(["terminal", "close", "--terminal", "t-staff", "--json"], [c[1:] for c in self.orca_calls()])
-        self.fake_repos()
-        self.assertEqual(self.orche("sleep", "staff").stdout.strip(), "staff pane is not open")
+    def test_on_opens_its_own_workspace_under_main_and_off_closes_it(self):
+        self.fake()
+        res = self.orche("wake", "staff-acme")
+        self.assertEqual((res.returncode, res.stdout.strip()), (0, "staff-acme pane opened"), res.stderr)
+        [create] = self.calls("worktree create")      # created the first time, a child of Main's worktree
+        self.assertEqual(create, ["worktree", "create", "--repo", "id:repo-acme", "--name", "staff",
+                                  "--parent-worktree", f"id:repo-acme::{self.repo}", "--json"])
+        [term] = self.calls("terminal create")        # its own terminal in that workspace, never Main's tab
+        self.assertEqual(term[term.index("--worktree") + 1], f"id:{self.ws_id}")
+        self.assertEqual(term[term.index("--title") + 1], "staff-acme")
+        self.assertIn("ORCHE_SESSION=staff-acme ", term[term.index("--command") + 1])
+        self.assertIn("--model claude-opus-5-5 --effort medium", term[term.index("--command") + 1])
+        self.assertEqual(self.reg()["projects"]["acme"]["staff"], {"status": "awake"})
+        self.fake(listed=True, terminals=[{"handle": "t-staff", "title": "\u2733 staff-acme"}])
+        self.assertEqual(self.orche("wake", "staff-acme").stdout.strip(), "staff-acme pane switched to")
+        self.assertEqual(self.orche("sleep", "staff-acme").stdout.strip(), "staff-acme pane closed")
+        self.assertIn(["terminal", "close", "--terminal", "t-staff", "--json"], self.calls("terminal close"))
+        self.assertEqual(self.reg()["projects"]["acme"]["staff"], {"status": "asleep"})
+        self.fake(listed=True)
+        self.assertEqual(self.orche("sleep", "staff-acme").stdout.strip(), "staff-acme pane is not open")
+        self.assertEqual(len(self.calls("worktree create")), 1)
 
-    def test_orca_learns_the_orche_checkout_once(self):
-        self.fake_repos(listed=False)
-        res = self.orche("wake", "staff")
-        self.assertEqual(res.returncode, 1)                  # the fake list never shows it: refused, named
-        self.assertIn("not in orca repo list", res.stderr)
-        self.assertIn(["repo", "add", "--path", ROOT, "--json"], [c[1:] for c in self.orca_calls()])
-        self.assertFalse(any(c[1:3] == ["terminal", "create"] for c in self.orca_calls()))
+    def test_an_existing_workspace_is_reused(self):
+        self.fake(listed=True)
+        self.assertEqual(self.orche("wake", "staff-acme").stdout.strip(), "staff-acme pane opened")
+        self.assertEqual(self.calls("worktree create"), [])
+        [term] = self.calls("terminal create")
+        self.assertEqual(term[term.index("--worktree") + 1], f"id:{self.ws_id}")
+
+    def test_a_failed_listing_creates_nothing(self):
+        """Never a second Staff workspace: when Orca cannot list the worktrees, nothing is created."""
+        failed = orca.OrcaError("orca is down", "bad_output")
+        with mock.patch.object(orca, "find_terminal_by_title", return_value=None), \
+                mock.patch.object(orca, "worktree", side_effect=failed) as worktree, \
+                mock.patch.object(orca, "terminal") as terminal:
+            with self.assertRaises(orca.OrcaError):
+                staff.open_pane("acme", self.reg()["projects"]["acme"])
+        self.assertEqual([c.args[0] for c in worktree.call_args_list], ["list"])
+        terminal.assert_not_called()
+
+    def test_bare_staff_names_the_callers_projects_staff(self):
+        self.fake(listed=True)
+        self.assertEqual(self.orche("wake", "staff").stdout.strip(), "staff-acme pane opened")   # from main-acme
+        res = self.orche("wake", "staff", session=None)
+        self.assertEqual(res.returncode, 1)
+        self.assertIn("staff-<project>", res.stderr)
+        res = self.orche("sleep", "staff-gone")
+        self.assertEqual(res.returncode, 2)
+        self.assertIn("no project 'gone'", res.stderr)
 
 
 class AutoOpenTest(PaneTest):
-    """Staff opens by default with every Main pane Orche opens, once, and stays off once put to sleep."""
+    """A project's Staff opens by default with every Main pane Orche opens for it, once, and stays off once
+    put to sleep."""
 
-    def creates(self):
-        return [c[c.index("--title") + 1] for c in self.orca_calls() if c[1:3] == ["terminal", "create"]]
-
-    def test_opening_main_opens_staff_first_once(self):
-        self.fake_repos()
+    def test_opening_main_opens_its_staff_first_once(self):
+        self.fake()
         res = self.orche("wake", "main-acme")
-        self.assertEqual((res.returncode, res.stdout.splitlines()), (0, ["main-acme pane opened", "staff pane opened"]),
-                         res.stderr)
-        self.assertEqual(self.creates(), ["staff", "main-acme"])    # Staff first: Main ends in front
-        self.fake_repos(terminals=[{"handle": "t-staff", "title": "staff"}])
+        self.assertEqual((res.returncode, res.stdout.splitlines()),
+                         (0, ["main-acme pane opened", "staff-acme pane opened"]), res.stderr)
+        self.assertEqual(self.creates(), ["staff-acme", "main-acme"])    # Staff first: Main ends in front
+        staff_term, main_term = self.calls("terminal create")
+        self.assertEqual(staff_term[staff_term.index("--worktree") + 1], f"id:{self.ws_id}")
+        self.assertEqual(main_term[main_term.index("--worktree") + 1], f"id:repo-acme::{self.repo}")
+        self.fake(listed=True, terminals=[{"handle": "t-staff", "title": "staff-acme"}])
         res = self.orche("wake", "main-acme")
         self.assertEqual(res.stdout.splitlines(), ["main-acme pane opened"])
-        self.assertEqual(self.creates(), ["staff", "main-acme", "main-acme"])   # never a second Staff
-        self.assertFalse(any(c[1:3] == ["terminal", "switch"] for c in self.orca_calls()))
+        self.assertEqual(self.creates(), ["staff-acme", "main-acme", "main-acme"])   # never a second Staff
+        self.assertEqual(len(self.calls("worktree create")), 1)
+        self.assertEqual(self.calls("terminal switch"), [])
 
     def test_asleep_stays_off_until_woken_in_words(self):
-        self.fake_repos()
-        self.assertEqual(self.orche("sleep", "staff").stdout.strip(), "staff pane is not open")
-        self.assertEqual(self.reg()["staff"], {"status": "asleep"})
+        self.fake(listed=True)
+        self.assertEqual(self.orche("sleep", "staff-acme").stdout.strip(), "staff-acme pane is not open")
+        self.assertEqual(self.reg()["projects"]["acme"]["staff"], {"status": "asleep"})
         self.assertEqual(self.orche("wake", "main-acme").stdout.splitlines(), ["main-acme pane opened"])
         self.assertEqual(self.creates(), ["main-acme"])
-        self.assertEqual(self.orche("wake", "staff").stdout.strip(), "staff pane opened")
-        self.assertEqual(self.reg()["staff"], {"status": "awake"})
-        self.assertEqual(self.creates(), ["main-acme", "staff"])
+        self.assertEqual(self.orche("wake", "staff-acme").stdout.strip(), "staff-acme pane opened")
+        self.assertEqual(self.reg()["projects"]["acme"]["staff"], {"status": "awake"})
+        self.assertEqual(self.creates(), ["main-acme", "staff-acme"])
 
     def test_a_dry_run_prints_what_it_would_open(self):
-        self.fake_repos()
+        self.fake()
         res = self.orche("wake", "main-acme", "--dry-run")
         self.assertEqual(res.stdout.splitlines(), ["would open main-acme pane (dry-run)",
-                                                   "would open staff pane (dry-run)"], res.stderr)
+                                                   "would open staff-acme pane (dry-run)"], res.stderr)
+        self.assertIn("[dry-run] orca worktree create --repo id:repo-acme --name staff --parent-worktree "
+                      f"id:repo-acme::{self.repo} --json", res.stderr)
         self.assertEqual(self.creates(), [])
-        self.orche("sleep", "staff", "--dry-run")
-        self.assertNotIn("staff", self.reg())                      # a dry run records nothing
+        self.orche("sleep", "staff-acme", "--dry-run")
+        self.assertNotIn("staff", self.reg()["projects"]["acme"])          # a dry run records nothing
 
-    def test_auto_open_never_raises_and_answers_once_per_process(self):
-        line = staff.auto_open()   # in process the PATH's failing `orca` answers: Orca is down
-        self.assertTrue(line.startswith("staff pane not opened ("), line)
-        self.assertIs(staff.auto_open(), line)
+    def test_auto_open_never_raises_and_answers_once_per_project(self):
+        proj = self.reg()["projects"]["acme"]
+        line = staff.auto_open("acme", proj)   # in process the PATH's failing `orca` answers: Orca is down
+        self.assertTrue(line.startswith("staff-acme pane not opened ("), line)
+        self.assertIs(staff.auto_open("acme", proj), line)
+        self.assertIsNone(staff.auto_open("other", {**proj, "staff": {"status": "asleep"}}))
 
-    def test_the_registry_entry_is_checked(self):
-        from orche import registry
-        reg = registry.empty()
-        self.assertEqual(registry.validate({**reg, "staff": {"status": "asleep"}}), [])
-        self.assertTrue(registry.validate({**reg, "staff": {"status": "gone"}}))
-        self.assertTrue(registry.validate({**reg, "staff": "asleep"}))
+    def test_install_and_update_open_staff_only_beside_an_open_main(self):
+        """`staff.auto_open_all` (orche install, orche update): the Staff of each project whose Main pane is
+        open, never one for a project without an open Main, never an asleep one."""
+        self.add_beta()
+        self.fake(listed=True, terminals=[{"handle": "t-main", "title": "main-acme"}])
+        with mock.patch.dict(os.environ, {"ORCHE_FAKE_ORCA": "1"}):
+            self.assertEqual(staff.auto_open_all(dry_run=True), ["would open staff-acme pane (dry-run)"])
+            self.assertEqual(self.creates(), [])
+            staff._AUTO.clear()
+            self.assertEqual(staff.auto_open_all(), ["staff-acme pane opened"])
+            self.assertEqual(self.creates(), ["staff-acme"])                # none for beta: its Main is not open
+            staff._AUTO.clear()
+            staff.set_status("acme", "asleep")
+            self.assertEqual(staff.auto_open_all(), [])
+        self.assertEqual(self.creates(), ["staff-acme"])
+
+    def test_the_registry_entry_is_checked_and_the_old_shared_one_ignored(self):
+        reg = self.reg()
+        acme = reg["projects"]["acme"]
+        with_staff = lambda value: {**reg, "projects": {"acme": {**acme, "staff": value}}}
+        self.assertEqual(registry.validate(with_staff({"status": "asleep"})), [])
+        self.assertTrue(registry.validate(with_staff({"status": "gone"})))
+        self.assertTrue(registry.validate(with_staff("asleep")))
+        old = {**reg, "staff": {"status": "asleep"}}   # the shared Staff's record of 0.19.x: kept, ignored
+        self.assertEqual(registry.validate(old), [])
+        registry.save(old)
+        self.assertEqual(registry.load()["staff"], {"status": "asleep"})
+        self.assertFalse(staff.asleep(registry.load()["projects"]["acme"]))
 
 
 class GreetingTest(StaffCase):
     def prompts(self, *texts):
         base = dt.datetime(2026, 10, 30, tzinfo=dt.timezone.utc)
-        self.main_transcript(json.dumps({"type": "custom-title", "customTitle": "main-acme"}) + "\n"
-                             + "".join(json.dumps(r) + "\n" for i, t in enumerate(texts)
-                                     for r in self.turn((base + dt.timedelta(minutes=i)).isoformat(), t, "ok", f"g{i}")))
+        self.main_transcript(self.named("main-acme", *(self.turn((base + dt.timedelta(minutes=i)).isoformat(), t,
+                                                                 "ok", f"g{i}") for i, t in enumerate(texts))))
 
     def test_both_texts_are_pinned_short_and_plain(self):
-        reg = self.reg()
-        self.assertEqual(staff.greeting(reg, "en"), GREETING_EN)
+        self.assertEqual(staff.greeting("acme", "en"), GREETING_EN)
         raw = Path(staff.GREETING.format(language="ko")).read_text(encoding="utf-8")
         self.assertEqual(hashlib.sha256(raw.encode()).hexdigest(), GREETING_KO_SHA256)
-        ko = staff.greeting(reg, "ko")
+        ko = staff.greeting("acme", "ko")
         self.assertTrue(staff.is_korean(ko))
-        self.assertIn('"acme Main', ko)
+        self.assertIn("acme", ko)
+        self.assertIn('"Main', ko)
         for text in (GREETING_EN, ko):
             self.assertLessEqual(len(text.splitlines()), 6)
             self.assertNotRegex(text, "[\u2013\u2014]")
+            self.assertNotIn("{project}", text)
             self.assertIn("Main", text)
 
     def test_the_language_follows_the_owners_prompts(self):
@@ -200,14 +301,14 @@ class GreetingTest(StaffCase):
         res = self.staff_hook("session_start.py", "session_start_clear.json", source="startup")
         self.assertEqual(res.returncode, 0, res.stderr)
         out = json.loads(res.stdout)
-        self.assertEqual(out["systemMessage"], staff.greeting(self.reg(), "ko"))
+        self.assertEqual(out["systemMessage"], staff.greeting("acme", "ko"))
         context = out["hookSpecificOutput"]
         self.assertEqual(context["hookEventName"], "SessionStart")
-        self.assertIn("session: staff", context["additionalContext"])
+        self.assertIn("session: staff-acme\nproject: acme", context["additionalContext"])
         self.assertIn(KO_PROMPT, context["additionalContext"])
         for source in ("resume", "compact"):
             res = self.staff_hook("session_start.py", "session_start_clear.json", source=source)
-            self.assertIn("session: staff", res.stdout)
+            self.assertIn("session: staff-acme", res.stdout)
             self.assertNotIn("systemMessage", res.stdout)
 
     def test_an_english_owner_gets_english(self):
@@ -251,9 +352,8 @@ class KnowledgeTest(StaffCase):
 
     def test_other_sessions_in_the_checkout_are_not_main(self):
         self.main_transcript()
-        self.main_transcript(json.dumps({"type": "custom-title", "customTitle": "staff"}) + "\n"
-                             + "".join(json.dumps(r) + "\n" for r in self.turn("2026-10-29T09:00:00Z", "mine",
-                                                                                 "not Main", "m9")), "s2.jsonl")
+        self.main_transcript(self.named("staff-acme", self.turn("2026-10-29T09:00:00Z", "mine", "not Main", "m9")),
+                             "s2.jsonl")
         self.assertEqual([r["prompt"] for r in staff.recent(self.reg(), "acme")],
                          ["what about the docs?", None, "ship the pricing page"])
 
@@ -263,10 +363,11 @@ class KnowledgeTest(StaffCase):
         for i in range(staff.PER_PROJECT + 3):
             self.append(path, *self.turn((base + dt.timedelta(minutes=i)).isoformat(), f"q{i} " + "x" * 600,
                                          f"a{i} " + "y" * 900, f"m{i}"))
-        text = staff.start_text(self.reg(), 6000)
+        text = staff.start_text(self.reg(), "acme", 6000)
         self.assertLessEqual(len(text), 6000)
         self.assertIn("CEO Staff", text)
-        self.assertIn("## Projects\nacme: needs you 0 · running 0 · finished 0", text)
+        self.assertIn(f"session: staff-acme\nproject: acme\nmain checkout: {self.repo}\n", text)
+        self.assertIn("## Project\nacme: needs you 0 · running 0 · finished 0", text)
         self.assertIn(staff.TRIMMED, text)
         newest = f"q{staff.PER_PROJECT + 2} "
         self.assertIn(newest, text)
@@ -275,64 +376,87 @@ class KnowledgeTest(StaffCase):
 
     def test_each_prompt_brings_only_what_is_new(self):
         path = self.main_transcript()
-        self.assertIn("what about the docs?", staff.start_text(self.reg(), 6000))
-        self.assertEqual(staff.prompt_text(self.reg(), inbox.BUDGET), "")
+        self.assertIn("what about the docs?", staff.start_text(self.reg(), "acme", 6000))
+        self.assertEqual(staff.prompt_text(self.reg(), "acme", inbox.BUDGET), "")
         self.append(path, {"type": "assistant", "timestamp": "2026-10-29T05:00:30Z",
                            "message": {"id": "m5", "role": "assistant", "content": [{"type": "text",
                                                                                      "text": "Blog after docs."}]}})
-        text = staff.prompt_text(self.reg(), inbox.BUDGET)
+        text = staff.prompt_text(self.reg(), "acme", inbox.BUDGET)
         self.assertIn("owner: and the blog?", text)
         self.assertIn("main: Blog after docs.", text)
         self.assertNotIn("docs?", text.replace("and the blog?", ""))
-        self.assertEqual(staff.prompt_text(self.reg(), inbox.BUDGET), "")
+        self.assertEqual(staff.prompt_text(self.reg(), "acme", inbox.BUDGET), "")
+        cursor = json.loads((self.home / "inbox" / "staff-acme" / staff.CURSOR).read_text())
+        self.assertEqual(list(cursor), ["at"])
 
     def test_the_prompt_budget_holds(self):
         path = self.main_transcript()
-        staff.start_text(self.reg(), 6000)
+        staff.start_text(self.reg(), "acme", 6000)
         base = dt.datetime(2026, 10, 30, tzinfo=dt.timezone.utc)
         for i in range(30):
             self.append(path, *self.turn((base + dt.timedelta(minutes=i)).isoformat(), "p" * 700, "r" * 700, f"n{i}"))
-        text = staff.prompt_text(self.reg(), inbox.BUDGET)
+        text = staff.prompt_text(self.reg(), "acme", inbox.BUDGET)
         self.assertLessEqual(len(text), inbox.BUDGET)
         self.assertTrue(text.endswith(staff.TRIMMED))
-        self.assertEqual(staff.prompt_text(self.reg(), inbox.BUDGET), "")
+        self.assertEqual(staff.prompt_text(self.reg(), "acme", inbox.BUDGET), "")
+
+    def test_a_staff_knows_only_its_own_projects_main(self):
+        self.main_transcript()
+        self.add_beta()
+        acme, beta = staff.start_text(self.reg(), "acme", 6000), staff.start_text(self.reg(), "beta", 6000)
+        self.assertIn("what about the docs?", acme)
+        self.assertNotIn("beta", acme)
+        self.assertIn("owner: beta question", beta)
+        self.assertIn("## Project\nbeta: ", beta)
+        for gone in ("what about the docs?", "acme"):
+            self.assertNotIn(gone, beta)
+        self.assertTrue((self.home / "inbox" / "staff-acme" / staff.CURSOR).is_file())   # one cursor per Staff
+        self.assertTrue((self.home / "inbox" / "staff-beta" / staff.CURSOR).is_file())
+        self.append(self.folder / "s1.jsonl", *self.turn("2026-10-30T09:00:00Z", "acme later", "ok", "m7"))
+        self.assertEqual(staff.prompt_text(self.reg(), "beta", inbox.BUDGET), "")
+        self.assertIn("owner: acme later", staff.prompt_text(self.reg(), "acme", inbox.BUDGET))
 
     def test_the_hooks_inject_it_and_skip_the_inbox(self):
         self.main_transcript()
         res = self.staff_hook("session_start.py", "session_start_clear.json")
         self.assertEqual(res.returncode, 0, res.stderr)
-        self.assertIn("session: staff", res.stdout)
+        self.assertIn("session: staff-acme", res.stdout)
         self.assertIn("owner: what about the docs?", res.stdout)
         self.assertLessEqual(len(res.stdout), 6001)
         res = self.staff_hook("report_inject.py", "prompt.json")
         self.assertEqual((res.returncode, res.stdout), (0, ""), res.stderr)
         self.assertFalse((self.home / "sessions").exists())        # no standing orders, no inbox turn
         self.assertEqual(self.orca_calls(), [])
+        res = self.staff_hook("report_inject.py", "prompt.json", session="staff-gone")   # no registered project
+        self.assertEqual((res.returncode, res.stdout), (0, ""), res.stderr)
 
 
 class GateTest(StaffCase):
-    def decision(self, hook, tool, tool_input, session="staff"):
-        res = self.run_hook(hook, self.payload("pretool_bash.json", cwd=ROOT, tool_name=tool, tool_input=tool_input),
-                            ORCHE_SESSION=session)
+    def decision(self, hook, tool, tool_input, session="staff-acme"):
+        res = self.run_hook(hook, self.payload("pretool_bash.json", cwd=str(self.ws), tool_name=tool,
+                                               tool_input=tool_input), ORCHE_SESSION=session)
         self.assertEqual(res.returncode, 0, res.stderr)
         return json.loads(res.stdout)["hookSpecificOutput"]["permissionDecisionReason"] if res.stdout else None
 
     def test_writes_are_refused(self):
-        for command in ("orche dispatch < brief.txt", "orche queue approve acme --all", "orche queue add u1",
-                        "orche hr add acme design", "orche hr audit --apply", "orche report done --summary x",
-                        "orche wake main-acme", "git commit -m x", "cd x && git push origin HEAD",
-                        "gh pr merge 12", "gh pr create --fill", 'bash -c "orche dispatch"',
-                        "python3 bin/orche.py dispatch", "env FOO=1 orche --json dispatch"):
-            self.assertEqual(self.decision("env_read_gate.py", "Bash", {"command": command}), staff.DENY, command)
-        for tool in ("Edit", "Write", "NotebookEdit"):
-            self.assertEqual(self.decision("scope_gate.py", tool, {"file_path": "/tmp/x.md",
-                                                                   "notebook_path": "/tmp/x.ipynb"}),
-                             staff.DENY, tool)
+        for session in ("staff-acme", "staff-gone"):   # any Staff, its project still registered or not
+            for command in ("orche dispatch < brief.txt", "orche queue approve acme --all", "orche queue add u1",
+                            "orche hr add acme design", "orche hr audit --apply", "orche report done --summary x",
+                            "orche wake main-acme", "orche sleep staff-acme", "git commit -m x",
+                            "cd x && git push origin HEAD", "gh pr merge 12", "gh pr create --fill",
+                            'bash -c "orche dispatch"', "python3 bin/orche.py dispatch",
+                            "env FOO=1 orche --json dispatch"):
+                self.assertEqual(self.decision("env_read_gate.py", "Bash", {"command": command}, session), staff.DENY,
+                                 (session, command))
+            for tool in ("Edit", "Write", "NotebookEdit"):
+                self.assertEqual(self.decision("scope_gate.py", tool, {"file_path": "/tmp/x.md",
+                                                                       "notebook_path": "/tmp/x.ipynb"}, session),
+                                 staff.DENY, (session, tool))
 
     def test_reads_are_allowed(self):
         for command in ("orche status", "orche status acme", "orche card acme", 'orche ask acme "why?"',
                         "orche metrics", "orche doctor", "orche --json queue acme", "orche hr log",
-                        'orche report info --to acme --summary "tell Main: x"', "git log --oneline | head",
+                        'orche report info --summary "tell Main: x"', "git log --oneline | head",
                         "cat README.md"):
             self.assertIsNone(self.decision("env_read_gate.py", "Bash", {"command": command}), command)
         self.assertIsNone(self.decision("env_read_gate.py", "Read", {"file_path": str(support.ROOT / "README.md")}))
@@ -343,33 +467,38 @@ class GateTest(StaffCase):
 
 
 class NoteTest(StaffCase):
-    def report(self, *argv):
-        env = {k: v for k, v in os.environ.items() if not k.startswith(("ORCA_", "ORCHE_", "CLAUDE"))}
-        env.update({"ORCHE_HOME": str(self.home), "ORCHE_SESSION": "staff"})
+    def report(self, *argv, session="staff-acme"):
         return subprocess.run([sys.executable, str(support.ROOT / "bin" / "orche.py"), "report", *argv],
-                              env=env, cwd=ROOT, capture_output=True, text=True, timeout=30)
+                              env=child_env(self.home, self.claude, session), cwd=str(self.ws),
+                              capture_output=True, text=True, timeout=30)
 
     def test_tell_main_leaves_a_held_note_that_does_not_wake(self):
         (self.home / "config.json").write_text(json.dumps({"inbox": {"wake": True, "quiet_s": 0}}))
-        res = self.report("info", "--to", "shop", "--summary", f"tell Main: ship it ({CANARY})")
+        res = self.report("info", "--summary", f"tell Main: ship it ({CANARY})")
         self.assertEqual(res.returncode, 0, res.stderr)
         self.assertIn("note left for main-acme", res.stdout)
         [path] = self.inbox("main-acme")
         ptr = json.loads(path.read_text())
-        self.assertEqual((ptr["from"], ptr["status"], ptr["urgent"]), ("staff", "info", False))
-        self.assertTrue(ptr["unit"].startswith("adhoc-staff-"))
+        self.assertEqual((ptr["from"], ptr["status"], ptr["urgent"]), ("staff-acme", "info", False))
+        self.assertTrue(ptr["unit"].startswith("adhoc-staff-acme-"))
         self.assertNotIn(CANARY, ptr["summary"])
         self.assertTrue(inbox.held(ptr))
         self.assertFalse(inbox.wakes(ptr))
         self.assertFalse((self.home / "logs" / "nudge.log").exists())
+        self.assertEqual(self.report("info", "--to", "shop", "--summary", "x").returncode, 0)   # its own, by alias
+        self.assertEqual(len(self.inbox("main-acme")), 2)
 
-    def test_only_info_notes_to_a_main(self):
-        for argv in (("done", "--to", "acme", "--summary", "x"), ("info", "--to", "acme", "--urgent", "--summary", "x"),
-                     ("info", "--to", "div-acme-build", "--summary", "x"), ("info", "--summary", "x")):
+    def test_only_info_notes_to_its_own_projects_main(self):
+        self.add_beta()
+        for argv in (("done", "--summary", "x"), ("info", "--urgent", "--summary", "x"),
+                     ("info", "--to", "div-acme-build", "--summary", "x"), ("info", "--to", "beta", "--summary", "x"),
+                     ("info", "--to", "main-beta", "--summary", "x")):
             res = self.report(*argv)
             self.assertEqual(res.returncode, 1, argv)
-        self.assertEqual(self.inbox("main-acme"), [])
-        self.assertEqual(self.inbox("div-acme-build"), [])
+        res = self.report("info", "--summary", "x", session="staff-gone")
+        self.assertEqual(res.returncode, 1)
+        for session in ("main-acme", "div-acme-build", "main-beta"):
+            self.assertEqual(self.inbox(session), [], session)
 
 
 if __name__ == "__main__":

@@ -33,7 +33,8 @@ class SetupCase(HrCase):
             return self.orche(*argv)
 
     def created(self):
-        return [c[c.index("--name") + 1] for c in self.orca_calls("worktree create")]
+        """The unit workspaces init created (the project Staff's, `staff`, is tests/test_staff.py's)."""
+        return [n for c in self.orca_calls("worktree create") for n in [c[c.index("--name") + 1]] if n != "staff"]
 
     def proj(self):
         return registry.load()["projects"]["acme-shop"]
@@ -200,8 +201,8 @@ class InteractiveTest(SetupCase):
         self.assertEqual(code, 0, err)
         self.assertIn("Summary: rnd, research, build, gtm, ops, design(custom) · stage building · 6 worktrees", out)
         dry = [l for l in err.splitlines() if " worktree create " in l]
-        self.assertEqual([l.split("--name ")[1].split()[0] for l in dry],
-                         ["div-rnd", "div-research", "div-build", "div-gtm", "div-ops", "div-design"])
+        self.assertEqual([l.split("--name ")[1].split()[0] for l in dry],     # then the project's Staff, under Main
+                         ["div-rnd", "div-research", "div-build", "div-gtm", "div-ops", "div-design", "staff"])
         self.assertIn("would init acme-shop", out)
         self.assertIn("design: dormant (custom)", out)
         self.assertEqual(registry.load()["projects"], {})
@@ -687,7 +688,7 @@ class AddRepoTest(SetupCase):
 
     def setUp(self):
         super().setUp()
-        support.staff_asleep()   # the Staff that opens beside Main: tests/test_staff.py
+        support.no_staff(self)   # the Staff that opens beside Main: tests/test_staff.py
         self.new = self.home / "repos" / "new-app"
         (self.new / ".git").mkdir(parents=True)
         self.listed_after_add = True
@@ -840,7 +841,7 @@ class BareInitTest(SetupCase):
 
     def setUp(self):
         super().setUp()
-        support.staff_asleep()   # the Staff that opens beside Main: tests/test_staff.py
+        support.no_staff(self)   # the Staff that opens beside Main: tests/test_staff.py
         self.here = git_repo(self.home / "repos" / "cwd-app")
 
     def fake_runner(self, argv, *, timeout, input, env=None, cwd=None):
@@ -924,7 +925,9 @@ class LandOnMainTest(SetupCase):
         code, out, err = self.orche("init", "Acme Shop", "--divisions", "build", "--no-intake")
         self.assertEqual(code, 0, err)
         self.assertNotIn("warning", err)
-        self.assertEqual(self.orca_calls("terminal create"), [])
+        self.assertEqual([c[c.index("--title") + 1] for c in self.orca_calls("terminal create")],
+                         ["staff-acme-shop"])        # Main was open: init still opens the project's Staff
+        self.assertIn("staff-acme-shop pane opened", out)
         self.assertEqual(self.orca_calls("terminal switch"), [["orca", "terminal", "switch", "--terminal", "t1", "--json"]])
 
     def test_json_reports_switched(self):

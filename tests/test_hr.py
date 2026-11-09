@@ -140,12 +140,13 @@ class InitTest(HrCase):
         dry = [l for l in err.splitlines() if l.startswith("[dry-run] orca ")]
         creates = [l for l in dry if " worktree create " in l]
         main = f"repo-acme::{os.path.realpath(self.repo)}"   # a division nests under Main's worktree
-        self.assertEqual(creates, [f"[dry-run] orca worktree create --repo id:repo-acme --name div-{d} "
-                                   f"--parent-worktree id:{main} --json" for d in registry.DIVISIONS])
+        self.assertEqual(creates, [f"[dry-run] orca worktree create --repo id:repo-acme --name {name} "
+                                   f"--parent-worktree id:{main} --json"     # the project's Staff nests there too
+                                   for name in [f"div-{d}" for d in registry.DIVISIONS] + ["staff"]])
         panes = [l for l in dry if " terminal create " in l]
-        self.assertEqual(len(panes), 2)                        # the CEO Staff opens first, then Main
-        self.assertIn("--title staff --command", panes.pop(0))
-        self.assertIn("would open staff pane (dry-run)", out)
+        self.assertEqual(len(panes), 2)                        # the project's CEO Staff opens first, then Main
+        self.assertIn("--worktree id:repo-acme::<staff worktree> --title staff-acme-shop --command", panes.pop(0))
+        self.assertIn("would open staff-acme-shop pane (dry-run)", out)
         self.assertIn(f"--title main-acme-shop --command {PANE}ORCHE_SESSION=main-acme-shop CLAUDE_CODE_PROMPT_CACHE_TTL=1h CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1 claude "
                       "--permission-mode bypassPermissions --model claude-opus-5-5 --effort xhigh --name main-acme-shop --json",
                       panes[0])
@@ -161,7 +162,7 @@ class InitTest(HrCase):
         self.assertEqual([l.split(" --comment ")[1] for l in dry if " --comment " in l],
                          ["Resting: starts when Main hands it work --json"] * len(registry.DIVISIONS))   # no --wake
         # Only read-only Orca calls ran; nothing was written.
-        self.assertEqual({" ".join(c[1:3]) for c in self.calls}, {"repo list", "terminal list"})
+        self.assertEqual({" ".join(c[1:3]) for c in self.calls}, {"repo list", "terminal list", "worktree list"})
         self.assertEqual(registry.load()["projects"], {})
         self.assertEqual(list(self.repo.iterdir()), [])
         self.assertFalse(self.wtroot.exists())
@@ -198,10 +199,16 @@ class InitTest(HrCase):
                          [f"div-acme-shop-{d}.md" for d in ("build", "gtm", "ops", "research", "rnd")])
         self.assertFalse((self.repo / ".claude" / "settings.local.json").exists())
         self.assertIn("persona template missing for division build", hr.log_path().read_text())
-        # Panes: the two woken divisions, then main.
+        # Panes: the two woken divisions, then the project's Staff in its own workspace under Main, then Main.
+        staff_ws = [c for c in self.orca_calls("worktree create") if "staff" in c]
+        self.assertEqual(staff_ws, [["orca", "worktree", "create", "--repo", "id:repo-acme", "--name", "staff",
+                                     "--parent-worktree", f"id:repo-acme::{os.path.realpath(self.repo)}", "--json"]])
+        staff_pane = next(c for c in self.orca_calls("terminal create") if "staff-acme-shop" in c)
+        self.assertEqual(staff_pane[staff_pane.index("--worktree") + 1], f"id:repo-acme::{self.wtroot / 'staff'}")
         panes = [c[c.index("--title") + 1:c.index("--title") + 4] for c in self.orca_calls("terminal create")]
         self.assertEqual(panes, [["div-acme-shop-build", "--command", f"{PANE}ORCHE_SESSION=div-acme-shop-build CLAUDE_CODE_PROMPT_CACHE_TTL=1h CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1 claude --permission-mode bypassPermissions --name div-acme-shop-build"],
                                  ["div-acme-shop-gtm", "--command", f"{PANE}ORCHE_SESSION=div-acme-shop-gtm CLAUDE_CODE_PROMPT_CACHE_TTL=1h CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1 claude --permission-mode bypassPermissions --name div-acme-shop-gtm"],
+                                 ["staff-acme-shop", "--command", f"{PANE}ORCHE_SESSION=staff-acme-shop CLAUDE_CODE_PROMPT_CACHE_TTL=1h claude --permission-mode bypassPermissions --model claude-opus-5-5 --effort medium --name staff-acme-shop"],
                                  ["main-acme-shop", "--command", f"{PANE}ORCHE_SESSION=main-acme-shop CLAUDE_CODE_PROMPT_CACHE_TTL=1h CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1 claude --permission-mode bypassPermissions --model claude-opus-5-5 --effort xhigh --name main-acme-shop"]])
         self.assertEqual(self.orca_calls("automations create"), [])
         self.assertIn("[dry-run] orca automations create --name orche-hr-audit-acme-shop", err)
@@ -322,6 +329,7 @@ class InitTest(HrCase):
         self.assertEqual(list(registry.load()["projects"]["acme-shop"]["divisions"]), ["build"])
 
     def test_settings_merge_keeps_other_keys_and_existing_panes_skipped(self):
+        support.no_staff(self)   # divisions only here: the Staff's workspace is tests/test_staff.py
         settings = self.wtroot / "div-build" / ".claude" / "settings.local.json"
         settings.parent.mkdir(parents=True)
         settings.write_text(json.dumps({"permissions": {"allow": ["Bash(ls)"]}, "agent": "old"}))
@@ -389,6 +397,7 @@ class InitTest(HrCase):
         self.assertEqual(self.calls, [["orca", "repo", "list", "--json"]])
 
     def test_symlinked_claude_dir_refused_then_resumed_without_second_worktree(self):
+        support.no_staff(self)   # divisions only here: the Staff's workspace is tests/test_staff.py
         (self.repo / ".claude").mkdir()
         wt = self.wtroot / "div-build"
         wt.mkdir(parents=True)
@@ -436,6 +445,7 @@ class InitTest(HrCase):
         self.assertEqual(registry.load()["projects"]["acme-shop"]["divisions"]["build"]["status"], "onboarding")
 
     def test_existing_orca_worktree_is_adopted(self):
+        support.no_staff(self)   # divisions only here: the Staff's workspace is tests/test_staff.py
         wt = self.wtroot / "elsewhere"
         wt.mkdir(parents=True)
         self.worktree_list = [{"id": f"repo-acme::{wt}", "repoId": "repo-acme", "path": str(wt),

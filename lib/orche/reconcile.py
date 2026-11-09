@@ -734,7 +734,7 @@ def _reopen(reg, c) -> None:
             if deliver.reopen_pane(reg, c.target, c.info["handle"]) is None:
                 raise orca.OrcaError(f"{c.target} not listed connected after the reopen", code="not_reopened")
         else:
-            hr.project_pane(reg["projects"][c.project], dry_run=False, switch=False)
+            hr.project_pane(c.project, reg["projects"][c.project], dry_run=False, switch=False)
         util.write_json(inbox.box(c.target) / MAIN_REOPENED, {"at": units.now().isoformat()})
     else:
         hr.wake(reg, roster.Roster(reg).member(c.target))
@@ -767,7 +767,7 @@ def _repair_main(reg, c) -> None:
         raise orca.OrcaError(f"{c.target} pane is in use: not reopened", code="owner_typing")
     for t in found:
         orca.terminal("close", "--terminal", str(t.get("handle")), timeout=10)
-    hr.project_pane(reg["projects"][c.project], dry_run=False, switch=False)
+    hr.project_pane(c.project, reg["projects"][c.project], dry_run=False, switch=False)
     util.write_json(inbox.box(c.target) / MAIN_REOPENED, {"at": units.now().isoformat()})
 
 

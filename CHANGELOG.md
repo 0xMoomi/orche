@@ -3,6 +3,16 @@
 All notable changes to Orche are listed here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow semantic versioning.
 
+## 0.19.13 — 2026-11-09
+
+### Changed
+
+- Each project has its own CEO Staff (`staff-<project>`), nested under its Main in Orca's sidebar like a division,
+  in its own workspace: it knows what the owner and that Main said to each other, reads the project's code in the
+  main checkout, and "tell Main: ..." leaves that Main a note. It opens beside its Main by default; "close the
+  staff window" (`orche sleep staff-<project>`) keeps that project's Staff closed until "open the staff window"
+  (`orche wake staff-<project>`). The shared Staff for the whole machine is gone.
+
 ## 0.19.12 — 2026-11-03
 
 ### Fixed

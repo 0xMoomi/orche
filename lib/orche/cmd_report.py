@@ -19,8 +19,9 @@ no review runs inside the report (a cross-check runs only on request, `orche rev
 In a team repository (registry.team) a gated done publishes nothing: it is filed with `pr: none` and the line
 `ready: say "push <unit>" (<branch>)` (publish.ready_line); `orche queue add <unit>` publishes on the owner's word.
 Under the runner (ORCHE_RUNNER set by `orche run`) it refuses with exit 2: the runner files the pointer.
-The CEO Staff (ORCHE_SESSION `staff`, not a member) files only `info --to <project or main-<p>>`: a held
-note from `staff` (unit `adhoc-staff-<yyyymmdd>`) that never wakes Main; Main reads it at its next wake.
+A project's CEO Staff (ORCHE_SESSION `staff-<p>`, not a member) files only `info` to its own project's Main
+(`--to`, when given, must name that project or its Main): a held note from `staff-<p>` (unit
+`adhoc-staff-<p>-<yyyymmdd>`) that never wakes Main; Main reads it at its next wake.
 """
 import json
 import os
@@ -56,18 +57,22 @@ def unidentified_message(r, place) -> str:
             "(Orche panes set it automatically) or run inside a unit worktree")
 
 
-def _staff_note(args, r) -> int:
-    """The CEO Staff's note to a project's Main: `info`, never urgent, held (it does not wake Main)."""
+def _staff_note(args, r, session) -> int:
+    """A Staff's note to its own project's Main: `info`, never urgent, held (it does not wake Main)."""
     if args.status != "info" or args.urgent or args.owner or args.unit:
-        return cli.fail(EXIT_USER, "Staff files only `orche report info --to <project> --summary ...` "
-                                   "(no --urgent, --owner or --unit): a note Main reads at its next wake")
-    target = r.resolve_to(args.to or "", None)
-    if target is None or target.kind != "main":
-        return cli.fail(EXIT_USER, f"--to must name a project or its Main, got {args.to!r}")
+        return cli.fail(EXIT_USER, "Staff files only `orche report info --summary ...` (no --urgent, --owner "
+                                   "or --unit): a note its project's Main reads at its next wake")
+    main = r.main(staff.project_of(r.reg, session))
+    if main is None:
+        return cli.fail(EXIT_USER, f"{session} belongs to no registered project with a Main")
+    target = r.resolve_to(args.to, None) if args.to else main
+    if target is None or target.session != main.session:
+        return cli.fail(EXIT_USER, f"a Staff leaves notes only for its own project's Main ({main.session}), "
+                                   f"got --to {args.to!r}")
     summary = inbox.clip(mask.redact(args.summary)[0])
     if not summary:
         return cli.fail(EXIT_USER, "--summary is empty")
-    ptr = inbox.make(f"adhoc-{staff.SESSION}-{units.now():%Y%m%d}", staff.SESSION, target.session, "info",
+    ptr = inbox.make(f"adhoc-{util.slugify(session)}-{units.now():%Y%m%d}", session, main.session, "info",
                      summary=summary)
     path = None if args.dry_run else inbox.post(ptr)
     if args.json:
@@ -94,7 +99,7 @@ def cmd_report(args):
     r = roster.Roster(reg)
     who = r.identify(cwd)
     if staff.is_staff(who.session):
-        return _staff_note(args, r)
+        return _staff_note(args, r, who.session)
     if who.session is None:
         return cli.fail(EXIT_USER, unidentified_message(r, who.place))
     if who.member is None:

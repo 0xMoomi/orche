@@ -169,8 +169,8 @@ def live_pane(term, title):
     return fresh[0] if fresh else None
 
 
-def project_pane(proj, *, dry_run, switch=True, resume=True) -> tuple:
-    """Open the project's `main-<proj>` pane in its main checkout, or switch to it.
+def project_pane(key, proj, *, dry_run, switch=True, resume=True) -> tuple:
+    """Open project `key`'s `main-<key>` pane (`proj`: its registry entry) in its main checkout, or switch to it.
 
     One title lookup: no pane -> create one (`pane_command`: resume the newest transcript named
     `main-<proj>` in the main checkout, else `--name main-<proj>`; onboarding passes resume=False),
@@ -180,8 +180,9 @@ def project_pane(proj, *, dry_run, switch=True, resume=True) -> tuple:
     the switch attempt when switching): one Orca no longer has — the list lagged a close — is
     created anew, and a failed switch to a live pane raises. Returns (data, line); data["pane"] is
     "opened", "switched" or (switch=False) "open". Under dry_run the create argv is printed and no
-    writing orca command runs. Opening Main's pane first opens the CEO Staff (`staff.auto_open`: unless
-    it is asleep or open; its line in data["staff"]). Raises orca.OrcaError.
+    writing orca command runs. Opening Main's pane first opens the project's CEO Staff (`staff.auto_open`:
+    in its own workspace under Main, unless it is asleep or open; its line in data["staff"]). Raises
+    orca.OrcaError.
     """
     title = proj["main_session"]
     term = orca.find_terminal_by_title(title)
@@ -204,7 +205,7 @@ def project_pane(proj, *, dry_run, switch=True, resume=True) -> tuple:
         data["dry_run"] = True
     if term is None:
         from .. import staff
-        if line := staff.auto_open(dry_run=dry_run):   # before Main's pane, so Main ends in front
+        if line := staff.auto_open(key, proj, dry_run=dry_run):   # before Main's pane, so Main ends in front
             data["staff"] = line
         command = pane_command(title, resume=resume, cwd=proj["path"])
         result = open_pane(f"{proj['repo_id']}::{proj['path']}", title, command, dry_run=dry_run)

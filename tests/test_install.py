@@ -307,7 +307,7 @@ class InstallTest(InstallCase):
         profile.mkdir()
         if settings is not None:
             (profile / "settings.json").write_text(settings)
-        support.staff_asleep()
+        support.no_staff(self)
         patcher = mock.patch.dict(os.environ, {"HOME": str(self.h), "CLAUDE_CONFIG_DIR": str(profile)})
         patcher.start()
         self.addCleanup(patcher.stop)

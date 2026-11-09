@@ -244,7 +244,7 @@ def reopen_pane(reg, session, handle, done=None):
             log.log("hooks", f"deliver: close {session} pane {handle}: {exc}")
         try:
             if m.kind == "main":
-                hr.project_pane(reg["projects"][m.project], dry_run=False, switch=False)
+                hr.project_pane(m.project, reg["projects"][m.project], dry_run=False, switch=False)
             else:
                 hr.wake(reg, m)
         except Exception as exc:  # noqa: BLE001 - the attempt ends no-agent; the heartbeat retries

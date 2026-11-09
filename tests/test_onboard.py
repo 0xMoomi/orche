@@ -28,7 +28,7 @@ class NewRepoTest(test_hr.HrCase):
 
     def setUp(self):
         super().setUp()
-        support.staff_asleep()   # the Staff that opens beside Main: tests/test_staff.py
+        support.no_staff(self)   # the Staff that opens beside Main: tests/test_staff.py
         patcher = mock.patch.dict(os.environ, GIT_ENV)
         patcher.start()
         self.addCleanup(patcher.stop)

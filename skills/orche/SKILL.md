@@ -8,8 +8,9 @@ description: Orche help. Use when the user asks how to work with Orche: its comm
 Orche runs a company-style agent organization for each project: one **Main** that decides, the
 project's **divisions** (`orche depts`; standard: R&D, Research, Build, GTM, Ops, plus any custom ones
 the project defines; a custom division gets this card too), **workers** each head staffs, a
-headless **Liaison** that answers other projects (`orche ask`), and one global **HR**. Work moves as briefs, reports and ledger rows,
-not chat.
+headless **Liaison** that answers other projects (`orche ask`), a read-only **CEO Staff** per project
+(`staff-<project>`, in its own workspace under Main) for the owner's everyday questions, and one
+global **HR**. Work moves as briefs, reports and ledger rows, not chat.
 
 The owner says what they want in words to Main, in any language, and Main runs the command; the commands below
 are for sessions and scripts.
@@ -37,7 +38,7 @@ Orche unit rules (full help: /orche)
 | `orche card refresh <proj>` | Refresh a project's card from what landed since its base commit (no call when nothing did) |
 | `orche ledger check --pr <pr> --sha <sha>` | `VERIFIED <verdict>` or `NOT-VERIFIED` for the PR's head SHA |
 | `orche feat new\|sleep\|wake\|retire` | Feature-agent lifecycle (HR; limits apply) |
-| `orche sleep <unit>` / `orche wake <unit>` | Close a pane and pause / resume a session |
+| `orche sleep <unit>` / `orche wake <unit>` | Close a pane and pause / resume a session; `staff-<proj>`: close that project's CEO Staff (it stays closed) / open it |
 | `orche decide ...` | Append a row to the unit's DECISIONS.tsv |
 | `orche report <status> --summary "..."` | File a unit's completion/blocker as one inbox pointer (to the brief's sender: Main, or the head for its workers) |
 | `orche run <unit>` | Run (or re-run by hand) one unit headless with `claude -p` in its worktree; the Stop hook starts new units this way. `--dry-run` prints the argv |

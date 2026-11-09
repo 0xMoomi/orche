@@ -104,7 +104,7 @@ The headless read-only role that answers other projects' questions (`orche ask`)
 _Avoid_: liaison session, liaison pane (gone since 0.5.0).
 
 **CEO Staff**:
-The read-only pane (session `staff`, one per machine, `lib/orche/staff.py`), open by default, the owner asks everyday questions; it knows the owner's exchanges with every Main from their transcripts and hands work to Main as a held note. Not a member: one registry entry (`staff.status`, asleep once closed in words), no memory or heartbeat.
+A project's read-only pane (session `staff-<project>`, one per project, `lib/orche/staff.py`) in its own workspace under that project's Main, open by default, where the owner asks everyday questions; it knows the owner's exchanges with that Main from its transcripts and hands work to that Main as a held note. Not a member: one registry entry per project (`projects.<p>.staff.status`, asleep once closed in words), no memory or heartbeat.
 _Avoid_: assistant, secretary, staff division (it is no division).
 
 **Base commit**:

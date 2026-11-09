@@ -9,9 +9,10 @@ Every write goes through `update(mutate)`: the change is applied to a registry l
 and saved before the lock is released, so two writers (a heartbeat wake and `orche hr add`) cannot
 lose each other's changes. `save` is called only here.
 
-The optional top-level `staff` ({"status": "awake" | "asleep"}) is the CEO Staff's one record
-(lib/orche/staff.py): `orche sleep staff` makes it asleep, so nothing opens Staff automatically
-until `orche wake staff`.
+A project's optional `staff` ({"status": "awake" | "asleep"}; absent is awake) is its CEO Staff's one
+record (lib/orche/staff.py): `orche sleep staff-<project>` makes it asleep, so nothing opens that Staff
+automatically until `orche wake staff-<project>`. A top-level key the schema does not name is kept as it is
+and ignored.
 
 A project's optional `team` is the team plugin id its repository declares (detect.team; written by
 `orche init` and `orche update`): such a project runs in team mode (`team(reg, key)` is the one read site).
@@ -318,6 +319,9 @@ def _validate_project(key, proj, errors):
         _validate_secrets(proj["secrets"], f"{where}.secrets", errors)
     if "team" in proj and not (isinstance(proj["team"], str) and proj["team"].strip()):
         errors.append(f"{where}.team: must be a non-empty string")
+    if "staff" in proj and not (isinstance(proj["staff"], dict) and set(proj["staff"]) == {"status"}
+                                and proj["staff"]["status"] in STAFF_STATUSES):
+        errors.append(f"{where}.staff: must be {{\"status\": {'|'.join(STAFF_STATUSES)}}}")
     if "orche_version" in proj and not (isinstance(proj["orche_version"], str)
                                         and ORCHE_VERSION.fullmatch(proj["orche_version"])):
         errors.append(f"{where}.orche_version: must be a version like 0.6.0")
@@ -353,9 +357,6 @@ def validate(reg) -> list:
                 errors.append(f"limits.{key}: must be a non-negative integer")
     if not isinstance(reg.get("frozen"), bool):
         errors.append("frozen: must be a boolean")
-    if "staff" in reg and not (isinstance(reg["staff"], dict) and set(reg["staff"]) == {"status"}
-                               and reg["staff"]["status"] in STAFF_STATUSES):
-        errors.append(f"staff: must be {{\"status\": {'|'.join(STAFF_STATUSES)}}}")
     projects = reg.get("projects")
     if not isinstance(projects, dict):
         errors.append("projects: must be an object")

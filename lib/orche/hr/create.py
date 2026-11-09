@@ -108,7 +108,7 @@ def onboard_project(reg, key, setup, plan, *, repo_id, root, card, dry_run=False
             _onboard_division(reg, key, proj, name, wake=name in plan.wake, root=root, repo_id=repo_id,
                               spec=custom.get(name), by=by, dry_run=dry_run,
                               model=division_model(setup, name, models))
-        data, _ = panes.project_pane(proj, dry_run=dry_run, switch=False, resume=False)
+        data, _ = panes.project_pane(key, proj, dry_run=dry_run, switch=False, resume=False)
         opened = [data["session"]] if data["pane"] == "opened" else []
     except onboarding.UnsafeTarget as exc:
         raise book.Refused(cli.EXIT_BLOCKED, f"init {key} stopped: {exc} (re-run orche init {key} to resume)") from None

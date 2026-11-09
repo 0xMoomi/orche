@@ -177,7 +177,7 @@ class FirstPassTest(test_install.InstallCase):
             p.start()
             self.addCleanup(p.stop)
         registry.save(copy.deepcopy(SAMPLE))
-        support.staff_asleep()   # the Staff that opens after the install: tests/test_staff.py
+        support.no_staff(self)   # the Staff that opens after the install: tests/test_staff.py
         self.app = privacy.python_app()
 
     def protect(self):

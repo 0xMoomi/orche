@@ -890,7 +890,7 @@ class ProjectPaneTest(CoreCase):
 
     def setUp(self):
         super().setUp()
-        support.staff_asleep()
+        support.no_staff(self)
 
     def calls_of(self, sub):
         return [c for c in self.calls if c[1:3] == ["terminal", sub]]

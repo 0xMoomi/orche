@@ -501,7 +501,7 @@ class InitIntakeTest(FakeClaudeMixin, test_hr.HrCase):
         super().setUp()
         git_repo(self.repo, code=True)
         self.setup_fake()
-        support.staff_asleep()
+        support.no_staff(self)
 
     def test_init_ends_with_the_intake(self):
         self.reply(answer({"build": "Run `make test`.", "gtm": "Audience: shops.", "design": "Figma."}))

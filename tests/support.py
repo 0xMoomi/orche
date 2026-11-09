@@ -128,11 +128,15 @@ def no_claude_dir() -> str:
     return _NO_CLAUDE_DIR
 
 
-def staff_asleep() -> None:
-    """The registry's CEO Staff asleep, so no Main pane, init or update a test runs opens it
-    (tests/test_staff.py covers that it opens by default)."""
-    from orche import registry
-    registry.update(lambda r: r.__setitem__("staff", {"status": "asleep"}))
+def no_staff(case) -> None:
+    """No CEO Staff opens for the rest of `case`: no Main pane, init, install or update the test runs in
+    process makes Orca calls for one (tests/test_staff.py covers that each project's opens by default)."""
+    from unittest import mock
+    from orche import staff
+    for name, value in (("auto_open", lambda *a, **k: None), ("auto_open_all", lambda *a, **k: [])):
+        patcher = mock.patch.object(staff, name, value)
+        patcher.start()
+        case.addCleanup(patcher.stop)
 
 
 def no_wake(cfg: dict) -> dict:

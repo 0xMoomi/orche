@@ -6,11 +6,11 @@ A Main's terminal is recorded for the bell; a Main identified without $ORCHE_SES
 heartbeat, and Main's own pane clears the mark (roster.note_pane, as the prompt hook does).
 Right after the role comes a "Role rules" card: the inject-marked block of skills/orche-main (main
 checkout), skills/orche-build (the div-*-build worktree) or skills/orche (every other unit).
-Total output stays under 6,000 characters; the card is trimmed first. The CEO Staff (ORCHE_SESSION
-`staff`, lib/orche/staff.py) gets its own text instead: its persona, one card line per project and the
-newest exchanges between the owner and every Main, within the same cap; on `startup` (a fresh Staff
-session, never a resume) as JSON whose `systemMessage` shows the owner Staff's greeting in their
-language (no model call) and whose `additionalContext` is that text. Fail-open."""
+Total output stays under 6,000 characters; the card is trimmed first. A project's CEO Staff
+(ORCHE_SESSION `staff-<project>`, lib/orche/staff.py) gets its own text instead: its role and persona, the
+project's card line and the newest exchanges between the owner and that project's Main, within the same
+cap; on `startup` (a fresh Staff session, never a resume) as JSON whose `systemMessage` shows the owner
+Staff's greeting in their language (no model call) and whose `additionalContext` is that text. Fail-open."""
 import json
 import os
 import sys
@@ -244,11 +244,12 @@ def main():
         who = r.identify(payload.get("cwd") or os.getcwd(), transcript=payload.get("transcript_path"))
         roster.note_pane(who)   # Main's terminal for the bell; a Main outside Orche's pane command is marked
         from orche import staff
-        if staff.is_staff(who.session):
+        key = staff.project_of(r.reg, who.session)
+        if key is not None:
             if payload.get("source") != "startup":
-                print(staff.start_text(r.reg, CAP))
+                print(staff.start_text(r.reg, key, CAP))
                 return 0
-            text, greeting = staff.opening(r.reg, CAP)   # a fresh session: the owner sees the greeting
+            text, greeting = staff.opening(r.reg, key, CAP)   # a fresh session: the owner sees the greeting
             print(json.dumps({"systemMessage": greeting, "hookSpecificOutput": {
                 "hookEventName": "SessionStart", "additionalContext": text}}, ensure_ascii=False))
             return 0

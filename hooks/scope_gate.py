@@ -4,8 +4,8 @@ feature's scope globs. Always allowed: `.orche/`, `docs/` and `.claude/agent-mem
 worktree, `~/.claude/agent-memory/`, the session scratch root (`/private/tmp/claude-<uid>/`,
 `$TMPDIR/claude-*`, or $ORCHE_SCRATCH_ROOT), and the session's own unit folders under the real
 project root (`<root>/.orche/units/<u>/…` when unit <u>'s brief is addressed to the session),
-except their `BRIEF.md`, `BRIEF.rev<N>.md` and `RUN.json`. The CEO Staff (ORCHE_SESSION `staff`) edits
-nothing anywhere (lib/orche/staff.py). Internal error -> allow + log."""
+except their `BRIEF.md`, `BRIEF.rev<N>.md` and `RUN.json`. A CEO Staff (ORCHE_SESSION `staff-<project>`)
+edits nothing anywhere (lib/orche/staff.py). Internal error -> allow + log."""
 import json
 import os
 import re

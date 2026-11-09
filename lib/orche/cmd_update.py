@@ -29,10 +29,11 @@ update follows `origin/main`. Steps, each one a progress line on stderr:
 
 The closing block: `Orche <old> → <new>`, one line per project, the install's `reconcile job` line (and its
 `janitor: remove` line when it removed the janitor's old 04:00 LaunchAgent), and
-the install's Staff line when it opened the CEO Staff (`staff.auto_open`; an up-to-date or dry-run
-update opens or prints it itself), and a restart line when a card, skill, template or agent file changed. `--dry-run` fetches without moving
-any ref (FETCH_HEAD only) and prints the plan. Exit 0 ok, 1 a step failed (named; the checkout keeps
-whatever the finished steps did, a re-run resumes), 2 refused. With `--json` every outcome is one JSON
+the install's Staff lines when it opened a project's CEO Staff (`staff.auto_open_all`: each project whose
+Main pane is open; an up-to-date or dry-run update opens or prints them itself), and a restart line when a
+card, skill, template or agent file changed. `--dry-run` fetches without moving any ref (FETCH_HEAD only)
+and prints the plan. Exit 0 ok, 1 a step failed (named; the checkout keeps whatever the finished steps did,
+a re-run resumes), 2 refused. With `--json` every outcome is one JSON
 object on stdout, carrying `development` (the reason, or null) unless refused.
 """
 import os
@@ -179,10 +180,10 @@ def cmd_update(args):
         resume = new == old and state.get("version") != old
         if new == old and not resume:
             note = "; development checkout, nothing pulled" if why else ""
-            opened = staff.auto_open(dry_run=dry_run)
+            opened = staff.auto_open_all(dry_run=dry_run)
             out(args, {"status": "current", "version": old, "development": why,
                        **({"staff": opened} if opened else {})},
-                [f"already up to date ({old}{note})"] + ([opened] if opened else []))
+                [f"already up to date ({old}{note})"] + opened)
             return EXIT_OK
     except StepFailed as exc:
         return _failed(args, exc, [])
@@ -200,8 +201,7 @@ def cmd_update(args):
         lines += [f"would refresh {k}: orche init {k} --refresh" for k in keys]
         if changed:
             lines.append(f"then: {RESTART}")
-        if opened := staff.auto_open(dry_run=True):
-            lines.append(opened)
+        lines += staff.auto_open_all(dry_run=True)
         out(args, {"status": "dry-run", "old": old, "new": new, "mode": mode, "projects": keys,
                    "session_files": changed, "resume": resume, "development": why}, lines)
         return EXIT_OK
@@ -223,7 +223,7 @@ def cmd_update(args):
         checked = hooks_lines(text)
         text = text.splitlines()
         heartbeat = [ln for ln in text if ln.startswith(RECONCILE_STEP)]
-        opened = [ln for ln in text if ln.startswith(f"{staff.SESSION} pane ")]   # the install opened Staff
+        opened = [ln for ln in text if ln.startswith(staff.PREFIX)]   # the Staff panes the install opened
         old_janitor = [ln for ln in text if ln.startswith(f"{JANITOR_STEP}: remove")]
     except StepFailed as exc:
         return _failed(args, exc, done)
@@ -238,7 +238,7 @@ def cmd_update(args):
         except StepFailed as exc:
             failed.append(exc)
             done.append(f"{key}: {exc}")
-    done += heartbeat[-1:] + old_janitor + checked + opened[-1:]
+    done += heartbeat[-1:] + old_janitor + checked + opened
     if changed or plugin or resume:
         done.append(RESTART)
     data = {"status": "failed" if failed else "updated", "old": old, "new": new, "mode": mode, "projects": keys,

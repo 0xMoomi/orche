@@ -8,6 +8,7 @@ hierarchy with fixed names, so you can see the organization at a glance without 
 ```
 my-app                                   (Orca repo)
  └─ main checkout                        1 pane: main-my-app
+     ├─ staff                            staff-my-app         (the CEO Staff, read-only)
      ├─ div-rnd                          div-my-app-rnd       (branch div/rnd)
      ├─ div-research                     div-my-app-research  (branch div/research)
      ├─ div-build                        div-my-app-build     (branch div/build)
@@ -20,24 +21,26 @@ my-app                                   (Orca repo)
 | Item | Name | Where |
 |---|---|---|
 | Main pane | `main-<proj>` | the project's main checkout |
+| CEO Staff card / pane | worktree `staff`, pane `staff-<proj>` | its own worktree, a child of the main checkout's row, created the first time the project's Staff opens; never worked in (Staff reads the main checkout) |
 | Division card / pane | worktree `div-<division>`, pane `div-<proj>-<division>` | its own worktree, branch `div/<division>`, a child of the main checkout's row |
 | Feature card / pane | worktree `feat-<feature>`, pane `feat-<proj>-<feature>` | child worktree of its head's division, branch: the branch Orca names by default; `<prefix>/<feature>` when the project sets `publish.per_project.<p>.branch_prefix` (Orche renames it right after creation) |
 
 Pane titles equal Claude Code session names. Orche starts a division or feature pane with
 `PATH=<plugin>/bin:$PATH ORCHE_SESSION=<session> claude --permission-mode bypassPermissions --name <session>`
 (or `--resume <session id>` on wake), and the Main pane with the same command plus
-`--model claude-opus-5-5 --effort xhigh` (since 0.6.0 Main also starts in bypass, like every pane), so hooks know the pane's role and `orche` is on the pane's PATH. `orche init` creates the division worktrees; `orche feat new` creates
+`--model claude-opus-5-5 --effort xhigh` (since 0.6.0 Main also starts in bypass, like every pane), so hooks know the pane's role and `orche` is on the pane's PATH. The Staff pane runs the same command with
+`--model claude-opus-5-5 --effort medium`. `orche init` creates the division worktrees; `orche feat new` creates
 feature worktrees.
 
 ## Lineage
 
-Main's row holds the project's divisions, and each division's row holds its workers. A division's
-worktree is created with **the project's main worktree as its Orca parent** (the checkout where
-Main's tab lives), and a feature's with **its head's worktree as its Orca parent**. So the divisions
-nest under Main and the workers under `div-<division>`: you talk only to Main, and everything a
-worker produces is reviewed and queued by its head.
+Main's row holds the project's CEO Staff and divisions, and each division's row holds its workers. The
+Staff's and a division's worktree are created with **the project's main worktree as their Orca parent**
+(the checkout where Main's tab lives), and a feature's with **its head's worktree as its Orca parent**.
+So the Staff and the divisions nest under Main and the workers under `div-<division>`: you talk only to
+Main (and ask its Staff everyday questions), and everything a worker produces is reviewed and queued by its head.
 
-The fold arrow on Main's row hides its divisions and their workers; click it again to show them.
+The fold arrow on Main's row hides its Staff, its divisions and their workers; click it again to show them.
 Orca remembers which rows are folded, across restarts too, so a project you folded stays folded
 until you open it.
 

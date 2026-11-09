@@ -14,7 +14,7 @@ For developers on macOS who want several agents on one repository without watchi
 - **Worktrees.** Every division and worker works in its own git worktree, which Orca shows as a workspace. In Orca's sidebar the divisions fold under Main's row and each worker under its division: fold them away and open them only when you want to look.
 - **Workers** carry out one slice each, headless (`claude -p`, no tab), and open their own pull requests. Build reviews each one, and the merge queue runs `scripts/verify/ci.sh` on the base branch and lands it when green. In team mode (a repository that declares its team plugin) push, pull request and merge wait for your word; in an issue-tracked project (Linear) each worker's name carries the issue key and its PR says `Fixes DES-57`.
 - **One wake per finished batch.** Main hears back once, when everything a request started has ended; a question or a decision for you reaches it at once.
-- **The CEO Staff**, one window for all your projects, opens by default: it knows what you said to every Main and what each answered, answers everyday questions, changes nothing, and "tell Main: …" leaves that Main a note.
+- **The CEO Staff**, one per project, opens by default in its own workspace under that project's Main: it knows what you said to that Main and what it answered, answers everyday questions, changes nothing, and "tell Main: …" leaves its Main a note.
 - **The heartbeat**, a LaunchAgent pass every 5 minutes that makes no model call itself, reopens closed panes (also a Main that Orca reopened without Orche), re-delivers stuck briefs, rings reminders and keeps the merge queue moving.
 
 ## Quick start
@@ -34,7 +34,7 @@ Re-running it on a Mac that already has Orche keeps that install (its folder and
 
 ## What you get
 
-- A `main-<project>` tab in Orca with the Staff tab beside it. Divisions stay dormant (no pane, no cost) until work arrives.
+- A `main-<project>` tab in Orca with the project's Staff (`staff-<project>`) in its own workspace under it. Divisions stay dormant (no pane, no cost) until work arrives.
 - A first message from Main: the install banner, how Orche works, what was made and what you can switch on any time (also in `<project>/.orche/SETUP.md`).
 - Nothing committed to your repository: the project's Orche files (`.orche/`, `PROJECT_CARD.md`, `AGENTS.md`) stay untracked.
 - A status line in Main's pane, in your language (English or Korean) and in colour: what waits on you and what runs first, then each division's running/assigned workers and today's spend (`⚠ waiting 2 · ▶ running 3 · BUILD 3/8 · … · $4.20 today`).
@@ -59,7 +59,7 @@ Say it to Main in your own words; Main runs the command.
 | "update" | `orche update`: the newest Orche, reinstalled, every project's Orche files refreshed (never yours) |
 | "what changed in <project>?" | `orche card <project>`, then `orche ask <project> "…"` |
 | "how much did this cost?" | `orche metrics` |
-| "close the staff window", "open the staff window" | `orche sleep staff` keeps it closed until you ask again; `orche wake staff` opens it |
+| "close the staff window", "open the staff window" | `orche sleep staff-<project>` keeps that project's Staff closed until you ask again; `orche wake staff-<project>` opens it |
 | "check the setup", "what else can Orche do?" | `orche doctor`, ending with the next steps |
 | "continue" | after a cut-off or /clear, Main picks the work up from `orche status <project>` |
 | "uninstall Orche" | `orche uninstall`, after one confirmation: every setting the install changed is restored |

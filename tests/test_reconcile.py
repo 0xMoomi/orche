@@ -591,11 +591,11 @@ class OwnerNoticeTest(ReconcileCase):
 
 class StaffIgnoredTest(ReconcileCase):
     def test_the_heartbeat_never_reminds_wakes_or_reopens_staff(self):
-        """The CEO Staff is no member: a waiting pointer, a gone pane or a quiet one changes nothing."""
-        self.pointer("staff", 120, status="question", urgent=True)
+        """A project's CEO Staff is no member: a waiting pointer, a gone pane or a quiet one changes nothing."""
+        self.pointer("staff-acme-shop", 120, status="question", urgent=True)
         (self.home / "fake-orca.json").write_text(json.dumps({"terminal list": {"terminals": [
             {"title": "main-acme-shop"}, {"title": "div-acme-shop-build"}, {"title": "main-docs-site"},
-            {"title": "staff", "handle": "t-staff", "connected": False, "lastOutputAt": 0}]}}))
+            {"title": "staff-acme-shop", "handle": "t-staff", "connected": False, "lastOutputAt": 0}]}}))
         for minutes in (0, 30, 240):
             self.assertEqual(self.run_at(minutes)[1], [])
             self.assertEqual(self.spawned, [])

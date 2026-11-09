@@ -106,6 +106,11 @@ def find_worktree(repo_id, name):
     except orca.OrcaError as exc:
         log.log("hr", f"worktree list failed, creating {name} without the duplicate check: {exc}")
         return None
+    return listed_worktree(result, repo_id, name)
+
+
+def listed_worktree(result, repo_id, name):
+    """(id, path, branch) of the worktree of `repo_id` named `name` in an `orca worktree list` result, else None."""
     items = result.get("worktrees") if isinstance(result, dict) else result
     for item in items if isinstance(items, list) else []:
         if not isinstance(item, dict) or not item.get("path"):

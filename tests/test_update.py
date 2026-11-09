@@ -14,7 +14,7 @@ from unittest import mock
 
 import support
 
-from orche import cmd_init, cmd_update, registry
+from orche import cmd_init, cmd_update, registry, staff
 from test_hr import HrCase
 
 FAKE = r'''#!/usr/bin/env python3
@@ -32,6 +32,8 @@ if sys.argv[1] == "install":
               "and the orche plugin not enabled)")
         sys.exit(1)
     print("hooks: ok (on for new sessions: all 7 in /h/.claude/settings.json)")
+    if (home / "staff-lines").exists():   # the Staff panes the install opened
+        print((home / "staff-lines").read_text(), end="")
     if (home / "fail-install").exists():
         sys.exit(1)
     state = json.loads((home / "install-state.json").read_text())
@@ -77,7 +79,7 @@ class UpdateTest(support.TempHomeCase):
                                     "card": "x", "standing": ".orche/STANDING.md", "stage": "building",
                                     "aliases": [], "divisions": {}}
         registry.save(reg)
-        support.staff_asleep()
+        support.no_staff(self)
         patcher = mock.patch.object(cmd_update, "ROOT", self.co)
         patcher.start()
         self.addCleanup(patcher.stop)
@@ -108,6 +110,19 @@ class UpdateTest(support.TempHomeCase):
         code, out, _ = self.update()
         self.assertEqual((code, out.strip()), (0, "already up to date (0.7.3)"))
         self.assertEqual(self.calls(), [])
+
+    def test_the_staff_of_each_open_main(self):
+        """Every Staff pane the install opened (one per project whose Main is open) closes the update; an
+        up-to-date update opens them itself (staff.auto_open_all)."""
+        (self.home / "staff-lines").write_text("staff-acme pane opened\nstaff-beta pane opened\n")
+        self.publish()
+        code, out, _ = self.update()
+        self.assertEqual(code, 0)
+        self.assertEqual([ln for ln in out.splitlines() if ln.startswith("staff")],
+                         ["staff-acme pane opened", "staff-beta pane opened"])
+        with mock.patch.object(staff, "auto_open_all", lambda dry_run=False: ["staff-acme pane opened"]):
+            code, out, _ = self.update()
+        self.assertEqual((code, out.splitlines()), (0, ["already up to date (0.8.0)", "staff-acme pane opened"]))
 
     def test_fast_forward_reinstalls_and_refreshes_with_the_new_code(self):
         self.publish()

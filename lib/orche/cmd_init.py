@@ -856,7 +856,7 @@ def cmd_init(args):
     report = None if dry_run or key not in reg["projects"] else _report(reg, key, root, intake_line, detected,
                                                                          created=_created_lines(created), gate=gate)
     data["setup_report"] = str(report) if report else None
-    data["staff"] = staff.auto_open(dry_run=dry_run)   # before the switch, so the owner lands on Main
+    data["staff"] = staff.auto_open(key, proj, dry_run=dry_run)   # before the switch, so the owner lands on Main
     if data["staff"]:
         lines.append(data["staff"])
     if dry_run:

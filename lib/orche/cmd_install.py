@@ -27,8 +27,8 @@ opened) when a project is under a protected folder, else where to look; the inst
 granted? else the steps, Finder at the job's Python.app (or its bare interpreter) and System Settings
 at Full Disk Access, then up to 5 min for a job pass (privacy.GRANTED / privacy.BLOCKED, exit 1).
 Ctrl-C during a wait: one line, exit 130.
-On the real home a finished install opens the CEO Staff pane (`staff.auto_open`) unless the owner closed
-it with `orche sleep staff`; a dry run prints it.
+On the real home a finished install opens the CEO Staff of each project whose Main pane is open
+(`staff.auto_open_all`) unless the owner closed it with `orche sleep staff-<project>`; a dry run prints it.
 """
 import os
 import sys
@@ -329,10 +329,10 @@ def cmd_install(args):
                         "  /plugin install orche@orche"]
     lines = ([f"dry run: nothing written (home {ctx.home})"] if ctx.dry_run else []) + ctx.lines()
     lines += (jev_result or {}).get("lines", []) + instructions
-    # Last, on the real home only (as the reconcile job): the CEO Staff opens unless the owner closed it.
+    # Last, on the real home only (as the reconcile job): each open Main's Staff, unless the owner closed it.
     real = ctx.home.resolve() == Path.home().resolve()
-    opened = staff.auto_open(dry_run=ctx.dry_run) if real and not ctx.errors and state is not None else None
-    lines += [opened] if opened else []
+    opened = staff.auto_open_all(dry_run=ctx.dry_run) if real and not ctx.errors and state is not None else []
+    lines += opened
     data = {"home": str(ctx.home), "dry_run": ctx.dry_run, "mode": mode, "actions": ctx.actions,
             "instructions": instructions, "errors": ctx.errors, "staff": opened}
     if jev_result is not None:

@@ -107,7 +107,7 @@ class MainResumesTest(support.TempHomeCase):
             self.assertNotIn("--autocompact", command)
 
     def test_project_pane_resumes_by_default_and_posts_the_resumed_note(self):
-        data, _ = panes.project_pane(self.proj, dry_run=False, switch=False)
+        data, _ = panes.project_pane("acme", self.proj, dry_run=False, switch=False)
         self.assertEqual(data["pane"], "opened")
         self.assertTrue(self.opened[0].endswith(f"bypassPermissions --model claude-opus-5-5 --effort xhigh --resume {ID_NEW}"),
                         self.opened[0])   # a resumed Main is pinned too: the flags beat the model its transcript restores
@@ -129,20 +129,20 @@ class MainResumesTest(support.TempHomeCase):
             for unit in ("div-acme-build", "feat-acme-x"):
                 for resume in (True, False):
                     self.assertNotIn("--model", panes.pane_command(unit, resume=resume, cwd=self.root))
-        panes.project_pane(self.proj, dry_run=False, switch=False, resume=False)
+        panes.project_pane("acme", self.proj, dry_run=False, switch=False, resume=False)
         self.assertIn(f" {pin}--name main-acme", self.opened[0])
 
     def test_project_pane_fresh_posts_nothing(self):
-        panes.project_pane(self.proj, dry_run=False, switch=False, resume=False)
+        panes.project_pane("acme", self.proj, dry_run=False, switch=False, resume=False)
         self.assertTrue(self.opened[0].endswith("--name main-acme"), self.opened[0])
         self.assertEqual(inbox.pending("main-acme"), [])
 
     def test_dry_run_posts_nothing(self):
-        data, _ = panes.project_pane(self.proj, dry_run=True, switch=False)
+        data, _ = panes.project_pane("acme", self.proj, dry_run=True, switch=False)
         self.assertEqual(inbox.pending("main-acme"), [])
 
     def test_onboarding_opens_main_fresh(self):
         import inspect
         from orche.hr import create
-        self.assertIn("panes.project_pane(proj, dry_run=dry_run, switch=False, resume=False)",
+        self.assertIn("panes.project_pane(key, proj, dry_run=dry_run, switch=False, resume=False)",
                       inspect.getsource(create.onboard_project))

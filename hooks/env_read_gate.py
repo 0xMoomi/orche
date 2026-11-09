@@ -17,7 +17,7 @@ in a `while`/`until`/`for` loop, `gh pr checks --watch`, `gh run watch`) are ref
 background task starts a Main turn that re-reads the whole context, while units report and the
 merge queue lands or fails into Main's inbox and Orche wakes Main once per lineage.
 
-A fifth rule keeps the CEO Staff read-only: for ORCHE_SESSION `staff` a Bash command that runs
+A fifth rule keeps the CEO Staff read-only: for ORCHE_SESSION `staff-<project>` a Bash command that runs
 `orche dispatch`, a queue action, an HR change, `git commit|push` or `gh pr merge|create` is refused
 (`lib/orche/staff.py`; the scope gate refuses its file edits).
 
@@ -37,7 +37,7 @@ from orche import pyguard  # noqa: E402  (before any other orche module)
 # is logged but the gate keeps denying positive matches (stronger than allowing everything).
 pyguard.check_hook("env_read_gate")
 
-from orche import envgate, jevgate  # noqa: E402  (stdlib only, old-interpreter safe like this file)
+from orche import envgate, jevgate, staff  # noqa: E402  (stdlib only, old-interpreter safe like this file)
 
 REASON = envgate.REASON
 JEV_REASON = jevgate.REASON
@@ -93,10 +93,10 @@ def wait_reason(tool, tool_input, session):
 
 
 def staff_reason(tool, tool_input, session):
-    """staff.DENY when the CEO Staff's Bash command would change something; None for every other session."""
-    if session != "staff" or tool != "Bash":
+    """staff.DENY when a CEO Staff's (`staff-<project>`) Bash command would change something; None for every
+    other session."""
+    if tool != "Bash" or not staff.is_staff(session):
         return None
-    from orche import staff
     return staff.reason(tool, tool_input)
 
 
