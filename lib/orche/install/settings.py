@@ -42,14 +42,16 @@ def session_dirs(ctx) -> list:
 
 
 def plugin_hooks(plugin_root) -> list:
-    """[(event, matcher or None, command)] from hooks/hooks.json with the plugin root substituted."""
+    """[(event, matcher or None, command, flags)] from hooks/hooks.json with the plugin root substituted;
+    `flags` holds the handler's other fields (`asyncRewake` for the wake hook), {} for most."""
     data = util.read_json(Path(plugin_root) / "hooks" / "hooks.json", default={}) or {}
     out = []
     for event, entries in (data.get("hooks") or {}).items():
         for entry in entries:
             for hook in entry.get("hooks", []):
                 cmd = hook["command"].replace("${CLAUDE_PLUGIN_ROOT}", str(plugin_root))
-                out.append((event, entry.get("matcher"), cmd))
+                flags = {k: v for k, v in hook.items() if k not in ("type", "command")}
+                out.append((event, entry.get("matcher"), cmd, flags))
     return out
 
 
@@ -66,8 +68,8 @@ def has_command(data, event, command) -> bool:
     return any(ev == event and cmd == command for ev, cmd in iter_commands(data))
 
 
-def add_hook(data, event, matcher, command) -> None:
-    entry = {"hooks": [{"type": "command", "command": command}]}
+def add_hook(data, event, matcher, command, flags=None) -> None:
+    entry = {"hooks": [{"type": "command", "command": command, **(flags or {})}]}
     if matcher:
         entry = {"matcher": matcher, **entry}
     data.setdefault("hooks", {}).setdefault(event, []).append(entry)
@@ -142,12 +144,12 @@ def _set_hooks(ctx, new, mode, state, quiet=False):
         changes += [f"remove hook {event} {command} (plugin mode: the plugin registers the hooks)"
                     for event, command in remove_commands(new, orche_hook_pairs(ctx.plugin_root, state))]
         return changes, added
-    for event, matcher, command in plugin_hooks(ctx.plugin_root):
+    for event, matcher, command, flags in plugin_hooks(ctx.plugin_root):
         if has_command(new, event, command):
             if not quiet:
                 ctx.note(STEP, "ok", None, f"hook {event} already registered: {command}")
             continue
-        add_hook(new, event, matcher, command)
+        add_hook(new, event, matcher, command, flags)
         changes.append(f"add hook {event}{f'[{matcher}]' if matcher else ''} {command}")
         added.append({"event": event, "command": command})
     return changes, added
@@ -215,9 +217,9 @@ def _home(ctx, mode, state) -> None:
 
 
 def orche_hook_pairs(plugin_root, state=None) -> set:
-    """(event, command) of every settings-mode Orche hook entry: the six plugin hooks
+    """(event, command) of every settings-mode Orche hook entry: the plugin hooks
     (`"<root>/hooks/run.sh" <hook>`) plus the recorded `added_hooks`."""
-    pairs = {(event, command) for event, _, command in plugin_hooks(plugin_root)}
+    pairs = {(event, command) for event, _, command, _f in plugin_hooks(plugin_root)}
     return pairs | {(event, command) for event, command in _added_pairs(state or {}) if command}
 
 
@@ -299,7 +301,7 @@ def uninstall(ctx, state) -> None:
 
 def registered(data, plugin_root) -> list:
     """Plugin hook commands missing from `data` (empty list = all registered)."""
-    return [cmd for ev, _, cmd in plugin_hooks(plugin_root) if not has_command(data, ev, cmd)]
+    return [cmd for ev, _, cmd, _f in plugin_hooks(plugin_root) if not has_command(data, ev, cmd)]
 
 
 def short(ctx, plugin_on) -> list:

@@ -38,6 +38,8 @@ the merge queue lands it.
 - Read the brief, the module you change, its callers and its tests before editing; settle the data shape first.
 - Run VERIFY once before changing anything and note what already fails. In a fresh worktree "module not found"
   means missing installs until proven otherwise.
+- Your own commands are not the product: re-run one that timed out (with a longer Bash timeout when it needs one),
+  wait for a locked file and retry, and treat an empty result as a reason to check the query or path, not an answer.
 - Red, green, one vertical slice at a time: one failing test of behaviour through the public seam, watched failing
   for the expected reason; the least code that passes; the focused test while iterating and VERIFY before each
   commit; refactor only on green.
@@ -54,10 +56,11 @@ the merge queue lands it.
 - Fix the first wrong decision, not the place the symptom shows, and search for siblings of the same mistake.
 - Prove the regression test: revert the fix and it fails, restore it and it passes.
 - Two fixes failed on one premise: write the premise down and test it before a third. A flaky or timing failure
-  waits on the condition with a timeout; never add a sleep, a retry or a skip.
+  in the code or its tests waits on the condition with a timeout; a sleep, retry or skip added there hides it.
 
 ### Done
-- Never relax a gate to get green: no edited ACCEPT, raised threshold or timeout, added retry or skipped test.
+- Never relax a gate to get green unless an AMEND allows it: no edited ACCEPT, raised threshold or test timeout,
+  retry added to a test or check, or skipped test. Re-running your own command is not a gate change.
 - Verify on the real artifact: run the command now and read its output. Exit 0, or a run that did nothing, proves
   nothing. Name what you could not verify and every failing test you saw, yours or not.
 - Commits: small, each green, a conventional subject (`fix(queue): ...`), structural and behavioural changes apart,
@@ -83,15 +86,14 @@ the merge queue lands it.
 - Never put `[skip ci]` on a commit that changes code (docs-only commits only).
 - In a pane (not under the runner): `orche report done` publishes and runs the review; give that Bash call 600000
   ms. A RETURN prints the findings and files nothing: fix them and report again.
-- You never type `git push` or `gh pr create`: the run publishes. When your head or the queue returns your PR, fix it on
-  the same branch and report done again with the new head.
+- When your head or the queue returns your PR, fix it on the same branch and report done again with the new head.
 
 {{REPORT_FORMAT}}
 
 ## Memory-save before done
 Before claiming done, write STATUS.md and DECISIONS.tsv (and HANDOFF.md if work continues) in
 `.orche/feat/{{NAME}}/`, and save new lessons to your agent memory. Append decisions with `orche decide`.
-Never claim done, and never `/clear`, until this ritual is complete; the Stop hook blocks a
-completion claim whose STATUS.md was not updated in this session.
+Claim done only after this ritual; the Stop hook blocks a completion claim whose STATUS.md was not
+updated in this session.
 
 {{PRINCIPLES}}

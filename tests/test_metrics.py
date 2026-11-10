@@ -7,10 +7,11 @@ import shutil
 import tempfile
 import unittest
 from contextlib import redirect_stderr, redirect_stdout
+from unittest import mock
 from pathlib import Path
 
 import support
-from orche import metrics, runs
+from orche import metrics
 from test_registry import load_cli
 
 TRANSCRIPTS = support.FIXTURES / "transcripts"
@@ -60,6 +61,22 @@ class MetricsTest(support.TempHomeCase):
         path = self.root.parent / "prices.json"
         path.write_text(json.dumps(data))
         return path
+
+    def test_fable_5_2_has_its_own_row(self):
+        row = metrics.PRICES["claude-fable-5-2"]
+        self.assertEqual(row, {"input": 8.0, "output": 40.0, "cache_read": 0.20, "cache_write": 10.0,
+                               "cache_write_1h": 16.0})
+        self.assertIs(metrics.price_row("claude-fable-5-2", metrics.PRICES), row)
+        self.assertEqual(metrics.PRICES["claude-fable-5-1"]["output"], 50.0)
+        self.assertEqual(metrics.PRICES["claude-sonnet-5-5"]["cache_read"], 0.10)
+        self.assertIsNone(metrics.known_row("claude-mystery-9", metrics.PRICES))
+
+    def test_an_unpriced_model_is_named_once(self):
+        m = self.compute()
+        self.assertEqual(m["unpriced"], ["claude-mystery-9"])
+        self.assertEqual([ln for ln in metrics.render(m) if ln.startswith("unpriced")],
+                         ["unpriced models (counted at claude-opus-5's price): claude-mystery-9"])
+        self.assertFalse(any(ln.startswith("unpriced") for ln in metrics.render({**m, "unpriced": []})))
 
     def test_prices_override_and_dated_ids(self):
         row = {"input": 1.0, "output": 0, "cache_read": 0, "cache_write": 0, "cache_write_1h": 0}
@@ -130,75 +147,129 @@ class MetricsTest(support.TempHomeCase):
         self.assertIn("main wake-ups: user 3, notification 1", out.getvalue())
         self.assertIn("AskUserQuestion: 1", out.getvalue())
 
-    def run_records(self, repo, now):
-        """Three RUN.json records in the window (one failed; two Opus medium, one Sonnet without an
-        effort) and one older than 30 days."""
+    def run_lines(self, now):
+        """Worker attempts in acme's run history: three in the window (one failed; two Opus medium, one Sonnet
+        without an effort; the failed one escalated: its escalation line counts too), one older than 30 days and
+        one that never started (no cost figure: not an attempt)."""
+        from orche.runs import history
         opus, sonnet = ("claude-opus-5-5", "medium"), ("claude-sonnet-5-5", None)
-        for i, (status, cost, age, (model, effort)) in enumerate((
-                ("done", 0.2, 1, opus), ("failed", 1.0, 2, opus), ("info", 0.4, 3, sonnet),
-                ("done", 9.0, 40, opus))):
-            folder = repo / ".orche" / "units" / f"acme-u-20261016-{i + 1}"
-            folder.mkdir(parents=True)
-            (folder / "RUN.json").write_text(json.dumps({
-                "status": status, "cost_usd": cost, "model": model, "effort": effort,
-                "finished": (now - dt.timedelta(days=age)).isoformat()}))
+        for i, (status, cost, age, (model, effort), kind) in enumerate((
+                ("done", 0.2, 1, opus, "work"), ("failed", 1.0, 2, opus, "work"),
+                ("failed", 0.3, 2, opus, "escalation"), ("info", 0.4, 3, sonnet, "work"),
+                ("done", 9.0, 40, opus, "work"), ("info", None, 1, opus, None))):
+            history.append("acme", {"unit": f"acme-u-20261016-{i + 1}", "status": status, "cost_usd": cost,
+                                    "model": model, "effort": effort, "kind": kind,
+                                    "finished": (now - dt.timedelta(days=age)).isoformat()}, 1)
 
-    def test_runner_summary_sums_run_records_in_the_window(self):
-        repo = self.root.parent / "acme"
-        self.run_records(repo, NOW)
-        self.assertEqual(metrics.runner_summary(runs.records([repo]), days=30, now=NOW),
-                         {"units": 3, "cost_usd": 1.6, "median_cost_usd": 0.4, "failures": 1,
-                          "by_status": {"done": 1, "failed": 1, "info": 1},
+    def test_runner_summary_counts_every_attempt_in_the_window(self):
+        self.run_lines(NOW)
+        self.assertEqual(metrics.runner_summary(metrics.attempts(["acme"]), days=30, now=NOW),
+                         {"attempts": 4, "cost_usd": 1.9, "median_cost_usd": 0.35, "failures": 2,
+                          "by_status": {"done": 1, "failed": 2, "info": 1},
                           "by_model_effort": {
-                              "claude-opus-5-5 medium": {"units": 2, "cost_usd": 1.2, "median_cost_usd": 0.6,
-                                                         "failures": 1},
-                              "claude-sonnet-5-5 ?": {"units": 1, "cost_usd": 0.4, "median_cost_usd": 0.4,
+                              "claude-opus-5-5 medium": {"attempts": 3, "cost_usd": 1.5, "median_cost_usd": 0.3,
+                                                         "failures": 2},
+                              "claude-sonnet-5-5 ?": {"attempts": 1, "cost_usd": 0.4, "median_cost_usd": 0.4,
                                                       "failures": 0}}})
-        self.assertEqual(metrics.runner_summary(runs.records([repo / "nope"]), days=30, now=NOW)["units"], 0)
+        self.assertEqual(metrics.runner_summary(metrics.attempts(["nope"]), days=30, now=NOW)["attempts"], 0)
 
-    def test_records_skips_an_unreadable_run_json(self):
-        """A RUN.json that is a directory or cannot be read is skipped, as the old metrics scan did."""
-        repo = self.root.parent / "acme"
-        self.run_records(repo, NOW)
-        units = repo / ".orche" / "units"
-        (units / "acme-u-20261016-8" / "RUN.json").mkdir(parents=True)
-        unreadable = units / "acme-u-20261016-9" / "RUN.json"
-        unreadable.parent.mkdir()
-        unreadable.write_text(json.dumps({"status": "done", "cost_usd": 5.0, "finished": NOW.isoformat()}))
-        os.chmod(unreadable, 0)
-        try:
-            found = runs.records([repo])
-            blocked = not os.access(unreadable, os.R_OK)
-        finally:
-            os.chmod(unreadable, 0o644)
-        self.assertEqual(sorted(rec["cost_usd"] for rec in found),
-                         [0.2, 0.4, 1.0, 9.0] if blocked else [0.2, 0.4, 1.0, 5.0, 9.0])
-
-    def test_cli_runner_section_from_registered_projects(self):
+    def registry(self):
         from orche import registry
-        repo = self.root.parent / "acme"
-        self.run_records(repo, dt.datetime.now(dt.timezone.utc))
         reg = registry.empty()
         reg["projects"]["acme"] = json.loads((support.FIXTURES / "hooks" / "registry.json").read_text()
                                              .replace("@ROOT@", str(self.root.parent)))["projects"]["acme"]
         registry.save(reg)
+        return reg
+
+    def test_cli_runner_section_from_registered_projects(self):
+        self.registry()
+        self.run_lines(dt.datetime.now(dt.timezone.utc))
         cli, out = load_cli(), io.StringIO()
         with redirect_stdout(out):
             self.assertEqual(cli.main(["metrics", "--root", str(self.root), "--json"]), 0)
-        self.assertEqual(json.loads(out.getvalue())["runner"]["units"], 3)
+        self.assertEqual(json.loads(out.getvalue())["runner"]["attempts"], 4)
         out = io.StringIO()
         with redirect_stdout(out):
             cli.main(["metrics", "--root", str(self.root)])
-        self.assertEqual(out.getvalue().splitlines()[-4:], [
-            "Runner (orche run, RUN.json):", "  units 3, cost $1.60, median $0.40/unit, failures 1",
-            "  claude-opus-5-5 medium: units 2, cost $1.20, median $0.60/unit, failures 1",
-            "  claude-sonnet-5-5 ?: units 1, cost $0.40, median $0.40/unit, failures 0"])
+        lines = out.getvalue().splitlines()
+        at = lines.index("Runner (orche run, history.jsonl):")
+        self.assertEqual(lines[at:at + 5], [
+            "Runner (orche run, history.jsonl):",
+            "  every attempt counts: re-runs, escalations and finishing calls (no longer a unit's last run)",
+            "  attempts 4, cost $1.90, median $0.35/attempt, failures 2",
+            "  claude-opus-5-5 medium: attempts 3, cost $1.50, median $0.30/attempt, failures 2",
+            "  claude-sonnet-5-5 ?: attempts 1, cost $0.40, median $0.40/attempt, failures 0"])
+        self.assertEqual(lines[at + 5], "Rework (last 30 days):")
+        self.assertEqual(lines[-3:], ["Spend by role (list price, $5.01):", "  ROLE               COST_USD  SHARE",
+                                      "  other (not Orche)  5.01      100%"])
+
+    def rework_fixture(self):
+        """Three units in the last 7 days: A ran three times (a `defect` AMEND with a finishing call, then an
+        `owner` AMEND whose run was killed) and landed, B re-ran its unchanged revision (`retry`), C landed at
+        once; the queue merged two, re-tested one green and returned two; five review rows; Main spent $14."""
+        from orche import ledger, units as units_mod
+        from orche.queue import store
+        from orche.runs import history
+        reg = self.registry()
+        root = units_mod.project_root(reg, "acme")
+        day = lambda d, h=0: (NOW - dt.timedelta(days=d, hours=h)).isoformat()   # noqa: E731
+        notes = {"acme-a-20261010-1": {2: "rev 1: defect: the cap is off by one tier", 3: "rev 2: owner: new copy"}}
+        for unit in ("acme-a-20261010-1", "acme-b-20261010-1", "acme-c-20261010-1"):
+            folder = root / ".orche" / "units" / unit
+            folder.mkdir(parents=True)
+            for rev, note in notes.get(unit, {}).items():
+                path = folder / f"BRIEF.rev{rev}.md"
+                path.write_text(f"rev: {rev}\nsupersedes: rev {rev - 1}\nsupersedes-note: {note}\nunit: {unit}\n")
+                os.utime(path, (NOW.timestamp() - 86400 * (4 - rev),) * 2)
+        lines = (("acme-a-20261010-1", 1, "work", 1.0, None, 5), ("acme-a-20261010-1", 2, "work", 2.0, None, 4),
+                 ("acme-a-20261010-1", 2, "finish", 1.0, None, 4), ("acme-a-20261010-1", 3, None, None, "busy", 3),
+                 ("acme-a-20261010-1", 3, "work", 1.0, "stopped", 2), ("acme-b-20261010-1", 1, "work", 1.0, None, 3),
+                 ("acme-b-20261010-1", 1, "work", 1.0, "end_turn", 2), ("acme-c-20261010-1", 1, "work", 3.0, None, 1),
+                 ("acme-c-20261010-1", 1, "review", 0.5, None, 1))
+        for unit, rev, kind, cost, stop, age in lines:
+            history.append("acme", {"unit": unit, "kind": kind, "cost_usd": cost, "stop_reason": stop,
+                                    "started": day(age), "finished": day(age, -1)}, rev)
+        for event, eid, unit, extra in (("merged", "e1", "acme-c-20261010-1", {}), ("retested", "e2", "acme-a-20261010-1", {}),
+                                        ("merged", "e2", "acme-a-20261010-1", {}),
+                                        ("returned", "e3", "acme-b-20261010-1", {"reason": "red"}),
+                                        ("returned", "e4", "acme-b-20261010-1", {"reason": "conflict"})):
+            with mock.patch("orche.util.now_iso", return_value=day(1)):
+                store.log("acme", event, {"id": eid, "pr": int(eid[1:]), "unit": unit}, **extra)
+        for kind, verdict, reviewer, model, note in (
+                ("build", "pass", "div-acme-build (review)", "claude-opus-5-5", ""),
+                ("build", "pass", "div-acme-build (pane)", "claude-opus-5-5", ""),
+                ("build", "return", "div-acme-build (review)", "facts", "route: pane review: no unit brief"),
+                ("build", "return", "div-acme-build (review)", "claude-opus-5-5", ""),
+                ("pre", "return", "codex (pre)", "gpt-5.5-codex", "")):
+            ledger.append_review("acme", ledger.make_review_row(9, "abc1234", kind, verdict, reviewer, model,
+                                                                "feat-acme-checkout", note=note, evidence="/x",
+                                                                ts=day(1), second_vendor=False))
+        return reg
+
+    def test_rework_block_from_a_fixture(self):
+        reg = self.rework_fixture()
+        w = metrics.rework_summary(reg, days=7, now=NOW, named={"main-acme": 14.0})
+        self.assertEqual((w["units"], w["runs"], w["landed"], w["runs_per_landed"], w["returns"]), (3, 6, 2, 2.0, 5))
+        self.assertEqual((w["reruns"], w["rerun_usd"], w["worker_usd"], w["killed"], w["killed_usd"]), (3, 5.0, 10.0, 1, 1.0))
+        self.assertEqual(w["by_cause"]["defect"], {"reruns": 1, "usd": 3.0})     # its finishing call included
+        self.assertEqual(metrics.rework_lines(w, 7), [
+            "Rework (last 7 days):",
+            "  units 3 · runs 6 · 2.0 runs/unit · landed 2 (2.0 runs/landed unit) · 1.67 returns/unit",
+            "  re-runs 3 · $5 of $10 worker spend (50%) · without owner revisions 2 · $4 (40%)",
+            "  killed mid-way 1 runs · $1",
+            "  AMENDs by cause (re-runs · $): owner 1·$1 defect 1·$3 retry 1·$1 untagged 0",
+            "  queue: merged 2 · re-tested 1 (green 1) · returned 2 (conflict 1, red 1)",
+            "  head review: pass 1 · routed 1 · returned 1 · pane pass 1 · pre-review 1 rounds, 1 returned",
+            "  Main spend: acme $2.00/day (claude-opus-5-5)"])
+        self.assertEqual(metrics.rework_lines(metrics.rework_summary(reg, days=7, now=NOW), 7)[-1],
+                         "  Main spend: n/a (transcripts cannot be read)")
+        self.assertEqual(metrics.rework_lines(None, 7), ["Rework (last 7 days):", "  n/a (registry unreadable)"])
 
     def test_missing_root_is_na_not_zero(self):
         m = metrics.compute(self.root / "nope", days=30, now=NOW)
         self.assertEqual((m["readable"], m["responses"], m["cost_usd"], m["routine"]["share"]),
                          (False, None, None, None))
-        lines = metrics.render({**m, "triage": None, "runner": None})
+        lines = metrics.render({**m, "triage": None, "runner": None, "rework": None})
         self.assertIn("responses: n/a (avg context n/a)", lines)
         self.assertIn("estimated cost: n/a (list price)", lines)
         self.assertIn("  n/a (no samples file)", lines)
@@ -219,6 +290,90 @@ class MetricsTest(support.TempHomeCase):
         lines = metrics.render(m)
         self.assertIn("1 unreadable", lines[0])
         self.assertIn("estimated cost: n/a (list price)", lines)
+
+    def role_setup(self):
+        """A registry for acme and transcripts of each role, priced on Opus 5.5 ($20/MTok output)."""
+        from orche import registry
+        from orche.janitor import discover
+        base = self.root.parent
+        reg = registry.empty()
+        reg["projects"]["acme"] = json.loads((support.FIXTURES / "hooks" / "registry.json").read_text()
+                                             .replace("@ROOT@", str(base)))["projects"]["acme"]
+        registry.save(reg)
+        root = base / "roles"
+        slug = lambda name: discover.claude_slug(os.path.realpath(base / name))  # noqa: E731
+        n = iter(range(100))
+
+        def write(folder, rel, usd, title=None):
+            path = root / folder / rel
+            path.parent.mkdir(parents=True, exist_ok=True)
+            rows = [{"type": "custom-title", "customTitle": title}] if title else []
+            rows.append({"type": "assistant", "timestamp": "2026-10-15T10:00:00Z",
+                         "message": {"id": f"msg_{next(n)}", "model": "claude-opus-5-5",
+                                     "usage": {"output_tokens": int(usd * 50_000)}}})
+            path.write_text("".join(json.dumps(r) + "\n" for r in rows))
+        write(slug("acme"), "m1.jsonl", 1.0, "main-acme")
+        write(slug("acme"), "m1/subagents/agent-a.jsonl", 1.0)          # Main's subagent: Main
+        write(slug("acme-staff"), "s1.jsonl", 1.0, "staff-acme")
+        write(slug("acme-build"), "d1.jsonl", 1.0, "div-acme-build")
+        write(slug("acme-build"), "w1.jsonl", 1.0)                       # unnamed in a unit worktree: a worker
+        write(slug("acme-checkout"), "f1.jsonl", 1.0, "feat-acme-checkout")
+        write(slug("acme-checkout"), "w2.jsonl", 0.5)
+        write("-elsewhere", "x.jsonl", 1.0)
+        from orche import paths
+        from orche.runs import history
+        day = (NOW - dt.timedelta(days=1)).isoformat()
+        for kind, vendor, usd in (("review", "claude", 0.3), ("build-review", "codex", 0.1), ("work", "codex", 0.2),
+                                  ("work", "claude", 9.0), ("finish", "claude", 9.0)):
+            history.append("acme", {"unit": "u", "kind": kind, "vendor": vendor, "cost_usd": usd, "finished": day}, 1)
+        history.append("acme", {"unit": "u", "kind": "review", "vendor": "claude", "cost_usd": 7.0,
+                                "finished": (NOW - dt.timedelta(days=40)).isoformat()}, 1)
+        events = paths.orche_home() / "logs" / "events.log"
+        events.parent.mkdir(parents=True, exist_ok=True)
+        events.write_text("".join(f"{day}\tevents\t{msg}\n" for msg in (
+            "intake project=acme head=abc1234 model=claude-sonnet-5-5 cost=0.4 turns=3 divisions=2",
+            "ask project=acme by=main-acme head=abc1234 model=claude-sonnet-5-5 cost=0.1 turns=2 chars=40",
+            "card project=acme refreshed base=none head=abc1234 sections=none model=m cost=0.05 turns=1",
+            "ask project=acme failed: boom",
+            "dispatch kind=brief unit=u cost=5")))
+        return reg, root
+
+    def test_spend_by_role(self):
+        reg, root = self.role_setup()
+        m = metrics.compute(root, days=30, now=NOW, classify=metrics.classifier(reg))
+        self.assertEqual(m["roles"], {"Main": 2.0, "Staff": 1.0, "build pane": 1.0, "feature panes": 1.0,
+                                      "other (not Orche)": 1.0, "workers": 1.5})
+        m["headless"] = metrics.headless_spend(["acme"], days=30, now=NOW)
+        self.assertEqual(m["headless"], {"ask": 0.15, "intake": 0.4, "review": 0.4, "workers": 0.2})
+        samples = root.parent / "samples.jsonl"
+        samples.write_text("".join(json.dumps({"at": (NOW - dt.timedelta(days=d)).isoformat(), "decision": "main",
+                                               "backend": "haiku", "ms": 120, "model_ms": 100, "cost_usd": usd}) + "\n"
+                                   for d, usd in ((1, 0.25), (40, 3.0))))
+        m["triage"] = metrics.triage_summary(samples, days=30, now=NOW)
+        self.assertEqual(m["triage"]["cost_usd"], 0.25)
+        rows = metrics.role_rows(m)
+        self.assertEqual([(r, round(usd, 2)) for r, usd, _share in rows],
+                         [("Main", 2.0), ("Staff", 1.0), ("build pane", 1.0), ("feature panes", 1.0),
+                          ("workers", 1.7), ("review", 0.4), ("intake", 0.4), ("ask", 0.15), ("triage", 0.25),
+                          ("other (not Orche)", 1.0)])
+        self.assertAlmostEqual(sum(share for *_r, share in rows), 1.0)
+        lines = metrics.render({**m, "runner": None})
+        at = lines.index("Spend by role (list price, $8.90):")
+        self.assertEqual(lines[at + 1:at + 4], ["  ROLE               COST_USD  SHARE",
+                                                "  Main               2.00      22%",
+                                                "  Staff              1.00      11%"])
+        self.assertEqual(lines[-1], "  other (not Orche)  1.00      11%")
+
+    def test_spend_by_role_is_na_without_its_sources(self):
+        reg, root = self.role_setup()
+        m = metrics.compute(root / "nope", days=30, now=NOW, classify=metrics.classifier(reg))
+        m["headless"] = {}
+        self.assertIsNone(metrics.role_rows(m))
+        self.assertEqual(metrics.render(m)[-2:], ["Spend by role:", "  n/a (transcripts cannot be read)"])
+        m = metrics.compute(root, days=30, now=NOW, classify=metrics.classifier(None))
+        self.assertEqual(m["roles"], {"other (not Orche)": 7.5})
+        self.assertEqual(metrics.render({**m, "headless": None})[-1], "  n/a (registry unreadable)")
+        self.assertNotIn("roles", metrics.compute(root, days=30, now=NOW))   # without a classifier
 
     def test_no_runs_median_is_na(self):
         self.assertIsNone(metrics.runner_summary([], days=30, now=NOW)["median_cost_usd"])

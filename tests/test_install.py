@@ -21,7 +21,8 @@ from test_registry import load_cli
 REAL_RUNNER = shell.RUNNER
 SEGMENT = PLUGIN_ROOT / "templates" / "statusline-segment.sh"
 # One per hooks.json handler: dispatch_relay serves Stop and StopFailure.
-HOOK_NAMES = ("dispatch_relay", "dispatch_relay", "report_inject", "env_read_gate", "scope_gate", "session_start", "session_end")
+HOOK_NAMES = ("dispatch_relay", "dispatch_relay", "report_inject", "env_read_gate", "scope_gate", "session_start", "session_end",
+              "inbox_wake")
 PLUGIN_CMDS = [f'"{PLUGIN_ROOT}/hooks/run.sh" {name}' for name in HOOK_NAMES]
 
 STATUSLINE = """#!/bin/bash
@@ -191,13 +192,17 @@ class InstallTest(InstallCase):
         self.assertNotIn("would", out2)
         self.assertIn(f"settings: ok {self.c / 'settings.json'} (unchanged)", out2)
 
-    def test_settings_mode_registers_seven_hooks_once(self):
+    def test_settings_mode_registers_eight_hooks_once(self):
         self.install("--mode", "settings")
         out = self.install("--mode", "settings")
         cmds = self.commands(self.read_settings())
         for cmd in PLUGIN_CMDS:
             self.assertEqual(cmds.count(cmd), PLUGIN_CMDS.count(cmd), cmd)
-        self.assertEqual(len(cmds), 2 + 7)
+        self.assertEqual(len(cmds), 2 + 8)
+        # The wake hook keeps its asyncRewake flag: without it a wake file only adds context, no turn.
+        self.assertEqual(self.read_settings()["hooks"]["FileChanged"],
+                         [{"hooks": [{"type": "command", "command": f'"{PLUGIN_ROOT}/hooks/run.sh" inbox_wake',
+                                      "asyncRewake": True}]}])
         pre = self.read_settings()["hooks"]["PreToolUse"]
         self.assertEqual(pre[0], self.settings["hooks"]["PreToolUse"][0])  # existing entries keep their order
         self.assertEqual([e.get("matcher") for e in pre[1:]], ["Read|Bash|Grep|Edit|Write|Monitor|Agent|Task",
@@ -246,7 +251,7 @@ class InstallTest(InstallCase):
         self.install("--mode", "settings")
         cmds = self.commands(self.read_settings())
         self.assertEqual([cmds.count(c) for c in PLUGIN_CMDS], [PLUGIN_CMDS.count(c) for c in PLUGIN_CMDS])
-        self.assertEqual(len(cmds), 2 + 7)
+        self.assertEqual(len(cmds), 2 + 8)
         self.assertEqual(sorted(h["command"] for h in self.state()["added_hooks"]), sorted(PLUGIN_CMDS))
 
     def test_careful_script_is_never_registered(self):
@@ -272,7 +277,7 @@ class InstallTest(InstallCase):
         self.assertEqual(code, 1)
         self.assertEqual((self.c / "settings.json").read_text(), "{broken")
         self.assertIn("settings: error", out)
-        self.assertIn(f"hooks: error {self.c / 'settings.json'} (new sessions would run without Orche: 0 of 7 hooks "
+        self.assertIn(f"hooks: error {self.c / 'settings.json'} (new sessions would run without Orche: 0 of 8 hooks "
                       "registered and the orche plugin not enabled)", out)
 
     # -- c108: the existing install's mode is kept; plugin mode only while the plugin is on -----------
@@ -284,7 +289,7 @@ class InstallTest(InstallCase):
                          [PLUGIN_CMDS.count(c) for c in PLUGIN_CMDS])
         self.assertNotIn("hooks: settings mode", out)
         self.assertNotIn("/plugin", out)
-        self.assertEqual(out.splitlines()[-1], f"hooks: ok (on for new sessions: all 7 in {self.c / 'settings.json'})")
+        self.assertEqual(out.splitlines()[-1], f"hooks: ok (on for new sessions: all 8 in {self.c / 'settings.json'})")
 
     def test_plugin_mode_with_the_plugin_disabled_registers_the_hooks_in_settings(self):
         # The 2026-11-01 incident: the plugin installed but turned off on purpose; plugin mode asked for.
@@ -295,7 +300,7 @@ class InstallTest(InstallCase):
         self.assertEqual(sorted(h["command"] for h in self.state()["added_hooks"]), sorted(PLUGIN_CMDS))
         self.assertIn("hooks: settings mode (the orche plugin is not enabled for new sessions, so settings.json "
                       "registers Orche's hooks)", out)
-        self.assertIn(f"hooks: ok (on for new sessions: all 7 in {self.c / 'settings.json'})", out)
+        self.assertIn(f"hooks: ok (on for new sessions: all 8 in {self.c / 'settings.json'})", out)
         calls = (self.claude.parent / "claude-argv.txt").read_text().splitlines()
         self.assertEqual(set(calls), {"plugin list --json"})   # asked, never changed
         self.assertEqual(self.orche("uninstall", "--home", str(self.h))[0], 0)
@@ -321,7 +326,7 @@ class InstallTest(InstallCase):
         self.assertEqual(sorted(self.commands(data)), sorted(PLUGIN_CMDS))
         self.assertNotIn("cleanupPeriodDays", data)   # only the hook entries go there
         self.assertEqual(len(list(other.parent.glob("settings.json.bak-*"))), 1)
-        self.assertIn(f"hooks: ok (on for new sessions: all 7 in {self.c / 'settings.json'}, {other})", out)
+        self.assertIn(f"hooks: ok (on for new sessions: all 8 in {self.c / 'settings.json'}, {other})", out)
         self.assertIn(f"settings: ok {other} (unchanged)", self.install("--mode", "settings", "--no-reconcile"))
         self.assertEqual(len(list(other.parent.glob("settings.json.bak-*"))), 1)
         self.plugin_on()   # enabled for both folders: plugin mode takes the entries out of both
@@ -337,7 +342,7 @@ class InstallTest(InstallCase):
         code, out, _ = self.orche("install", "--home", str(self.h), "--mode", "settings", "--no-reconcile")
         self.assertEqual(code, 1, out)
         self.assertEqual(other.read_text(), "{broken")
-        self.assertIn(f"hooks: error {other} (new sessions would run without Orche: 0 of 7 hooks registered and the "
+        self.assertIn(f"hooks: error {other} (new sessions would run without Orche: 0 of 8 hooks registered and the "
                       "orche plugin not enabled)", out)
         self.assertNotIn("hooks: ok", out)
 
@@ -750,7 +755,7 @@ class DoctorTest(InstallCase):
         registry.save(registry.empty())
         _, out, _ = self.doctor()
         self.assertIn(f"OK\tclaude\t{self.claude} 9.9.9 (Claude Code)", out.splitlines())
-        self.assertIn("OK\tclaude flags\tall 16 listed in claude --help", out.splitlines())
+        self.assertIn("OK\tclaude flags\tall 17 listed in claude --help", out.splitlines())
         (self.claude.parent / "help.txt").write_text("Usage: claude [options]\n  -p\n")
         code, out, _ = self.doctor()
         self.assertEqual(code, 0, out)
@@ -831,12 +836,12 @@ class DoctorTest(InstallCase):
         support.plugin_installed(self.claude.parent, disabled_in=self.c)
         self.install("--mode", "settings")
         _, out, _ = self.doctor()
-        self.assertIn(f"OK\thooks\tall 7 Orche hooks in {self.c / 'settings.json'}", out.splitlines())
+        self.assertIn(f"OK\thooks\tall 8 Orche hooks in {self.c / 'settings.json'}", out.splitlines())
         data = self.read_settings()
         data["enabledPlugins"]["orche@orche"] = True   # the owner turns the plugin on again
         (self.c / "settings.json").write_text(json.dumps(data, indent=2) + "\n")
         _, out, _ = self.doctor()
-        self.assertIn(f"WARN\thooks\thooks registered twice (plugin + 7 entries in {self.c / 'settings.json'}): run "
+        self.assertIn(f"WARN\thooks\thooks registered twice (plugin + 8 entries in {self.c / 'settings.json'}): run "
                       "orche install (the plugin wins, the settings entries go)", out.splitlines())
         self.install()   # R4: the plugin wins and the settings entries go; doctor is quiet again
         _, out, _ = self.doctor()
@@ -848,7 +853,7 @@ class DoctorTest(InstallCase):
         code, out, _ = self.doctor()
         self.assertEqual(code, 1, out)
         self.assertIn("FAIL\thooks\tOrche's hooks are off: new sessions run without Orche. Say \"repair the setup\"; "
-                      f"Main runs orche install ({self.c / 'settings.json'}: 0 of 7 hooks, the orche plugin not "
+                      f"Main runs orche install ({self.c / 'settings.json'}: 0 of 8 hooks, the orche plugin not "
                       "enabled)", out.splitlines())
         self.assertNotIn("restart", out.lower())
 

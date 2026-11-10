@@ -9,7 +9,8 @@ Layout: `rules` decides (plan, no side effects), `discover` reads git/Orca/files
 `archive` / `trash` act, `graveyard` records. This module runs one pass and renders the report.
 
 The heartbeat (reconcile) starts `orche janitor run` detached when the last pass is DAILY_S old (the
-report's mtime: every pass, dry or live, writes it) and no pass holds `janitor/.pass.lock`.
+report's mtime: every pass, dry or live, writes it), or older than the start of a brief day whose daily
+brief is not built yet (flow/daily.py), and no pass holds `janitor/.pass.lock`.
 """
 import contextlib
 import os
@@ -143,11 +144,25 @@ def last_pass_text(now=None) -> str:
     return "never" if age is None else f"{ago(age)} ago"
 
 
+def brief_due(now=None) -> bool:
+    """A daily brief waits for this pass (flow.daily.wanted): a brief day began after the last pass."""
+    from ..flow import daily
+    try:
+        reg = registry.load()
+    except registry.RegistryError:
+        return False
+    try:
+        at = report_path().stat().st_mtime
+    except FileNotFoundError:
+        at = None
+    return daily.wanted(reg, now or units.now(), config.load(), at)
+
+
 def heartbeat(dry_run) -> list:
-    """The heartbeat's class `janitor` (reconcile): when due() and no pass is running, `orche janitor run`
-    started detached, never inline. One row as review's, or none."""
+    """The heartbeat's class `janitor` (reconcile): when due() or brief_due() and no pass is running,
+    `orche janitor run` started detached, never inline. One row as review's, or none."""
     from .. import procs
-    if not due() or running():
+    if running() or not (due() or brief_due()):
         return []
     when, failed = last_pass_text(), None
     if not dry_run:

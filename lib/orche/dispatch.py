@@ -17,10 +17,13 @@ from .flow import guard, lineage, owner
 # ---- targets -------------------------------------------------------------
 
 def standing_text(reg, proj_key) -> str:
+    """The project's STANDING.md as briefs carry it: its Enforcement table only with the rows the owner
+    promoted (hr.mistakes.for_briefs; K7)."""
+    from .hr import mistakes
     proj = reg["projects"][proj_key]
     path = Path(units.project_root(reg, proj_key) or ".") / proj["standing"]
     try:
-        return path.read_text(encoding="utf-8")
+        return mistakes.for_briefs(path.read_text(encoding="utf-8"))
     except OSError:
         log.log("hooks", f"dispatch: no STANDING.md at {path}")
         return "(no STANDING.md)"
@@ -71,14 +74,18 @@ def _check_reachable(r, t):
         raise brief.Refusal(f"{brief.REFUSE}{t.session}'s worktree {wt} is missing: re-target, or recreate it.")
 
 
-def _check_pin(r, t, block, cfg) -> None:
+def _check_pin(r, t, block, cfg, prior=None) -> None:
     """Refuse a MODEL pin the target division cannot run (ladder.pin_error): another vendor, a model
-    priced above the division's, or Codex while it is unavailable."""
+    priced above the division's, or Codex while it is unavailable. K8a: ladder.ESCALATION passes the price
+    ceiling only on a `defect` AMEND of a unit (`prior`) that already has a `defect` revision."""
     pin = str(block.fields.get("MODEL") or "").strip()
     if not pin:
         return
     from . import ladder
-    err = ladder.pin_error(cfg, pin, vendors.of(r.reg, t) if t.owns_worktree else "claude-opus-5-5", t.session)
+    escalation = (block.kind == "amend" and prior is not None and brief.cause(block.note) == "defect"
+                  and "defect" in brief.causes(prior.folder).values())
+    err = ladder.pin_error(cfg, pin, vendors.of(r.reg, t) if t.owns_worktree else "claude-opus-5-5", t.session,
+                           escalation=escalation)
     if err:
         raise brief.Refusal(f"{brief.REFUSE}{err}")
 
@@ -139,7 +146,7 @@ def plan_blocks(r, bodies, frm) -> list:
                 raise brief.Refusal(_cross_project_error(r, t.session, t.project, frm.project))
             if block.kind != "stop":
                 _check_reachable(r, t)
-                _check_pin(r, t, block, cfg)
+                _check_pin(r, t, block, cfg, prior)
             hit = guarded(block, t.session, block.kind == "amend" and deliver.runner_wanted(r, t.session, cfg))
             plans.append(hit if hit is not None else Plan(block, t.session, prior.project, prior, block.unit))
             accepted += hit is None and block.kind != "stop"
@@ -511,9 +518,15 @@ def _orche_turn(who) -> bool:
 
 def _closing(project, text, session) -> None:
     """flow.owner.closing for Main's final message, with the turn's start (the prompt hook's turn record,
-    lineage.read_turn): a tag covers the reports that turn read; never fails the hook (the type only: no text)."""
+    lineage.read_turn): a tag covers the reports that turn read; never fails the hook (the type only: no text).
+    First the `main reply` event: who started the turn (owner, orche, unknown without a record), the closing
+    line's tag (none) and the reply's non-blank lines; never its text."""
     try:
         turn = lineage.read_turn(session) if session else None
+        by = "unknown" if not isinstance(turn, dict) or "owner" not in turn else "owner" if turn["owner"] else "orche"
+        hit = owner.parse(text or "")
+        lines = sum(1 for ln in str(text or "").splitlines() if ln.strip())
+        log.log("events", f"main reply project={project} by={by} tag={hit[0] if hit else 'none'} lines={lines}")
         owner.closing(project, text, units.now(), turn_at=units.parse_iso((turn or {}).get("at")))
     except Exception as exc:  # noqa: BLE001 - fail-open
         log.log("hooks", f"dispatch: closing line for {project}: {type(exc).__name__}")

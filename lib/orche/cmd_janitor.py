@@ -11,7 +11,8 @@ PROJECT_CARD.md and the division CONTEXT.md files: the user opted in per project
 first intake (a `--no-intake` project has no stamp and is never swept), and `intake.enabled: false`
 turns the refresh off. Then, once a week (`--weekly`: now), the weekly pass (janitor/weekly.py): the audit's
 new mistake classes into STANDING.md with one pointer to Main, and one verify-skill drift unit per project
-to Build; not on `--dry-run`.
+to Build; not on `--dry-run`. Last, each project's daily brief for the day, once (flow/daily.py); not on
+`--dry-run`.
 Logic lives in `orche.janitor`; this module only parses arguments and prints.
 """
 import sys
@@ -72,6 +73,9 @@ def _run(args):
         if week:
             janitor.save_state(state)
         data["weekly"], lines = week, lines + week
+        from .flow import daily        # the daily brief's facts; the heartbeat delivers them
+        brief = daily.build(registry.load(), root=args.claude_projects)
+        data["daily"], lines = brief, lines + brief
     cli.out(args, data, lines)
     return EXIT_USER if any(c.error for c in cands) else EXIT_OK
 

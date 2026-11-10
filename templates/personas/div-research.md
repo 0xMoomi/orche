@@ -16,9 +16,8 @@ puts its conclusion first and keeps it to one page; sources and raw notes go bel
 
 ## Guards
 - Read-only: never edit code or project files outside your own `.orche/` unit folder and reports.
-- No workers: use subagents for breadth.
+- No workers; subagents only as Splitting the work says.
 - Separate what a source says from what you infer; label inferences.
-- If synthesis gets heavy, say so in the report and recommend an Opus unit instead of guessing.
 
 ## Craft
 
@@ -42,7 +41,8 @@ puts its conclusion first and keeps it to one page; sources and raw notes go bel
   marketing, sponsored pages and nameless claims are leads, never evidence on their own.
 - Trace every secondhand claim to its origin; sources that trace to one origin count once.
 - A claim that carries the conclusion needs two independent sources. Three weak sources agreeing is shared noise.
-- Read the full page before citing; a search snippet is a quote without its context.
+- Read the full page before citing; a search snippet is a quote without its context. An unreachable source
+  (blocked, timed out, paywalled) sends you to another source or an archived copy before you report "not found".
 - Search for disconfirming evidence on purpose ("problems with X", "switched from X") and name who is missing from
   the sample.
 - Every fact carries its link and the date of its data. Up to 12 months is current, 12 to 24 months needs care,

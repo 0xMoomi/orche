@@ -11,7 +11,10 @@ The hold: ORCHE_HOME/flow/usage-<vendor>.json {vendor, at, until, source, step, 
 TEXT_MAX), project (the first unit's), units: [{project, unit, stage, at}], notified, resumed},
 written under flow/.usage-<vendor>.lock. A run start of a held vendor joins the hold (job._held); an
 attempt that hits a limit records it (hit). The heartbeat (reconcile, heartbeat()) sends the owner
-notice once per hold, logs `usage resume` once `until` passed and re-runs the held units (class `held`)."""
+notice once per hold, logs `usage resume` once `until` passed and re-runs the held units (class `held`).
+
+An unreachable API (K5: OUTAGE, among the default patterns) holds the vendor the same way, from a failed attempt's
+text only (headless.Result.limit_text is '' for a call that did not fail); its texts say `API unreachable`."""
 import contextlib
 import datetime as _dt
 import fcntl
@@ -28,6 +31,7 @@ REPEAT_MAX = 3                       # holds of one unit without a done run betw
 REPEAT_S = 24 * 3600                # a hold this soon after the last one climbs the backoff ladder
 AHEAD = _dt.timedelta(days=8)        # a parsed reset further out than this is not believed
 _warned = set()
+OUTAGE = re.compile(r"can't reach the api server|\benotfound\b", re.IGNORECASE)   # K5: an outage, not a limit
 
 
 def settings(cfg) -> dict:
@@ -258,9 +262,20 @@ def held_units(hold, project=None) -> list:
             if isinstance(u, dict) and (project is None or u.get("project") == project)]
 
 
+def outage(hold) -> bool:
+    """The hold is an unreachable API (OUTAGE in its text), not a usage limit."""
+    return bool(OUTAGE.search(str((hold or {}).get("text") or "")))
+
+
+def what(hold) -> str:
+    """`API unreachable` for an outage hold, else `usage limit`."""
+    return "API unreachable" if outage(hold) else "usage limit"
+
+
 def held_text(hold, vendor, now=None) -> str:
-    """The quiet `info` of a held unit: `held: claude usage limit until 15:00; this unit runs then`."""
-    return f"held: {vendor} usage limit until {hhmm(until_of(hold), now)}; this unit runs then"
+    """The quiet `info` of a held unit: `held: claude usage limit until 15:00; this unit runs then` (an outage:
+    `held: claude API unreachable until 15:00; ...`)."""
+    return f"held: {vendor} {what(hold)} until {hhmm(until_of(hold), now)}; this unit runs then"
 
 
 def _row(action, project, target, line, failed=None) -> dict:
@@ -283,12 +298,12 @@ def heartbeat(now, dry_run) -> list:
             if not dry_run:
                 try:
                     mark(vendor, notified=units.iso(now))      # marked first: at most one notice per hold
-                    owner.usage_notice(project, vendor, at, n, now)
+                    owner.usage_notice(project, vendor, at, n, now, outage=outage(hold))
                 except Exception as exc:  # noqa: BLE001 - a notice never stops the pass
                     failed = type(exc).__name__
                     log.log("hooks", f"reconcile: usage notice {vendor}: {failed}: {exc}")
             rows.append(_row("usage-notice", project, vendor, f"{'would tell' if dry_run else 'told'} the "
-                                                            f"owner: {vendor} usage limit until {at} ({n} units held)", failed))
+                                                            f"owner: {vendor} {what(hold)} until {at} ({n} units held)", failed))
         elif until is not None and not is_active(hold, now) and not hold.get("resumed"):
             if not dry_run:
                 try:

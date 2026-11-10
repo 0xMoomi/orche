@@ -62,6 +62,36 @@ class CmdDispatchTest(HookCase):
         self.assertIn("delivered", res.stdout)
         self.assertEqual(len(list(self.units_dir().iterdir())), 2)
 
+    def test_an_amend_without_a_cause_is_refused_with_the_fix(self):
+        self.orche("dispatch", stdin=BODY)
+        unit = self.only_unit()
+        res = self.orche("dispatch", stdin=f"AMEND {unit} rev 2\nSUPERSEDES rev 1: smaller\nGOAL Smaller")
+        self.assertEqual(res.returncode, 2, res.stdout + res.stderr)
+        self.assertIn("start the SUPERSEDES note with its cause (owner, brief, defect, red, conflict, gate, infra or "
+                      "continue)", res.stdout + res.stderr)
+        self.assertFalse((self.units_dir() / unit / "BRIEF.rev2.md").exists())
+        res = self.orche("dispatch", stdin=f"AMEND {unit} rev 2\nSUPERSEDES rev 1: owner: smaller\nGOAL Smaller")
+        self.assertEqual(res.returncode, 0, res.stdout + res.stderr)
+        self.assertIn("supersedes-note: rev 1: owner: smaller\n", (self.units_dir() / unit / "BRIEF.rev2.md").read_text())
+
+    def test_briefs_carry_only_the_promoted_enforcement_rows(self):
+        """K7: the audit's `proposed` rows stay out of briefs; a row the owner promoted rides along."""
+        standing = self.repo / ".orche" / "STANDING.md"
+        table = ("1. Never force-push.\n\n## Enforcement (proposed by the audit)\n\n"
+                 "| class | seen | proposed level | status |\n|---|---|---|---|\n"
+                 "| flaky e2e login | 3 | test | proposed |\n| skip ci on code | 2 | hook or gate | enforced |\n")
+        standing.parent.mkdir(parents=True, exist_ok=True)
+        standing.write_text(table)
+        self.orche("dispatch", stdin=BODY)
+        text = (self.units_dir() / self.only_unit() / "BRIEF.md").read_text()
+        self.assertIn("1. Never force-push.", text)
+        self.assertIn("| skip ci on code | 2 | hook or gate | enforced |", text)
+        self.assertNotIn("flaky e2e login", text)
+        standing.write_text(table.replace("enforced", "proposed"))
+        self.orche("dispatch", stdin=GIFT)
+        texts = [p.read_text() for p in self.units_dir().glob("*/BRIEF.md")]
+        self.assertEqual(sum("## Enforcement" in t for t in texts), 1)       # none left: the section goes
+
     def test_file(self):
         outbox = self.repo / ".orche" / "outbox"
         outbox.mkdir()

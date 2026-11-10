@@ -63,6 +63,10 @@ Spend (§7.3): a run whose worker started but left no cost figure (killed, timed
 without a completed turn) records history.reserve() as `cost_usd` (`usage` null), so G4 counts it;
 filing.lost does the same for a lost run. A worker that never started records no cost.
 
+Progress (runs/progress.py): a Claude worker streams (`stream-json`); every line reaches the run's
+progress.Recorder as it arrives, which keeps PROGRESS.json (facts only) next to RUN.json, named in the lock,
+and marks it ended when the attempts are over. What the run files still comes from the final `result` event.
+
 headless.run is the one way Orche starts claude (SPEC §14.10), codex.run the one way it starts codex;
 this module holds the unit-worker policy (call_for) and files the run.
 """
@@ -77,7 +81,7 @@ from pathlib import Path
 from .. import (brief, codex, config, donegate, headless, intake, ladder, log, mask, paths, procs, publish,
                 registry, roster, runs, shell, templates, units, util, vendors)
 from ..flow import usage as holds
-from . import filing, history
+from . import filing, history, progress
 
 EXIT_OK, EXIT_USER, EXIT_NOT_FOUND, EXIT_BLOCKED, EXIT_DUPLICATE, EXIT_UNFILED = 0, 1, 2, 3, 4, 5
 OPUS = "claude-opus-5-5"
@@ -388,7 +392,11 @@ def decide(reg, job, data, error, code=0, head_before=None, head=None):
     if word in ("blocked", "failed"):
         return word, summary or line
     if word in donegate.DONE_WORDS:
-        proof = donegate.after_run(roster.Roster(reg).member(job.to), word, job.worktree, head_before, head)
+        cfg = config.load()
+        base = publish.base(job.root or job.worktree, cfg, job.worktree, job.project)
+        proof = donegate.after_run(roster.Roster(reg).member(job.to), word, job.worktree, head_before, head,
+                                   base_ref=publish.base_ref(job.worktree, base) if base else None, tier=job.tier,
+                                   cfg=cfg)
         if not proof.missing:
             return "done", summary or line
         note = f"unverified: {line} ({proof.missing[0]})"
@@ -689,14 +697,19 @@ class _Try:
         return self.res.error is not None and not self.res.killed and self.res.code != 127
 
 
-def _attempt(reg, job, call, cfg, lock, since, stop, head_before, text, kind="work", prior=None) -> _Try:
+def _attempt(reg, job, call, cfg, lock, since, stop, head_before, text, kind="work", prior=None, prog=None) -> _Try:
     """Run the worker once with `text` on stdin and decide its outcome. `prior`: the resumed session's
-    total so far (a finish), taken off this call's reported total."""
+    total so far (a finish), taken off this call's reported total. `prog`: the run's progress.Recorder,
+    fed every stream line of a Claude call."""
     started = util.now_iso()
+    extra, named = {}, {}
+    if prog is not None and isinstance(call, headless.Call):
+        prog.attempt(call.model, prior)
+        extra["on_line"], named["progress"] = prog.feed, str(prog.path)   # the readers find it through the lock
     res = adapter(call).run(
         call, text, cfg, stop=stop,
         should_stop=lambda: runs.stop_requested(job.project, job.unit, since),
-        on_start=lambda pid: runs.update(lock, child_pid=pid, pgid=pid))
+        on_start=lambda pid: runs.update(lock, child_pid=pid, pgid=pid, **named), **extra)
     finished = util.now_iso()
     stop_at = runs.marker_time(job.project, job.unit)
     stopped = res.killed and stop_at is not None and stop_at >= since
@@ -747,7 +760,7 @@ def _hold_of(job, cfg, tries) -> tuple:
     return None, None
 
 
-def _finish(reg, job, call, cfg, lock, since, stop, head_before, tries, recipient, before):
+def _finish(reg, job, call, cfg, lock, since, stop, head_before, tries, recipient, before, prog=None):
     """The one finishing continuation of the last attempt in `tries`, or None when it does not qualify:
     a Claude call that ended normally (no error, exit 0, not stopped, timed out, at its turn cap or at a
     usage limit) and was decided `unverified`, with a session id, no pointer of the worker's own, no
@@ -774,7 +787,7 @@ def _finish(reg, job, call, cfg, lock, since, stop, head_before, tries, recipien
     more = replace(call, resume=res.session_id, max_turns=FINISH_TURNS, timeout=left)
     prior = res.cost_usd if isinstance(res.cost_usd, (int, float)) and not isinstance(res.cost_usd, bool) else None
     return _attempt(reg, job, more, cfg, lock, since, stop, head_before, FINISH_PROMPT.format(gap=gap),
-                    kind="finish", prior=prior)
+                    kind="finish", prior=prior, prog=prog)
 
 
 def _run_locked(reg, job, call, cfg, lock, since, stop) -> tuple:
@@ -795,8 +808,32 @@ def _run_locked(reg, job, call, cfg, lock, since, stop) -> tuple:
         return _not_started(reg, job, since, stop)      # STOP/SIGTERM before claude started
     _audit(job, cfg)
     base_prompt = prompt(job, cfg)
-    tries = [_attempt(reg, job, call, cfg, lock, since, stop, head_before, base_prompt)]
-    more = _finish(reg, job, call, cfg, lock, since, stop, head_before, tries, recipient, before)
+    prog = _recorder(job, call, lock)
+    try:
+        tries = _attempts(reg, job, call, cfg, lock, since, stop, head_before, base_prompt, recipient, before, prog)
+    finally:
+        if prog is not None:
+            prog.close()
+    return _file(reg, job, cfg, since, head_before, tries, recipient, before)
+
+
+def _recorder(job, call, lock):
+    """The run's progress.Recorder (a Claude call only; the lock's `progress` names its file once claude is up), else None; a
+    record that cannot be started is no reason to fail the run."""
+    if not isinstance(call, headless.Call):
+        return None
+    try:
+        return progress.Recorder(job.unit_dir / progress.FILE, runs.run_id_of(lock), util.now_iso(),
+                                 job.timebox_s, call.model, project=job.project)
+    except Exception as exc:  # noqa: BLE001 - progress is a view, never a reason to fail
+        log.log("hooks", f"runner: {job.unit}: no progress record ({type(exc).__name__}: {exc})")
+        return None
+
+
+def _attempts(reg, job, call, cfg, lock, since, stop, head_before, base_prompt, recipient, before, prog) -> list:
+    """The worker calls of the run: the first, its finishing continuation (_finish), then the one escalation."""
+    tries = [_attempt(reg, job, call, cfg, lock, since, stop, head_before, base_prompt, prog=prog)]
+    more = _finish(reg, job, call, cfg, lock, since, stop, head_before, tries, recipient, before, prog)
     if more is not None:
         tries.append(more)
     t = tries[-1]
@@ -817,7 +854,13 @@ def _run_locked(reg, job, call, cfg, lock, since, stop) -> tuple:
             log.log("hooks", f"runner: {job.unit}: {call.model} {call.effort} ended {t.status}; "
                              f"escalating once to {up.model} {up.effort}")
             text = base_prompt + ladder.previous(call.model, call.effort, t.status, mask.redact(t.res.text or "")[0])
-            tries.append(_attempt(reg, job, up, cfg, lock, since, stop, head_before, text, kind="escalation"))
+            tries.append(_attempt(reg, job, up, cfg, lock, since, stop, head_before, text, kind="escalation",
+                                  prog=prog))
+    return tries
+
+
+def _file(reg, job, cfg, since, head_before, tries, recipient, before) -> tuple:
+    """File the run from its attempts: RUN.json, REPORT.md, history, the pointer (see _run_locked)."""
     t = tries[-1]
     stopped, stop_at, owner, status, summary, head, result = t.stopped, t.stop_at, t.owner, t.status, t.summary, t.head, t.res.text
     pr = review = held_vendor = held_stage = None

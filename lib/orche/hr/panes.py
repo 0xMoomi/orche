@@ -20,7 +20,7 @@ from pathlib import Path
 from .. import config, orca, paths
 from ..janitor import discover
 
-RESUMED = "resumed: say in five lines what was done last, what runs now and what waits on the owner"
+RESUMED = "resumed: your pane was reopened; act on what orche status shows and reply with the status line"
 
 
 def session_env(session) -> str:
@@ -110,19 +110,22 @@ def resume_flag(session, cwd) -> str:
     return f"--name {shlex.quote(session)}"
 
 
-def pane_command(session, *, resume, cwd=None) -> str:
+def pane_command(session, *, resume, cwd=None, proj=None) -> str:
     """`claude --permission-mode bypassPermissions` + `resume_flag(session, cwd)` for a reopened pane (Main included), `--name <session>` for a fresh
     start: no Orche pane ever stops at a permission prompt.
 
-    A Main pane (`main-<project>`, fresh or resumed) also passes `--model claude-opus-5-5 --effort xhigh`
-    (staff.MAIN_MODEL, staff.MAIN_EFFORT): Opus 5.5 starts at medium effort, and a top-level `effortLevel`
-    in the user's settings does not reach it. Claude Code ranks a level or model picked in the session
-    (`/effort`, `/model`) above the flags, so the owner's own choice still wins in that pane.
+    A Main pane (`main-<project>`, fresh or resumed) also passes `--model <m> --effort <e>`: the project's
+    setting (`proj`: its registry entry; staff.main_model, set by `orche hr model <project> main`), by default
+    `--model claude-opus-5-5 --effort xhigh` (staff.MAIN_MODEL, staff.MAIN_EFFORT): Opus 5.5 starts at medium
+    effort, and a top-level `effortLevel` in the user's settings does not reach it. Claude Code ranks a level
+    or model picked in the session (`/effort`, `/model`) above the flags, so the owner's own choice still wins
+    in that pane.
 
     Prefixed with `session_env(session)`. The one builder for every Orche pane, Main included."""
     from .. import staff   # at call time, as in project_pane: hr's import-time modules are pinned
     flag = resume_flag(session, cwd) if resume else f"--name {session}"
-    pin = f"--model {staff.MAIN_MODEL} --effort {staff.MAIN_EFFORT} " if str(session).startswith("main-") else ""
+    model, effort = staff.main_model(proj)
+    pin = f"--model {shlex.quote(model)} --effort {effort} " if str(session).startswith("main-") else ""
     return (f"{session_env(session)}{config.load().get('claude_bin', 'claude')} "
             f"--permission-mode bypassPermissions {pin}{flag}")
 
@@ -207,7 +210,7 @@ def project_pane(key, proj, *, dry_run, switch=True, resume=True) -> tuple:
         from .. import staff
         if line := staff.auto_open(key, proj, dry_run=dry_run):   # before Main's pane, so Main ends in front
             data["staff"] = line
-        command = pane_command(title, resume=resume, cwd=proj["path"])
+        command = pane_command(title, resume=resume, cwd=proj["path"], proj=proj)
         result = open_pane(f"{proj['repo_id']}::{proj['path']}", title, command, dry_run=dry_run)
         if dry_run:
             data["argv"] = result["argv"]

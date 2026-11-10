@@ -516,6 +516,16 @@ def landed_heads(project) -> set:
     return {str(ln.get("id") or "").rsplit("-", 1)[-1] for ln in store.read_log(project) if ln.get("event") == "merged"}
 
 
+def merged_since(project, since) -> list:
+    """The log's `merged` lines {at, id, pr, unit, …} at or after `since` (an aware datetime), oldest first."""
+    out = []
+    for ln in store.read_log(project):
+        at = units.parse_iso(ln.get("at")) if ln.get("event") == "merged" else None
+        if at is not None and at >= since:
+            out.append(ln)
+    return out
+
+
 def closed_text(project, closed) -> str:
     """A closed queue's reason and what reopens it (`orche queue`, `orche status`, doctor): main-red → a
     fix queued with --first; proof → only `orche queue resume` (--first never reopens it)."""

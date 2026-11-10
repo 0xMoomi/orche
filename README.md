@@ -8,9 +8,9 @@ For developers on macOS who want several agents on one repository without watchi
 ## What's new
 
 <!-- whats-new: scripts/release.py keeps the three newest -->
+- **0.20.0** (2026-11-10): one final report per request, wake without typing, a daily brief, live progress of workers, less rework and Claude Fable 5.2. [Notes](https://github.com/0xMoomi/orche/releases/tag/v0.20.0)
 - **0.19.14** (2026-11-09): every version has its GitHub release, and the README shows what's new. [Notes](https://github.com/0xMoomi/orche/releases/tag/v0.19.14)
 - **0.19.13** (2026-11-09): one CEO Staff per project, under its Main. [Notes](https://github.com/0xMoomi/orche/releases/tag/v0.19.13)
-- **0.19.12** (2026-11-03): Main greets a new install at once, with a banner and a guide. [Notes](https://github.com/0xMoomi/orche/releases/tag/v0.19.12)
 <!-- /whats-new -->
 
 Every version: [releases](https://github.com/0xMoomi/orche/releases) and [CHANGELOG.md](CHANGELOG.md).
@@ -22,10 +22,12 @@ Every version: [releases](https://github.com/0xMoomi/orche/releases) and [CHANGE
 - **Main**, one per project, turns what you say into briefs and hands them to divisions with `orche dispatch`. It also talks to other projects' Mains: `orche ask` gets a read-only answer without waking them, and a work request goes to that Main, which asks you before taking it on.
 - **Divisions** (Build, Research, R&D, GTM, Ops, or your own) are specialists: each is its own Claude session with one role's craft, the model that suits it and its own memory, so every context stays short. They brief each other too (Research can hand Build a task), and every report goes back to whoever sent the brief. A resting division has no tab and costs nothing; work sent to it runs headless in its worktree.
 - **Worktrees.** Every division and worker works in its own git worktree, which Orca shows as a workspace. In Orca's sidebar the divisions fold under Main's row and each worker under its division: fold them away and open them only when you want to look.
-- **Workers** carry out one slice each, headless (`claude -p`, no tab), and open their own pull requests. Build reviews each one, and the merge queue runs `scripts/verify/ci.sh` on the base branch and lands it when green. In team mode (a repository that declares its team plugin) push, pull request and merge wait for your word; in an issue-tracked project (Linear) each worker's name carries the issue key and its PR says `Fixes DES-57`.
-- **One wake per finished batch.** Main hears back once, when everything a request started has ended; a question or a decision for you reaches it at once.
+- **Workers** carry out one slice each, headless (`claude -p`, no tab), and open their own pull requests. Build reviews each one, and the merge queue runs `scripts/verify/ci.sh` on the base branch and lands it when green. While a worker runs, `orche status` shows its elapsed time, turn, last tool and cost so far. In team mode (a repository that declares its team plugin) push, pull request and merge wait for your word; in an issue-tracked project (Linear) each worker's name carries the issue key and its PR says `Fixes DES-57`.
+- **One report per request.** While work runs, Main adds one status line per step and asks a decision only once. When the last piece has ended you get one final report that stands on its own: the result, each piece of work with its PR, what failed, what you need to decide. Say "the last report again" to get it again.
+- **No typing into your panes.** Orche wakes a pane through a file that the pane's own hook watches, so text you left in the input box is never touched, and a busy pane gets new reports at its next tool step.
 - **The CEO Staff**, one per project, opens by default in its own workspace under that project's Main: it knows what you said to that Main and what it answered, answers everyday questions, changes nothing, and "tell Main: …" leaves its Main a note.
-- **The heartbeat**, a LaunchAgent pass every 5 minutes that makes no model call itself, reopens closed panes (also a Main that Orca reopened without Orche), re-delivers stuck briefs, rings reminders and keeps the merge queue moving.
+- **The heartbeat**, a LaunchAgent pass every 5 minutes that makes no model call itself, reopens closed panes (also a Main that Orca reopened without Orche), re-delivers stuck briefs, notices a worker that has gone silent, rings reminders and keeps the merge queue moving.
+- **The daily brief.** Once a day, after quiet hours, Main opens with what landed, what failed, what has waited for you and for how long, and yesterday's spend. A quiet project gets none.
 
 ## Quick start
 
@@ -47,7 +49,7 @@ Re-running it on a Mac that already has Orche keeps that install (its folder and
 - A `main-<project>` tab in Orca with the project's Staff (`staff-<project>`) in its own workspace under it. Divisions stay dormant (no pane, no cost) until work arrives.
 - A first message from Main: the install banner, how Orche works, what was made and what you can switch on any time (also in `<project>/.orche/SETUP.md`).
 - Nothing committed to your repository: the project's Orche files (`.orche/`, `PROJECT_CARD.md`, `AGENTS.md`) stay untracked.
-- A status line in Main's pane, in your language (English or Korean) and in colour: what waits on you and what runs first, then each division's running/assigned workers and today's spend (`⚠ waiting 2 · ▶ running 3 · BUILD 3/8 · … · $4.20 today`).
+- A status line in Main's pane, in your language (English or Korean) and in colour: what waits on you and what runs first, then each division's running/assigned workers and today's spend (`⚠ waiting 2 · ▶ running 3 (oldest 22m/30m) · BUILD 3/8 · … · $4.20 today`), with `⚠ stalled 1` when a worker has printed nothing for 10 minutes.
 - Notifications: Orca shows one when Main ends a reply, and Orche rings Main's tab when a decision still waits after 30 minutes; Orca shows that ring as its own notification when its Terminal Bell notifications are on (Settings > Notifications > Terminal Bell; `orche doctor` says if they are off). Missed one? Main's workspace stays marked unread in Orca's sidebar after every turn Orche started there, until you open it.
 - Files: the install in `~/orche`, config, registry and logs in `~/.claude/orche`, units and briefs in `<project>/.orche`, the heartbeat in `~/Library/LaunchAgents/com.orche.reconcile.plist`.
 - Spend per day: every division is a Claude Code session on your own plan; `orche status` shows each project's spend today, `orche metrics` the detail.
@@ -68,7 +70,10 @@ Say it to Main in your own words; Main runs the command.
 | "push DES-57", "merge PR 12" (team mode) | `orche queue add <unit>` pushes and opens the PR; `orche queue approve <project> #12` lands it |
 | "update" | `orche update`: the newest Orche, reinstalled, every project's Orche files refreshed (never yours) |
 | "what changed in <project>?" | `orche card <project>`, then `orche ask <project> "…"` |
-| "how much did this cost?" | `orche metrics` |
+| "how much did this cost?" | `orche metrics`: spend by role (Main, each division, workers, Staff) and how much went to re-runs, by cause |
+| "the last report again" | Main writes the final report of the newest finished request again |
+| "stop the morning brief", "start it again" | `orche flow brief off` / `orche flow brief on` |
+| "run Main on Fable", "put Main back on Opus" | `orche hr model <project> main fable --effort high`: the model Main's pane starts on, from its next start. Fable 5.2 costs twice Opus 5.5 per token, so try it on one project and compare the Rework block of `orche metrics` |
 | "close the staff window", "open the staff window" | `orche sleep staff-<project>` keeps that project's Staff closed until you ask again; `orche wake staff-<project>` opens it |
 | "check the setup", "what else can Orche do?" | `orche doctor`, ending with the next steps |
 | "continue" | after a cut-off or /clear, Main picks the work up from `orche status <project>` |

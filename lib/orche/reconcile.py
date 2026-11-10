@@ -51,11 +51,17 @@ reconcile/heartbeat.json last. Classes:
   never inline), at most one per project a pass, after the repairs and never past
   BUDGET_S;
 - janitor (a full pass only, after review): the janitor's last pass a day old (janitor.due) and none running
-  -> `orche janitor run` started detached (janitor.heartbeat), never inline;
+  -> `orche janitor run` started detached (janitor.heartbeat), never inline; also when a brief day began
+  after its last pass and a daily brief is not built yet (flow.daily);
+- daily <project> (after janitor): the daily brief the janitor's pass built for the day, not sent yet,
+  outside quiet hours, the project not paused -> one urgent `info` from `orche` to Main, once a day;
 - silent <unit>: the target's newest unit, a pane unit (never Main) whose dispatch was delivered,
   not run, running or reported on at this rev, with no open child of its own, whose pane has been
   idle SILENT_IDLE_S or whose rev is SILENT_TIMEBOX × TIMEBOX old -> `orche deliver --remind` once
   per revision; SILENT_ESCALATE_S later (or at 2 × TIMEBOX) one urgent `info` to the brief's sender;
+  a headless run (runs/progress.py) whose process is alive but whose stream printed no event for
+  SILENT_RUN_S is silent too (no reminder: nothing can be typed into it); at SILENT_RUN_ESCALATE_S without
+  any event (a tool call in progress included) one urgent `info` to the brief's sender, once per run; never a kill;
 - lineage (flow.lineage, before owner): a lineage close a crash or a busy lock missed (repair); then
   a session holding a `quiet: "batch"` pointer and no waking one gets its batch's close when the batch
   is complete, else one urgent wake when every unit it waits on is past its TIMEBOX deadline or the
@@ -95,6 +101,7 @@ from pathlib import Path
 
 from . import __version__, brief, config, inbox, log, orca, paths, procs, registry, roster, units, util
 from .flow import guard, lineage, owner, usage
+from .runs import progress
 
 STATE_TTL = _dt.timedelta(hours=48)
 STALE_INTERVALS = 2       # `orche status` / `orche doctor`: the heartbeat is stale past 2 intervals
@@ -109,6 +116,8 @@ OUTSIDE_IDLE_S = 600      # outside: Main's pane printed nothing, and the owner 
 SILENT_IDLE_S = 1200      # silent: the pane idle this long ...
 SILENT_TIMEBOX = 1.5      # ... or the revision this many TIMEBOXes old
 SILENT_ESCALATE_S = 1800  # silent: the escalation this long after the reminder, or at 2 × TIMEBOX
+SILENT_RUN_S = progress.STALLED_S             # silent headless run: no stream event this long (stalled)
+SILENT_RUN_ESCALATE_S = progress.NOTE_S       # ... and its one urgent note at this long without any event
 KIND = {"unread": "nudge", "undelivered": "deliver", "busy": "restart", "drain": "drain", "silent": "remind",
         "held": "rerun"}
 EVENT = {"drain": "drain-stale"}
@@ -383,6 +392,25 @@ def _silent(reg, r, now, keys, terms, cfg_all) -> list:
     return out
 
 
+def _silent_runs(reg, now, keys) -> list:
+    """silent conditions of headless runs: a live run (its lock's process and claude alive) whose progress
+    record's last event is SILENT_RUN_S old; ready (the note is due) at SILENT_RUN_ESCALATE_S. One episode a run."""
+    out = []
+    for key, _root in _projects(reg, keys):
+        for v in progress.views(key, now):
+            if not v["live_record"] or not v["alive"] or (v["quiet_s"] or 0) < SILENT_RUN_S:
+                continue
+            b = brief.find(reg, str(v["unit"]), project=key)
+            if b is None or not b.rev:
+                continue
+            out.append(Condition("silent", f"silent:{b.unit}:{b.rev}:{v['run_id']}", key, b.unit, v["quiet_s"],
+                                 ready=v["quiet_s"] >= SILENT_RUN_ESCALATE_S, rev=b.rev, to=str(v["to"] or b.to),
+                                 sender=b.sender or f"main-{key}", status="headless",
+                                 info={"headless": True, "run_id": v["run_id"],
+                                       "detail": progress.line(v).split("  ", 1)[-1]}))
+    return out
+
+
 def _dispatches(reg, m, session, late, now) -> list:
     """undelivered / drain conditions of `session`'s late dispatch pointers, the newest per unit. A
     revision is drained only when it is settled (deliver.settled: ran, runs or reported at that
@@ -487,6 +515,7 @@ def observe(reg, now, keys=None, wake=True, terms=None, cfg_all=None, hush=False
                                  status="active" if _wakes_head(m) else m.status,
                                  info={"handle": terms[session].get("handle")} if dead else {}))
     out += _busy(reg, now, keys, cfg_all)
+    out += _silent_runs(reg, now, keys)
     if terms is not None:
         out += _silent(reg, r, now, keys, terms, cfg_all)
     return sorted(out, key=lambda c: c.key)
@@ -614,9 +643,14 @@ def plan(conds, state, now, resolved=frozenset()) -> tuple:
         e.update(project=c.project, target=c.target, cls=c.cls, to=c.to, seen=units.iso(now),
                  **({"rev": c.rev} if c.rev is not None else {}),
                  **({"detail": c.info["detail"]} if c.info.get("detail") else {}),
+                 **({"run_id": c.info["run_id"]} if c.info.get("run_id") else {}),
                  **({"since": c.info["since"]} if c.cls == "held" else {}))
         if c.cls == "closed":
             _plan_closed(c, e, new, now, actions)
+            continue
+        if c.info.get("headless"):     # a silent headless run: no reminder, one note once it is due
+            if c.ready and not e.get("escalated"):
+                actions.append(Action("escalate", c, 0, 0))
             continue
         if c.cls == "busy" and _came_back(e, c):
             e["attempts"] = []
@@ -668,6 +702,9 @@ def _gone(reg, key, e, deliver) -> bool:
     b = brief.find(reg, target, project=e.get("project"))
     if b is None or b.rev != e.get("rev"):
         return True
+    if cls == "silent" and e.get("run_id"):     # a headless run's episode ends with that run
+        lock = runs.running(b.project, b.unit)
+        return lock is None or lock.get("run_id") != e.get("run_id")
     if cls == "silent":
         return bool(to) and deliver.settled(b, to)
     rec = runs.last(b.folder, strict=True)
@@ -698,6 +735,10 @@ def _escalate(reg, action, now) -> None:
         how = f"after {cap} wakes today" if c.status == "active" else f"while {c.status or 'asleep'}"
         _post(c.sender or c.target, main, f"closed: {c.target} has {c.count} report(s) waiting ({minutes} min) "
                                           f"{how} — run `orche wake {c.target}`, or leave it")
+    elif c.cls == "silent" and c.info.get("headless"):
+        _post(c.target, c.sender or main, f"silent: {c.target} rev {c.rev} in {c.to}: its headless run is alive "
+                                          f"but printed no event for {minutes} min ({c.info.get('detail') or '?'}); "
+                                          "STOP, AMEND or let it run (its TIMEBOX ends it)", rev=c.rev)
     elif c.cls == "silent":
         since = units.parse_iso(c.info.get("since"))
         reminded = units.parse_iso(action.extra.get("reminded"))
@@ -1205,6 +1246,7 @@ def _pass(cfg_all, cfg, now, started, dry_run, out, keys=None, as_json=False) ->
             _block(blocked, key, exc.filename, dry_run)
         return key is not None
     from . import janitor, runs
+    from .flow import daily
     from .review import build
     _phase("runs")
     for key in every:
@@ -1257,6 +1299,7 @@ def _pass(cfg_all, cfg, now, started, dry_run, out, keys=None, as_json=False) ->
     if dry_run:
         later = build.heartbeat(reg, scope(), True, started + BUDGET_S)
         later += janitor.heartbeat(True) if keys is None else []
+        later += daily.heartbeat(reg, now, True, scope(), cfg_all)
         for row in shut + notes:
             emit(row, row["line"])
         for a in actions:
@@ -1305,6 +1348,12 @@ def _pass(cfg_all, cfg, now, started, dry_run, out, keys=None, as_json=False) ->
     for row in janitor.heartbeat(False) if keys is None else []:
         log.log("events", "reconcile action=janitor attempt=1/1" + (f" failed={row['failed']}" if row["failed"] else ""))
         emit(row, row["line"] + (f" (failed: {row['failed']})" if row["failed"] else ""))
+        done += 1
+    _phase("daily")        # the daily brief the janitor's pass built: one waking pointer to Main, once a day
+    for row in daily.heartbeat(reg, now, False, scope(), cfg_all):
+        log.log("events", f"reconcile action=daily-brief project={row['project']} target={row['target']} "
+                          f"rev=- attempt=1/1")
+        emit(row, row["line"])
         done += 1
     _phase("statusline")   # today's spend, what waits on the owner and their language: at most a pass old
     from . import project as facts, statusline

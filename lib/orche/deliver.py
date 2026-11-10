@@ -1,8 +1,15 @@
-"""Typing into a pane, detached from every hook: `orche nudge <session>` (the wake) and
+"""Waking a pane, detached from every hook: `orche nudge <session>` (the wake) and
 `orche deliver <unit>` (a dispatched brief). No hook calls Orca to type (ruling 2).
 
+Both first wake by file (`_by_file`, lib/orche/watch.py): a target whose WATCH record names its Claude
+session gets its wake file written, which its FileChanged hook turns into a turn (idle) or a delivery at the
+next tool boundary (busy or waiting in `claude agents --json`: `queued`). An idle or unlisted session that
+shows no sign of taking it within WAKE_WAIT_S loses its WATCH record and is typed into as below; a target
+without the record is typed into as below. The report-due reminder (`remind`) is always typed.
+
 A waking pointer posted to a session starts `orche nudge <session>` (inbox.wake). The nudger holds
-`inbox/<session>/.wake.lock`, and types the fixed WAKE_TEXT only when a waking pointer is still
+`inbox/<session>/.wake.lock`; with a WATCH record it wakes by file after the quiet window. Otherwise it
+types the fixed WAKE_TEXT only when a waking pointer is still
 pending, the pane's agent is idle (`orca terminal wait --for tui-idle`: status running, no
 blockedReason, satisfied) and the composer is empty (`orca terminal read --screen`: `_composer`). Into
 Main (a person types there) it first waits until the pane printed nothing for ACTIVE_S (`_hold`), and
@@ -16,7 +23,8 @@ ends) first marks Main's Orca workspace unread (`mark_unread`), then wakes as ab
 
 The Stop hook writes a pane unit's pointer (`via: dispatch`) and starts `orche deliver <unit>`
 (spawn). The deliverer holds the target's own `.deliver.lock` (never the wake lock: a brief is not
-held up behind a wake's quiet window), waits up to DELIVER_WAIT_S for the target to be idle
+held up behind a wake's quiet window), wakes by file when it can, else waits up to DELIVER_WAIT_S for
+the target to be idle
 (then types anyway: a division pane has no human and Claude Code queues typed input), never types
 into a draft or a dialog, and types `[orche] inbox: <unit> rev <N>`; a send into a pane that was still
 busy, accepted without a turn start, is `queued` (not failed). A failed delivery posts an
@@ -26,10 +34,11 @@ it runs or already ran.
 import contextlib
 import datetime as _dt
 import fcntl
+import json
 import re
 import time
 
-from . import brief, config, inbox, log, orca, paths, procs, roster, runs, shell, units, util, vendors
+from . import brief, config, inbox, log, orca, paths, procs, roster, runs, shell, units, util, vendors, watch
 
 WAKE_LOCK = ".wake.lock"        # one nudger per session
 DELIVER_LOCK = ".deliver.lock"  # one deliverer per target pane
@@ -52,7 +61,10 @@ HOLD_MAX_S = 60            # … a typing attempt waits for that quiet this long
 # the marker (`already-nudged`), never a spurious `locked`.
 WAKE_HOLD_S = (CALL_S + 2 * (IDLE_WAIT_S + WAIT_SLACK_S + CALL_S) + SUBMIT_WAIT_S + 2 * WAIT_SLACK_S
                + HOLD_MAX_S)
-OK_STATES = ("nudged", "already-nudged", "nothing-pending")
+WAKE_WAIT_S = 5           # after writing the wake file: this long for the session to show it took the wake
+AGENTS_S = 2              # `claude agents --json` (about 0.12 s): its failure is never an error
+ARMED_SLACK_S = 2         # a WATCH record's `at` keeps whole seconds (_armed_before)
+OK_STATES = ("nudged", "queued", "already-nudged", "nothing-pending")
 FAILED = ("no-pane", "needs-wake", "wake-requested", "dialog", "no-agent", "refused", "nudge-failed", "locked")
 
 
@@ -394,12 +406,76 @@ def _queued(send: dict) -> bool:
             and prompt.get("observation") not in ("permission", "incarnation_replaced"))
 
 
+def _armed_before(row, armed_at) -> bool:
+    """A `claude agents` row's process started before the WATCH record was written (`armed_at`, epoch
+    seconds; the record keeps whole seconds, so ARMED_SLACK_S of slack), or the row has no `startedAt`. A
+    process started later (the same session resumed elsewhere) never armed the watch it would answer for."""
+    started = row.get("startedAt")
+    if not isinstance(started, (int, float)) or isinstance(started, bool):
+        return True
+    return started / 1000 <= armed_at + ARMED_SLACK_S
+
+
+def _agent_status(session_id, armed_at=None):
+    """`status` of Claude session `session_id` in `claude agents --json` (`busy` or `waiting` when any of its
+    rows says so), or None: not listed, or the call failed or timed out (AGENTS_S). With `armed_at` (when its
+    WATCH record was written), only rows of a process that armed it count (_armed_before). Never raises."""
+    try:
+        res = shell.run([config.load().get("claude_bin") or "claude", "agents", "--json"], timeout=AGENTS_S)
+        rows = json.loads(res.out) if res.ok else None
+    except Exception:  # noqa: BLE001 - no listing: the wake waits for its evidence instead
+        return None
+    found = [r.get("status") for r in rows if isinstance(r, dict) and r.get("sessionId") == session_id
+             and (armed_at is None or _armed_before(r, armed_at))] if isinstance(rows, list) else []
+    return next((s for s in ("busy", "waiting") if s in found), found[0] if found else None)
+
+
+def _by_file(session, taken, nudger=False):
+    """Wake `session` through its wake file (lib/orche/watch.py) before any typing: (state, waited) or None
+    (type instead). No WATCH record: None. Else (a nudger first writes its `.nudged` marker) the file is
+    written and the Claude session the record names is looked up: `busy` or `waiting` of a process that wrote
+    the record (_armed_before; a session that crashed is not listed) is `queued` (Claude Code delivers it at
+    the next tool boundary; the Stop hook's rearm covers a turn that ends first). Idle, or not known:
+    `nudged` once `taken()` (the pointer drained, or the prompt hook removed `.nudged`) within WAKE_WAIT_S;
+    with no such evidence the WATCH record is removed (the next SessionStart writes it again), a nudger's
+    marker too, and None. One events line per decision: `wake session=<s> via=file|typing …`."""
+    m = watch.marker(session)
+    if m is None:
+        log.log("events", f"wake session={session} via=typing reason=no-watch")
+        return None
+    started = time.monotonic()
+    if nudger:
+        _mark(session)
+    watch.ring(session)
+    at = units.parse_iso(m.get("at"))
+    status = _agent_status(m["session_id"], at.timestamp() if at is not None else 0.0)
+    if status in ("busy", "waiting"):
+        log.log("events", f"wake session={session} via=file state=queued agent={status}")
+        return "queued", 0
+    while not taken():
+        if time.monotonic() - started >= WAKE_WAIT_S:
+            watch.disarm(session, m["session_id"])
+            if nudger:
+                _unmark(session)
+            log.log("events", f"wake session={session} via=typing reason=no-evidence agent={status or '-'}")
+            return None
+        time.sleep(POLL_S / 5)
+    waited = time.monotonic() - started
+    log.log("events", f"wake session={session} via=file state=nudged agent={status or '-'} waited={waited:.1f}s")
+    return "nudged", int(waited)
+
+
 def _waking(session) -> int:
     return sum(1 for _x, p in inbox.pending(session) if inbox.wakes(p))
 
 
 def _mark(session) -> None:
     (inbox.box(session) / inbox.NUDGED).write_text(util.now_iso() + "\n", encoding="utf-8")
+
+
+def _marked(session) -> bool:
+    """`.nudged` is still there (the prompt hook removes it when any prompt arrives)."""
+    return (inbox.box(session) / inbox.NUDGED).exists()
 
 
 def _unmark(session) -> None:
@@ -493,11 +569,21 @@ def nudge(session, unread=False) -> tuple:
                         state = "nothing-pending"
                     else:
                         from . import registry
-                        state, waited = _type(session, inbox.WAKE_TEXT, strict=True,
-                                              wait_s=IDLE_WAIT_S, still_needed=lambda: _waking(session) > 0,
-                                              before_send=lambda: _mark(session), on_fail=lambda: _unmark(session),
-                                              settle=settle, reopen=_reopener(session),
-                                              owner=_is_main(roster.Roster(registry.load()), session))
+                        if watch.marker(session) is None:
+                            filed, again = _by_file(session, None), settle      # logs `via=typing reason=no-watch`
+                        else:
+                            settle()             # the quiet window first, then the wake file
+                            filed = _by_file(session, lambda: not _waking(session) or not _marked(session),
+                                             nudger=True) if _waking(session) else ("nothing-pending", 0)
+                            again = None         # a fallback types at once: the quiet window has run
+                        if filed is not None:
+                            state, waited = filed
+                        else:
+                            state, waited = _type(session, inbox.WAKE_TEXT, strict=True,
+                                                  wait_s=IDLE_WAIT_S, still_needed=lambda: _waking(session) > 0,
+                                                  before_send=lambda: _mark(session), on_fail=lambda: _unmark(session),
+                                                  settle=again, reopen=_reopener(session),
+                                                  owner=_is_main(roster.Roster(registry.load()), session))
                 except Exception as exc:  # noqa: BLE001 - recorded below, under the lock
                     log.log("hooks", f"deliver: nudge {session}: {type(exc).__name__}: {exc}")
                     state, waited = "nudge-failed", int(time.monotonic() - started)
@@ -727,9 +813,13 @@ def _pane(r, b, to, sent, reopened=None):
         if not stop and settled(b, to):
             drain_dispatch(to, b.unit, b.rev)
             return "already-ran", int(time.monotonic() - started)
-        state, waited = _type(to, f"[orche] inbox: {b.unit} rev {b.rev}", strict=False, wait_s=DELIVER_WAIT_S,
-                              still_needed=path.exists, reopen=lambda h: reopen_pane(r.reg, to, h, reopened),
-                              owner=_is_main(r, to))
+        filed = _by_file(to, lambda: not path.exists())
+        if filed is not None:
+            state, waited = filed
+        else:
+            state, waited = _type(to, watch.brief_line(b.unit, b.rev), strict=False, wait_s=DELIVER_WAIT_S,
+                                  still_needed=path.exists, reopen=lambda h: reopen_pane(r.reg, to, h, reopened),
+                                  owner=_is_main(r, to))
         if stop and state == "no-pane":
             drain_dispatch(to, b.unit, b.rev)
             return "stop-idle", waited

@@ -310,6 +310,37 @@ class RunTest(GateCase):
         self.row(head, "unit-test-verified", "verifier-1")
         self.assertEqual(self.run_("release-ready", self.before, head), ())
 
+    def change(self, rel, message):
+        path = self.wt / rel
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(message + "\n")
+        self.git(self.wt, "add", rel)
+        self.git(self.wt, "commit", "-q", "-m", message)
+        head = self.rev(self.wt)
+        self.row(head, "type-check-only")
+        return head
+
+    def test_what_the_queue_refuses_is_a_gap_before_done(self):
+        """K3: a code commit carrying [skip ci], then a deep change without a test in the branch; none without a base."""
+        cfg = {"review": {"deep_lines": 400}}
+
+        def gaps(head, base, tier="standard"):
+            return donegate.after_run(self.build, "done", str(self.wt), self.before, head, base_ref=base, tier=tier,
+                                      cfg=cfg).missing
+        docs = self.change("docs/notes.md", "notes [skip ci]")
+        self.assertEqual(gaps(docs, self.before), ())                       # a docs-only [skip ci] is fine
+        head = self.change("src/app.py", "fix the cart [skip ci]")
+        self.assertEqual(gaps(head, self.before),
+                         (f"a commit that changes code carries [skip ci] ({head[:7]}): add a commit without it",))
+        self.assertEqual(gaps(head, None), ())
+        base = head
+        head = self.change("src/payments/charge.py", "charge in cents")
+        self.assertEqual(gaps(head, base), ("high risk (src/payments/charge.py): no test in this branch exercises the "
+                                            "fact it is safe because of: add one and a `SAFE:` line",))
+        self.assertEqual(gaps(head, base, tier="mechanical"), ())
+        head = self.change("tests/test_charge.py", "prove cents")
+        self.assertEqual(gaps(head, base), ())
+
     def test_ungated_or_not_a_completion(self):
         # R12
         self.assertEqual(self.run_("done", self.before, self.before, member=self.rnd), ())

@@ -1,6 +1,8 @@
 {
   "waiting": "waiting {n}",
   "running": "running {n}",
+  "running_oldest": "running {n} (oldest {age}/{box})",
+  "stalled": "stalled {n}",
   "today": "${usd} today",
   "spend_na": "spend n/a",
   "paused": "PAUSED {why} · say \"resume\" in Main",

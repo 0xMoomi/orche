@@ -16,7 +16,7 @@ from .flow import lineage, owner, usage
 
 MAX_OPEN, MAX_CLOSED, WIDTH = 8, 3, 160
 STATE_ORDER = ("merged", "queued", "running", "held", "returned", "done", "info", "failed", "blocked", "question",
-               "stopped")
+               "stopped", "unverified")
 CARD_LINES, CARD_CHARS = 40, 3000   # the card's budget
 DETAIL_TTL = _dt.timedelta(hours=24)    # lineages(): closed lineages this recent
 WAITING_TTL = _dt.timedelta(hours=24)   # blocked(): a blocked or question pointer this young
@@ -103,7 +103,8 @@ def lineages(reg, key, now=None, ttl=DETAIL_TTL, members=False) -> list:
     """One row per lineage of the last `ttl` (None: any age) or still open, newest first: {lineage, units,
     states: {state: n}, prs, spend, since, open}. A unit's state: running (a live run), held (a usage hold),
     queued (a merge-queue entry), the queue's last word on it (merged, returned, dropped), else its newest
-    report's (lineage.members). `members` adds [(Brief, (path, pointer) | None, status, state)] (not JSON)."""
+    report's (lineage.members, shown by lineage.label). `members` adds [(Brief, (path, pointer) | None,
+    status, state)] (not JSON)."""
     from . import queue
     from .runs import history
     now = now or units.now()
@@ -125,7 +126,7 @@ def lineages(reg, key, now=None, ttl=DETAIL_TTL, members=False) -> list:
         for b, found, status in ms:
             rec = runs.last(b.folder) or {}
             state = ("running" if runs.running(key, b.unit) else "held" if rec.get("stop_reason") in usage.HELD
-                     else "queued" if b.unit in queued else said.get(b.unit) or status)
+                     else "queued" if b.unit in queued else said.get(b.unit) or lineage.label(found, status))
             states[state] = states.get(state, 0) + 1
             mine.append((b, found, status, state))
             pr = rec.get("pr")
@@ -189,7 +190,8 @@ def waits(ms, project):
 
 def _statuses(ms) -> dict:
     counts = {}
-    for _b, _f, s, _state in ms:
+    for _b, f, s, _state in ms:
+        s = lineage.label(f, s)
         counts[s] = counts.get(s, 0) + 1
     return dict(sorted(counts.items()))
 
@@ -204,7 +206,9 @@ def card(reg, key, now=None) -> dict:
     lineages {lineage, goal, units, states, prs, last, waits}, and `open_total`; `owner` (flow.owner.status),
     `unread` and `blocked` as the status row has them; `queue` (queue_of); `closed`, the last MAX_CLOSED
     closed lineages {lineage, goal, units, statuses: {status: n}, prs, spend (their runs' cost), unconfirmed
-    (done without a ledger row)}; `spent_today` (spent_today, None when unreadable)."""
+    (done without a ledger row)}; `spent_today` (spent_today, None when unreadable); `runs`, the live runs'
+    progress (runs/progress.py view(), oldest first)."""
+    from .runs import progress
     rows = lineages(reg, key, now, ttl=None, members=True)
     opened, closed = [r for r in rows if r["open"]], [r for r in rows if not r["open"]][:MAX_CLOSED]
     return {"project": key,
@@ -217,7 +221,7 @@ def card(reg, key, now=None) -> dict:
             "closed": [{"lineage": r["lineage"], "goal": goal(r["members"], r["lineage"]), "units": r["units"],
                         "statuses": _statuses(r["members"]), "prs": r["prs"], "spend": r["spend"],
                         "unconfirmed": _unconfirmed(r["members"])} for r in closed],
-            "spent_today": spent_today(reg, key, now)}
+            "spent_today": spent_today(reg, key, now), "runs": progress.views(key, now)}
 
 
 def has_open(reg, key) -> bool:
@@ -273,8 +277,9 @@ def _prs(prs) -> str:
 def card_text(d) -> str:
     """The card (project.card), in the owner's order: `[orche] resume <project>`; NEEDS YOU (the `owner:`
     and `blocked:` lines as the status row prints them); FINISHED (the closed lineages: GOAL, statuses,
-    PRs, their runs' cost, how many are not confirmed); RUNNING (per open lineage its `L` line with the
-    GOAL, its states, its last report and what it waits on), or `nothing in flight`; the `unread:` lines;
+    PRs, their runs' cost, how many are not confirmed); RUNNING (one line per live run, `feat-x  12m of 30m ·
+    turn 14 · Edit ladder.py · $1.20`, then per open lineage its `L` line with the GOAL, its states, its last
+    report and what it waits on), or `nothing in flight`; the `unread:` lines;
     `queue: w/t/m · spent today $X`. An empty heading is left out. At most CARD_LINES lines and
     CARD_CHARS characters."""
     from . import metrics
@@ -293,7 +298,11 @@ def card_text(d) -> str:
                    + (f"  PRs {prs}" if prs else "")
                    + (f"  runs ${c['spend']:.2f}" if c.get("spend") else "")
                    + (f"  {n} not confirmed (no ledger row)" if n else ""))
-    out += [f"RUNNING ({d['open_total']})"] if d["open"] else ["nothing in flight"]
+    from .runs import progress
+    live = d.get("runs") or []
+    out += [f"RUNNING ({d['open_total']})"] if d["open"] else [f"RUNNING ({len(live)} runs)"] if live \
+        else ["nothing in flight"]
+    out += [f"  ▶ {progress.line(v)}" for v in live]
     for o in d["open"]:
         last = o["last"]
         out += [f"  L {o['lineage']}" + (f" — {o['goal']}" if o["goal"] else ""), f"    {states_text(o)}"]

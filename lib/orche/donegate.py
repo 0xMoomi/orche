@@ -176,14 +176,34 @@ def _row_gap(word, head, row, session):
     return None
 
 
-def after_run(member, word, worktree, head_before, head) -> Proof:
+def _queue_gaps(worktree, head, base_ref, tier, cfg):
+    """K3: what the merge queue would refuse, checked before done: a commit that changes code and carries
+    [skip ci], then a deep change (review.deep) with no test in the branch (review.proves). None without a base."""
+    if not base_ref or not head:
+        return None
+    from . import queue
+    from .queue import facts, repo
+    from .review import deep, proves
+    skip = facts.skip_ci_commits(worktree, base_ref, head, queue.DOCS_PATHS)
+    if skip:
+        return f"a commit that changes code carries [skip ci] ({skip[0]}): add a commit without it"
+    changed = repo.changed(worktree, base_ref, head)
+    why = deep(cfg, changed, tier) if cfg is not None else ""
+    if why and not proves(changed):
+        return f"{why}: no test in this branch exercises the fact it is safe because of: add one and a `SAFE:` line"
+    return None
+
+
+def after_run(member, word, worktree, head_before, head, base_ref=None, tier="standard", cfg=None) -> Proof:
     """The runner (R-DISPATCH-9): a done or release-ready claim from a gated target needs, in this
     order, a new commit, the pre-run HEAD as its ancestor, a clean tree (Orche's own untracked files
-    aside) and the ledger row; `missing` holds the first gap only."""
+    aside), what the queue checks (K3, with `base_ref`, the branch's base: no code commit carrying [skip ci],
+    and a test in the branch for a deep change of `tier` by `cfg`'s review.deep_lines) and the ledger row;
+    `missing` holds the first gap only."""
     # Keyed by the target identity's project (Roster), not the brief's job.project: the row is the target's.
     row = ledger.row_for_sha(member.project, head) if (member is not None and head) else None
     if word not in DONE_WORDS or not gated(member):
         return Proof(head, row)
     why = (_commit_gap(worktree, head_before, head) or _tree_gap(worktree, member.session)
-           or _row_gap(word, head, row, member.session))
+           or _queue_gaps(worktree, head, base_ref, tier, cfg) or _row_gap(word, head, row, member.session))
     return Proof(head, row, (why,) if why else ())

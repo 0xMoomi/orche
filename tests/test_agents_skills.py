@@ -140,7 +140,7 @@ class PersonaTemplatesTest(unittest.TestCase):
             self.assertIn("orche report ", text, path.name)
         unit = onboarding.render_persona(PERSONAS / "feature.md", **VARS)
         for part in (".orche/units/<unit>/BRIEF.md", "orche report stop", "Never hand-write pointer JSON",
-                     "Never `/clear` mid-unit", "STATUS: done | blocked | failed | stop`"):
+                     "never `/clear` mid-unit", "STATUS: done | blocked | failed | stop`"):
             self.assertIn(part, unit)
 
     def test_division_and_feature_personas_tell_runner_workers_not_to_report(self):
@@ -344,6 +344,37 @@ class SkillsTest(unittest.TestCase):
             self.assertIn(part, block)
         self.assertLessEqual(len(block), 1500)
 
+    def test_main_replies_in_three_shapes_with_one_final_report(self):
+        """c120: the status line, one decision asked once, and one final report per request from LINEAGE.md;
+        no five- or six-line caps or status card remain to disagree with them."""
+        text = (SKILLS / "orche-main" / "SKILL.md").read_text()
+        block = INJECT.findall(text)[0]
+        self.assertIn("- When a report arrives: act; reply = the closing line alone, or one new owner decision "
+                      "(recommend + default); lineage closed, none left ⇒ final report. Never only acknowledge.", block)
+        self.assertLessEqual(len(block), 1500)
+        flat = " ".join(text.split())
+        for part in ("## Replies to the owner", "**Status line.**", "**Decision.**", "**Final report.**",
+                     "Build it from LINEAGE.md (every unit's status, PR, result), not only this wake's reports",
+                     "Ask once and never repeat an open ask, except that the daily brief lists the open asks once a "
+                     "day; while open, later replies end `RUNNING:` (Orche reminds him).",
+                     "**Daily brief.** An urgent `info` from Orche, unit `daily-brief`", "its summary starts `daily brief:`",
+                     "It ends with the oldest open `OWNER:` line word for word when something waits, otherwise "
+                     "`DONE: <one line>`.",
+                     "| Stop the morning brief, start it again | `orche flow brief off` / `orche flow brief on` |",
+                     "It ends `DONE: <result>`, or the open `OWNER:` line word for word.",
+                     "2. Act: `orche dispatch` the next step, or record a default with `orche decide`.",
+                     "A close you continue gets the status line.",
+                     "Show the draft as one decision",
+                     "`orche status <project>` and each closed lineage's LINEAGE.md carry the state",
+                     "| The last report again | `orche status <project>`, then Read its LINEAGE.md | the final report "
+                     "again |"):
+            self.assertIn(part, flat)
+        for old in ("## Status card", "status card", "at most five plain lines", "five plain lines", "at most 6 lines",
+                    "progress line", "full report", "nothing else goes in the reply"):
+            self.assertNotIn(old, flat)
+        section = flat[flat.index("## Replies to the owner"):flat.index("## Candor")]
+        self.assertFalse(set("\u2013\u2014") & set(section))
+
     def test_main_card_routes_setup_and_the_two_model_pattern(self):
         text = (SKILLS / "orche-main" / "SKILL.md").read_text()
         block = INJECT.findall(text)[0]
@@ -458,7 +489,7 @@ class SkillsTest(unittest.TestCase):
     def test_rulebooks_cover_their_topics(self):
         main = (SKILLS / "orche-main" / "SKILL.md").read_text()
         for heading in ("## Dispatch grammar", "## When a report arrives", "## Question discipline",
-                        "## Status card", "## Echo-back", "## Candor", "## Grill before dispatch"):
+                        "## Replies to the owner", "## Echo-back", "## Candor", "## Grill before dispatch"):
             self.assertIn(heading, main)
         build = (SKILLS / "orche-build" / "SKILL.md").read_text()
         card = INJECT.search(build).group(1)

@@ -132,6 +132,12 @@ class MainResumesTest(support.TempHomeCase):
         panes.project_pane("acme", self.proj, dry_run=False, switch=False, resume=False)
         self.assertIn(f" {pin}--name main-acme", self.opened[0])
 
+    def test_a_projects_main_setting_replaces_the_default_pin(self):
+        """`orche hr model <p> main` writes `projects.<p>.main`; the pane command reads it when Main's pane opens."""
+        proj = {**self.proj, "main": {"model": "claude-fable-5-2", "effort": "high"}}
+        panes.project_pane("acme", proj, dry_run=False, switch=False, resume=False)
+        self.assertIn(" --model claude-fable-5-2 --effort high --name main-acme", self.opened[0])
+
     def test_project_pane_fresh_posts_nothing(self):
         panes.project_pane("acme", self.proj, dry_run=False, switch=False, resume=False)
         self.assertTrue(self.opened[0].endswith("--name main-acme"), self.opened[0])

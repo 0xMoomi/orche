@@ -155,7 +155,9 @@ class NoReviewByItselfTest(PreReviewCase):
     def test_a_runs_publish_of_a_deep_head_makes_no_reviewer_call(self):
         self.configure(build=True)
         self.claude_calls(("say", STATUS_DONE))
-        (self.fake / "do1.sh").write_text(DEEP + ROW.format(verdict="unit-test-verified"))
+        proven = DEEP.replace("git add deploy/run.sh", "mkdir -p tests && echo ok > tests/test_run.sh && "
+                                                       "git add deploy/run.sh tests/test_run.sh")   # K3: a deep done has its test
+        (self.fake / "do1.sh").write_text(proven + ROW.format(verdict="unit-test-verified"))
         self.codex_answers("VERDICT: PASS")
         published = []
         with mock.patch.object(build, "after_publish", lambda *a: published.append(a) or True):

@@ -2,7 +2,8 @@
 
 add:     add one division to a registered project on a model (hr/create.add_division), then start
          the project intake in the background when its stamp misses the division.
-model:   move a division to another model (hr/models.set_model).
+model:   move a division to another model (hr/models.set_model); `main` in place of the division sets the
+         model and `--effort` of the project's Main pane (hr/models.set_main; the next time it opens).
 choices: the division kinds, models and the owner's questions (design 2026-10-23 §10.3; lib/orche/hr/choices.py).
 scale:   print the scale presets and the current one, or set one (lib/orche/scale.py; `--dry-run` writes nothing).
 
@@ -50,10 +51,11 @@ def register(subparsers):
     p.add_argument("--wake", action="store_true", help="open its pane now (Claude only)")
     p.add_argument("--no-intake", action="store_true", help="do not start the project intake")
     p.set_defaults(func=cmd_add)
-    p = sub.add_parser("model", help="move a division to another model")
+    p = sub.add_parser("model", help="move a division (or `main`: the project's Main pane) to another model")
     p.add_argument("project")
-    p.add_argument("division")
+    p.add_argument("division", help="a division, or main")
     p.add_argument("model")
+    p.add_argument("--effort", help="main only: low, medium, high, xhigh or max (default: Main's current one)")
     p.set_defaults(func=cmd_model)
     p = sub.add_parser("choices", help="division kinds, models and the owner's questions (read-only)")
     p.add_argument("project", nargs="?", help="omit for a project not under Orche yet")
@@ -108,15 +110,18 @@ def cmd_audit_project(args):
     if args.json:
         print(json.dumps(data, indent=2, ensure_ascii=False))
         return EXIT_OK
+    t = data.get("table")
+    verb = "would write" if args.dry_run else "wrote"
+    expired = f", {len(t['expired'])} expired" if t and t["expired"] else ""
     if not data["classes"]:
         if not args.quiet:
             print(f"no mistake classes in the last {args.days} days")
+        if expired:
+            print(f"{verb} {t['path']} Enforcement: 0 new, 0 updated{expired}")
         return EXIT_OK
     _classes(data["classes"])
-    t = data.get("table")
     if t:
-        verb = "would write" if args.dry_run else "wrote"
-        print(f"{verb} {t['path']} Enforcement: {len(t['new'])} new, {len(t['updated'])} updated")
+        print(f"{verb} {t['path']} Enforcement: {len(t['new'])} new, {len(t['updated'])} updated{expired}")
     return EXIT_OK
 
 
@@ -211,7 +216,12 @@ def cmd_model(args):
     if found is None:
         return EXIT_NOT_FOUND
     try:
-        data, lines = hr.set_model(reg, found[0], args.division, args.model, dry_run=args.dry_run)
+        if args.division == "main":
+            data, lines = hr.set_main(reg, found[0], args.model, args.effort, dry_run=args.dry_run)
+        elif args.effort:
+            return fail(EXIT_USER, "--effort is for main only: a division's pane effort comes from its persona")
+        else:
+            data, lines = hr.set_model(reg, found[0], args.division, args.model, dry_run=args.dry_run)
     except hr.Refused as exc:
         return fail(exc.code, exc.msg)
     print(json.dumps(data, indent=2, ensure_ascii=False) if args.json else "\n".join(lines))

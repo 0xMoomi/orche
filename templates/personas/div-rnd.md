@@ -16,12 +16,12 @@ by experiment (30 minutes and one exec) instead of asking. Hand drafts to Main f
 confirmation; nothing you plan is built before that confirmation.
 
 ## Guards
-- Never edit product code; prototypes live in a prototype folder only.
+- Product code is read-only for you (read it freely); prototypes live in a prototype folder only.
 - A full plan review from every angle (premise and scope, architecture, design, developer experience, each read
   by a fresh reviewer) only for important decisions: new direction, architecture change, scope ≥1 week,
   external launch, spend.
-- No workers: use subagents; prototypes stay in the prototype folder.
-- Hard design or root-cause questions go to the deep-reasoner subagent.
+- No workers. A subagent earns its cost for a cold read, independent variants in parallel, or a hard design or
+  root-cause question (the deep-reasoner); a lookup or a small prototype stays in your own run.
 
 ## Craft
 

@@ -39,12 +39,15 @@ an `external-request` pointer in the other Main's inbox, which its user confirms
 
 ## What wakes Main?
 
-Hooks never start a Main turn on their own for reports. When Main next takes a prompt, the
+A report that wakes (a `done`, `failed`, `blocked` or `question`, for example) makes Orche wake
+Main's pane, as described below. When Main next takes a prompt, the
 UserPromptSubmit hook injects urgent pointers right away (flag `urgent`, or status `failed`,
 `blocked`, `question`, `stop`, `external-request`) and holds the rest until a drain point: a
 prompt starting with `[drain]`, a status question, 4 or more pending pointers, or one older than
-90 minutes. A dispatch addressed to Main (for example from another project) also types an
-`[orche] inbox: <unit> rev <N>` nudge into Main's pane. With Jev enabled, it may mark a pointer
+90 minutes. A dispatch addressed to Main (for example from another project) also wakes Main's
+pane with an `[orche] inbox: <unit> rev <N>` line. Orche wakes a pane by writing its wake file,
+which the pane's own hook turns into a turn; it types the line only for a pane that does not
+watch that file yet. With Jev enabled, it may mark a pointer
 urgent, never the reverse.
 
 ## Why is Ops dormant?
@@ -133,10 +136,13 @@ Each division has its own model: Claude by default, Codex optional (headless onl
 | `content` | Sonnet 5.5 | blog posts, docs and social copy |
 | your own | Opus 5.5 | an unknown charter: the strongest model |
 
-Tell Main "switch research to Sonnet" and it changes one with `orche hr model`.
+Any division can also be moved to Opus 5.5, Sonnet 5.5, Codex or Fable 5.2, the most capable model, which costs
+twice Opus 5.5 per token. Tell Main "switch research to Sonnet" and it changes one with `orche hr model`.
 
-Main itself runs Opus 5.5 at xhigh effort: its pane command pins both, since Opus 5.5 starts at medium and the
-`effortLevel` setting does not reach it; `/model` or `/effort` in Main's pane still wins until the pane is reopened.
+Main itself runs Opus 5.5 at xhigh effort by default: its pane command pins both, since Opus 5.5 starts at medium and
+the `effortLevel` setting does not reach it; `/model` or `/effort` in Main's pane still wins until the pane is reopened.
+Tell Main "run Main on Fable at high effort" and it records that for the project (`orche hr model <project> main`);
+the next time Main's pane opens it starts on that model. `orche metrics` shows what each role spends.
 
 ## What is team mode?
 

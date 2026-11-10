@@ -21,10 +21,10 @@ GREETING_EN = (
     "I know everything you've told acme's Main and what it answered, and I catch up again with every question.\n"
     "I don't do the work myself: no code, no pushes, no merges. Work always goes through Main.\n"
     'To hand something over, say "tell Main: ..." and I\'ll leave acme\'s Main a note.\n'
-    "I run on a lighter model, so ask away, even about small things.")
+    "I run at a lighter effort than Main, so ask away, even about small things.")
 # The Korean greeting lives only in templates/staff/greeting.ko.txt (Hangul only in such per-language
 # text files, HangulTest): pinned by its hash here, its shape below.
-GREETING_KO_SHA256 = "4c61dc4e94bc589e81958bd84bc9f3f0f3ceef91e32ce4f149dbce094b251724"
+GREETING_KO_SHA256 = "af3b84870bc8a5b7e580e29c2570a108f266e742bc8a1be5f92e191264ce7537"
 KO_PROMPT = "\uc624\ub298 \ubc30\ud3ec \uc0c1\ud669 \uc54c\ub824 \uc918"   # a Korean owner prompt
 
 

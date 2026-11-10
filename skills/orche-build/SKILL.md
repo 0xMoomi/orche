@@ -32,7 +32,8 @@ Staff each brief yourself; Main briefs heads, never workers.
   once than runs n/cap in orche status. Every change that lands comes from a worker (mechanical: Haiku).
 4 Standing: keep one `infra` worker (deploy, CI, docker); deploy slices go to it one at a time, each with
   ROLLBACK and the owner's approval. Keep another only after the same files caused two returns in a week.
-5 Not a worker: options, drafts, research, prototypes: your own run (subagents in parallel) or Research/R&D.
+5 Not a worker: options, drafts, research, prototypes: your own run or Research/R&D. A subagent only for parts that
+  are independent and each need many reads; a few lookups stay in your own run.
   Specs stay in your report; a PR only for what ships.
 6 Decide each finished slice with the checklist (skill orche-build). On the landed note, reuse or retire each
   worker of that unit (orche feat retire <p> <name> --yes), then report your unit.
@@ -48,6 +49,9 @@ Staff each brief yourself; Main briefs heads, never workers.
   review checklist. `orche queue add <unit> --dry-run` prints the facts. PASS = `orche queue add <unit>`
   (`--accept "<why>"` when you overrule open findings or a review error). RETURN = `AMEND <unit> rev N` naming the failing checklist lines and what would pass; put every question in
   that one AMEND (each AMEND counts toward G1's three a window).
+- Start every SUPERSEDES note with its cause: `owner` (the owner changed or added something), `brief` (your brief
+  was wrong or short), `defect` (a review or live run found the work wrong), `red`, `conflict`, `gate`, `infra`, or
+  `continue` (a dependency landed). Orche refuses an AMEND without one.
 - Never wait on the queue: take the next report. The queue sends you held notes for merges and returns, and one
   wake when every unit of your brief has landed: then report your unit to Main. Main hears your lineage only from
   that report.
@@ -111,8 +115,6 @@ Review depth, on top of the eight lines:
 - Many agents share one Claude subscription window; a usage limit holds that vendor until its reset and Orche re-runs
   the held units itself (`orche status` shows `paused: … usage limit until …`). Do not re-send briefs during a hold.
 - For 20–30 agents the owner picks a scale preset through Main; you never raise caps yourself.
-- Sustained 20–30 agents on a Claude subscription reach its usage window within hours; the lasting ways are an API
-  key for headless runs (the spend caps are then real dollars) or some divisions on Codex.
 
 ## Ledger rules
 

@@ -20,6 +20,7 @@ and runbooks readable by a non-developer at night.
 - Execute known runbooks and rollbacks only; novel incident types go to the user.
 - Diagnosis is read-only. DB migrations are TIER hard and need a backup first.
 - A user report becomes a Build unit only after two independent observations.
+- No workers. A subagent only for a wide read-only sweep (many logs or files) whose summary is all you need.
 
 ## Craft
 
@@ -49,7 +50,8 @@ and runbooks readable by a non-developer at night.
 
 ### CI (Build's infra worker changes it; hold it to this)
 - The same script runs locally and in CI, tool versions are pinned, and caches are keyed by the lockfile. A red main
-  blocks deploys until fixed; a flaky check is fixed or removed, never retried into green.
+  blocks deploys until fixed; a flaky check is fixed or removed, not given a retry that turns it green (re-running
+  a job once to see whether a failure repeats is diagnosis).
 
 ### Alerts and incidents
 - Every alert is actionable, has an owner and links its runbook; an alert nobody acted on twice is fixed or deleted.

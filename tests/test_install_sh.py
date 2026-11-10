@@ -535,7 +535,7 @@ class InstallShTest(unittest.TestCase):
         self.assertIn(f"update {dev} (main)", res.stdout)
         self.assertFalse(self.dir.exists())   # no second clone in ~/orche
         self.assertEqual({c for c in self.claude_calls()[len(before):]}, {"plugin --help", "plugin list --json"})
-        self.assertEqual(sum(f'"{dev}/hooks/run.sh"' in c for c in self.hook_commands()), 7)
+        self.assertEqual(sum(f'"{dev}/hooks/run.sh"' in c for c in self.hook_commands()), 8)
         self.assertIs(self.settings()["enabledPlugins"]["orche@orche"], False)
         self.assertIn(f"Orche {__import__('orche').__version__} is installed on this Mac (settings mode).", res.stdout)
         self.assertEqual(json.loads((self.orche_home / "install-state.json").read_text())["mode"], "settings")
@@ -595,7 +595,7 @@ class InstallShTest(unittest.TestCase):
         self.assertIn("orche install --mode settings --no-jev", res.stdout)
         self.assertIn("(settings mode)", res.stdout)
         self.assertNotIn("plugin updated", res.stdout)
-        self.assertEqual(sum(f'"{self.dir}/hooks/run.sh"' in c for c in self.hook_commands()), 7)
+        self.assertEqual(sum(f'"{self.dir}/hooks/run.sh"' in c for c in self.hook_commands()), 8)
         self.assertEqual(json.loads((self.orche_home / "install-state.json").read_text())["mode"], "settings")
 
     def test_claude_config_dir_gets_the_enable_and_the_hooks(self):
@@ -615,8 +615,8 @@ class InstallShTest(unittest.TestCase):
         plugin_installed(self.fake, disabled_in=profile)
         res = self.install("--mode", "settings", env={**env})
         self.assertOk(res)
-        self.assertEqual(sum(f'"{self.dir}/hooks/run.sh"' in c for c in self.hook_commands(profile)), 7)
-        self.assertEqual(sum(f'"{self.dir}/hooks/run.sh"' in c for c in self.hook_commands()), 7)
+        self.assertEqual(sum(f'"{self.dir}/hooks/run.sh"' in c for c in self.hook_commands(profile)), 8)
+        self.assertEqual(sum(f'"{self.dir}/hooks/run.sh"' in c for c in self.hook_commands()), 8)
 
     # --- running from a clone -------------------------------------------------------------------
 

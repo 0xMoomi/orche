@@ -37,11 +37,30 @@ class RungTest(unittest.TestCase):
         self.assertIn("another vendor", ladder.pin_error(CFG, "codex", OPUS, "div-x",
                                                          available=lambda c: SimpleNamespace(state="ok")))
         self.assertIn("above", ladder.pin_error(CFG, FABLE, OPUS, "div-x"))
-        self.assertTrue(ladder.pin_error(CFG, "fable", OPUS, "div-x"))
+        self.assertTrue(ladder.pin_error(CFG, "fable", OPUS, "div-x", escalation=False))
         self.assertEqual(ladder.pin_error(CFG, "sonnet", OPUS, "div-x"), "")
         absent = ladder.pin_error(CFG, "codex", "codex", "div-x", available=lambda c: SimpleNamespace(
             state="missing", detail="not installed", fix="install it"))
         self.assertTrue(absent.startswith("MODEL codex:"), absent)
+
+    def test_fable_5_2_is_priced_and_capped_like_any_model(self):
+        fable = "claude-fable-5-2"
+        self.assertEqual(ladder.full_id("fable"), fable)
+        self.assertEqual(ladder.price(CFG, "fable"), 40.0)
+        self.assertTrue(ladder.pin_error(CFG, "fable", OPUS, "div-x", escalation=False).startswith(
+            f"MODEL fable is above div-x's model {OPUS}; it is admitted only on a unit's second `defect` AMEND"))
+        self.assertEqual(ladder.pin_error(CFG, fable, fable, "div-x"), "")
+        self.assertEqual(ladder.pin_error(CFG, OPUS, fable, "div-x"), "")       # below the ceiling
+        self.assertEqual(ladder.rung(CFG, fable, "hard", "opus"), ladder.Rung(OPUS, "high", "MODEL"))
+        self.assertEqual(ladder.rung(CFG, fable, "standard")[:2], (fable, "medium"))
+        self.assertEqual(ladder.rung(CFG, fable, "mechanical")[:2], (HAIKU, "low"))
+
+    def test_the_ceiling_reads_the_metrics_price_table(self):
+        from orche import metrics
+        for model, row in metrics.PRICES.items():
+            self.assertEqual(ladder.price(CFG, model), row["output"], model)
+            self.assertEqual(ladder.price(CFG, model + "-20261101"), row["output"], model)
+        self.assertIsNone(ladder.price(CFG, "claude-mystery-9"))
 
     def test_escalation_rules(self):
         esc = lambda status, summary="", tier="mechanical", pinned=False, **kw: ladder.escalate(
@@ -140,10 +159,36 @@ class LadderRunTest(RunnerCase):
         target = roster.Roster(reg).member("div-acme-build")
         r = SimpleNamespace(reg=reg)
         for pin in ("codex", "claude-fable-5-1", "fable"):
-            block = SimpleNamespace(fields={"MODEL": pin})
+            block = SimpleNamespace(kind="brief", fields={"MODEL": pin})
             with self.assertRaises(brief.Refusal, msg=pin):
                 dispatch._check_pin(r, target, block, {**CFG, "codex": {"enabled": True}})
-        dispatch._check_pin(r, target, SimpleNamespace(fields={"MODEL": "sonnet"}), CFG)
+        dispatch._check_pin(r, target, SimpleNamespace(kind="brief", fields={"MODEL": "sonnet"}), CFG)
+
+
+    def test_the_fable_pin_passes_only_on_a_second_defect_amend(self):
+        """K8a: the one pin above the ceiling, only where a unit's work was found wrong twice; never for the owner."""
+        reg = registry.load()
+        target = roster.Roster(reg).member("div-acme-build")
+        r = SimpleNamespace(reg=reg)
+        fable = {"MODEL": ladder.ESCALATION}
+        unit = self.brief()
+        b = brief.find(reg, unit)
+        with self.assertRaises(brief.Refusal) as cm:            # the first defect AMEND: not yet
+            dispatch._check_pin(r, target, brief.Block("amend", fable, unit, 2, "rev 1: defect: cap off"), CFG, b)
+        self.assertIn("admitted only on a unit's second `defect` AMEND", str(cm.exception))
+        b = brief.write(brief.Block("amend", {}, unit, 2, "rev 1: defect: cap off"), target, "main-acme", "", prior=b,
+                        timeout=0)
+        dispatch._check_pin(r, target, brief.Block("amend", fable, unit, 3, "rev 2: defect: still off"), CFG, b)
+        with self.assertRaises(brief.Refusal):
+            dispatch._check_pin(r, target, brief.Block("amend", fable, unit, 3, "rev 2: owner: new copy"), CFG, b)
+        with self.assertRaises(brief.Refusal):
+            dispatch._check_pin(r, target, brief.Block("brief", {**dict.fromkeys(brief.KEYS[:10], "x"), **fable,
+                                                                 "TIER": "hard"}), CFG, None)
+        unit = self.pinned_brief(ladder.ESCALATION, tier="hard")       # the run re-checks the pin dispatch admitted
+        _, out, err = self.orche("--dry-run", "--json", "run", unit)
+        argv = json.loads(out)["argv"]
+        self.assertEqual((argv[argv.index("--model") + 1], argv[argv.index("--effort") + 1]),
+                         (ladder.ESCALATION, "high"), err)               # the TIER's effort, as any pin
 
 
 class AuditTest(unittest.TestCase):

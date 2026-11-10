@@ -36,7 +36,7 @@ output clean: no stray prints or warnings.
 ```
 bin/                 orche (sh launcher) and orche.py, which discovers lib/orche/cmd_*.py
 lib/orche/cmd_*.py   one module per CLI command, found by file name
-lib/orche/           top-level modules by theme: dispatch, brief, inbox, deliver (work flow);
+lib/orche/           top-level modules by theme: dispatch, brief, inbox, deliver, watch (work flow);
                      registry, roster, units, project (who is where); headless, codex, vendors, ladder
                      (model calls); triage, jev*, envgate, cmdscan, mask (gates); orca, github, shell (tools)
 lib/orche/<package>/ flow, hr, install, janitor, queue, review, runs, secrets: one domain each

@@ -51,6 +51,10 @@ class HookCase(support.TempHomeCase):
         (self.home / "config.json").write_text(json.dumps(support.no_wake({"delivery": "pane"})))
         self.fake_orca({"terminal list": {"terminals": [
             {"handle": "t-build", "title": "div-acme-build", "lastOutputAt": int(time.time() * 1000)}]}})
+        # The settings a hook's session loads (run_hook passes this folder): the Orche plugin on, so a pane
+        # session runs the wake hook (watch.hooked); never the user's own settings.
+        (self.home / "claude").mkdir(exist_ok=True)
+        (self.home / "claude" / "settings.json").write_text(json.dumps({"enabledPlugins": {"orche@orche": True}}))
 
     def tearDown(self):
         # Every `orche deliver` a Stop hook started (detached) ends with its events line; wait for them
@@ -94,9 +98,16 @@ class HookCase(support.TempHomeCase):
         clean = {k: v for k, v in os.environ.items()
                  if not k.startswith(("ORCA_", "ORCHE_", "CLAUDE"))}
         clean.update({"ORCHE_HOME": str(self.home), "ORCHE_FAKE_ORCA": "1",
-                      "ORCHE_SCRATCH_ROOT": str(self.root / "scratch")}, **env)
-        return subprocess.run([sys.executable, str(HOOKS / hook)], input=json.dumps(payload), env=clean,
-                              capture_output=True, text=True, timeout=20)
+                      "ORCHE_SCRATCH_ROOT": str(self.root / "scratch"),
+                      "CLAUDE_CONFIG_DIR": str(self.home / "claude")}, **env)
+        res = subprocess.run([sys.executable, str(HOOKS / hook)], input=json.dumps(payload), env=clean,
+                             capture_output=True, text=True, timeout=20)
+        res.raw, res.watch = res.stdout, None
+        if hook == "session_start.py" and res.stdout.startswith('{"hookSpecificOutput"'):
+            out = json.loads(res.stdout)["hookSpecificOutput"]
+            if "watchPaths" in out:     # a pane session's JSON: the tests read its text, `watch` its wake file
+                res.stdout, res.watch = out.get("additionalContext", ""), out["watchPaths"]
+        return res
 
     def ledger(self, *rows):
         path = self.home / "ledger" / "acme.tsv"
@@ -441,7 +452,7 @@ class DispatchRelayTest(HookCase):
     def test_amend_of_a_unit_without_a_brief_is_refused(self):
         ghost = f"acme-ghost-{dt.date.today():%Y%m%d}-1"
         (self.units_dir() / ghost).mkdir(parents=True)
-        res = self.send(f"```dispatch\nAMEND {ghost} rev 2\nGOAL      g2\n```")
+        res = self.send(f"```dispatch\nAMEND {ghost} rev 2\nSUPERSEDES rev 1: owner: g2\nGOAL      g2\n```")
         self.assertEqual(res.returncode, 2)
         self.assertIn(f"block 1: refused — unknown unit {ghost!r} (no .orche/units/{ghost}/BRIEF.md).",
                       res.stdout)
@@ -508,7 +519,7 @@ class DispatchRelayTest(HookCase):
     def test_amend_to_retired_target_is_refused(self):
         unit, folder, files, brief = self._retire_build_after_one_unit()
         pointers = len(self.inbox("div-acme-build"))
-        res = self.send(f"```dispatch\nAMEND {unit} rev 2\nSUPERSEDES rev 1: smaller\n"
+        res = self.send(f"```dispatch\nAMEND {unit} rev 2\nSUPERSEDES rev 1: owner: smaller\n"
                         "GOAL      Add coupon field only\n```")
         self.assertEqual(res.returncode, 2)
         self.assertIn("block 1: refused — target div-acme-build is retired.", res.stdout)
@@ -529,13 +540,13 @@ class DispatchRelayTest(HookCase):
     def test_amend_creates_rev2_with_supersedes(self):
         self.send(DISPATCH_OK)
         unit = self.only_unit()
-        amend = (f"Correction.\n\n```dispatch\nAMEND {unit} rev 2\nSUPERSEDES rev 1: no font change\n"
+        amend = (f"Correction.\n\n```dispatch\nAMEND {unit} rev 2\nSUPERSEDES rev 1: owner: no font change\n"
                  "GOAL      Add coupon field without touching fonts\n```")
         res = self.send(amend)
         self.assertEqual((res.returncode, res.stderr), (0, ""))
         folder = self.units_dir() / unit
         brief = (folder / "BRIEF.md").read_text()
-        self.assertTrue(brief.startswith("rev: 2\nsupersedes: rev 1\nsupersedes-note: rev 1: no font change\n"
+        self.assertTrue(brief.startswith("rev: 2\nsupersedes: rev 1\nsupersedes-note: rev 1: owner: no font change\n"
                                          f"unit: {unit}\nto: div-acme-build   from: main-acme\nlineage: {unit}   parent: -\n"
                                          f"worktree: {self.root / 'acme-build'}   branch: div/build\n"), brief)
         self.assertIn("GOAL      Add coupon field without touching fonts", brief)
@@ -1038,6 +1049,24 @@ class OwnerVoiceHookTest(HookCase):
         self.assertEqual((self.ask(), self.notes()), (None, []))
         self.assertNotIn("owner untagged", self.events())
 
+    def test_every_main_reply_is_logged_without_its_text(self):
+        """c120: `main reply` names who started the turn, the closing tag and the non-blank lines, never text."""
+        turn = self.home / "sessions" / "main-acme.turn.json"
+        turn.parent.mkdir(parents=True, exist_ok=True)
+        turn.write_text(json.dumps({"owner": False, "lineages": [], "at": None, "started": None}))
+        self.assertEqual(self.stop("RUNNING: build runs the secretword tests").returncode, 0)
+        turn.write_text(json.dumps({"owner": True, "lineages": [], "at": None, "started": None}))
+        self.assertEqual(self.stop("Coupons shipped in PR 41.\n\nThe secretword fix failed.\nDONE: coupons").returncode, 0)
+        turn.unlink()
+        self.assertEqual(self.stop("all good").returncode, 0)
+        events = self.events()
+        self.assertIn("main reply project=acme by=orche tag=RUNNING lines=1\n", events)
+        self.assertIn("main reply project=acme by=owner tag=DONE lines=3\n", events)
+        self.assertIn("main reply project=acme by=unknown tag=none lines=1\n", events)
+        self.assertNotIn("secretword", events)
+        self.stop("OWNER: approve", session="div-acme-build", cwd=str(self.root / "acme-build"))
+        self.assertEqual(self.events().count("main reply"), 3)              # Main's replies only
+
 
 class ReportInjectTest(HookCase):
     def run_hook(self, hook, payload, **env):
@@ -1177,17 +1206,22 @@ class ReportInjectTest(HookCase):
         self.assertNotIn(inbox.REPORT_LINE, res.stdout)
 
     def test_report_line_text_is_pinned(self):
-        """The full report when a lineage closes, one progress line otherwise, one closing line."""
+        """c120: one final report per request, from LINEAGE.md, at the close Main does not continue; any other
+        wake gets the closing line alone or one new owner question; never a repeated ask."""
         self.assertEqual(inbox.REPORT_LINE,
                          "[orche] Act on the inbox above now: the reports are shown above; Read a file only where "
-                         "its block says not shown. Where a lineage line says closed and you dispatch nothing more for it, write your full report to the user "
-                         "— outcome · what landed · what failed · decisions needed (recommendation + default) · next "
-                         "step; otherwise dispatch the next step and write one progress line. Anything the owner "
-                         "must decide or do goes first. Never only acknowledge. Dispatch blocks go before your "
+                         "its block says not shown. If a lineage line says closed and you dispatch nothing more for "
+                         "it or its request, write the final report: it stands alone and covers every unit in its "
+                         "LINEAGE.md, not only the reports above: the result first, one sentence per brief you sent, "
+                         "what failed or is unverified, decisions (recommendation + default). Otherwise dispatch the "
+                         "next step and reply with the closing line alone, or, for something new only the owner can "
+                         "decide or do, one short question with your recommendation and default. Never only "
+                         "acknowledge, and never repeat an open ask. Dispatch blocks go before your "
                          "closing line, and the reply ends with exactly one closing line: RUNNING: <what runs now> "
                          "when nothing is needed from the owner, OWNER: <the decision or step, with its default> "
                          "when something is, DONE: <the result> when the work is done.")
         self.assertNotIn("\n", inbox.REPORT_LINE)
+        self.assertFalse(set("\u2013\u2014") & set(inbox.REPORT_LINE))
 
     def test_the_owners_message_comes_first_when_it_drains_reports(self):
         """c103: the owner's own prompt that drains reports gets OWNER_LINE in place of REPORT_LINE (the
@@ -1196,8 +1230,9 @@ class ReportInjectTest(HookCase):
         self.assertEqual(inbox.OWNER_LINE,
                          "[orche] The owner's message comes first: answer it before the inbox above, which is "
                          "background to it. Then mention the reports in one short line and dispatch the next step "
-                         "they need. An urgent report, or anything the owner must decide or do, still goes first. "
-                         + inbox.CLOSING)
+                         "they need; a lineage shown closed with nothing more to dispatch still gets its final report "
+                         "after your answer. An urgent report, or anything the owner must decide or do, still goes "
+                         "first. " + inbox.CLOSING)
         self.assertTrue(inbox.REPORT_LINE.endswith(inbox.CLOSING))
         self.assertFalse(set("\n\u2013\u2014") & set(inbox.OWNER_LINE))
         cases = [("what about the pricing page copy?", inbox.OWNER_LINE),
@@ -1214,6 +1249,30 @@ class ReportInjectTest(HookCase):
                 lines = out.rstrip("\n").splitlines()
                 self.assertEqual(lines[-1], line, out)
                 self.assertEqual(lines.count(inbox.OWNER_LINE) + lines.count(inbox.REPORT_LINE), 1, out)
+
+    def test_the_daily_brief_gets_its_own_order(self):
+        """The daily brief (unit daily-brief from orche) is written in its rulebook shape, standing alone, open asks
+        listed; the order line says so in either turn, and other rules keep the rest of the inbox. Its summary is
+        hidden under the inlined report, its unit stays visible. A unit merely named daily-brief gets nothing."""
+        self.assertEqual(inbox.DAILY_LINE,
+                         "For the daily brief above (unit daily-brief) write the daily brief your rulebook describes, "
+                         "in its shape and standing alone; it may list the open asks. Your other rules still apply to "
+                         "the rest of the inbox, and in the owner's own turn his message still comes first and the "
+                         "brief follows it in full.")
+        self.assertFalse(set("\n\u2013\u2014") & set(inbox.DAILY_LINE))
+        for prompt, line in ((inbox.WAKE_TEXT, inbox.REPORT_LINE),
+                             ("what about the pricing page copy?", inbox.OWNER_LINE)):
+            with self.subTest(prompt=prompt):
+                self.pointer("daily-brief", status="info", frm="orche", urgent=True, summary="daily brief: 2 landed",
+                             report="# Daily brief\n2 landed\n")
+                self.pointer("acme-a-20261016-1")
+                out = self.prompt(prompt).stdout
+                self.assertIn("- unit daily-brief · from orche · status info · URGENT", out)
+                self.assertNotIn("summary: daily brief:", out)
+                self.assertEqual(out.rstrip("\n").splitlines()[-1], line + " " + inbox.DAILY_LINE, out)
+        self.pointer("daily-brief", frm="div-acme-build")
+        out = self.prompt(inbox.WAKE_TEXT).stdout
+        self.assertEqual(out.rstrip("\n").splitlines()[-1], inbox.REPORT_LINE, out)
 
     def test_pointer_fields_cannot_forge_orche_lines(self):
         """Pointer fields are single-lined data: only Orche's own tail starts a line with `[orche] Act on`."""
@@ -2051,7 +2110,8 @@ class SessionStartEndTest(HookCase):
 class ManifestTest(HookCase):
     def test_manifest_points_at_executable_hooks(self):
         manifest = json.loads((HOOKS / "hooks.json").read_text())["hooks"]
-        self.assertEqual(set(manifest), {"Stop", "StopFailure", "UserPromptSubmit", "PreToolUse", "SessionStart", "SessionEnd"})
+        self.assertEqual(set(manifest), {"Stop", "StopFailure", "UserPromptSubmit", "PreToolUse", "SessionStart", "SessionEnd",
+                                         "FileChanged"})
         self.assertEqual([m["matcher"] for m in manifest["PreToolUse"]],
                          ["Read|Bash|Grep|Edit|Write|Monitor|Agent|Task", "Edit|Write|NotebookEdit|MultiEdit"])
         names = []
@@ -2062,8 +2122,9 @@ class ManifestTest(HookCase):
                     self.assertEqual(launcher, '"${CLAUDE_PLUGIN_ROOT}/hooks/run.sh"')
                     self.assertTrue((HOOKS / f"{name}.py").is_file(), name)
                     names.append(name)
-        self.assertEqual(sorted(names), ["dispatch_relay", "dispatch_relay", "env_read_gate", "report_inject", "scope_gate",
-                                         "session_end", "session_start"])
+        self.assertEqual(sorted(names), ["dispatch_relay", "dispatch_relay", "env_read_gate", "inbox_wake", "report_inject",
+                                         "scope_gate", "session_end", "session_start"])
+        self.assertEqual(manifest["FileChanged"][0]["hooks"][0].get("asyncRewake"), True)
         self.assertTrue(os.access(HOOKS / "run.sh", os.X_OK))
 
 

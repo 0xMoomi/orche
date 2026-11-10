@@ -5,6 +5,17 @@ from .. import ledger, publish, units
 from . import repo, store
 
 
+LOCKFILES = re.compile(r"(^|/)(package-lock\.json|npm-shrinkwrap\.json|yarn\.lock|pnpm-lock\.yaml|bun\.lockb?|"
+                       r"Cargo\.lock|poetry\.lock|uv\.lock|Pipfile\.lock|Gemfile\.lock|composer\.lock|go\.sum|"
+                       r"flake\.lock)$")
+
+
+def moves_with(rel) -> bool:
+    """K2: a test or a lockfile, which moves with the code it covers: in SCOPE by rule (review.TESTS)."""
+    from ..review import TESTS
+    return bool(TESTS.search(rel) or LOCKFILES.search(rel))
+
+
 def scope_globs(scope_text) -> list:
     """The SCOPE field's path globs: its backticked items, else the tokens that look like paths."""
     text = str(scope_text or "")
@@ -40,7 +51,8 @@ def gather(where, *, project, pr, head, base, tier="standard", scope="", docs_pa
     files = repo.changed(where, base_ref, head)
     paths_ = [f[0] for f in files]
     globs = scope_globs(scope)
-    outside = [p for p in paths_ if globs and not any(units.scope_match(p, g) for g in globs)]
+    beyond = [p for p in paths_ if globs and not any(units.scope_match(p, g) for g in globs)]
+    outside = [p for p in beyond if not moves_with(p)]
     overlap = []
     for other in store.read(project)["entries"]:
         if other.get("pr") == pr or other.get("id") == entry_id:
@@ -53,7 +65,7 @@ def gather(where, *, project, pr, head, base, tier="standard", scope="", docs_pa
     pre = ledger.review_for(project, pr, head, "pre")
     return {"pr": pr, "head": head, "base": base, "base_sha": base_sha, "tier": tier,
             "files": len(files), "added": sum(f[1] for f in files), "deleted": sum(f[2] for f in files),
-            "scope_outside": outside, "scope_declared": bool(globs),
+            "scope_outside": outside, "scope_declared": bool(globs), "scope_moved": len(beyond) - len(outside),
             "skip_ci": skip_ci_commits(where, base_ref, head, list(docs_paths)),
             "overlap": overlap, "ledger": row, "pre_review": pre}
 
@@ -65,7 +77,9 @@ def lines(f) -> list:
     if not f["scope_declared"]:
         out.append("scope: none declared")
     else:
-        out.append("scope: ok" if not f["scope_outside"] else f"scope: outside {', '.join(f['scope_outside'][:5])}")
+        moved = f.get("scope_moved") or 0
+        out.append(f"scope: outside {', '.join(f['scope_outside'][:5])}" if f["scope_outside"]
+                   else f"scope: ok (+{moved} tests/locks)" if moved else "scope: ok")
     sk = f["skip_ci"]
     out.append("skip-ci: none" if not sk else f"skip-ci: {len(sk)} code commits ({', '.join(sk)})")
     ov = f["overlap"]

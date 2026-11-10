@@ -11,7 +11,7 @@ UNKNOWN = ("unknown vendor 'openai' — Claude ids are plain (claude-opus-5-5), 
 
 class GrammarTest(unittest.TestCase):
     def test_model_strings(self):
-        for ok in ("claude-opus-5-5", "sonnet", "codex", "codex:gpt-6.1-sol"):
+        for ok in ("claude-opus-5-5", "sonnet", "fable", "claude-fable-5-2", "codex", "codex:gpt-6.1-sol"):
             self.assertEqual(vendors.errors(ok), [], ok)
         self.assertEqual(vendors.errors("openai:x"), [UNKNOWN])
         self.assertEqual(vendors.errors("codex:"),
@@ -19,6 +19,8 @@ class GrammarTest(unittest.TestCase):
         self.assertEqual(vendors.errors("gpt-4"),
                          ["unknown model 'gpt-4' — Claude ids start with claude- (claude-opus-5-5) or are an alias "
                           f"({', '.join(vendors.ALIASES)}), Codex is `codex` or `codex:<model id>`"])
+        self.assertIn("fable", vendors.errors("gpt-4")[0])
+        self.assertEqual(vendors.ALIASES["fable"], "claude-fable-5-2")
         for bad in ("a b", "", None, 3, "x\u200by"):
             self.assertEqual(vendors.errors(bad), ["must be a model id without spaces or control characters"], bad)
 

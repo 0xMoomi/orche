@@ -567,3 +567,49 @@ class QueueCmdTest(support.TempHomeCase):
                 self.assertIn(f"{reason} — ", text)
                 self.assertIn(step, text)
         self.assertNotIn("--first", queue.closed_text("acme", {"reason": "proof", "main": "d" * 40}))
+
+
+class ScopeFactsTest(support.TempHomeCase):
+    """K2: tests and lockfiles move with the code they cover: in SCOPE by rule, counted on the facts' scope line."""
+
+    def test_tests_and_lockfiles_count_as_in_scope(self):
+        from orche.queue import facts
+        repo = self.home / "repo"
+        env = {**os.environ, "GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@example.com",
+               "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@example.com"}
+
+        def git(*args):
+            return subprocess.run(["git", "-C", str(repo), "-c", "commit.gpgsign=false", *args], check=True,
+                                  capture_output=True, text=True, env=env).stdout.strip()
+        repo.mkdir()
+        git("init", "-q")
+        (repo / "README").write_text("x\n")
+        git("add", ".")
+        git("commit", "-q", "-m", "init")
+        base = git("rev-parse", "HEAD")
+        for rel in ("src/cart.py", "tests/test_cart.py", "web/cart.test.ts", "package-lock.json", "api/go.sum"):
+            (repo / rel).parent.mkdir(parents=True, exist_ok=True)
+            (repo / rel).write_text("y\n")
+        git("add", ".")
+        git("commit", "-q", "-m", "cart")
+        head = git("rev-parse", "HEAD")
+        f = facts.gather(str(repo), project="acme", pr=5, head=head, base=base, scope="`src/**`")
+        self.assertEqual((f["scope_outside"], f["scope_moved"]), ([], 4))
+        self.assertIn("scope: ok (+4 tests/locks)", facts.lines(f))
+        (repo / "docs").mkdir()
+        (repo / "docs" / "cart.md").write_text("z\n")
+        git("add", ".")
+        git("commit", "-q", "-m", "docs")
+        f = facts.gather(str(repo), project="acme", pr=5, head=git("rev-parse", "HEAD"), base=base, scope="`src/**`")
+        self.assertIn("scope: outside docs/cart.md", facts.lines(f))
+
+    def test_queue_add_takes_the_reports_safe_line(self):
+        from types import SimpleNamespace
+        from orche import cmd_queue
+        folder = self.home / "unit"
+        folder.mkdir()
+        b = SimpleNamespace(folder=folder)
+        self.assertEqual(cmd_queue.safe_line(b), "")
+        (folder / "REPORT.md").write_text("STATUS: done\nSAFE: amounts stay integers in cents\nPR: #5\n")
+        self.assertEqual(cmd_queue.safe_line(b), "amounts stay integers in cents")
+        self.assertEqual(cmd_queue.safe_line(None), "")

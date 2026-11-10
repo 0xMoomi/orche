@@ -11,7 +11,7 @@ transition: `[dry-run]` lines, warnings, retire's progress lines.
 from .audit import run as run_audit, run_mistakes
 from .book import Refused, correct, log_path
 from .create import add_division, create_feature, onboard_project, plan_divisions
-from .models import set_model
+from .models import set_main, set_model
 from .limits import awake, set_frozen, stage_gate
 from .onboarding import session_name, session_owner
 from .panes import project_pane
@@ -21,5 +21,5 @@ from .transitions import run_verb, set_stage, sleep, wake
 
 __all__ = ["Refresh", "Refused", "add_division", "awake", "correct", "create_feature", "log_path", "onboard_project",
            "plan_divisions", "project_pane", "refresh_project", "retire", "retire_gone", "run_audit", "run_mistakes",
-           "run_verb", "session_name", "session_owner", "set_frozen", "set_model", "set_stage", "sleep", "stage_gate",
+           "run_verb", "session_name", "session_owner", "set_frozen", "set_main", "set_model", "set_stage", "sleep", "stage_gate",
            "stamp_version", "wake"]

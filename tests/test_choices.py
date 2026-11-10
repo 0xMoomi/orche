@@ -92,15 +92,16 @@ class BuildTest(unittest.TestCase):
         data = self.build(reg(gtm={"model": OPUS}, build={"model": OPUS}))
         gtm = data["ask"]["model"]["gtm"]
         self.assertEqual(gtm["tool"]["question"], "Which model should GTM switch to? (now: Opus 5.5)")
-        self.assertEqual(labels(gtm), ["Sonnet 5.5 (recommended)", "Codex", "Keep"])
-        self.assertEqual(gtm["values"], {"Sonnet 5.5 (recommended)": SONNET, "Codex": "codex", "Keep": None})
+        self.assertEqual(labels(gtm), ["Sonnet 5.5 (recommended)", "Codex", "Fable 5.2", "Keep"])
+        self.assertEqual(gtm["values"], {"Sonnet 5.5 (recommended)": SONNET, "Codex": "codex",
+                                        "Fable 5.2": "claude-fable-5-2", "Keep": None})
         change = data["ask"]["change"]
         self.assertEqual([o["description"] for o in change["tool"]["options"]],
                          ["now Opus 5.5 (recommended)", "now Opus 5.5 · recommended Sonnet 5.5"])
 
     def test_d_build_on_its_recommendation_keeps_first(self):
         data = self.build(reg(build={"model": OPUS}))
-        self.assertEqual(labels(data["ask"]["model"]["build"]), ["Keep (recommended)", "Sonnet 5.5", "Codex"])
+        self.assertEqual(labels(data["ask"]["model"]["build"]), ["Keep (recommended)", "Sonnet 5.5", "Codex", "Fable 5.2"])
 
     def test_e_a_new_kind_and_the_star_entry(self):
         data = self.build(reg(build={}))

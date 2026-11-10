@@ -44,14 +44,15 @@ BARE_DRAIN = r"\s*(\[drain\]|/drain)\s*"
 def _owner_seen(payload, who):
     """The owner typed in Main: restart the project's autonomy window (lib/orche/flow/guard.py) and
     answer the project's open ask (lib/orche/flow/owner.py: no more re-notifications). Orche's own
-    prompts (the inbox wake, the report-due reminder) and a bare drain do not count."""
+    prompts (the inbox wake, typed or delivered by the wake hook, the report-due reminder) and a bare drain
+    do not count."""
     try:
         import re
         from orche import deliver, inbox
         from orche.flow import guard, owner
         m = who.member
         prompt = str(payload.get("prompt") or "")
-        if (m is None or m.kind != "main" or inbox.NUDGE_RE.match(prompt) or deliver.REMIND_RE.match(prompt)
+        if (m is None or m.kind != "main" or inbox.orche_prompt(prompt) or deliver.REMIND_RE.match(prompt)
                 or re.fullmatch(BARE_DRAIN, prompt, re.IGNORECASE)):
             return
         guard.owner_seen(m.project)

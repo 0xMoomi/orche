@@ -1,9 +1,10 @@
-"""`orche flow pause <proj> [--reason TEXT]` and `orche flow resume <proj>` (G8, lib/orche/flow/guard.py).
+"""`orche flow pause <proj> [--reason TEXT]`, `orche flow resume <proj>` (G8, lib/orche/flow/guard.py) and
+`orche flow brief on|off` (config `flow.daily_brief`, the daily brief: lib/orche/flow/daily.py).
 
 A paused project relays no brief or AMEND (STOP still works) and the heartbeat repairs nothing in it but
 drains. Resume needs the owner's word: it removes the pause only when the owner prompted Main after it.
 """
-from . import registry, roster, statusline
+from . import config, registry, roster, statusline, util
 from .cli import EXIT_BLOCKED, EXIT_NOT_FOUND, EXIT_OK, dry, fail, out
 from .flow import guard
 
@@ -18,6 +19,9 @@ def register(subparsers):
     q = sub.add_parser("resume", help="lift the pause (only after the owner spoke in Main)")
     q.add_argument("project")
     q.set_defaults(func=cmd_resume)
+    q = sub.add_parser("brief", help="the daily brief Main gives after quiet hours: on (the default) or off")
+    q.add_argument("state", choices=("on", "off"))
+    q.set_defaults(func=cmd_brief)
 
 
 def _key(name):
@@ -51,4 +55,22 @@ def cmd_resume(args):
         return fail(EXIT_BLOCKED, f"resume needs the owner's word after {at.astimezone():%H:%M}")
     statusline.touch(key)
     out(args, {"project": key, "paused": False}, [f"resumed {key}"])
+    return EXIT_OK
+
+
+def cmd_brief(args):
+    """Set `flow.daily_brief` in ORCHE_HOME/config.json (only the file's own keys are saved)."""
+    try:
+        raw = util.read_json(config.path(), default={}) or {}
+    except util.JsonError as exc:
+        return fail(EXIT_BLOCKED, f"cannot read config: {exc}")
+    value = args.state == "on"
+    if not isinstance(raw.get("flow"), dict):
+        raw["flow"] = {}
+    raw["flow"]["daily_brief"] = value
+    if args.dry_run:
+        dry(f"set flow.daily_brief={'true' if value else 'false'}")
+        return EXIT_OK
+    config.save(raw)
+    out(args, {"daily_brief": value}, [f"daily brief {'on: Main opens each day after quiet hours' if value else 'off'}"])
     return EXIT_OK

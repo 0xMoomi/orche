@@ -283,7 +283,8 @@ class DryRunArgvTest(RunnerCase):
     def base(self, unit, model, effort, turns, tools, *rest):
         """The run id exists only once the run has its slot: a dry run names a placeholder. `rest`
         (deny list, persona) sits before the gates' --settings pair, which is always last (D8)."""
-        return [str(self.claude), "-p", "--model", model, "--effort", effort, "--output-format", "json",
+        return [str(self.claude), "-p", "--model", model, "--effort", effort,
+                "--output-format", "stream-json", "--verbose",
                 "--max-turns", str(turns),
                 "--setting-sources", "project", "--permission-mode", "bypassPermissions",
                 "--strict-mcp-config", "--mcp-config",
@@ -858,6 +859,23 @@ class FinishTest(RunnerCase):
         self.assertIn("status=done stop=end_turn rung=standard:claude-opus-5-5:medium attempts=2 escalated=0\n",
                       self.events())
 
+    def test_a_skip_ci_code_commit_is_a_done_gate_gap_and_the_finish_names_it(self):
+        """K3: what the merge queue would refuse is caught before done, and the finishing continuation is told."""
+        unit = self.brief()
+        self.ledger()
+        self.setup_calls(self.answer("I did it\nSTATUS: done\nall good", 0.3),
+                         self.answer("Still there.\nSTATUS: done\nall good", 0.4))
+        d = self.fake
+        skip = COMMIT.replace("-m work", "-m 'work [skip ci]'") + ROW.format(verdict="unit-test-verified")
+        self.action(f'if ! grep -qx -- --resume "{d}/argv.txt"; then\n{skip}fi\n' + (d / "action.sh").read_text())
+        self.orche("run", unit)
+        sha = self.rev(self.wt)[:7]
+        gap = f"STATUS: done (a commit that changes code carries [skip ci] ({sha}): add a commit without it)"
+        (_a1, _s1), (_a2, stdin2) = self.calls()
+        self.assertEqual(stdin2, runner.FINISH_PROMPT.format(gap=gap))
+        [ptr] = self.pointers("main-acme")
+        self.assertEqual((ptr["status"], ptr["summary"].splitlines()[0]), ("info", f"unverified: {gap}"))
+
     def test_no_status_line_names_the_gap_and_a_second_unverified_files_without_a_third_call(self):
         unit = self.brief()
         self.setup_calls(self.answer("worked on it", 0.2), self.answer("still nothing", 0.3))
@@ -1231,7 +1249,7 @@ class RelayRunnerTest(RunnerCase):
         self.lock_file(unit)                                  # a live `orche run <unit>` holds the lock
         path.write_text(json.dumps({**json.loads(path.read_text()), "rev": 1, "to": "div-acme-build"}))
         with self.sandboxed():
-            self.relay(body=f"AMEND {unit} rev 2\nSUPERSEDES rev 1: smaller\nGOAL      Smaller")
+            self.relay(body=f"AMEND {unit} rev 2\nSUPERSEDES rev 1: owner: smaller\nGOAL      Smaller")
         self.assertEqual(len(self.spawned), 1)
         self.assertIsNotNone(runs.stop_requested("acme", unit))          # the old run got the marker
         self.assertEqual([(p["brief_rev"], p["deferred"]) for p in self.pointers("div-acme-build")],
@@ -1310,7 +1328,7 @@ class RelayRunnerTest(RunnerCase):
         self.assertEqual(self.spawned, [])
         self.assertEqual(len(self.deliverers), 1)
         unit = self.relay()                       # spawned once
-        self.relay(body=f"AMEND {unit} rev 2\nSUPERSEDES rev 1: smaller\nGOAL      Smaller")
+        self.relay(body=f"AMEND {unit} rev 2\nSUPERSEDES rev 1: owner: smaller\nGOAL      Smaller")
         self.assertEqual([a for a, _ in self.spawned], [SPAWN + [unit]] * 2)
         self.assertIn(f"kind=amend unit={unit} rev=2 to=div-acme-build by=main-acme delivery=runner-started",
                       self.events())
@@ -1318,7 +1336,7 @@ class RelayRunnerTest(RunnerCase):
         self.assertEqual(len(self.spawned), 3)
         self.config({"claude_bin": str(self.claude), "runner": {"hard_in_pane": True}})   # a removed key: ignored
         hard = self.relay(tier="hard")
-        self.relay(body=f"AMEND {hard} rev 2\nGOAL      Smaller")
+        self.relay(body=f"AMEND {hard} rev 2\nSUPERSEDES rev 1: owner: smaller\nGOAL      Smaller")
         self.assertEqual(len(self.spawned), 5)
         self.assertEqual(len(self.deliverers), 1)
 
@@ -1441,7 +1459,7 @@ class RelayRunnerTest(RunnerCase):
             procs.append(REAL_POPEN(argv, **kw))
             self.addCleanup(self.reap, procs[-1])
             return procs[-1]
-        self.relay(body=f"AMEND {unit} rev 2\nSUPERSEDES rev 1: smaller\nGOAL      Smaller", popen=popen)
+        self.relay(body=f"AMEND {unit} rev 2\nSUPERSEDES rev 1: owner: smaller\nGOAL      Smaller", popen=popen)
         self.assertIn(f"kind=amend unit={unit} rev=2 to=div-acme-build by=main-acme delivery=runner-restarted",
                       self.events())
         self.assertEqual(self.feedback(), [f"relayed {unit} → div-acme-build rev 2 (runner-restarted)"])
@@ -1538,7 +1556,7 @@ class RelayRunnerTest(RunnerCase):
             procs.append(REAL_POPEN(argv, **kw))
             self.addCleanup(self.reap, procs[-1])
             return procs[-1]
-        self.relay(body=f"AMEND {unit} rev 2\nGOAL      Smaller", popen=popen)
+        self.relay(body=f"AMEND {unit} rev 2\nSUPERSEDES rev 1: owner: smaller\nGOAL      Smaller", popen=popen)
         self.relay(body=f"STOP {unit}")
         self.assertEqual(procs[0].wait(timeout=20), 0)          # rev 2 gave up while rev 1 was live
         self.assertIsNotNone(self.lock(unit))

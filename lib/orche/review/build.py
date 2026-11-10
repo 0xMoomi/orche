@@ -49,6 +49,9 @@ _VERDICT = re.compile(r"VERDICT:\s*(PASS|RETURN)", re.IGNORECASE)
 _FINDING = re.compile(r"^\s*-\s*([1-8])\s*:\s*(.+?)\s*$")
 _SURFACE = re.compile(r"^\s*SURFACE\s*:\s*(user|internal)\s*$", re.IGNORECASE | re.MULTILINE)
 _FIELD = re.compile(r"^(surface|safe_because): (.+)$")
+ROUTE = (6, 7, 8, 9)     # checklist lines that send a PR to the pane, not back to its writer: overlap, risk, size,
+                         # no unit brief (K6); a review whose findings are all here logs `verdict=route`
+NO_BRIEF = (9, "pane review: no unit brief")
 
 
 def _folder(project) -> Path:
@@ -219,8 +222,14 @@ def _first_reason(findings, error):
     return f"{findings[0][0]}: {findings[0][1]}" if findings else "-"
 
 
-def _event(project, pr, verdict, queued):
-    log.log("events", f"buildreview project={project} pr={pr} verdict={verdict} queued={'yes' if queued else 'no'}")
+def _event(project, pr, verdict, queued, by=None):
+    log.log("events", f"buildreview project={project} pr={pr} verdict={verdict} queued={'yes' if queued else 'no'}"
+                      + (f" by={by}" if by else ""))
+
+
+def routed(findings) -> bool:
+    """Every finding is a ROUTE line: the PR goes to the pane, nobody's work was found wrong."""
+    return bool(findings) and all(n in ROUTE for n, _why in findings)
 
 
 def _held(project, pr, sha, unit, head, vendor, hold) -> dict:
@@ -327,6 +336,8 @@ def _decide(reg, cfg, rv, project, pr, unit, view, sha, base, h7, root, where, h
         findings = deterministic(f, int(rv["pane_lines"]))
     except Exception as exc:   # noqa: BLE001 — never silent: Build hears of it
         f, error = None, f"facts: {exc}"
+    if b is None:            # K6: no ACCEPT can be asked of a PR without a unit brief: the pane reviews it
+        findings.append(NO_BRIEF)
     verdict = "return" if findings else ("error" if error else None)
     if verdict is None:
         try:
@@ -376,9 +387,12 @@ def _decide(reg, cfg, rv, project, pr, unit, view, sha, base, h7, root, where, h
     if answer:
         body += ["", "## Answer (data, masked)", answer]
     util.atomic_write(evidence, masked("\n".join(body)) + "\n")
+    note = error or ""
+    if verdict == "return" and routed(findings):      # K6: the ledger's mark of a routed head (hr/mistakes.py skips it)
+        note = f"route: {findings[0][1]}"
     try:
         ledger.record_review(project, "build", pr, sha, verdict, str(evidence), f"{head.session} (review)",
-                             model, writer=writer.session if writer else "unknown", note=one_line(error or "", 200))
+                             model, writer=writer.session if writer else "unknown", note=one_line(note, 200))
     except ledger.LedgerError as exc:
         log.log("hooks", f"buildreview: {project} PR #{pr}: ledger row refused: {exc}")
     return _act(project, pr, unit, view, sha, base, h7, where, head, writer, b, verdict, findings, error, pre_v,
@@ -406,10 +420,11 @@ def _act(project, pr, unit, view, sha, base, h7, where, head, writer, b, verdict
     text = f"PR #{pr} @{h7} needs you: {said}, head review {verdict.upper()} — {_first_reason(findings, error)}"
     extra = [f"- {n}: {why}" for n, why in (findings[:3] if error else findings[1:4])]
     _notify(project, pr, sha, unit, head, "\n".join([text, *extra]), quiet=False)
-    _event(project, pr, verdict, False)
+    route = verdict == "return" and routed(findings)
+    _event(project, pr, "route" if route else verdict, False)
     if verdict == "error":
         status = "error"
-    elif verdict == "return" and not any(n in (7, 8) for n, _ in findings):
+    elif verdict == "return" and not route and not any(n in (7, 8) for n, _ in findings):
         status = "returned"
     else:                     # high risk or size, a spend-cap skip, a PASS the queue refused
         status = "pane"
@@ -460,6 +475,7 @@ def pane_record(project, pr, sha, *, reviewer, model, writer, surface, safe_beca
                              writer=writer or "unknown")
     except ledger.LedgerError as exc:
         log.log("hooks", f"buildreview: {project} PR #{pr}: pane row refused: {exc}")
+    _event(project, pr, "pass", True, by="pane")
     return path
 
 

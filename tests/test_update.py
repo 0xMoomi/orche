@@ -28,10 +28,10 @@ if sys.argv[1] == "install":
     print("settings.json: write (hooks)")
     print("reconcile job: write /h/Library/LaunchAgents/com.orche.reconcile.plist (every 300s, loaded)")
     if (home / "hooks-off").exists():   # the install's last step: its hooks check failed
-        print("hooks: error /h/.claude/settings.json (new sessions would run without Orche: 0 of 7 hooks registered "
+        print("hooks: error /h/.claude/settings.json (new sessions would run without Orche: 0 of 8 hooks registered "
               "and the orche plugin not enabled)")
         sys.exit(1)
-    print("hooks: ok (on for new sessions: all 7 in /h/.claude/settings.json)")
+    print("hooks: ok (on for new sessions: all 8 in /h/.claude/settings.json)")
     if (home / "staff-lines").exists():   # the Staff panes the install opened
         print((home / "staff-lines").read_text(), end="")
     if (home / "fail-install").exists():
@@ -135,7 +135,7 @@ class UpdateTest(support.TempHomeCase):
         self.assertIn("refreshed beta: 2 file(s)", lines)
         self.assertIn("reconcile job: write /h/Library/LaunchAgents/com.orche.reconcile.plist (every 300s, loaded)",
                       lines)
-        self.assertIn("hooks: ok (on for new sessions: all 7 in /h/.claude/settings.json)", lines)   # the final check
+        self.assertIn("hooks: ok (on for new sessions: all 8 in /h/.claude/settings.json)", lines)   # the final check
         self.assertNotIn("settings.json: write (hooks)", lines)
         self.assertEqual(lines[-1], cmd_update.RESTART)
         self.assertIn("update: fast-forwarding", err)
@@ -249,7 +249,7 @@ class UpdateTest(support.TempHomeCase):
         (self.home / "hooks-off").touch()
         code, out, _ = self.update()
         self.assertEqual(code, 1)
-        self.assertIn("hooks: error /h/.claude/settings.json (new sessions would run without Orche: 0 of 7 hooks "
+        self.assertIn("hooks: error /h/.claude/settings.json (new sessions would run without Orche: 0 of 8 hooks "
                       "registered and the orche plugin not enabled)", out.splitlines())
         self.assertIn("orche update: step install failed: exit 1", out)
         self.assertEqual([c["argv"][0] for c in self.calls()], ["install"])
@@ -276,7 +276,7 @@ class UpdateTest(support.TempHomeCase):
         self.assertLess(err.index("update: claude plugin enable orche@orche --scope user"),
                         err.index("update: reinstalling (plugin mode)"))
         self.assertEqual(self.calls()[0]["argv"], ["install", "--mode", "plugin", "--no-jev", "--no-plugin-hint"])
-        self.assertIn("hooks: ok (on for new sessions: all 7 in /h/.claude/settings.json)", out.splitlines())
+        self.assertIn("hooks: ok (on for new sessions: all 8 in /h/.claude/settings.json)", out.splitlines())
 
     def cache_copy(self):
         """A plugin cache copy: the same files, no .git."""

@@ -9,7 +9,7 @@ from pathlib import Path
 
 from .. import paths, util
 
-EVENTS = ("added", "approved", "testing", "merged", "returned", "dropped", "restarted", "lost",
+EVENTS = ("added", "approved", "testing", "merged", "returned", "dropped", "restarted", "retested", "lost",
           "closed", "opened", "paused", "resumed")
 
 

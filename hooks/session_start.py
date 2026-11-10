@@ -10,7 +10,11 @@ Total output stays under 6,000 characters; the card is trimmed first. A project'
 (ORCHE_SESSION `staff-<project>`, lib/orche/staff.py) gets its own text instead: its role and persona, the
 project's card line and the newest exchanges between the owner and that project's Main, within the same
 cap; on `startup` (a fresh Staff session, never a resume) as JSON whose `systemMessage` shows the owner
-Staff's greeting in their language (no model call) and whose `additionalContext` is that text. Fail-open."""
+Staff's greeting in their language (no model call) and whose `additionalContext` is that text. A pane session
+Orche wakes (Main, a division, a feature; never the Staff or a headless run), when it is the pane's own session
+and runs the wake hook (_watch), gets JSON instead of plain text: `watchPaths` holds its wake file and
+`additionalContext` the text, and its WATCH record names this Claude session (lib/orche/watch.py, R-INBOX-4).
+Fail-open."""
 import json
 import os
 import sys
@@ -256,6 +260,7 @@ def main():
         sections = _sections(r, who)
         text = build(sections) if sections else ""
         text = _with_resume(r, who, payload.get("source"), text)
+        watch = _watch(who, payload.get("session_id"))
     except Exception as exc:  # noqa: BLE001 - fail-open
         try:
             from orche import log
@@ -263,9 +268,37 @@ def main():
         except Exception:  # noqa: BLE001
             pass
         return 0
-    if text:
+    if watch:
+        out = {"hookEventName": "SessionStart", "watchPaths": watch} | ({"additionalContext": text} if text else {})
+        print(json.dumps({"hookSpecificOutput": out}, ensure_ascii=False))
+    elif text:
         print(text)
     return 0
+
+
+def _watch(who, session_id):
+    """[the wake file] for a pane session Orche wakes (Main, a division, a feature; not retired, not a
+    headless run under ORCHE_RUNNER), after its WATCH record names this Claude session (lib/orche/watch.py);
+    else []. Only the pane's own session: its ORCHE_SESSION names the unit, or it is a Main the transcript
+    rule identified (Orca reopened it without ORCHE_SESSION); a session someone opened in a unit's worktree
+    gets none. Only when this session runs the wake hook (watch.hooked); otherwise the pane keeps typed
+    wakes. The Staff never gets here. Fail-open: an error leaves the pane on typed wakes."""
+    from orche import roster
+    m = who.member
+    if (m is None or m.kind not in ("main", "div", "feat") or m.status == "retired" or not session_id
+            or os.environ.get("ORCHE_RUNNER")
+            or roster.env_session() != m.session and (roster.env_session() or m.kind != "main")):
+        return []
+    try:
+        from orche import watch
+        if not watch.hooked():
+            return []
+        watch.arm(m.session, session_id)
+        return [str(watch.wake_path(m.session))]
+    except Exception as exc:  # noqa: BLE001 - fail-open
+        from orche import log
+        log.log("hooks", f"session_start: watch {m.session}: {type(exc).__name__}: {exc}")
+        return []
 
 
 if __name__ == "__main__":

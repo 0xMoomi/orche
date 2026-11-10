@@ -8,12 +8,15 @@
       [--surface user]                            the change alters what a user sees or does: it lands only
                                                   on the check script's live-ui-verified
       [--safe-because FACT]                       a high-risk or large change: the one fact it is safe because
-                                                  of; a test in the PR must exercise it
+                                                  of; a test in the PR must exercise it (a unit: default the
+                                                  last `SAFE:` line of its REPORT.md)
   orche queue drop <p> <id|#N> [--reason R]
   orche queue pause <p> [--reason R] · resume <p>
   orche queue approve <p> (#N ...|--all)          land: owner projects, Main only
   orche queue run <p>                             the integrator (the driver starts it detached)
 """
+import re
+
 from . import brief, cli, config, donegate, github, publish, queue, registry, roster, units, vendors
 from .queue import facts, repo
 from .review import build as review_build
@@ -32,7 +35,7 @@ def register(subparsers):
                         "check script's live-ui-verified); default: the head review's, else internal")
     p.add_argument("--safe-because", metavar="FACT",
                    help="add: the one fact a high-risk or large change is safe because of (required there); "
-                        "a test in the PR must exercise it")
+                        "a test in the PR must exercise it; default: the unit REPORT.md's `SAFE:` line")
     p.add_argument("--pr", type=int, help="add: the PR number (with --project)")
     p.add_argument("--project", help="add --pr: the project")
     p.add_argument("--reason", help="drop/pause: why")
@@ -85,6 +88,20 @@ def _pr_checkout(reg, project, pr, head, base):
     except github.GhError as exc:
         raise queue.Refused(cli.EXIT_BLOCKED, str(exc)) from None
     return where
+
+
+_SAFE = re.compile(r"^\s*[-*]?\s*SAFE:\s*(\S.*?)\s*$", re.MULTILINE)
+
+
+def safe_line(b) -> str:
+    """The last `SAFE: <fact>` line of the unit's REPORT.md (the worker names its deep change's fact there, K3),
+    else ""."""
+    try:
+        text = (b.folder / "REPORT.md").read_text(encoding="utf-8", errors="replace") if b is not None else ""
+    except OSError:
+        return ""
+    found = _SAFE.findall(text)
+    return found[-1] if found else ""
 
 
 def _team_publish(reg, target, where, unit, b, base) -> list:
@@ -169,7 +186,7 @@ def cmd_add(args, words):
                                             f"worktree's is {head[:7]}: report done again to publish")
         writer = b.to
     surface = args.surface or review_build.record(project, pr, head).get("surface") or "internal"
-    fact = " ".join(str(args.safe_because or "").split())
+    fact = " ".join(str(args.safe_because or safe_line(b)).split())
     res = queue.admit(project, pr, head, where=where, base=base, branch=branch, unit=unit, b=b, writer=writer,
                       accept=args.accept, first=args.first, by=by, surface=surface, safe_because=fact,
                       dry_run=args.dry_run, reg=reg, cfg=cfg)

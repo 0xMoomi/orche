@@ -1,7 +1,7 @@
 """The Run module: one unit's run from its spawn to its last file (SPEC §14.13).
 
 Interface: start, stop, restart, execute, preview, count/live, reconcile/reconcile_cli/describe/
-pending_sweeps, logs_dir/prune_logs, records(roots), RunError.
+pending_sweeps, logs_dir/prune_logs, RunError.
 
 Run locks under ORCHE_HOME/runs/<proj>/, one set per live `orche run`.
 
@@ -152,11 +152,6 @@ def ran_since(folder, since) -> bool:
     from .. import units      # the store stays light (test_runs.ImportTest)
     at = units.parse_iso((last(folder) or {}).get("started"))
     return at is not None and since is not None and at >= since
-
-
-def records(roots) -> list:
-    """The last-run records under `roots` (what `orche metrics` sums), in path order."""
-    return [rec for root in roots for _unit, rec, _ns in last_runs(root)]
 
 
 def preview(reg, unit, cfg):

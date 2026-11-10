@@ -147,6 +147,36 @@ class HoldStoreTest(support.TempHomeCase):
         self.assertIsNotNone(self.hit("API Error: 429", "u1", T0 + MIN))
 
 
+class OutageTest(support.TempHomeCase):
+    """K5: an unreachable API holds the vendor as a usage limit does; only a failed run's text is read."""
+
+    def test_an_unreachable_api_holds_the_vendor_and_says_so(self):
+        res = headless.Result(1, {"is_error": True, "result": "API Error: Unable to connect to API (ENOTFOUND)"},
+                              None, None, False)
+        h = usage.hit("claude", res.limit_text, {}, project="acme", unit="u1", stage="work", now=T0)
+        self.assertEqual((h["source"], usage.until_of(h)), ("backoff", T0 + 5 * MIN))
+        self.assertTrue(usage.outage(h))
+        self.assertEqual(usage.held_text(h, "claude", T0),
+                         f"held: claude API unreachable until {usage.hhmm(T0 + 5 * MIN, T0)}; this unit runs then")
+        self.assertTrue(usage.is_limit("Error: Can't reach the API server", {}))
+        limit = usage.hit("codex", "usage limit reached", {}, project="acme", unit="u2", stage="work", now=T0)
+        self.assertEqual(usage.held_text(limit, "codex", T0)[:26], "held: codex usage limit un")
+
+    def test_a_successful_run_that_mentions_an_outage_never_holds(self):
+        ok = headless.Result(0, {"is_error": False, "result": "Retry on ENOTFOUND when we can't reach the API server"},
+                             None, None, False)
+        self.assertEqual(ok.limit_text, "")
+        self.assertIsNone(usage.hit("claude", ok.limit_text, {}, project="acme", unit="u1", stage="work", now=T0))
+        self.assertFalse(usage.path("claude").exists())
+
+    def test_the_owner_gets_one_outage_notice_in_these_words(self):
+        from orche.flow import owner
+        with mock.patch.object(owner, "announce", return_value=True) as ann:
+            owner.usage_notice("acme", "claude", "10:05", 2, T0, outage=True)
+        ann.assert_called_once_with("acme", "usage", "Claude API unreachable (retry 10:05). Orche re-runs the 2 held "
+                                    "units then; nothing to do unless it lasts.", T0)
+
+
 class FreeMemoryTest(unittest.TestCase):
     SYSCTL = "59\n25769803776\n"
     VM_STAT = ("Mach Virtual Memory Statistics: (page size of 16384 bytes)\nPages free:      3000.\n"

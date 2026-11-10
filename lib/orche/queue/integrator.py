@@ -44,6 +44,7 @@ MAX_FILES = 10
 METHOD = "squash"        # gh pr merge --squash (github.merge), the `landed` record's method
 MAX_RETURNS = 3         # a unit's returns inside W before its head gets `blocked`
 MAX_STOPS = 3           # passes in a row stopped by git/gh before the queue pauses
+RETESTS = 1             # a red or timed-out head goes back to the front this often, unchanged, before it is returned
 LIVE = "live-ui-verified"
 LIVE_REASON = "user-visible change: live verification required (the check script's verdict was {level})"
 IDENT = ["-c", "user.name=Orche queue", "-c", "user.email=queue@orche.invalid", "-c", "commit.gpgsign=false",
@@ -230,8 +231,10 @@ def _tail_block(tail) -> str:
 
 def amend_text(reason, *, unit, rev, pr, head, base_branch, base, files=(), step="", code=None, minutes=0,
                tail="", log="", level="") -> str:
-    """Appendix A.10: the RETURN AMEND (the note is its prose; every key is kept)."""
+    """Appendix A.10: the RETURN AMEND (the note is its prose; every key is kept). The note starts with its cause
+    word (brief.CAUSES): `conflict`, `red` for a red or live return, `infra` for a timeout."""
     h7, b7 = head[:7], (base or "")[:7]
+    why = {"conflict": "conflict", "red": "red", "live": "red"}.get(reason, "infra")
     if reason == "conflict":
         sup = f"it conflicts with origin/{base_branch} at {b7}"
         body = templates.load("queue/conflict.md", BASE=base_branch, FILES=", ".join(files) or "(git named none)")
@@ -243,7 +246,7 @@ def amend_text(reason, *, unit, rev, pr, head, base_branch, base, files=(), step
         sup = f"`{step}` {what} on the merge with origin/{base_branch} at {b7}"
         last = templates.load("queue/red-last.md" if reason == "red" else "queue/timeout-last.md")
         body = templates.load("queue/red.md", BASE=base_branch, STEP=step, LOG=log, TAIL=_tail_block(tail), LAST=last)
-    return (f"AMEND {unit} rev {rev}\nSUPERSEDES rev {rev - 1}: the merge queue returned PR #{pr} at {h7}: {sup}\n"
+    return (f"AMEND {unit} rev {rev}\nSUPERSEDES rev {rev - 1}: {why}: the merge queue returned PR #{pr} at {h7}: {sup}\n"
             f"{body}")
 
 
@@ -644,8 +647,21 @@ class Pass:
         self.to_head("info", text, urgent=reason != "head-moved")
         return _res(0, "dropped", self.pr, text)
 
+    def retest(self, reason, g) -> dict:
+        """K4: a red or timed-out head goes back to the front once, unchanged, before it is returned (a flaky
+        check or a busy machine); logged `retested`."""
+        n = units.num(self.entry.get("retested"), 0) + 1
+        queue.mark(self.project, self.id, retested=n)
+        queue.front(self.project, self.id, entry=self.entry, event="retested", reason=reason, step=g.get("step"),
+                    base=self.base, candidate=self.cand, n=n)
+        _ev(f"queue retest project={self.project} pr={self.pr} reason={reason} step={g.get('step')}")
+        return _res(0, "retest", self.pr, f"PR #{self.pr} {reason} at `{g.get('step')}`: back at the front for one "
+                                          "re-test before a return")
+
     def returned(self, reason, files=(), gate_=None) -> dict:
         g = gate_ or {}
+        if reason in ("red", "timeout") and g.get("gate") != "-" and units.num(self.entry.get("retested"), 0) < RETESTS:
+            return self.retest(reason, g)
         since = guard.window(self.project)
         prior = [ln for ln in store.read_log(self.project) if self.unit and ln.get("event") == "returned"
                  and ln.get("unit") == self.unit and _after(ln.get("at"), since)]

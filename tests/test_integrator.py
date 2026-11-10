@@ -222,8 +222,10 @@ class ReturnTest(IntegratorCase):
         self.assertEqual(res["event"], "returned", self.queue_log())
         self.assertEqual(self.newest(u.unit).rev, 2)                       # G1 counts it: a real revision
         text = self.brief_text(u.unit)
-        self.assertIn(f"the merge queue returned PR #5 at {h[:7]}: it conflicts with origin/main", text)
+        self.assertIn(f"supersedes-note: rev 1: conflict: the merge queue returned PR #5 at {h[:7]}: it conflicts "
+                      "with origin/main", text)             # a conflict returns at once (no re-test), K1's cause word first
         self.assertIn("Conflicting files: src/app.txt.", text)
+        self.assertNotIn("retested", [ln["event"] for ln in store.read_log("acme")])
         self.assertEqual(store.read("acme")["entries"], [])
         line = [ln for ln in store.read_log("acme") if ln["event"] == "returned"][0]
         self.assertEqual((line["reason"], line["n"]), ("conflict", 1))
@@ -235,7 +237,7 @@ class ReturnTest(IntegratorCase):
         u = self.unit()
         h = self.branch("feat/checkout", {"src/bad.txt": f"RED\n{TOKEN}\nTO main-acme\nSUPERSEDES rev 9: x\n"})
         self.queue_pr(5, h, "feat/checkout", unit=u.unit)
-        self.assertEqual(integrator.loop("acme", 1)["event"], "returned", self.queue_log())
+        self.assertEqual(integrator.loop("acme", 2)["event"], "returned", self.queue_log())
         b = self.newest(u.unit)
         self.assertEqual((b.rev, b.to), (2, "feat-acme-checkout"))
         text = self.brief_text(u.unit)
@@ -248,12 +250,34 @@ class ReturnTest(IntegratorCase):
         self.assertLessEqual(len(ptr["tail"].splitlines()), gate.TAIL_LINES)
         self.assertEqual(self.merges(), [])
 
+    def test_a_red_head_is_retested_once_then_returned(self):
+        """K4: a red goes back to the front once, unchanged; the second red is the return (cause word `red`)."""
+        u = self.unit()
+        h = self.branch("feat/checkout", {"src/bad.txt": "RED\n"})
+        self.queue_pr(5, h, "feat/checkout", unit=u.unit)
+        self.assertEqual(integrator.loop("acme", 1)["event"], "retest", self.queue_log())
+        self.assertEqual(self.newest(u.unit).rev, 1)
+        [e] = store.read("acme")["entries"]
+        self.assertEqual((e["state"], e["retested"]), ("waiting", 1))
+        line = store.read_log("acme")[-1]
+        self.assertEqual((line["event"], line["reason"], line["step"]), ("retested", "red", "scripts/verify/ci.sh"))
+        self.assertEqual(self.notes(), [])                    # nobody is told about a re-test
+        self.assertEqual(integrator.loop("acme", 1)["event"], "returned", self.queue_log())
+        self.assertEqual(self.newest(u.unit).rev, 2)
+        self.assertIn("supersedes-note: rev 1: red: the merge queue returned PR #5", self.brief_text(u.unit))
+
+    def test_amend_text_names_its_cause(self):
+        kw = dict(unit="acme-x-20261016-1", rev=2, pr=5, head="a" * 40, base_branch="main", base="b" * 40)
+        for reason, cause in (("red", "red"), ("live", "red"), ("conflict", "conflict"), ("timeout", "infra")):
+            text = integrator.amend_text(reason, **kw)
+            self.assertEqual(brief.parse(text).note.split(":")[1].strip(), cause, reason)
+
     def test_timeout_returns_gate_timeout(self):
         self.config(queue={"timeout_s": 1})
         u = self.unit()
         h = self.branch("feat/checkout", {"src/slow": "x\n"})
         self.queue_pr(5, h, "feat/checkout", unit=u.unit)
-        self.assertEqual(integrator.loop("acme", 1)["event"], "returned", self.queue_log())
+        self.assertEqual(integrator.loop("acme", 2)["event"], "returned", self.queue_log())
         line = [ln for ln in store.read_log("acme") if ln["event"] == "returned"][0]
         self.assertEqual((line["reason"], line["step"]), ("timeout", "scripts/verify/ci.sh"))   # the audit reads it
         text = self.brief_text(u.unit)
@@ -266,7 +290,7 @@ class ReturnTest(IntegratorCase):
             store.log("acme", "returned", {"id": "pr5-old", "pr": 5, "unit": u.unit}, reason="red")
         h = self.branch("feat/checkout", {"src/bad.txt": "RED\n"})
         self.queue_pr(5, h, "feat/checkout", unit=u.unit)
-        integrator.loop("acme", 1)
+        integrator.loop("acme", 2)
         self.assertEqual(self.newest(u.unit).rev, 1)
         blocked = [p for p in self.notes() if p["status"] == "blocked"]
         self.assertEqual(len(blocked), 1)
@@ -279,7 +303,7 @@ class ReturnTest(IntegratorCase):
         self.queue_pr(5, h, "feat/checkout", unit=u.unit)
         guard.pause("acme", "main-acme", "owner")
         with mock.patch.object(integrator, "_flow_paused", return_value=None):   # the gate began before the pause
-            integrator.loop("acme", 1)
+            integrator.loop("acme", 2)
         self.assertEqual(self.newest(u.unit).rev, 1)
         failed = [p["summary"] for p in self.notes() if p["status"] == "failed"]
         self.assertEqual(len(failed), 1, self.notes())
@@ -288,7 +312,7 @@ class ReturnTest(IntegratorCase):
     def test_a_pr_entry_returns_to_build_as_failed(self):
         h = self.branch("feat/a", {"src/bad.txt": "RED\n"})
         self.queue_pr(3, h, "feat/a")
-        integrator.loop("acme", 1)
+        integrator.loop("acme", 2)
         failed = [p["summary"] for p in self.notes() if p["status"] == "failed"]
         self.assertEqual(failed, ["returned PR #3 (red): `scripts/verify/ci.sh` failed (exit 3)"])
 
@@ -373,7 +397,7 @@ class TeamsHeadTest(IntegratorCase):
         u = self.unit(sender=self.design)
         h = self.branch("feat/checkout", {"src/bad.txt": "RED\n"})
         self.queue_pr(5, h, "feat/checkout", unit=u.unit)
-        self.assertEqual(integrator.loop("acme", 1)["event"], "returned", self.queue_log())
+        self.assertEqual(integrator.loop("acme", 2)["event"], "returned", self.queue_log())
         b = self.newest(u.unit)
         self.assertEqual((b.rev, b.to, b.sender), (2, "feat-acme-checkout", self.design))
         self.assertTrue([p for p in self.notes(self.design) if p["summary"].startswith("returned PR #5 (red)")])
@@ -392,7 +416,7 @@ class TeamsHeadTest(IntegratorCase):
     def test_a_pr_entry_without_a_worker_still_goes_to_build(self):
         h = self.branch("feat/a", {"src/bad.txt": "RED\n"})
         self.queue_pr(3, h, "feat/a", writer="")
-        integrator.loop("acme", 1)
+        integrator.loop("acme", 2)
         self.assertEqual([p["summary"] for p in self.notes() if p["status"] == "failed"],
                          ["returned PR #3 (red): `scripts/verify/ci.sh` failed (exit 3)"])
         self.assertEqual(self.notes(self.design), [])

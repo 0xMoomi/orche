@@ -172,8 +172,10 @@ def plain(line: str) -> str:
 
 def segment(reg: dict, key: str, now=None, r=None, spent=None) -> str:
     """The status line in the owner's language (cached_language), zero cells omitted:
-    `⚠ waiting 1 · ▶ running 3 · BUILD 3/8 · RS ● · R&D ○ GTM ○ DES ○ · 🔑1 · $10.75 today`: what waits on
-    the owner (yellow), the live runs (green bold), one cell per division with active workers (`<cell>
+    `⚠ waiting 1 · ▶ running 3 (oldest 22m/30m) · ⚠ stalled 1 · BUILD 3/8 · RS ● · R&D ○ GTM ○ DES ○ · 🔑1 ·
+    $10.75 today`: what waits on the owner (yellow), the live runs with the oldest one's elapsed time against
+    its TIMEBOX (green bold), the headless runs without a stream event for progress.STALLED_S (yellow;
+    runs/progress.py), one cell per division with active workers (`<cell>
     running/assigned`: its workers' live runs / its active workers), then the awake divisions without
     workers (`●`, `◐` onboarding), the asleep ones dimmed, pending secret requests and today's spend
     (`spent`: USD, "n/a" when unreadable, None when not read today). While a spend cap or a pause holds,
@@ -195,14 +197,28 @@ def segment(reg: dict, key: str, now=None, r=None, spent=None) -> str:
         else:
             asleep.append(f"{cell} {ASLEEP}")
     parts = ([_paint(YELLOW, f"{WAITING} {words['waiting'].format(n=n)}")] if n else []) \
-        + ([_paint(GREEN_BOLD, f"{RUNNING} {words['running'].format(n=c['running'])}")] if c["running"] else []) \
-        + work + ([" ".join(awake)] if awake else []) + ([_paint(DIM, " ".join(asleep))] if asleep else []) \
+        + _running(words, key, c["running"], now) + work + ([" ".join(awake)] if awake else []) + ([_paint(DIM, " ".join(asleep))] if asleep else []) \
         + ([f"🔑{c['keys']}"] if c["keys"] else [])
     if spent == "n/a":
         parts.append(words["spend_na"])
     elif spent:
         parts.append(words["today"].format(usd=f"{spent:.2f}"))
     return " · ".join(parts)
+
+
+def _running(words, key, n, now) -> list:
+    """The live runs' cells: `▶ running 3 (oldest 22m/30m)` and, when any is stalled, `⚠ stalled 1`."""
+    if not n:
+        return []
+    from .runs import progress
+    views = progress.views(key, now)
+    oldest = next((v for v in views if v["elapsed_s"] is not None and v["timebox_s"]), None)
+    text = (words["running_oldest"].format(n=n, age=progress.minutes(oldest["elapsed_s"]),
+                                           box=progress.minutes(oldest["timebox_s"]))
+            if oldest is not None else words["running"].format(n=n))
+    stalled = sum(1 for v in views if v["stalled"])
+    return ([_paint(GREEN_BOLD, f"{RUNNING} {text}")]
+            + ([_paint(YELLOW, f"{WAITING} {words['stalled'].format(n=stalled)}")] if stalled else []))
 
 
 def _path(key):

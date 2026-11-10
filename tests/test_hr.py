@@ -1997,6 +1997,45 @@ class MistakesTest(FeatCase):
                                                     "## Enforcement (proposed by the audit)\n"))
         self.assertEqual(path.read_text().count("| outside the scope |"), 1)
 
+    def test_routed_rows_and_briefless_prs_are_not_mistakes(self):
+        """K6: a routed head review (note `route:`) and a PR without a unit (`pr<N>`) name nobody's mistake."""
+        from orche import ledger
+        from orche.hr import mistakes
+        self.review(21, "acme-shop-a-20261020-1", "- 1: ACCEPT line 2 has no evidence")
+        self.review(22, "acme-shop-b-20261021-1", "- 1: ACCEPT line 2 has no evidence")
+        ev = self.home / "reviews" / "pr23.md"
+        ev.write_text("# head review · PR #23 @ abc1234\n\nverdict: return\n\n- 1: ACCEPT line 2 has no evidence\n")
+        ledger.append_review("acme-shop", ledger.make_review_row(23, "abc1234", "build", "return",
+                                                                 "div-acme-shop-build (review)", "m", "w",
+                                                                 evidence=str(ev), ts=ago(days=1)))
+        ev = self.home / "reviews" / "pr24.md"
+        ev.write_text("# head review · PR #24 @ abc1234\n\nverdict: return\nunit: acme-shop-c-20261022-1\n\n"
+                      "- 9: pane review: no unit brief\n- 1: ACCEPT line 2 has no evidence\n")
+        ledger.append_review("acme-shop", ledger.make_review_row(24, "abc1234", "build", "return",
+                                                                 "div-acme-shop-build (review)", "facts", "w",
+                                                                 note="route: pane review: no unit brief",
+                                                                 evidence=str(ev), ts=ago(days=1)))
+        since = mistakes._when(ago(days=30))
+        self.assertEqual(sorted(e["unit"] for e in mistakes.review_returns("acme-shop", since)),
+                         ["acme-shop-a-20261020-1", "acme-shop-b-20261021-1"])
+
+    def test_a_proposed_row_the_window_no_longer_finds_expires_a_promoted_row_stays(self):
+        """K7: nothing switches itself on, and the audit drops what it no longer sees."""
+        path = self.repo / ".orche" / "STANDING.md"
+        path.parent.mkdir(exist_ok=True)
+        path.write_text("# STANDING\n\n1. Never push\n\n## Enforcement (proposed by the audit)\n\n"
+                        "| class | seen | proposed level | status |\n|---|---|---|---|\n"
+                        "| flaky e2e login | 3 | test | proposed |\n| skip ci on code | 2 | hook or gate | enforced |\n")
+        code, out, _ = self.orche("hr", "audit", "acme", "--apply")
+        self.assertEqual(code, 0)
+        self.assertIn("Enforcement: 0 new, 0 updated, 1 expired", out)
+        self.assertEqual(path.read_text(), "# STANDING\n\n1. Never push\n\n## Enforcement (proposed by the audit)\n\n"
+                                           "| class | seen | proposed level | status |\n|---|---|---|---|\n"
+                                           "| skip ci on code | 2 | hook or gate | enforced |\n")
+        path.write_text(path.read_text().replace("enforced", "proposed"))
+        self.orche("hr", "audit", "acme", "--apply")
+        self.assertEqual(path.read_text(), "# STANDING\n\n1. Never push\n")
+
     def test_no_events(self):
         self.assertEqual(self.orche("hr", "audit", "acme"), (0, "no mistake classes in the last 30 days\n", ""))
         self.assertEqual(self.orche("hr", "audit", "nope")[0], 2)
@@ -2207,6 +2246,42 @@ class HrAddModelTest(HrCase):
         self.assertEqual(self.orche("hr", "model", "acme-shop", "gtm", "codex")[0], 2)
         self.assertEqual(self.orche("hr", "model", "acme-shop", "build", "openai:gpt-4")[0], 1)
 
+    def test_model_main_sets_the_projects_main_pane_model(self):
+        from orche import staff
+        from orche.hr import panes
+        self.assertEqual(staff.main_model(registry.load()["projects"]["acme-shop"]), ("claude-opus-5-5", "xhigh"))
+        code, out, err = self.orche("hr", "model", "acme-shop", "main", "fable", "--effort", "high")
+        self.assertEqual((code, err), (0, ""))
+        self.assertEqual(out, "main-acme-shop: claude-opus-5-5 xhigh → claude-fable-5-2 high\n"
+                              "(its pane uses it the next time it opens; a running Main keeps its model)\n")
+        proj = registry.load()["projects"]["acme-shop"]
+        self.assertEqual(proj["main"], {"model": "claude-fable-5-2", "effort": "high"})
+        self.assertIn("model main-acme-shop claude-opus-5-5 xhigh -> claude-fable-5-2 high", hr.log_path().read_text())
+        self.assertIn(" --model claude-fable-5-2 --effort high --name main-acme-shop",
+                      panes.pane_command("main-acme-shop", resume=False, proj=proj))
+        code, out, _ = self.orche("hr", "model", "acme-shop", "main", "claude-fable-5-2")
+        self.assertEqual((code, out), (0, "main-acme-shop is already on claude-fable-5-2 at high\n"))
+        self.assertEqual(self.orche("hr", "model", "acme-shop", "main", "opus")[0], 0)   # the effort stays
+        self.assertEqual(registry.load()["projects"]["acme-shop"]["main"], {"model": "claude-opus-5-5", "effort": "high"})
+
+    def test_model_main_refusals(self):
+        for argv, text in ((("main", "fable", "--effort", "ultra"), "effort must be one of low|medium|high|xhigh|max"),
+                           (("main", "codex"), "Codex is headless only"),
+                           (("main", "gpt-4"), "unknown model 'gpt-4'"),
+                           (("research", "fable", "--effort", "high"), "--effort is for main only")):
+            code, _, err = self.orche("hr", "model", "acme-shop", *argv)
+            self.assertEqual(code, 1, argv)
+            self.assertIn(text, err)
+        self.assertEqual(self.orche("hr", "model", "nope", "main", "fable")[0], 2)
+        self.assertNotIn("main", registry.load()["projects"]["acme-shop"])
+        self.assertEqual(self.div("research")["model"], "claude-sonnet-5-5")
+
+    def test_model_fable_alias_moves_a_division_to_fable_5_2(self):
+        code, out, err = self.orche("hr", "model", "acme-shop", "research", "fable")
+        self.assertEqual((code, err), (0, ""))
+        self.assertEqual(out.splitlines()[0], "div-acme-shop-research: claude-sonnet-5-5 → claude-fable-5-2")
+        self.assertEqual(self.div("research")["model"], "claude-fable-5-2")
+
     def test_a_dormant_division_with_an_awake_worker_keeps_codex_off(self):  # teams §4.5
         reg = registry.load()
         reg["projects"]["acme-shop"]["divisions"]["research"]["features"] = [
@@ -2232,8 +2307,10 @@ class HrAddModelTest(HrCase):
                           "status": "dormant", "model": "claude-sonnet-5-5", "recommended": "claude-sonnet-5-5",
                           "pane_effort": "medium"})
         self.assertFalse(kinds["gtm"]["exists"])
-        self.assertEqual([m["model"] for m in data["models"]], ["claude-opus-5-5", "claude-sonnet-5-5", "codex"])
+        self.assertEqual([m["model"] for m in data["models"]], ["claude-opus-5-5", "claude-sonnet-5-5", "codex",
+                                                               "claude-fable-5-2"])
         self.assertTrue(all(m["available"] for m in data["models"]))
+        self.assertIn("twice Opus 5.5's price per token", data["models"][3]["desc"])
         self.avail = self.vendors.Availability("absent", "", self.vendors.INSTALL)
         data = json.loads(self.orche("--json", "hr", "choices", "acme-shop")[1])
         codex = data["models"][2]

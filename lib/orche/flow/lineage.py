@@ -40,7 +40,7 @@ import time
 from contextlib import contextmanager
 from dataclasses import dataclass
 
-from .. import brief, inbox, log, paths, util
+from .. import brief, inbox, log, mask, paths, util
 
 def turn_path(session):
     return paths.orche_home() / "sessions" / f"{util.slugify(session)}.turn.json"
@@ -162,6 +162,8 @@ TERMINAL = ("done", "failed", "stopped")
 OPEN = ("blocked", "question", "external-request")
 WAITING = ("blocked", "question")
 STOPS = TERMINAL + WAITING          # a unit's report that ends it
+LABELS = TERMINAL + ("unverified",) + WAITING   # what a count or a row shows (label)
+RESULT_MAX = 220                    # characters of one LINEAGE.md result cell
 LOCK_WAIT_S, LOCK_POLL_S = 5.0, 0.02
 RECENT = _dt.timedelta(hours=24)    # repair and status look only at lineages this young
 _ENDS = re.compile(r"^to: (\S+)\s+from: (\S+)\s*$", re.M)
@@ -458,14 +460,30 @@ def quiets(sc, ptr):
     return "batch" if len(_under(bs, top(reads, bs, ptr["to"]))) >= 2 else False
 
 
+def label(found, s):
+    """What a count or a row shows for a member with status `s` and newest report `found`: `unverified`
+    for a stopped member whose newest pointer is a runner summary that starts `unverified:` (its work ran,
+    its proof is missing), else `s`."""
+    p = found[1] if found else None
+    if (s == "stopped" and p is not None and p.get("via") == "runner"
+            and str(p.get("summary") or "").startswith("unverified:")):
+        return "unverified"
+    return s
+
+
 def _counts(ms):
-    return {s: sum(1 for _b, _f, x in ms if x == s) for s in STOPS}
+    c = dict.fromkeys(LABELS, 0)
+    for _b, f, s in ms:
+        x = label(f, s)
+        if x in c:
+            c[x] += 1
+    return c
 
 
 def _tally(ms):
-    """`d done, f failed, s stopped`, then `b blocked`, `q question` when not zero."""
+    """`d done, f failed, s stopped`, then `u unverified`, `b blocked`, `q question` when not zero."""
     c = _counts(ms)
-    return ", ".join([f"{c[s]} {s}" for s in TERMINAL] + [f"{c[s]} {s}" for s in WAITING if c[s]])
+    return ", ".join([f"{c[s]} {s}" for s in TERMINAL] + [f"{c[s]} {s}" for s in LABELS[len(TERMINAL):] if c[s]])
 
 
 def _closed_path(project):
@@ -493,23 +511,57 @@ def _record(project, lineage, ms):
     util.write_json(path, rec)
 
 
+def _by(b, reads):
+    """Who sent brief `b`: `main`, the sending division's name, else the sender's session (`-`: none)."""
+    sender = _ends(b)[1]
+    m = reads.roster.member(sender) if sender else None
+    if m is None:
+        return sender or "-"
+    return "main" if m.kind == "main" else (m.division or m.name)
+
+
+def _pr(b):
+    """`#N` from the unit's RUN.json, else `-`."""
+    from .. import runs
+    pr = (runs.last(b.folder) or {}).get("pr")
+    pr = pr.get("number") if isinstance(pr, dict) else pr
+    return f"#{pr}" if isinstance(pr, int) and not isinstance(pr, bool) else "-"
+
+
+def _result(found):
+    """The newest report's summary on one line (a first line `unverified: …` moved to the end, then
+    `OWNER: <step>`), masked, `|` as `/`, at most RESULT_MAX characters; `-` without one."""
+    p = found[1] if found else None
+    if p is None:
+        return "-"
+    parts = [ln for ln in str(p.get("summary") or "").splitlines() if ln.strip()]
+    if parts and parts[0].lstrip().startswith("unverified:"):
+        parts = parts[1:] + parts[:1]
+    if p.get("owner"):
+        parts.append(f"OWNER: {p['owner']}")
+    text = " ".join(mask.redact(" ".join(parts))[0].split()).replace("|", "/")
+    return (text if len(text) <= RESULT_MAX else text[:RESULT_MAX - 1] + "…") or "-"
+
+
 def close(reg, project, lineage, ms, reads=None):
     """Write LINEAGE.md (atomically), then the close pointer to Main, then the close's record in
     closed.json (a crash in between leaves a pointer that repair finds and only records); the pointer,
-    or None (no Main)."""
-    main = (reads or Reads(reg)).roster.main(project)
+    or None (no Main). LINEAGE.md is the request's record: one row per unit (Main's briefs first) with
+    who sent it, its status (label), its PR and its newest result."""
+    reads = reads or Reads(reg)
+    main = reads.roster.main(project)
     head = next((b for b, _f, _s in ms if b.unit == lineage), ms[0][0])
     md = head.root / brief.UNITS / lineage / "LINEAGE.md"
-    rows = ["| unit | to | rev | status | report |", "|---|---|---|---|---|"]
-    for b, found, s in ms:
-        report = (found[1].get("report_path") if found else "") or "-"
-        rows.append(f"| {b.unit} | {_ends(b)[0] or '-'} | {b.rev} | {s} | {report} |")
-    util.atomic_write(md, f"# Lineage {lineage}\n\nclosed: {util.now_iso()}   units: {len(ms)}, {_tally(ms)}\n\n"
-                          + "\n".join(rows) + "\n")
+    rows = ["| unit | by | status | PR | result |", "|---|---|---|---|---|"]
+    by = {b.unit: _by(b, reads) for b, _f, _s in ms}
+    for b, found, s in sorted(ms, key=lambda m: by[m[0].unit] != "main"):
+        rows.append(f"| {b.unit} | {by[b.unit]} | {label(found, s)} | {_pr(b)} | {_result(found)} |")
+    util.atomic_write(md, f"# Lineage {lineage}\n\nclosed: {util.now_iso()}   units: {len(ms)}, {_tally(ms)}\n"
+                          f"reports: {head.root / brief.UNITS}/<unit>/REPORT.md\n\n" + "\n".join(rows) + "\n")
     ptr = None
     if main is not None:
         summary = "\n".join([f"lineage {lineage} closed: {len(ms)} units: {_tally(ms)}"]
-                            + [f"{b.unit} {s}" for b, _f, s in ms[:4]])
+                            + [f"{b.unit} {label(f, s)}" for b, f, s in ms[:4]])
         ptr = inbox.make(lineage, "orche", main.session, "done", report_path=str(md), brief_rev=head.rev,
                          summary=summary, lineage=lineage, lineage_closed=True)
         inbox.write(ptr)
@@ -536,7 +588,7 @@ def _head_close(reads, project, lineage, session, ms):
     sub = [(b, f, s) for b, f, s in ms if b.unit in mine]
     head = next((b for b in bs if b.unit == lineage), bs[0])
     summary = "\n".join([f"lineage {lineage}: every unit you wait on ended: {len(sub)} units, {_tally(sub)}"]
-                        + [f"{b.unit} {s}" for b, _f, s in sub[:4]])
+                        + [f"{b.unit} {label(f, s)}" for b, f, s in sub[:4]])
     ptr = inbox.make(lineage, "orche", session, "done", brief_rev=head.rev, summary=summary, lineage=lineage,
                      lineage_closed=True)
     inbox.write(ptr)
@@ -819,7 +871,7 @@ def line(reg, project, lineage, reads=None):
     wait = waiting(reads, project, lineage, None, ms)
     if not wait:
         c = _counts(ms)
-        parts = ", ".join(f"{c[s]} {s}" for s in STOPS if c[s])
+        parts = ", ".join(f"{c[s]} {s}" for s in LABELS if c[s])
         return f"[orche] lineage {name}: closed — {n} ({parts})"
     k = sum(1 for _b, _f, s in ms if s not in STOPS)
     b, why = wait[0]

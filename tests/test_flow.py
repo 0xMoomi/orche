@@ -22,7 +22,7 @@ THIRD = BODY.replace("Add coupon field", "Add loyalty badge")
 
 
 def amend(unit, rev, goal="Add coupon field only"):
-    return f"AMEND {unit} rev {rev}\nSUPERSEDES rev {rev - 1}: smaller\nGOAL      {goal} {rev}\n"
+    return f"AMEND {unit} rev {rev}\nSUPERSEDES rev {rev - 1}: owner: smaller\nGOAL      {goal} {rev}\n"
 
 
 class FlowCase(HookCase):
@@ -696,12 +696,23 @@ class LineageCloseTest(FlowCase):
         md = self.units_dir() / lin / "LINEAGE.md"
         self.assertEqual(close["report_path"], str(md))
         text = md.read_text()
-        self.assertIn("| unit | to | rev | status | report |", text)
+        self.assertIn("| unit | by | status | PR | result |", text)
         for u in (a, b, c):
-            self.assertIn(f"| {u} | div-acme-build | 1 | done |", text)
+            self.assertIn(f"| {u} | main | done | - | {u} done |", text)
         out = self.run_hook("report_inject.py", self.payload("prompt.json", prompt="[orche] inbox: new reports"),
                             ORCHE_SESSION="main-acme").stdout
         self.assertIn(f"  report: {md}\n````markdown\n# Lineage {lin}\n", out)    # the wake carries LINEAGE.md
+
+    def test_a_lone_unverified_unit_closes_as_unverified_not_stopped(self):
+        """c120: a runner's `unverified: …` filing ran the work; it is shown as unverified, never as 0 done."""
+        from orche import registry
+        from orche.flow import lineage
+        lin, (a,) = self.lineage(1)
+        with mock.patch.object(inbox, "wake"):
+            inbox.post(inbox.make(a, "div-acme-build", "main-acme", "info", brief_rev=1, via="runner",
+                                  summary="unverified: no STATUS line\nCoupon field added.", lineage=lin))
+        self.assertEqual(lineage.line(registry.load(), "acme", lin),
+                         f"[orche] lineage {lin}: closed — 1 unit (1 unverified)")
 
     def test_the_close_rings_nothing_and_touches_the_status_line(self):
         """No finish notice: the close wakes Main, whose report Orca shows; the status line is refreshed."""
@@ -1005,10 +1016,10 @@ class BatchTest(FlowCase):
         (d / "BRIEF.md").write_text(brief_text(unit, to, frm, lin or self.L, parent, rev))
         return unit
 
-    def post(self, unit, frm, to, status, lin=None, rev=1, **extra):
+    def post(self, unit, frm, to, status, lin=None, rev=1, summary=None, **extra):
         self.t += _dt.timedelta(seconds=1)
-        ptr = inbox.make(unit, frm, to, status, brief_rev=rev, summary=f"{unit} {status}", lineage=lin or self.L,
-                         **extra)
+        ptr = inbox.make(unit, frm, to, status, brief_rev=rev, summary=summary or f"{unit} {status}",
+                         lineage=lin or self.L, **extra)
         ptr["at"] = self.t.isoformat(timespec="seconds")
         return json.loads(inbox.post(ptr).read_text())
 
@@ -1089,6 +1100,50 @@ class BatchTest(FlowCase):
                          f"[orche] lineage {self.L}: open — 0 of 4 units running; waiting on {h} (report due)")
         self.post(h, self.BUILD, self.MAIN, "done")
         self.assertEqual((self.woke(), len(self.closes())), ([self.MAIN], 1))
+
+    def test_lineage_md_is_the_requests_record(self):
+        """c120: one row per unit, Main's briefs first: who sent it, its status (unverified shown as such), its
+        PR from RUN.json, and its newest result on one line (unverified moved last, then the OWNER step)."""
+        from orche import registry
+        from orche.flow import lineage
+        h = self.make(self.L, self.BUILD, self.MAIN)
+        w = self.make("acme-a1-20261029-2", self.FEAT, self.BUILD, h)          # sorts first; Main's go first
+        r = self.make("acme-r-20261029-9", self.RND, self.MAIN)
+        (self.units_dir() / h / "RUN.json").write_text(json.dumps({"pr": {"number": 41}}))
+        (self.units_dir() / w / "RUN.json").write_text(json.dumps({"pr": 42}))
+        self.post(r, self.RND, self.MAIN, "info", via="runner",
+                  summary="unverified: no STATUS line\nPricing notes written.")
+        self.post(w, self.FEAT, self.BUILD, "done", summary="Checkout | coupon fixed\n\nwith tests")
+        self.post(h, self.BUILD, self.MAIN, "blocked", summary="Needs the deploy key", owner="approve the deploy")
+        [close] = self.closes()
+        self.assertEqual(close["summary"].splitlines(),
+                         [f"lineage {self.L} closed: 3 units: 1 done, 0 failed, 0 stopped, 1 unverified, 1 blocked",
+                          f"{w} done", f"{h} blocked", f"{r} unverified"])
+        text = (self.units_dir() / self.L / "LINEAGE.md").read_text()
+        head, table = text.split("\n\n| unit")
+        self.assertRegex(head, rf"^# Lineage {self.L}\n\nclosed: \S+   units: 3, 1 done, 0 failed, 0 stopped, "
+                               rf"1 unverified, 1 blocked\nreports: \S+/\.orche/units/<unit>/REPORT\.md$")
+        self.assertEqual("| unit" + table,
+                         "| unit | by | status | PR | result |\n|---|---|---|---|---|\n"
+                         f"| {h} | main | blocked | #41 | Needs the deploy key OWNER: approve the deploy |\n"
+                         f"| {r} | main | unverified | - | Pricing notes written. unverified: no STATUS line |\n"
+                         f"| {w} | build | done | #42 | Checkout / coupon fixed with tests |\n")
+        self.assertEqual(lineage.line(registry.load(), "acme", self.L),
+                         f"[orche] lineage {self.L}: closed — 3 units (1 done, 1 unverified, 1 blocked)")
+        from orche import project                                            # `orche status` counts it once too
+        [row] = [x for x in project.lineages(registry.load(), "acme", members=True) if x["lineage"] == self.L]
+        self.assertEqual(row["states"], {"blocked": 1, "done": 1, "unverified": 1})
+        self.assertEqual(project._statuses(row["members"]), {"blocked": 1, "done": 1, "unverified": 1})
+
+    def test_a_result_cell_is_masked_one_line_and_capped(self):
+        from orche.flow import lineage
+        token = "sk-ant-api03-" + "A" * 40
+        cell = lineage._result((None, {"summary": f"key {token}\n" + "Fixed the coupon field in checkout. " * 10}))
+        self.assertNotIn("A" * 40, cell)
+        self.assertNotIn("\n", cell)
+        self.assertEqual(len(cell), lineage.RESULT_MAX)
+        self.assertTrue(cell.endswith("…"))
+        self.assertEqual(lineage._result(None), "-")
 
     def test_failed_joins_the_batch_and_counts_in_the_close(self):
         a, b = self.two()

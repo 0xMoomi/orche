@@ -3,6 +3,72 @@
 All notable changes to Orche are listed here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow semantic versioning.
 
+## 0.20.0 — 2026-11-10
+
+### Added
+
+- One final report per request. While work runs, Main adds one status line per step and asks a decision only
+  once; when the last piece has ended it writes one report that stands on its own: the result first, one
+  sentence per piece of work with its PR and whether it was checked, what failed, then decisions. Say "the last
+  report again" to get it again. The request's record (LINEAGE.md) now holds every unit's sender, status, PR and
+  one-line result, and work that ran but could not be proven shows as "unverified", so a finished request no
+  longer reports "0 done".
+- Orche wakes a pane by writing a wake file that the pane's own hook turns into a turn, instead of typing into
+  the terminal. Text you left in the input box is never touched, a busy pane gets new reports at its next tool
+  step, and no `[orche] inbox:` line can be lost or left half typed. A pane keeps the typed wake until it starts
+  again after `orche update` has added the new hook, and a pane whose wake file stops answering falls back to
+  typing by itself.
+- A daily brief. Once a day, after quiet hours, Main opens with what landed, what failed or is unverified, what
+  has waited for you and for how long, and yesterday's spend. A quiet project gets none. Say "stop the morning
+  brief" or "start it again" (`orche flow brief off|on`).
+- Running work is visible. `orche status` lists each running worker with its elapsed time against its TIMEBOX,
+  turn, last tool and cost so far; the status line shows the oldest run (`▶ running 3 (oldest 22m/30m)`) and
+  `⚠ stalled N` when a worker has printed nothing for 10 minutes. After 20 silent minutes whoever sent the brief
+  gets one urgent note; the worker is never killed for it.
+- Claude Fable 5.2 (`claude-fable-5-2`, alias `fable`) can be chosen for any division, is offered by
+  `orche hr choices`, and can be a brief's MODEL pin under the price ceiling. On a unit's second `defect` AMEND,
+  Main may pin it for that unit.
+- `orche hr model <project> main <model> [--effort <level>]` sets the model and effort Main's pane starts on,
+  per project, from its next start.
+- `orche metrics` shows spend by role (Main, Staff, each division's pane, feature panes, workers, review,
+  intake, ask, triage) and a Rework block: re-runs by cause, killed runs, queue re-tests and returns, head-review
+  routes, and each Main's spend a day.
+- The merge queue re-tests a red or timed-out PR once before returning it.
+- An unreachable API holds runs the way a usage limit does: you get one notice and the held units re-run on
+  their own.
+- A worker's done is checked for what the merge queue would refuse (a code commit marked `[skip ci]`, a deep
+  change without a test), and the worker gets one chance to fix it. `orche queue add` takes the fact a deep
+  change is safe because of from the report's `SAFE:` line.
+
+### Changed
+
+- Workers and divisions no longer stop at ordinary obstacles. A shared "Finishing work" rule tells them to
+  diagnose and work through timeouts, locked files, empty results and busy tools, and to stop only for the owner
+  or a deliberate blocker. Rules about flaky tests and gates say what is still allowed (re-running your own
+  command, waiting for a lock, retrying a safe call), and the Always-pause list ends with the steps that never
+  need approval.
+- Every AMEND starts its SUPERSEDES note with a cause (owner, brief, defect, red, conflict, gate, infra or
+  continue); `orche dispatch` refuses one without and says how to fix it. Main dispatches once your decisions
+  settle: an AMEND to a running unit kills its run.
+- Workers may change the tests, fixtures and lockfiles that move with their code; these count as in scope.
+- A PR without a unit brief goes straight to the Build pane with no review call, and the pane's own PASS is
+  logged.
+- Enforcement rows the audit proposed no longer ride in every brief, and they expire when the audit stops
+  finding them. Rows you enforced stay.
+- Workers open their report with the result in one plain sentence. Each division says when a subagent is worth
+  its cost.
+- The Runner block of `orche metrics` counts every attempt, so its numbers are higher than before.
+  `orche metrics` names any model it has no price for, and `orche hr model` stores a Claude alias as its full
+  model id.
+
+### Fixed
+
+- Fable 5.2 spend was priced at the Opus 5 rate, and a Fable 5.2 pin or ladder rung was always refused as above
+  the ceiling.
+- Sonnet 5.5 cache reads are priced at $0.10 per million tokens (was $0.20).
+- The Staff greeting no longer says it runs on a lighter model, and the spec's model table matches the
+  configured defaults.
+
 ## 0.19.14 — 2026-11-09
 
 ### Added

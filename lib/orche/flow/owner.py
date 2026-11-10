@@ -60,6 +60,8 @@ ASK, SENT, NOTIFY_LOCK, TAGGED, RESUMED = "ask.json", "notified.json", ".notify.
 NOTICES = ("done", "stuck", "fallback", "usage")     # one-off notices: flow/<p>/<kind>.json
 USAGE_NOTICE = ("{label} usage limit reached (resets {hhmm}). Orche re-runs the {n} held units then. "   # Appendix A.15
                 "To keep going now: run on an API key, or move some divisions to Codex.")
+OUTAGE_NOTICE = ("{label} API unreachable (retry {hhmm}). Orche re-runs the {n} held units then; "   # K5
+                 "nothing to do unless it lasts.")
 VENDOR_LABEL = {"claude": "Claude", "codex": "Codex"}
 ASK_MAX, STEP_MAX, LINE_MAX = 160, 200, 100
 NOTIFY_GAP_S = 300          # at most one notification per project per this many seconds
@@ -413,10 +415,10 @@ def announce(project, kind, body, now=None) -> bool:
     return notify(project, kind, now, notice_id=rec["id"])
 
 
-def usage_notice(project, vendor, hhmm, n, now=None) -> bool:
+def usage_notice(project, vendor, hhmm, n, now=None, outage=False) -> bool:
     """The one owner notice of a usage hold, as `project`'s `usage` notice (announce:
-    a held-back one is flushed by the heartbeat)."""
-    text = USAGE_NOTICE.format(label=VENDOR_LABEL.get(vendor, vendor), hhmm=hhmm, n=n)
+    a held-back one is flushed by the heartbeat); an unreachable API's says so (OUTAGE_NOTICE)."""
+    text = (OUTAGE_NOTICE if outage else USAGE_NOTICE).format(label=VENDOR_LABEL.get(vendor, vendor), hhmm=hhmm, n=n)
     return announce(project, "usage", text, now)
 
 

@@ -3,7 +3,8 @@ dated in the janitor's state file (`weekly.last`). Per registered project:
 
 1. The audit's mistake classes (hr/mistakes.py, the last AUDIT_DAYS days). Classes not yet in
    STANDING.md's Enforcement table are written there and Main gets one `info` pointer (POINTER);
-   nothing when there is none.
+   nothing when there is none. A `proposed` row the window no longer finds is dropped (no pointer);
+   nothing switches a row on but the owner's "enforce <class>".
 2. The verify skill's drift check (SPEC §5.4): a project with `.claude/skills/verify-<app>/SKILL.md`
    gets one unit to Build (DRIFT, through the dispatch relay with Main as the sender and the janitor
    as the relayer, the way triage relays), one app per week in turn; never while the last drift unit
@@ -66,9 +67,12 @@ def audit(reg, key, proj, now, r) -> str | None:
     found = mistakes.classes(key, proj, now)
     known = mistakes.table(proj)
     new = [c for c in found if c["key"] not in known]
-    if not new:
+    gone = [k for k, row in known.items() if row[3] == mistakes.PROPOSED and k not in {c["key"] for c in found}]
+    if not new and not gone:
         return None
     mistakes.apply(key, proj, found)
+    if not new:
+        return f"{key}: {len(gone)} proposed Enforcement rows expired"
     main = r.main(key)
     if main is None:
         return f"{key}: {len(new)} new mistake classes in STANDING.md Enforcement (no Main to tell)"

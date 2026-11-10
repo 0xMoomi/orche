@@ -3,8 +3,9 @@ one kill-and-sweep, one result parser. Callers bring only their policy.
 
 A `Call` names a context:
 
-- `project`: the unit worker. Project settings, `--permission-mode bypassPermissions` (a headless
-  worker cannot answer prompts; the gates and the deny list still block), the run's own empty MCP
+- `project`: the unit worker. Streaming output (`--output-format stream-json --verbose`: one JSON event a
+  line, the `result` event last; run(..., on_line=) sees each line as it arrives), project settings,
+  `--permission-mode bypassPermissions` (a headless worker cannot answer prompts; the gates and the deny list still block), the run's own empty MCP
   config when tagged, the caller's tool rules, a persona file, Orche's PreToolUse gates through
   `--settings` (gates()), then, in a team repository, the team plugin's own (`Call.team`).
 - `sealed`: intake and the Liaison. `--restricted`, `--tools` derived from the allowed rules, no
@@ -30,7 +31,7 @@ from pathlib import Path
 from . import log, paths, procs, registry, shell, util
 
 CONTEXTS = ("project", "sealed", "blank")
-FLAGS = ("--model", "--effort", "--output-format", "--setting-sources", "--permission-mode",
+FLAGS = ("--model", "--effort", "--output-format", "--verbose", "--setting-sources", "--permission-mode",
          "--restricted", "--tools", "--no-session-persistence", "--strict-mcp-config", "--mcp-config",
          "--allowedTools", "--disallowedTools", "--append-system-prompt-file", "--system-prompt",
          "--settings", "--resume")
@@ -123,7 +124,7 @@ def _tool_names(allowed) -> str:
 @dataclass(frozen=True)
 class Result:
     code: int              # exit status; negative: killed by that signal; 124: none read; 127: not started
-    data: dict             # the --output-format json result object; {} when stdout held none
+    data: dict             # the result object (json) or the stream's `result` event; {} when stdout held none
     error: str | None      # why run() ended or never started claude; None if claude exited itself
     failure: str | None    # masked: error, else "exit N: <last line>" when data is {}, else None
     killed: bool           # run() killed claude for a Stop signal or should_stop()
@@ -216,9 +217,9 @@ def argv(call: Call, cfg: dict) -> list:
     call. No side effects: what dry runs print. A project call reads hooks.json for its gates
     (gates(), which raises when it cannot).
 
-    The three shapes, after `-p --model M [--effort E] --output-format json --max-turns N`:
-    project `--setting-sources project --permission-mode bypassPermissions [--resume <id>]` (a headless
-    worker cannot answer prompts; the gates and the deny list still block); sealed `--restricted --tools
+    The three shapes, after `-p --model M [--effort E] --output-format <F> --max-turns N` (F: project
+    `stream-json --verbose`, the others `json`): project `--setting-sources project --permission-mode
+    bypassPermissions [--resume <id>]` (a headless worker cannot answer prompts; the gates and the deny list still block); sealed `--restricted --tools
     <names>` (`--restricted` refuses bypass); blank `--setting-sources project --tools ""`. Then
     `--strict-mcp-config`, the tagged `--mcp-config`, the tool rules, `--no-session-persistence`
     (sealed, blank), the prompt file or system prompt, and the project call's `--settings`."""
@@ -226,7 +227,8 @@ def argv(call: Call, cfg: dict) -> list:
     out = [cfg.get("claude_bin") or "claude", "-p", "--model", call.model]
     if call.effort is not None:
         out += ["--effort", call.effort]
-    out += ["--output-format", "json", "--max-turns", str(call.max_turns)]
+    fmt = ["stream-json", "--verbose"] if call.context == "project" else ["json"]
+    out += ["--output-format", *fmt, "--max-turns", str(call.max_turns)]
     if call.context == "project":
         out += ["--setting-sources", "project", "--permission-mode", "bypassPermissions"]
         if call.resume is not None:
@@ -445,15 +447,17 @@ def _group_alive(pgid) -> bool:
     return True
 
 
-def _kill(proc, blank):
+def _kill(proc, blank, reap=None):
     """Kill claude's group and collect (stdout, stderr). Blank: SIGKILL, reaped for 1 s. Else
-    SIGTERM, SIGKILL after KILL_WAIT_S."""
+    SIGTERM, SIGKILL after KILL_WAIT_S. `reap(timeout)` replaces proc.communicate when threads
+    read the pipes (it returns ("", ""))."""
+    reap = reap or (lambda t: proc.communicate(timeout=t))
     if blank:
         # If this 1 s reap times out, the second _kill in _wait's finally adds up to 1 s more and
         # run() reports code 124 (no exit status read).
         _killpg(proc.pid, signal.SIGKILL)
         try:
-            out, err = proc.communicate(timeout=1)
+            out, err = reap(1)
         except subprocess.TimeoutExpired:
             out, err = "", ""
         return out or "", err or ""
@@ -461,7 +465,7 @@ def _kill(proc, blank):
     for sig in (signal.SIGTERM, signal.SIGKILL):
         _killpg(proc.pid, sig)
         try:
-            out, err = proc.communicate(timeout=KILL_WAIT_S)
+            out, err = reap(KILL_WAIT_S)
             break
         except subprocess.TimeoutExpired:
             out, err = "", ""
@@ -514,13 +518,24 @@ def _scratch_dir() -> str:
 
 
 def _as_result(data) -> dict:
+    """The result object in `data` (a list: its last `result`); {} for anything else, also an event of
+    another type (a stream cut short)."""
     if isinstance(data, list):
         data = next((d for d in reversed(data) if isinstance(d, dict) and d.get("type") == "result"), {})
-    return data if isinstance(data, dict) else {}
+    return data if isinstance(data, dict) and data.get("type", "result") == "result" else {}
+
+
+def _event_line(line) -> bool:
+    """`line` parses as a JSON object: a stream event (model text may be inside), never a failure tail."""
+    try:
+        return isinstance(json.loads(line), dict)
+    except ValueError:
+        return False
 
 
 def _parse_output(stdout) -> dict:
-    """The `--output-format json` result object ({} when none is found).
+    """The `--output-format json` result object, or the `stream-json` stream's `result` event ({} when
+    none is found).
 
     Noise around it (an update banner, a project hook echoing to stdout) is skipped: the whole
     stream first, then the last non-empty line, then the last JSON object with `"type": "result"`
@@ -552,9 +567,64 @@ def _parse_output(stdout) -> dict:
     return fallback
 
 
-def _wait(proc, stdin, timeout, blank, tag, stop, should_stop, on_start):
-    """Steps 4-6 of run(): (stdout, stderr, timeout error or None, killed by stop/should_stop)."""
+def _pump(stream, sink, on_line) -> None:
+    """Read `stream` line by line into `sink`; `on_line(line)` sees each one (its errors are logged once
+    and never stop the read)."""
+    failed = False
+    try:
+        for line in stream:
+            sink.append(line)
+            if on_line is not None and not failed:
+                try:
+                    on_line(line)
+                except Exception as exc:  # noqa: BLE001 - progress never breaks a run
+                    failed = True
+                    log.log("hooks", f"runner: stream reader failed: {type(exc).__name__}: {exc}")
+    except (OSError, ValueError):
+        pass
+
+
+def _feed(stream, text) -> None:
+    try:
+        if text:
+            stream.write(text)
+        stream.close()
+    except (OSError, ValueError):
+        pass
+
+
+class _Lines:
+    """The pipes of a streaming call, read by threads as the lines arrive (on_line), stdin written by one."""
+
+    def __init__(self, proc, stdin, on_line):
+        self.proc, self.out, self.err = proc, [], []
+        self.threads = [threading.Thread(target=_pump, args=(proc.stdout, self.out, on_line), daemon=True),
+                        threading.Thread(target=_pump, args=(proc.stderr, self.err, None), daemon=True),
+                        threading.Thread(target=_feed, args=(proc.stdin, stdin), daemon=True)]
+        for t in self.threads:
+            t.start()
+
+    def reap(self, timeout):
+        self.proc.wait(timeout=timeout)
+        return "", ""
+
+    def text(self) -> tuple:
+        """(stdout, stderr) once the process is gone: the readers get KILL_WAIT_S to reach the end."""
+        for t in self.threads:
+            t.join(timeout=KILL_WAIT_S)
+        for pipe in (self.proc.stdout, self.proc.stderr):
+            try:
+                pipe.close()
+            except (OSError, ValueError):
+                pass
+        return "".join(self.out), "".join(self.err)
+
+
+def _wait(proc, stdin, timeout, blank, tag, stop, should_stop, on_start, on_line=None):
+    """Steps 4-6 of run(): (stdout, stderr, timeout error or None, killed by stop/should_stop). With
+    `on_line`, threads read the pipes line by line (_Lines) instead of communicate()."""
     done, watcher, error, out, err = threading.Event(), None, None, "", ""
+    lines, reap = None, None
     try:
         if on_start is not None:
             on_start(proc.pid)
@@ -564,9 +634,14 @@ def _wait(proc, stdin, timeout, blank, tag, stop, should_stop, on_start):
             thread.start()
             watcher = thread           # only a started thread is joined (a failed start must not mask the kill)
         try:
-            out, err = proc.communicate(stdin, timeout=timeout)
+            if on_line is not None:
+                lines = _Lines(proc, stdin, on_line)
+                reap = lines.reap
+                proc.wait(timeout=timeout)
+            else:
+                out, err = proc.communicate(stdin, timeout=timeout)
         except subprocess.TimeoutExpired:
-            out, err = _kill(proc, blank)
+            out, err = _kill(proc, blank, reap)
             error = f"timeout after {timeout}s"
     finally:
         done.set()
@@ -574,19 +649,22 @@ def _wait(proc, stdin, timeout, blank, tag, stop, should_stop, on_start):
             watcher.join(timeout=POLL_S)
         killed, timer = stop._detach()
         if proc.returncode is None:    # an exception above: never leave claude running
-            _kill(proc, blank)
+            _kill(proc, blank, reap)
         if timer is not None:
             timer.cancel()
         _sweep_group(proc.pid, blank)
         _sweep_tag(tag)
+        if lines is not None:
+            out, err = lines.text()
     return out or "", err or "", error, killed
 
 
 def spawn(cmd, env, cwd, stdin, *, timeout, blank=False, tag=None, stop=None, should_stop=None,
-          on_start=None):
+          on_start=None, on_line=None):
     """The one process lifecycle: start `cmd` in its own group, feed stdin, wait up to `timeout`,
     kill (blank: SIGKILL at once), sweep the group and the tag. (code, stdout, stderr, error,
-    killed); code 127 with the error when it could not start, 124 when no exit status was read."""
+    killed); code 127 with the error when it could not start, 124 when no exit status was read.
+    `on_line(line)`: each stdout line as it arrives (stdout is still returned whole)."""
     try:
         proc = subprocess.Popen(cmd, cwd=str(cwd), env=env, stdin=subprocess.PIPE,
                                 stdout=subprocess.PIPE, stderr=subprocess.PIPE, encoding="utf-8",
@@ -594,17 +672,18 @@ def spawn(cmd, env, cwd, stdin, *, timeout, blank=False, tag=None, stop=None, sh
     except OSError as exc:
         return 127, "", "", f"cannot start {cmd[0]}: {exc}", False
     out, err, error, killed = _wait(proc, stdin, timeout, blank, tag, stop if stop is not None else Stop(),
-                                    should_stop, on_start)
+                                    should_stop, on_start, on_line)
     return (proc.returncode if proc.returncode is not None else 124), out, err, error, killed
 
 
-def run(call: Call, stdin: str, cfg: dict, *, stop=None, should_stop=None, on_start=None) -> Result:
+def run(call: Call, stdin: str, cfg: dict, *, stop=None, should_stop=None, on_start=None, on_line=None) -> Result:
     """Start the call, feed stdin, wait up to call.timeout, kill, sweep, clean up, parse.
 
     Never raises for anything claude does. Raises ValueError (an invalid call), OSError (the
     marker or scratch dir could not be made), and, after claude is killed, KeyboardInterrupt or
     its own machinery's errors. `on_start(pid)` runs once claude is up; `should_stop()` is polled
-    every POLL_S; a Stop kills the call on a SIGTERM to this process."""
+    every POLL_S; a Stop kills the call on a SIGTERM to this process. `on_line(line)` sees each stdout
+    line as it arrives (a project call's stream events; runs/progress.py); its errors never fail the call."""
     from . import mask  # lazy: hooks that import headless only for argv()/env() keep a small import closure
     cmd, call_env = argv(call, cfg), env(call, cfg)
     mcp = marker_path(call.tag) if call.tag else None
@@ -616,7 +695,7 @@ def run(call: Call, stdin: str, cfg: dict, *, stop=None, should_stop=None, on_st
             scratch = _scratch_dir()
         code, out, err, error, killed = spawn(cmd, call_env, scratch or call.cwd, stdin, timeout=call.timeout,
                                               blank=call.context == "blank", tag=call.tag, stop=stop,
-                                              should_stop=should_stop, on_start=on_start)
+                                              should_stop=should_stop, on_start=on_start, on_line=on_line)
     finally:
         try:
             if mcp is not None:
@@ -631,8 +710,8 @@ def run(call: Call, stdin: str, cfg: dict, *, stop=None, should_stop=None, on_st
     if error is not None:
         failure = mask.redact(error)[0]
     elif not data:
-        tail = next((ln.strip() for text in (err, out) for ln in reversed(text.splitlines()) if ln.strip()),
-                    "no output")
+        tail = next((ln.strip() for text in (err, out) for ln in reversed(text.splitlines())
+                     if ln.strip() and not _event_line(ln)), "no output")
         failure = mask.redact(f"exit {code}: {tail}"[:300])[0]
     else:
         failure = None

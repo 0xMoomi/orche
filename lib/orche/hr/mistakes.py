@@ -2,9 +2,11 @@
 last `days` days, and where to enforce it.
 
 Sources, all durable records:
-  head-review returns   ORCHE_HOME/ledger/<p>.review.tsv rows `kind build`, `verdict return`; each
-                        checklist line `- N: why` of the row's evidence file, but 6-8 (overlap, risk,
-                        size route a PR, they are not mistakes); the unit is the file's `unit:` line
+  head-review returns   ORCHE_HOME/ledger/<p>.review.tsv rows `kind build`, `verdict return`, but routed
+                        ones (note `route:`); each checklist line `- N: why` of the row's evidence file,
+                        but review.build.ROUTE's (overlap, risk, size, no unit brief route a PR, they are
+                        not mistakes); the unit is the file's `unit:` line, and a PR without one (`pr<N>`)
+                        is skipped: no brief asked anything of it
   queue returns         ORCHE_HOME/queue/<p>/log.jsonl `returned` events: reason (red, conflict,
                         timeout) and the failed step
   reverts               `git log origin/<base>` commits whose subject starts with `Revert` or whose body
@@ -17,8 +19,11 @@ a structural change (type, lint rule, build step), a test, a hook or gate, a sta
 
 The Enforcement table: `apply` keeps one section `## Enforcement (proposed by the audit)` in the
 project's STANDING.md, a table `| class | seen | proposed level | status |` (new rows `proposed`; an
-existing row keeps its status, its count and level follow the audit). It is the rules map SPEC §5.10
-names. The numbered standing orders are never touched; `hr correct` adds its lines above the section.
+existing row keeps its status, its count and level follow the audit; a `proposed` row the audit no longer
+finds in its window is dropped, a row the owner promoted (any other status) stays). It is the rules map
+SPEC §5.10 names. Nothing in it switches itself on: only the owner's "enforce <class>" does (K7), and
+briefs carry only its promoted rows (dispatch.standing_text). The numbered standing orders are never
+touched; `hr correct` adds its lines above the section.
 """
 import datetime as _dt
 import re
@@ -26,12 +31,13 @@ from pathlib import Path
 
 from .. import ledger, publish, shell, templates, units, util
 from ..queue import store
+from ..review.build import ROUTE
 from .audit import AUDIT_DAYS
 
 MAX_CLASSES = 8
 KEY_WORDS = 6
-ROUTING = (6, 7, 8)     # head-review checklist lines that route a PR (overlap, risk, size)
 HEADING = "## Enforcement (proposed by the audit)"
+PROPOSED = "proposed"
 TABLE_HEAD = ("| class | seen | proposed level | status |", "|---|---|---|---|")
 LEVELS = (   # (level, words that point at it, why): the first level whose words the key holds wins
     ("structural change", {"type", "types", "typed", "lint", "import", "imports", "unused", "format", "compile",
@@ -77,7 +83,8 @@ def review_returns(key, since) -> list:
     out = []
     for row in ledger.read_reviews(key):
         at = _when(row.get("ts"))
-        if row.get("kind") != "build" or row.get("verdict") != "return" or at is None or at < since:
+        if row.get("kind") != "build" or row.get("verdict") != "return" or at is None or at < since \
+                or str(row.get("note") or "").startswith("route:"):
             continue
         try:
             body = Path(row.get("evidence") or "").read_text(encoding="utf-8")
@@ -85,9 +92,11 @@ def review_returns(key, since) -> list:
             continue
         m = _UNIT.search(body)
         unit = m.group(1) if m else f"pr{row.get('pr')}"
+        if re.fullmatch(r"pr\d+", unit):
+            continue
         for line in body.split("\n## ", 1)[0].splitlines():
             f = _FINDING.match(line)
-            if f and int(f.group(1)) not in ROUTING:
+            if f and int(f.group(1)) not in ROUTE:
                 out.append({"source": "review", "unit": unit, "at": at, "text": f.group(2)})
     return out
 
@@ -189,8 +198,23 @@ def table(proj) -> dict:
     return _rows(lines, lines.index(HEADING))[1] if HEADING in lines else {}
 
 
+def for_briefs(text) -> str:
+    """STANDING.md as a brief carries it (K7): the Enforcement section keeps only the rows the owner promoted
+    (status other than `proposed`), and goes when none is left; the numbered orders are untouched."""
+    lines = str(text or "").splitlines()
+    if HEADING not in lines:
+        return text
+    start = lines.index(HEADING)
+    end, rows = _rows(lines, start)
+    kept = [r for r in rows.values() if r[3] != PROPOSED]
+    section = [HEADING, "", *TABLE_HEAD, *("| " + " | ".join(r) + " |" for r in kept), ""] if kept else []
+    return "\n".join(lines[:start] + section + lines[end:]).rstrip("\n") + "\n"
+
+
 def apply(key, proj, found, *, dry_run=False) -> dict:
-    """Write `found` (classes()) into the Enforcement table of `key`'s STANDING.md: {new, updated, path}."""
+    """Write `found` (classes()) into the Enforcement table of `key`'s STANDING.md: {new, updated, expired, path}.
+    A `proposed` row `found` no longer holds is dropped (expired); a promoted row stays as it is. A table left
+    without rows goes with its heading."""
     path = _path(proj)
     if path.exists():
         text = path.read_text(encoding="utf-8")
@@ -204,16 +228,20 @@ def apply(key, proj, found, *, dry_run=False) -> dict:
     else:
         start = end = len(lines)
         rows = {}
+    keys = {c["key"] for c in found}
     new = [c["key"] for c in found if c["key"] not in rows]
     updated = [c["key"] for c in found if c["key"] in rows]
+    expired = [k for k, r in rows.items() if k not in keys and r[3] == PROPOSED]
+    for k in expired:
+        del rows[k]
     for c in found:
-        status = rows[c["key"]][3] if c["key"] in rows else "proposed"
+        status = rows[c["key"]][3] if c["key"] in rows else PROPOSED
         rows[c["key"]] = [c["key"], str(c["count"]), c["level"], status]
-    section = [HEADING, "", *TABLE_HEAD, *("| " + " | ".join(r) + " |" for r in rows.values()), ""]
+    section = [HEADING, "", *TABLE_HEAD, *("| " + " | ".join(r) + " |" for r in rows.values()), ""] if rows else []
     before = lines[:start]
-    if before and before[-1].strip():
+    if before and before[-1].strip() and section:
         before.append("")
     out = "\n".join(before + section + lines[end:]).rstrip("\n") + "\n"
-    if not dry_run and (new or updated) and out != text:
+    if not dry_run and (new or updated or expired) and out != text:
         util.atomic_write(path, out)
-    return {"new": new, "updated": updated, "path": str(path)}
+    return {"new": new, "updated": updated, "expired": expired, "path": str(path)}

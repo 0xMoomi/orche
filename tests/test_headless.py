@@ -45,12 +45,14 @@ class ArgvTest(TempHomeCase):
         mk = str(headless.marker_path("r-1"))
         rows = [
             ("project minimal", project(), {},
-             ["claude", "-p", "--model", "claude-opus-5-5", "--output-format", "json", "--max-turns", "50",
+             ["claude", "-p", "--model", "claude-opus-5-5", "--output-format", "stream-json", "--verbose",
+              "--max-turns", "50",
               "--setting-sources", "project", "--permission-mode", "bypassPermissions",
               "--strict-mcp-config"] + gates_pair()),
             ("project full", project(effort="high", tag="r-1", allowed="Read,Edit", denied=DENIED,
                                      append_file=PERSONA), {},
-             ["claude", "-p", "--model", "claude-opus-5-5", "--effort", "high", "--output-format", "json",
+             ["claude", "-p", "--model", "claude-opus-5-5", "--effort", "high",
+              "--output-format", "stream-json", "--verbose",
               "--max-turns", "50", "--setting-sources", "project", "--permission-mode", "bypassPermissions",
               "--strict-mcp-config",
               "--mcp-config", mk, "--allowedTools", "Read,Edit", "--disallowedTools", DENIED,
@@ -69,15 +71,18 @@ class ArgvTest(TempHomeCase):
               "--setting-sources", "project", "--tools", "", "--strict-mcp-config",
               "--no-session-persistence", "--system-prompt", "SYS"]),
             ("claude_bin from cfg", project(), {"claude_bin": "/opt/x/claude"},
-             ["/opt/x/claude", "-p", "--model", "claude-opus-5-5", "--output-format", "json", "--max-turns",
+             ["/opt/x/claude", "-p", "--model", "claude-opus-5-5", "--output-format", "stream-json", "--verbose",
+              "--max-turns",
               "50", "--setting-sources", "project", "--permission-mode", "bypassPermissions",
               "--strict-mcp-config"] + gates_pair()),
             ("project resume", project(resume="sid-1", max_turns=8), {},
-             ["claude", "-p", "--model", "claude-opus-5-5", "--output-format", "json", "--max-turns", "8",
+             ["claude", "-p", "--model", "claude-opus-5-5", "--output-format", "stream-json", "--verbose",
+              "--max-turns", "8",
               "--setting-sources", "project", "--permission-mode", "bypassPermissions", "--resume", "sid-1",
               "--strict-mcp-config"] + gates_pair()),
             ("empty claude_bin is the default", project(), {"claude_bin": ""},
-             ["claude", "-p", "--model", "claude-opus-5-5", "--output-format", "json", "--max-turns", "50",
+             ["claude", "-p", "--model", "claude-opus-5-5", "--output-format", "stream-json", "--verbose",
+              "--max-turns", "50",
               "--setting-sources", "project", "--permission-mode", "bypassPermissions",
               "--strict-mcp-config"] + gates_pair()),
         ]
@@ -98,7 +103,7 @@ class ArgvTest(TempHomeCase):
         self.assertEqual(list(data["hooks"]), ["PreToolUse"])
         flat = [("PreToolUse", e.get("matcher"), h["command"])
                 for e in data["hooks"]["PreToolUse"] for h in e["hooks"]]
-        want = [h for h in install_settings.plugin_hooks(paths.PLUGIN_ROOT) if h[0] == "PreToolUse"]
+        want = [h[:3] for h in install_settings.plugin_hooks(paths.PLUGIN_ROOT) if h[0] == "PreToolUse"]
         self.assertEqual(flat, want)
         root = str(paths.PLUGIN_ROOT)
         self.assertEqual([c for _, _, c in flat],
@@ -295,11 +300,11 @@ class CheckTest(TempHomeCase):
         bracket = help_without("--append-system-prompt-file") + "  --append-system-prompt[-file] <x>\n"
         alone = help_without("--system-prompt") + "  --append-system-prompt <x>\n"
         rows = [
-            ("all listed", ALL_FLAGS, ("OK", "claude flags", "all 16 listed in claude --help")),
+            ("all listed", ALL_FLAGS, ("OK", "claude flags", "all 17 listed in claude --help")),
             ("effort and restricted missing", help_without("--restricted", "--effort"),
              ("WARN", "claude flags", "not listed in claude --help: --effort, --restricted; headless "
                                       "calls that use them fail (update Claude Code)")),
-            ("bracket form counts", bracket, ("OK", "claude flags", "all 16 listed in claude --help")),
+            ("bracket form counts", bracket, ("OK", "claude flags", "all 17 listed in claude --help")),
             ("append alone is not system", alone,
              ("WARN", "claude flags", "not listed in claude --help: --system-prompt; headless "
                                       "calls that use them fail (update Claude Code)")),
@@ -325,7 +330,7 @@ class CheckTest(TempHomeCase):
         script.chmod(0o755)
         got = headless.check({"claude_bin": str(script)})
         self.assertEqual(got, [("WARN", "claude", f"{script} --version failed: boom"),
-                               ("OK", "claude flags", "all 16 listed in claude --help")])
+                               ("OK", "claude flags", "all 17 listed in claude --help")])
 
     def test_found_on_path(self):
         bin_ = self.fake(ALL_FLAGS)
@@ -459,6 +464,26 @@ class RunTest(TempHomeCase):
     def test_no_output(self):
         res = headless.run(self.call(timeout=10.0), "", self.cfg)
         self.assertEqual(res.failure, "exit 0: no output")
+
+    def test_a_cut_off_stream_never_puts_an_event_into_the_failure(self):
+        """No `result` event: the tail comes from stderr and non-JSON stdout lines, never from a stream event
+        (model text inside one must not start a usage or outage hold)."""
+        from orche import config
+        from orche.flow import usage
+        said = {"type": "assistant", "message": {"content": [{"type": "text", "text":
+                "Claude usage limit reached. Your limit will reset at 3pm; can't reach the API server"}]}}
+        stream = json.dumps({"type": "system", "subtype": "init"}) + "\n" + json.dumps(said) + "\n"
+        for name, out, err, tail in (("events only", stream, "", "no output"),
+                                     ("prose before", "warming up\n" + stream, "", "warming up"),
+                                     ("stderr", stream, "killed by signal 9", "killed by signal 9")):
+            with self.subTest(name):
+                self.put("reply.json", out)
+                self.put("action.sh", f"echo '{err}' >&2\n" if err else "")
+                self.put("exit", "1")
+                res = headless.run(self.call(timeout=10.0), "", self.cfg)
+                self.assertEqual((res.data, res.failure), ({}, f"exit 1: {tail}"))
+                self.assertFalse(usage.is_limit(res.limit_text, config.load()))
+                self.assertFalse(usage.OUTAGE.search(res.limit_text))
 
     def test_is_error_is_not_a_failure(self):
         reply = {"type": "result", "result": 5, "is_error": True, "cost_usd": 1.0}

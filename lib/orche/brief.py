@@ -15,6 +15,10 @@ KEYS = ("TO", "GOAL", "SCOPE", "CONTEXT", "ACCEPT", "VERIFY", "TIMEBOX", "FORBID
 TIERS = ("mechanical", "standard", "hard")
 REFUSE = "[orche] dispatch refused: "
 UNITS = ".orche/units"          # a unit folder is <project root>/UNITS/<unit>
+# An AMEND's cause, the first word of its SUPERSEDES note (K1): the owner changed or added something, the brief
+# was wrong or short, a review or live run found the work wrong, the queue's red / conflict, a gate rule, an
+# outage or timeout, a continuation after a dependency landed.
+CAUSES = ("owner", "brief", "defect", "red", "conflict", "gate", "infra", "continue")
 
 _REQUIRED = tuple(k for k in KEYS if k not in ("ROLLBACK", "MODEL"))
 _UNIT_ID = re.compile(r"^[a-z0-9][a-z0-9-]*-\d{8}-\d+$")
@@ -22,6 +26,8 @@ _AMEND = re.compile(r"AMEND\s+(\S+)\s+rev\s+(\d+)")
 _STOP = re.compile(r"STOP\s+(\S+)(?:\s+(.*))?")
 _SUPERSEDES = re.compile(r"^SUPERSEDES\s+(.*)$")
 _REV = re.compile(r"^rev:\s*(\d+)\s*$", re.MULTILINE)
+_CAUSE = re.compile(r"^\s*(?:rev\s*\d+\s*:)?\s*([A-Za-z]+)")
+_NOTE_LINE = re.compile(r"^supersedes-note: (.*)$", re.MULTILINE)
 _MARK = re.compile(r"^## Brief\b.*$", re.MULTILINE)
 _ORDER = re.compile(r"-(\d{8})-(\d+)$")
 _FROM = re.compile(r"^to: \S+\s+from: (\S+)\s*$", re.M)
@@ -39,6 +45,39 @@ def unit_id_error(unit):
     if isinstance(unit, str) and _UNIT_ID.match(unit):
         return None
     return f"bad unit id {unit!r} (want <proj>-<slug>-<yyyymmdd>-<n>)"
+
+
+def cause(note) -> str:
+    """The cause word of an AMEND note (the SUPERSEDES text): its first word after `rev N:`, lower-cased,
+    when it is one of CAUSES; else ""."""
+    m = _CAUSE.match(str(note or ""))
+    word = m.group(1).lower() if m else ""
+    return word if word in CAUSES else ""
+
+
+def causes(folder) -> dict:
+    """{rev: cause word, "" when untagged} of every revision N >= 2 in the unit folder (BRIEF.rev<N>.md's
+    `supersedes-note:`); {} when there is none or the folder cannot be read."""
+    out = {}
+    try:
+        paths = list(Path(folder).glob("BRIEF.rev*.md"))
+    except OSError:
+        return out
+    for path in paths:
+        n = path.name[len("BRIEF.rev"):-len(".md")]
+        if not n.isdigit() or int(n) < 2:
+            continue
+        m = _NOTE_LINE.search(_text(path) or "")
+        out[int(n)] = cause(m.group(1)) if m else ""
+    return dict(sorted(out.items()))
+
+
+def cause_refusal(unit, rev, note) -> str:
+    """The refusal of an AMEND whose note does not start with a cause word: what to write, in this turn."""
+    got = f"; got {_quote(note)}" if str(note or "").strip() else "; it has no SUPERSEDES line"
+    return (f"{REFUSE}AMEND {unit}: start the SUPERSEDES note with its cause (owner, brief, defect, red, conflict, "
+            f"gate, infra or continue), e.g. `SUPERSEDES rev {max(1, rev - 1)}: defect: the pre-review found the cap "
+            f"off by one tier`{got}. Put the cause word first on that line and send the AMEND again now.")
 
 
 def _refuse_unknown(names, allowed):
@@ -75,6 +114,8 @@ class Block:
             err = unit_id_error(self.unit)
             if err:
                 raise Refusal(f"{REFUSE}{err}.")
+            if self.kind == "amend" and not cause(self.note):
+                raise Refusal(cause_refusal(self.unit, self.rev, self.note))
 
 
 def _is_comment(line):

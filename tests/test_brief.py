@@ -56,13 +56,12 @@ class GrammarTest(unittest.TestCase):
     def test_valid(self):
         for name, body, want in [
             ("full brief", FULL, ("brief", "", 0, "", FIELDS)),
-            ("AMEND, SUPERSEDES on line 2", f"AMEND {U} rev 2\nSUPERSEDES scope was wrong\nGOAL g2",
-             ("amend", U, 2, "scope was wrong", {"GOAL": "g2"})),
-            ("AMEND, SUPERSEDES on line 3", f"AMEND {U} rev 3\nGOAL g2\nSUPERSEDES late",
-             ("amend", U, 3, "late", {"GOAL": "g2"})),
-            ("AMEND, no SUPERSEDES", f"AMEND {U} rev 2\nGOAL g2", ("amend", U, 2, "", {"GOAL": "g2"})),
-            ("AMEND, SUPERSEDES twice", f"AMEND {U} rev 2\nSUPERSEDES one\nSUPERSEDES two",
-             ("amend", U, 2, "two", {})),
+            ("AMEND, SUPERSEDES on line 2", f"AMEND {U} rev 2\nSUPERSEDES brief: scope was wrong\nGOAL g2",
+             ("amend", U, 2, "brief: scope was wrong", {"GOAL": "g2"})),
+            ("AMEND, SUPERSEDES on line 3", f"AMEND {U} rev 3\nGOAL g2\nSUPERSEDES owner late",
+             ("amend", U, 3, "owner late", {"GOAL": "g2"})),
+            ("AMEND, SUPERSEDES twice", f"AMEND {U} rev 2\nSUPERSEDES one\nSUPERSEDES red two",
+             ("amend", U, 2, "red two", {})),
             ("STOP with reason and TO", f"STOP {U}  wrong target \nTO build",
              ("stop", U, 0, "wrong target", {"TO": "build"})),
             ("STOP bare", f"STOP {U}", ("stop", U, 0, "", {})),
@@ -71,15 +70,15 @@ class GrammarTest(unittest.TestCase):
             ("STOP TO after the body", f"STOP {U} first\nsecond line\nTO build",
              ("stop", U, 0, "first\nsecond line", {"TO": "build"})),
             ("STOP indented line continues the reason", f"STOP {U}\nwhy\n  more", ("stop", U, 0, "why\nmore", {})),
-            ("AMEND prose before a key is note", f"AMEND {U} rev 2\nscope moved\nGOAL g2",
-             ("amend", U, 2, "scope moved", {"GOAL": "g2"})),
-            ("AMEND prose after SUPERSEDES is note", f"AMEND {U} rev 2\nSUPERSEDES rev 1: smaller\nand faster\nGOAL g2",
-             ("amend", U, 2, "rev 1: smaller\nand faster", {"GOAL": "g2"})),
-            ("AMEND prose after a key extends it", f"AMEND {U} rev 2\nGOAL g2\nand more",
-             ("amend", U, 2, "", {"GOAL": "g2\nand more"})),
+            ("AMEND prose before a key is note", f"AMEND {U} rev 2\nbrief scope moved\nGOAL g2",
+             ("amend", U, 2, "brief scope moved", {"GOAL": "g2"})),
+            ("AMEND prose after SUPERSEDES is note", f"AMEND {U} rev 2\nSUPERSEDES rev 1: owner: smaller\nand faster\nGOAL g2",
+             ("amend", U, 2, "rev 1: owner: smaller\nand faster", {"GOAL": "g2"})),
+            ("AMEND prose after a key extends it", f"AMEND {U} rev 2\nSUPERSEDES defect\nGOAL g2\nand more",
+             ("amend", U, 2, "defect", {"GOAL": "g2\nand more"})),
             ("plain continuation", FULL.replace("CONTEXT c", "CONTEXT c\nunindented more"),
              ("brief", "", 0, "", {**FIELDS, "CONTEXT": "c\nunindented more"})),
-            ("indented verb", f"   AMEND {U} rev 2\nGOAL g2", ("amend", U, 2, "", {"GOAL": "g2"})),
+            ("indented verb", f"   AMEND {U} rev 2\nSUPERSEDES gate\nGOAL g2", ("amend", U, 2, "gate", {"GOAL": "g2"})),
             ("verb after comment and blanks", f"\n# why\n\n  # more\nSTOP {U}", ("stop", U, 0, "", {})),
             ("one-space-indented key", FULL.replace("GOAL g", " GOAL g"), ("brief", "", 0, "", FIELDS)),
             ("trailing spaces on value", FULL.replace("GOAL g", "GOAL   g   "), ("brief", "", 0, "", FIELDS)),
@@ -121,8 +120,8 @@ class GrammarTest(unittest.TestCase):
         self.assertEqual(b.fields["CONTEXT"], "c\nSTOP soon")
 
     def test_amend_indented_supersedes_is_content(self):
-        b = brief.parse(f"AMEND {U} rev 2\nGOAL g2\n  SUPERSEDES x")
-        self.assertEqual((b.fields["GOAL"], b.note), ("g2\nSUPERSEDES x", ""))
+        b = brief.parse(f"AMEND {U} rev 2\nSUPERSEDES infra\nGOAL g2\n  SUPERSEDES x")
+        self.assertEqual((b.fields["GOAL"], b.note), ("g2\nSUPERSEDES x", "infra"))
 
     def test_supersedes_is_prose_outside_amend(self):
         with self.assertRaises(Refusal) as cm:
@@ -244,6 +243,29 @@ class BlockTest(unittest.TestCase):
         with self.assertRaises(ValueError):
             Block("weird")
 
+    def test_an_amend_needs_a_cause_word(self):
+        """K1: the SUPERSEDES note starts with its cause; the refusal says what to write, in this turn."""
+        for note, cause in (("rev 2: defect: the cap is off", "defect"), ("Owner wants blue", "owner"),
+                            ("rev 3:brief, SCOPE missed the lockfile", "brief"), ("continue", "continue")):
+            self.assertEqual(brief.cause(note), cause, note)
+            self.assertEqual(Block("amend", {}, U, 3, note).note, note)
+        for note in ("", "rev 2: tighten the cap", "rev 2 defect", "defects found"):
+            self.assertEqual(brief.cause(note), "", note)
+            with self.assertRaises(Refusal) as cm:
+                Block("amend", {}, U, 3, note)
+            self.assertTrue(str(cm.exception).startswith(
+                f"{R}AMEND {U}: start the SUPERSEDES note with its cause (owner, brief, defect, red, conflict, gate, "
+                "infra or continue), e.g. `SUPERSEDES rev 2: defect: the pre-review found the cap off by one tier`"),
+                str(cm.exception))
+            self.assertTrue(str(cm.exception).endswith(
+                ". Put the cause word first on that line and send the AMEND again now."))
+        with self.assertRaises(Refusal) as cm:
+            brief.parse(f"AMEND {U} rev 3\nSUPERSEDES rev 2: smaller\nGOAL g")
+        self.assertIn('got "rev 2: smaller". Put the cause word first', str(cm.exception))
+        with self.assertRaises(Refusal) as cm:
+            brief.parse(f"AMEND {U} rev 3\nGOAL g")
+        self.assertIn("; it has no SUPERSEDES line.", str(cm.exception))
+
     def test_frozen(self):
         b = Block("stop", {}, U)
         with self.assertRaises(dataclasses.FrozenInstanceError):
@@ -357,22 +379,32 @@ class WriteReadTest(StoreCase):
 
     def test_amend(self):
         b = self.write({"GOAL": "Add coupon field"})
-        a = brief.write(Block("amend", {"GOAL": "Smaller"}, b.unit, 2, "rev 1: smaller"),
+        a = brief.write(Block("amend", {"GOAL": "Smaller"}, b.unit, 2, "rev 1: owner: smaller"),
                         self.member("div-acme-build"), "main-acme", STANDING, prior=b, timeout=0)
         self.assertEqual((a.unit, a.rev, a.fields["GOAL"], a.fields["VERIFY"]), (b.unit, 2, "Smaller", "run:\nnpm test"))
-        self.assertTrue(a.text.startswith(f"rev: 2\nsupersedes: rev 1\nsupersedes-note: rev 1: smaller\nunit: {b.unit}\n"))
+        self.assertTrue(a.text.startswith(f"rev: 2\nsupersedes: rev 1\nsupersedes-note: rev 1: owner: smaller\nunit: {b.unit}\n"))
         self.assertEqual((b.folder / "BRIEF.rev1.md").read_text(), b.text)
         self.assertEqual((b.folder / "BRIEF.rev2.md").read_text(), a.text)
         self.assertEqual(a.path.read_text(), a.text)
         self.assertEqual(brief.find(self.reg, b.unit), a)
         self.assertFalse((self.home / "logs" / "hooks.log").exists())
 
+    def test_causes_lists_each_revisions_cause(self):
+        b = self.write({"GOAL": "Add coupon field"})
+        self.assertEqual(brief.causes(b.folder), {})
+        m = self.member("div-acme-build")
+        for rev, note in ((2, "rev 1: defect: x"), (3, "rev 2: owner: y")):
+            b = brief.write(Block("amend", {}, b.unit, rev, note), m, "main-acme", STANDING, prior=b, timeout=0)
+        (b.folder / "BRIEF.rev4.md").write_text("rev: 4\nsupersedes: rev 3\nunit: x\n")    # written before K1
+        self.assertEqual(brief.causes(b.folder), {2: "defect", 3: "owner", 4: ""})
+        self.assertEqual(brief.causes(b.folder / "missing"), {})
+
     def test_amend_author_rev_is_advisory(self):
         b = self.write({"GOAL": "Add coupon field"})
-        a = brief.write(Block("amend", {}, b.unit, 5), self.member("div-acme-build"), "main-acme", STANDING,
+        a = brief.write(Block("amend", {}, b.unit, 5, "owner"), self.member("div-acme-build"), "main-acme", STANDING,
                         prior=b, timeout=0)
         self.assertEqual(a.rev, 2)
-        self.assertNotIn("supersedes-note", a.text)
+        self.assertIn("supersedes-note: owner\n", a.text)
         self.assertIn(f"dispatch: AMEND {b.unit} said rev 5; using 2",
                       (self.home / "logs" / "hooks.log").read_text())
 
@@ -381,7 +413,7 @@ class WriteReadTest(StoreCase):
         b = self.write({})
         bare = types.SimpleNamespace(session="x", project="acme", home=None, owns_worktree=False,
                                      worktree=None, branch="")
-        for block, target, prior in ((Block("stop", {}, b.unit), m, b), (Block("amend", {}, b.unit, 2), m, None),
+        for block, target, prior in ((Block("stop", {}, b.unit), m, b), (Block("amend", {}, b.unit, 2, "owner"), m, None),
                                      (Block("brief", FIELDS), m, b), (Block("brief", FIELDS), bare, None)):
             with self.subTest(kind=block.kind, prior=prior is not None):
                 with self.assertRaises(ValueError):
@@ -403,7 +435,7 @@ class WriteReadTest(StoreCase):
     def test_sender(self):
         b = self.write({}, frm="div-acme-build")
         self.assertEqual((b.sender, brief.find(self.reg, b.unit).sender), ("div-acme-build", "div-acme-build"))
-        a = brief.write(Block("amend", {}, b.unit, 2), self.member("div-acme-build"), "main-acme", STANDING,
+        a = brief.write(Block("amend", {}, b.unit, 2, "owner"), self.member("div-acme-build"), "main-acme", STANDING,
                         prior=b, timeout=0)
         self.assertEqual(brief.find(self.reg, b.unit).sender, "main-acme")      # the current revision's
         b.path.write_text("rev: 1\n\n## Brief x\nTO div-acme-build\n")          # hand-written: no header
@@ -666,9 +698,9 @@ class ByteIdentityTest(StoreCase):
         subprocess.run(["git", "init", "-q", "-b", "trunk"], cwd=self.repo, check=True, capture_output=True)
         text = json.loads(SAMPLE.read_text().splitlines()[1])["message"]["content"][0]["text"]
         sample = brief.parse(text.split("```dispatch\n", 1)[1].split("\n```", 1)[0]).fields
-        amend = brief.parse("AMEND acme-x-20261019-1 rev 2\nSUPERSEDES rev 1: no font change\n"
+        amend = brief.parse("AMEND acme-x-20261019-1 rev 2\nSUPERSEDES rev 1: owner: no font change\n"
                             "GOAL      Add coupon field without touching fonts")
-        drift = Block("amend", {"VERIFY": "make check\n  # still content"}, "acme-x-20261019-1", 7)
+        drift = Block("amend", {"VERIFY": "make check\n  # still content"}, "acme-x-20261019-1", 7, "continue")
         design = {"worktree": f"repo-acme::{self.root / 'acme-design'}", "branch": "div/design",
                   "session": "div-acme-design", "status": "active"}
         cases = [  # (name, registry edit, fields, to, from, amend)

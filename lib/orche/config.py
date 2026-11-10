@@ -27,7 +27,7 @@ DEFAULTS = {
                                 "\\brate[^\\n]*\\b429\\b", "\\bapi error:?\\s*429\\b", "too many requests",
                                 "(?:\\d+-hour|daily|weekly) limit reached", "hit your (usage )?limit",
                                 "usage quota", "quota exceeded for", "exceeded your (?:current )?quota",
-                                "overloaded"],
+                                "overloaded", "can't reach the api server", "\\benotfound\\b"],
                    "reset_patterns": [
                        "\\|(?P<epoch>\\d{10})\\b",
                        "resets?\\s+(?:at\\s+)?(?P<iso>\\d{4}-\\d{2}-\\d{2}[T ]\\d{2}:\\d{2}(?::\\d{2})?"
@@ -68,11 +68,12 @@ DEFAULTS = {
     # re-nudges unread sessions and re-delivers undelivered briefs (tries and backoff are constants in
     # reconcile.py), then one escalation. false: the pass only writes the heartbeat.
     "reconcile": {"enabled": True, "every_s": 300},
-    # Flow guarantees: the autonomy window's quiet hours and the headless spend caps.
+    # Flow guarantees: the autonomy window's quiet hours and the headless spend caps. daily_brief: Main opens
+    # each day after quiet hours with what happened and what waits for the owner (lib/orche/flow/daily.py).
     # The guards' caps: revisions (G1) and briefs_per_hour (G3) inside W, runs_per_unit (G5), a lineage's
     # depth and fanout (G6).
-    "flow": {"enabled": True, "quiet_hours": "23:00-08:00", "max_unit_cost_usd": 10, "max_project_cost_usd": 30,
-             "revisions": 3, "briefs_per_hour": 20, "runs_per_unit": 4, "depth": 3, "fanout": 5},
+    "flow": {"enabled": True, "quiet_hours": "23:00-08:00", "daily_brief": True, "max_unit_cost_usd": 10,
+             "max_project_cost_usd": 30, "revisions": 3, "briefs_per_hour": 20, "runs_per_unit": 4, "depth": 3, "fanout": 5},
     # publish: base = the PR base branch the queue lands on (null: origin/HEAD; neither: an OWNER step);
     # branch_prefix = the first path segment of a feature worker's branch (null: `feat`); issues = the issue
     # tracker's team key, e.g. `DES` (a worker is then named `des-<N>-<topic>`); per_project overrides land by
@@ -176,6 +177,9 @@ DEFAULTS = {
                                   "desc": "fast and capable at half Opus's price"},
             "codex":             {"label": "Codex", "cost": 3,
                                   "desc": "OpenAI Codex's default model: a second vendor, headless only"},
+            "claude-fable-5-2":  {"label": "Fable 5.2", "cost": 3,
+                                  "desc": "the most capable model, for work where rework costs more than tokens; "
+                                          "twice Opus 5.5's price per token"},
         },
         "codex_bin": "codex",
         "codex_sandbox": "workspace-write",

@@ -1,6 +1,8 @@
 {
   "waiting": "대기 {n}",
   "running": "실행 {n}",
+  "running_oldest": "실행 {n} (최장 {age}/{box})",
+  "stalled": "멈춤 의심 {n}",
   "today": "오늘 ${usd}",
   "spend_na": "오늘 비용 n/a",
   "paused": "일시정지 {why} · Main에 \"재개\"라고 말하세요",

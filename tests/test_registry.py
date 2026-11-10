@@ -94,6 +94,20 @@ class ValidateTest(unittest.TestCase):
             self.assertEqual(registry.validate(reg),
                              ["projects.acme-shop.orche_version: must be a version like 0.6.0"], bad)
 
+    def test_main_model_is_optional_and_checked(self):
+        reg = sample()
+        self.assertNotIn("main", reg["projects"]["acme-shop"])   # absent: Opus 5.5 at xhigh
+        reg["projects"]["acme-shop"]["main"] = {"model": "claude-fable-5-2", "effort": "high"}
+        self.assertEqual(registry.validate(reg), [])
+        shape = 'projects.acme-shop.main: must be {"model": <model>, "effort": low|medium|high|xhigh|max}'
+        for bad, errors in (({"model": "claude-fable-5-2"}, [shape]), ("fable", [shape]),
+                            ({"model": "a b", "effort": "high"},
+                             ["projects.acme-shop.main.model: must be a model id without spaces or control characters"]),
+                            ({"model": "claude-fable-5-2", "effort": "ultra"},
+                             ["projects.acme-shop.main.effort: must be one of low|medium|high|xhigh|max, got 'ultra'"])):
+            reg["projects"]["acme-shop"]["main"] = bad
+            self.assertEqual(registry.validate(reg), errors, bad)
+
     def test_old_liaison_session_key_is_ignored(self):
         """A project written before the Liaison left keeps its `liaison_session`; it validates and names no member."""
         reg = sample()
@@ -251,7 +265,7 @@ class CliTest(support.TempHomeCase):
         return cp.returncode, cp.stdout, cp.stderr
 
     def test_version(self):
-        self.assertEqual(self.orche("version"), (0, "orche 0.19.14\n", ""))
+        self.assertEqual(self.orche("version"), (0, "orche 0.20.0\n", ""))
 
     def test_projects_json_empty_home(self):
         self.assertEqual(self.orche("projects", "--json"), (0, "[]\n", ""))

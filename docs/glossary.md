@@ -36,6 +36,10 @@ _Avoid_: recipient.
 The member that hears from a unit: the sender of its current brief revision when that is a live Main or division of the project; otherwise a feature agent's division, everyone else's Main.
 _Avoid_: target.
 
+**Daily brief**:
+The facts Orche builds once per local day and project after quiet hours (what landed, what ended without landing, what waits for the owner, held work, yesterday's spend) and posts to Main as one waking `info`, which Main turns into its morning report to the owner (`lib/orche/flow/daily.py`). A quiet project gets none.
+_Avoid_: morning report (that is Main's reply), digest.
+
 **Held note**:
 A non-urgent `info` pointer that is neither a pane delivery nor a runner filing (Orche's dispatch feedback, a pane's `orche report info`). It waits for a drain trigger; every other pointer reaches the next prompt.
 _Avoid_: non-urgent pointer.
@@ -416,7 +420,7 @@ _Avoid_: setup note (that is the five-line pointer to Main), onboarding summary.
 
 **Always-pause**: Actions that always need user approval
 
-**Status card**: Main's report to the owner: one-line outcome, then a fenced card of at most 6 lines with labels in the owner's language and fixed glyphs (⛔ owner action first, 🟢 done · 🟡 verifying · 🔴 failed · ⏸ held counts from this wake's reports, ▶ running, ❓ decision with recommendation and default, ➡ next, 🔗 pointers), then the closing line to the owner; dispatch runs through `orche dispatch` during the turn
+**Final report**: Main's one complete report per request, written once at the lineage close it does not continue, from LINEAGE.md: the result first, one sentence per brief Main sent (what changed, where, checked or not), what failed or is unverified, then decisions (recommendation + default); plain words in the owner's language, no unit ids or glyphs; it ends `DONE:` or the open `OWNER:` line. Every other wake gets the status line (`RUNNING:` alone) or one decision (`OWNER:`)
 
 **Stage**: `building` or `public`; gates the Ops division
 

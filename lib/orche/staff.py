@@ -22,8 +22,8 @@ named WORKTREE (`staff`, beside the divisions' `div-<d>`), found in `orca worktr
 first time that Staff opens, as a child of the project's main worktree (hr/onboarding.create_worktree, as a
 division's; a failed listing creates nothing, so never a second one). The pane is its own terminal there,
 titled with its session, running `--model claude-opus-5-5 --effort medium` (the same `--effort` flag
-headless runs pass); MAIN_MODEL and MAIN_EFFORT, next to them, are every Main pane's
-(`--model claude-opus-5-5 --effort xhigh`). Staff never works in that worktree: it reads the project's
+headless runs pass); MAIN_MODEL and MAIN_EFFORT, next to them, are a Main pane's default
+(`--model claude-opus-5-5 --effort xhigh`; a project's registry `main` record overrides them, main_model). Staff never works in that worktree: it reads the project's
 current files in the main checkout, named in its SessionStart text. Its transcripts sit in that worktree's
 Claude project dir: the project's `spent today` reads the main checkout's and its units' dirs only, so it
 leaves Staff out, and `orche metrics` counts it with every transcript.
@@ -50,7 +50,7 @@ from . import cmdscan
 PREFIX = "staff-"         # + the project key: the session, title and inbox folder of its Staff
 WORKTREE = "staff"        # the Staff workspace: the Orca worktree name, and the branch when Orca names none
 MODEL, EFFORT = "claude-opus-5-5", "medium"
-MAIN_MODEL, MAIN_EFFORT = "claude-opus-5-5", "xhigh"   # every Main pane (hr/panes.pane_command)
+MAIN_MODEL, MAIN_EFFORT = "claude-opus-5-5", "xhigh"   # a Main pane's default (hr/panes.pane_command)
 DENY = '[orche] Staff answers questions; work goes through Main. Say "tell Main: ..." and Staff leaves Main a note.'
 PER_PROJECT = 6            # exchanges per project at SessionStart
 SIDE_MAX = 700             # characters of one prompt or one reply
@@ -70,6 +70,13 @@ GIT_WRITES = ("commit", "push")
 GH_WRITES = ("merge", "create")
 _REMINDER = re.compile(r"<system-reminder>.*?(?:</system-reminder>|\Z)", re.DOTALL)
 _BARE_DRAIN = re.compile(r"\s*(\[drain\]|/drain)\s*", re.IGNORECASE)
+
+
+def main_model(proj) -> tuple:
+    """(model, effort) project `proj`'s Main pane starts on: its registry `main` record, else MAIN_MODEL at
+    MAIN_EFFORT."""
+    main = (proj or {}).get("main") or {}
+    return main.get("model") or MAIN_MODEL, main.get("effort") or MAIN_EFFORT
 
 
 def session_of(key) -> str:

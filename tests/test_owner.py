@@ -110,6 +110,21 @@ class FitTest(support.TempHomeCase):
         self.assertLess(len(kept), len(items))
         self.assertLessEqual(len(text), 1500)
 
+    def test_a_lineage_record_is_cut_at_4000_and_a_report_at_1800(self):
+        """c120: LINEAGE.md is the request's record and carries up to LINEAGE_MAX; a REPORT.md stays at BODY_MAX."""
+        self.assertEqual((inbox.LINEAGE_MAX, inbox.BODY_MAX), (4000, 1800))
+        for name, limit in (("LINEAGE.md", 4000), ("REPORT.md", 1800)):
+            with self.subTest(name=name):
+                path = self.home / name.split(".")[0] / name
+                path.parent.mkdir(parents=True)
+                path.write_text("x" * 5000)
+                body = inbox.body(str(path))
+                self.assertIn("x" * limit + "\n", body)
+                self.assertNotIn("x" * (limit + 1), body)
+                self.assertTrue(body.endswith(f"[not shown in full: read {path}]"))
+                path.write_text("y" * limit)
+                self.assertNotIn("not shown in full", inbox.body(str(path)))
+
     def test_the_tail_survives_an_oversized_head(self):
         tail = inbox.REPORT_LINE
         text = inbox._within("## Standing orders\n" + "x" * 20000, "## Inbox (1)", tail, 9000)

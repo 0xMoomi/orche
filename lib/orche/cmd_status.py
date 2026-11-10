@@ -1,5 +1,6 @@
 """`orche status` (one line per project, then its `owner:`, `undelivered:`, `unread:`, `blocked:`,
-`looping:`, `paused:`, `queue:` and `upgrade:` lines, at most CAP_LINES per kind; then the global
+`looping:`, `paused:`, `queue:` and `upgrade:` lines (first `running:`, one per live run with a progress record,
+runs/progress.py), at most CAP_LINES per kind; then the global
 `triage:` and `heartbeat:` lines), `orche status <project>` (its card: what a cleared or restarted Main
 picks the work up from, also shown by SessionStart), `orche status --project <p>` (the detail view: every
 sub-line, then one `L` line per lineage of the last 24 h or still open) and `orche statusline [--cwd PATH]`.
@@ -15,6 +16,7 @@ import sys
 
 from . import __version__, config, inbox, metrics, project, registry, roster, runs, statusline, units, vendors
 from .flow import guard, owner, shape, usage
+from .runs import progress
 
 CAP_LINES = 3      # sub-lines per kind; the rest: `… <n> more: orche status --project <p>`
 EXIT_OK, EXIT_NOT_FOUND = 0, 2
@@ -76,6 +78,7 @@ def status_row(reg, key, now=None, cfg=None) -> dict:
             "upgrade": registry.upgrade(proj, __version__),
             "looping": looping(reg, key, now), "paused": paused(key, now), "owner": owner.status(key, now),
             "queue": q, "runs": {"live": c["running"], "cap": cap}, "holds": usage_holds(key, now),
+            "progress": [v for v in progress.views(key, now) if v["live_record"]],
             "spent_today": spent}
 
 
@@ -197,7 +200,8 @@ def cmd_status(args):
             print(row["line"])
             # repairs Orche is retrying or escalated (lib/orche/reconcile.py); upgrade: the stamp of the
             # last `orche init` is missing or older
-            sub = (overdue_lines(row) + [reconcile.stalled_line(s) for s in row["stalled"]]
+            sub = ([f"  running: {progress.line(v)}" for v in row["progress"]]
+                   + overdue_lines(row) + [reconcile.stalled_line(s) for s in row["stalled"]]
                    + ([f"  upgrade: {registry.upgrade_text(row['project'], row['upgrade'])}"] if row["upgrade"] else []))
             for line in (sub if detail else capped(sub, row["project"])):
                 print(line)

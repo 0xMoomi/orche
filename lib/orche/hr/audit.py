@@ -206,7 +206,7 @@ def run_mistakes(reg, key, *, now=None, days=AUDIT_DAYS, do_apply=False, dry_run
     proj = reg["projects"][key]
     found = mistakes.classes(key, proj, now or units.now(), days)
     data = {"project": key, "days": days, "classes": found}
-    if do_apply and found:
+    if do_apply:      # also with none found: a `proposed` row the window no longer finds expires
         data["table"] = mistakes.apply(key, proj, found, dry_run=dry_run)
     return data
 

@@ -46,7 +46,17 @@ class BuildReviewCase(support.TempHomeCase):
         self.facts = facts()
         self.calls, self.added = [], []
         self.reply = answer("VERDICT: PASS\n")
-        patches = [mock.patch.object(build, "_pr", lambda where, pr: dict(VIEW)),
+        self.briefless = False      # True: the PR has no unit brief (K6: it goes to the pane without a call)
+        real_members = build._members
+        stub = SimpleNamespace(fields={"GOAL": "the cart", "ACCEPT": "it works", "VERIFY": "", "SCOPE": ""},
+                               tier="standard", parent="", sender="main-acme", rev=1, unit="acme-cart-20261016-1",
+                               folder=self.home / "units" / "acme-cart-20261016-1", to="feat-acme-checkout")
+
+        def members(reg, project, branch, unit):
+            head, writer, b = real_members(reg, project, branch, unit)
+            return head, writer, b if b is not None or self.briefless else stub
+        patches = [mock.patch.object(build, "_members", members),
+                   mock.patch.object(build, "_pr", lambda where, pr: dict(VIEW)),
                    mock.patch.object(build, "_gather", lambda where, **kw: dict(self.facts)),
                    mock.patch.object(build, "_diff", lambda *a: "diff --git a/src/cart.py b/src/cart.py"),
                    mock.patch.object(jobmod, "adapter", lambda call: SimpleNamespace(run=self.fake_call)),
@@ -104,6 +114,25 @@ class Decisions(BuildReviewCase):
         self.assertEqual((row["verdict"], row["reviewer"], row["writer"]), ("pass", f"{BUILD} (review)",
                                                                              "feat-acme-checkout"))
         self.assertTrue((self.home / "reviews" / "acme" / "pr7-aaaaaaa-build.md").is_file())
+
+    def test_a_pr_without_a_unit_brief_goes_to_the_pane_without_a_call(self):
+        """K6: no ACCEPT can be asked of a PR without a brief; the facts route it and log `verdict=route`."""
+        self.briefless = True
+        self.pre("pass")
+        out = self.review()
+        self.assertEqual((out["status"], out["findings"]), ("pane", [(9, "pane review: no unit brief")]))
+        self.assertEqual(self.calls, [])
+        row = self.build_row()
+        self.assertEqual((row["verdict"], row["model"], row["note"]),
+                         ("return", "facts", "route: pane review: no unit brief"))
+        events = (self.home / "logs" / "events.log").read_text()
+        self.assertIn("buildreview project=acme pr=7 verdict=route queued=no\n", events)
+
+    def test_the_panes_pass_logs_an_event(self):
+        build.pane_record("acme", 7, HEAD, reviewer=f"{BUILD} (pane)", model="claude-opus-5-5",
+                          writer="feat-acme-checkout", surface="internal")
+        self.assertIn("buildreview project=acme pr=7 verdict=pass queued=yes by=pane\n",
+                      (self.home / "logs" / "events.log").read_text())
 
     def test_pre_skipped_then_build_pass_queues(self):
         self.pre("skipped")

@@ -4,7 +4,8 @@
 effort. The division's model is the ceiling: a rung model of another vendor, or one priced above the
 division's (output price: metrics.PRICES for Claude, `models.prices` for Codex), resolves to the
 division's model, with a hooks-log line. A brief's MODEL pin replaces the rung's model, never its
-effort. Haiku is named here only, never in `models.catalog` (R25).
+effort. Haiku is named here only, never in `models.catalog` (R25). One pin passes the price ceiling:
+ESCALATION, on a unit's second `defect` AMEND only (K8a; dispatch decides, pin_error's `escalation`).
 
 escalate(): a mechanical work attempt that ended `failed` or `info "unverified: …"` re-runs once, in
 the same run, at the standard rung, with templates/run/escalation.md appended to the brief. A pinned brief, a blocked
@@ -21,6 +22,7 @@ from . import brief, config, templates, vendors
 DIVISION = "division"
 TAIL_CHARS = 1500
 MIN_CONFIDENCE = 0.8
+ESCALATION = "claude-fable-5-2"   # K8a: the one model a MODEL pin may name above the ceiling
 
 
 class Rung(NamedTuple):
@@ -30,8 +32,9 @@ class Rung(NamedTuple):
 
 
 def full_id(model) -> str:
-    """A Claude alias as its full id (`sonnet` -> claude-sonnet-5-5); anything else as given."""
-    return f"claude-{model}-5-5" if model in vendors.ALIASES else model
+    """A Claude alias as its full id (`sonnet` -> claude-sonnet-5-5, `fable` -> claude-fable-5-2); anything
+    else as given."""
+    return vendors.ALIASES.get(model, model)
 
 
 def price(cfg, model):
@@ -44,8 +47,8 @@ def price(cfg, model):
         row = codex.price_row(prices, mid) if mid else codex.price_row(prices, vendors.CODEX)
         return row[2] if row else None
     from . import metrics
-    known = [m for m in metrics.PRICES if model.startswith(m)]
-    return metrics.PRICES[max(known, key=len)]["output"] if known else None
+    row = metrics.known_row(model, metrics.PRICES)
+    return row["output"] if row else None
 
 
 def above(cfg, model, base) -> str:
@@ -79,9 +82,11 @@ def rung(cfg, base, tier, pin=None) -> Rung:
     return Rung(full_id(model), effort, f"{tier} rung")
 
 
-def pin_error(cfg, pin, base, division, available=None) -> str:
+def pin_error(cfg, pin, base, division, available=None, escalation=None) -> str:
     """Why a brief's `MODEL pin` cannot run on `division` (model `base`), or "". `available` is
-    vendors.available, called only for a Codex pin."""
+    vendors.available, called only for a Codex pin. `escalation` (K8a): True, a unit's second `defect` AMEND,
+    lets ESCALATION past the price ceiling; False refuses it there with the rule; None (the run's re-check) lets
+    it pass, as dispatch admitted it."""
     errs = vendors.errors(pin, cfg)
     if errs:
         return f"MODEL {pin}: {errs[0]}"
@@ -94,7 +99,12 @@ def pin_error(cfg, pin, base, division, available=None) -> str:
                 f"`orche hr model`, or send the brief to a Codex division" if vendors.vendor_of(pin) == vendors.CODEX
                 else f"MODEL {pin} is another vendor than {division} ({base}): move the division with "
                      f"`orche hr model`, or send the brief to a Claude division")
+    if full_id(pin) == ESCALATION and escalation is not False:
+        return ""
     if above(cfg, pin, base):
+        if full_id(pin) == ESCALATION:
+            return (f"MODEL {pin} is above {division}'s model {base}; it is admitted only on a unit's second "
+                    "`defect` AMEND (SUPERSEDES rev N: defect: ...)")
         return f"MODEL {pin} is above {division}'s model {base}"
     return ""
 

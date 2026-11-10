@@ -17,19 +17,32 @@ CLOSING = ("Dispatch blocks go before your closing line, and the reply ends with
            "<what runs now> when nothing is needed from the owner, OWNER: <the decision or step, with its default> "
            "when something is, DONE: <the result> when the work is done.")
 REPORT_LINE = ("[orche] Act on the inbox above now: the reports are shown above; Read a file only where its block "
-               "says not shown. Where a lineage line says "
-               "closed and you dispatch nothing more for it, write your full report to the user — outcome · what "
-               "landed · what failed · decisions needed (recommendation + default) · next step; otherwise dispatch the "
-               "next step and write one progress line. Anything the owner must decide or do goes first. Never only "
-               "acknowledge. " + CLOSING)
+               "says not shown. If a lineage line says closed and you dispatch nothing more for it or its request, "
+               "write the final report: it stands alone and covers every unit in its LINEAGE.md, not only the "
+               "reports above: the result first, one sentence per brief you sent, what failed or is unverified, "
+               "decisions (recommendation + default). Otherwise dispatch the next step and reply with the closing "
+               "line alone, or, for something new only the owner can decide or do, one short question with your "
+               "recommendation and default. Never only acknowledge, and never repeat an open ask. " + CLOSING)
 # The owner's own message drained the inbox: its reports are background to that message (_order).
 OWNER_LINE = ("[orche] The owner's message comes first: answer it before the inbox above, which is background to "
-              "it. Then mention the reports in one short line and dispatch the next step they need. An urgent "
-              "report, or anything the owner must decide or do, still goes first. " + CLOSING)
+              "it. Then mention the reports in one short line and dispatch the next step they need; a lineage "
+              "shown closed with nothing more to dispatch still gets its final report after your answer. An "
+              "urgent report, or anything the owner must decide or do, still goes first. " + CLOSING)
+# Added to either order line when the injected pointers include the daily brief (unit DAILY_UNIT from
+# `orche`, lib/orche/flow/daily.py): its summary is hidden under an inlined body, its unit stays visible.
+DAILY_UNIT = "daily-brief"
+DAILY_LINE = ("For the daily brief above (unit daily-brief) write the daily brief your rulebook describes, in "
+              "its shape and standing alone; it may list the open asks. Your other rules still apply to the rest "
+              "of the inbox, and in the owner's own turn his message still comes first and the brief follows it "
+              "in full.")
 TASK_NOTE = "<task-notification>"   # Claude Code's own turn for a finished background task, not the owner's
 _SAFE = re.compile(r"^[A-Za-z0-9._-]+$")
 DRAIN_RE = re.compile(r"^\s*(\[drain\]|/drain)", re.IGNORECASE)
 NUDGE_RE = re.compile(r"^\s*\[orche\] inbox:")
+# The wake hook's stderr as Claude Code wraps it (lib/orche/watch.py): a prompt that opens with a tag and whose
+# last line inside the closing tag ends with Orche's wake or brief line. Matched on that shape and Orche's own
+# text, never on Claude Code's wrapper wording; text the owner pastes that merely ends with the line is his.
+WOKEN_RE = re.compile(r"\A\s*<[^<>\n]+>.*\[orche\] inbox: (?:new reports|\S+ rev \d+)[ \t]*\n\s*</[^<>\n]+>\s*\Z", re.S)
 STATUS_RE = re.compile(r"(status|progress|report|drain)", re.IGNORECASE)
 DRAIN_COUNT = 4
 DRAIN_AGE = _dt.timedelta(minutes=90)
@@ -42,7 +55,8 @@ TRUNCATED = "[…truncated]"
 # The prompt hook's whole stdout. Claude Code shows Claude only a file path and a preview past 10,000
 # characters, so the inbox block fits BUDGET: report bodies go first, the instruction lines never.
 BUDGET = 9500
-BODY_MAX = 1800                         # characters of one inlined REPORT.md or LINEAGE.md
+BODY_MAX = 1800                         # characters of one inlined REPORT.md
+LINEAGE_MAX = 4000                      # characters of one inlined LINEAGE.md (the request's record)
 BODY_FILES = ("LINEAGE.md", "REPORT.md")
 _CTRL = re.compile(r"[\x00-\x08\x0b-\x1f\x7f]")
 
@@ -145,7 +159,8 @@ def unmark(session: str) -> None:
 def rearm(session: str, unread: bool = False) -> None:
     """wake(session) when a waking pointer is pending (a turn ended, a prompt was routed). `unread`: the
     turn that ended was Main's and Orche started it, so the nudger starts in any case and marks Main's
-    workspace unread (wake). Never raises."""
+    workspace unread (wake). A session that watches its wake file is woken by the nudger too: it writes the
+    file and types when nothing takes it (deliver._by_file). Never raises."""
     try:
         if unread or any(wakes(p) for _x, p in pending(session)):
             wake(session, unread)
@@ -299,8 +314,8 @@ def render(items: list, stalled=(), bodies=None) -> str:
 
 def body(path) -> str | None:
     """A REPORT.md or LINEAGE.md as data: masked whole (mask.redact), control characters dropped, cut
-    at BODY_MAX with `[not shown in full: read <path>]`, in a fence no line inside can close; None when
-    the path is not an absolute path to one of those or cannot be read."""
+    at BODY_MAX (LINEAGE.md: LINEAGE_MAX) with `[not shown in full: read <path>]`, in a fence no line inside
+    can close; None when the path is not an absolute path to one of those or cannot be read."""
     if not path or not Path(str(path)).is_absolute() or Path(str(path)).name not in BODY_FILES:
         return None
     try:
@@ -308,8 +323,9 @@ def body(path) -> str | None:
     except OSError:
         return None
     text = _CTRL.sub("", mask.redact(text)[0]).strip()
-    cut = len(text) > BODY_MAX
-    block = util.fence(text[:BODY_MAX].rstrip() if cut else text, "markdown")
+    limit = LINEAGE_MAX if Path(str(path)).name == "LINEAGE.md" else BODY_MAX
+    cut = len(text) > limit
+    block = util.fence(text[:limit].rstrip() if cut else text, "markdown")
     return block + f"\n[not shown in full: read {_one(path)}]" if cut else block
 
 
@@ -461,6 +477,27 @@ def _within(head, block, tail, budget) -> str:
     return text[max(0, len(text) - budget):] if budget > 0 else ""
 
 
+def orche_prompt(prompt) -> bool:
+    """Orche started this prompt: its typed wake or brief line (`[orche] inbox: …` first), or that line
+    as the last line inside the wrapper Claude Code makes of the wake hook's output (WOKEN_RE)."""
+    return bool(NUDGE_RE.match(prompt) or WOKEN_RE.match(prompt))
+
+
+def _same_turn(payload) -> bool:
+    """Record this prompt's `prompt_id` for its Claude session; True when the previous prompt had the same
+    one: Claude Code delivered this prompt (a wake) inside the turn still running. Never raises."""
+    pid, path = str(payload.get("prompt_id") or ""), _session_file(payload.get("session_id"), ".prompt")
+    if not pid or path is None:
+        return False
+    try:
+        last = path.read_text(encoding="utf-8").strip() if path.exists() else ""
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(pid + "\n", encoding="utf-8")
+    except OSError:
+        return False
+    return last == pid
+
+
 def _order(prompt) -> str:
     """Orche's order line for Main's block: REPORT_LINE for an `[orche]` line (a wake, a delivered line), a
     task notification, `[drain]` or a status question; OWNER_LINE for any other prompt, the owner's own
@@ -473,22 +510,32 @@ def _order(prompt) -> str:
 def _prompt_text(payload, started, r, who, me, budget) -> str:
     prompt = payload.get("prompt") or ""
     main = who.member is not None and who.member.kind == "main"
-    owner = not prompt.lstrip().startswith("[orche]")
+    owner = not prompt.lstrip().startswith("[orche]") and not orche_prompt(prompt)
+    turn = None
     if main:
         from .flow import lineage     # flow imports inbox: resolved at call time
-        lineage.begin_turn(me, owner)  # first: a failure below never leaves the last turn's lineages
+        # A wake delivered inside the running turn keeps that turn's record: who started it stays as it was.
+        turn = lineage.read_turn(me) if _same_turn(payload) else None
+        if turn is not None:
+            owner = turn.get("owner") is not False
+        else:
+            lineage.begin_turn(me, owner)  # first: a failure below never leaves the last turn's lineages
     terms = orca.Terminals(orca.hook_deadline(started))
     units.touch_activity(me)
     _reconcile(r, who, terms)
     head = "\n\n".join(_standing_once(r, payload, who))
     read_at = units.now()   # before the inbox is read: a report landing after it is not this turn's
     items = _jev(prompt, pending(me), terms.deadline)
-    block, tail, named, order = "", [], [], _order(prompt) if main else ""
+    block, tail, named = "", [], []
+    # Orche's order line follows who started the turn: a mid-turn wake in the owner's turn stays background.
+    order = (OWNER_LINE if turn is not None and owner else REPORT_LINE if not owner else _order(prompt)) if main else ""
     if items:
         times = [t for t in (pointer_time(p, x) for p, x in items) if t is not None]
-        drain_all = (DRAIN_RE.match(prompt) or NUDGE_RE.match(prompt) or STATUS_RE.search(prompt)
+        drain_all = (DRAIN_RE.match(prompt) or orche_prompt(prompt) or STATUS_RE.search(prompt)
                      or len(items) >= DRAIN_COUNT or (times and units.now() - min(times) > DRAIN_AGE))
         inject = by_lineage([it for it in items if drain_all or not held(it[1])])
+        if main and any(x.get("unit") == DAILY_UNIT and x.get("from") == "orche" for _p, x in inject):
+            order += " " + DAILY_LINE    # the daily brief is urgent: always shown (fit)
         if inject:
             if main:     # only a lineage field, or the brief of the pointer's unit, names a lineage
                 named = [n for n in (lineage.of_pointer(x, r.reg, who.member.project) for _p, x in inject) if n]
@@ -504,6 +551,8 @@ def _prompt_text(payload, started, r, who, me, budget) -> str:
             tail.append(f"[orche] inbox: {waiting} note(s) held — FYI from Orche, no action needed; [drain] shows them")
         if inject and main:
             tail.append(order)  # Orche's own order, last in every block Main gets (§14.2)
-    if main:
+    if main and turn is not None:   # mid-turn: the running turn also carries the lineages injected now
+        util.write_json(lineage.turn_path(me), {**turn, "lineages": sorted(set(turn.get("lineages") or []) | set(named))})
+    elif main:
         lineage.write_turn(me, owner, named, at=read_at)   # after the drain; `at` is when the inbox was read
     return _within(head, block, "\n\n".join(tail), budget)

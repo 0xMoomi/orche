@@ -1,7 +1,7 @@
 """Model strings as data: the grammar, the vendor of a model, the
 recommended model of a division kind, and the model a unit runs on.
 
-A model string is a Claude model id (`claude-…`, an alias `sonnet`/`opus`/`haiku`, or an id listed in
+A model string is a Claude model id (`claude-…`, an alias `sonnet`/`opus`/`haiku`/`fable`, or an id listed in
 config `models.catalog`), `codex`
 (Codex's own default model) or `codex:<model id>`. A division records one (`divisions.<d>.model`); a
 feature agent has none of its own and runs on its division's. No effort is stored: a headless run's
@@ -14,7 +14,9 @@ from typing import NamedTuple
 FEATURE_EFFORT = "high"   # a feature persona's effort (its model is its division's)
 CODEX = "codex"
 VENDORS = ("claude", CODEX)
-ALIASES = ("sonnet", "opus", "haiku")   # the Claude CLI's model aliases
+# The Claude model aliases and the id each one means (ladder.full_id; `orche hr model` stores the id).
+ALIASES = {"sonnet": "claude-sonnet-5-5", "opus": "claude-opus-5-5", "haiku": "claude-haiku-5-5",
+           "fable": "claude-fable-5-2"}
 DOTS = {1: "●○○", 2: "●●○", 3: "●●●"}
 
 

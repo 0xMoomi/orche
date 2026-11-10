@@ -1,1 +1,1 @@
-Codex sandbox: you can write only inside {{WORKTREE}}, {{UNITS}}, Orche's state ({{HOME}}) and git's metadata; the network is on. A command the sandbox refuses is a fact to report, not to work around.
+Codex sandbox: you can write only inside {{WORKTREE}}, {{UNITS}}, Orche's state ({{HOME}}) and git's metadata; the network is on. A command the sandbox refuses is a fact to report, not to work around; finish the rest of the brief without it.

@@ -14,6 +14,9 @@ record (lib/orche/staff.py): `orche sleep staff-<project>` makes it asleep, so n
 automatically until `orche wake staff-<project>`. A top-level key the schema does not name is kept as it is
 and ignored.
 
+A project's optional `main` ({"model": <model id>, "effort": <one of EFFORTS>}; absent is staff.MAIN_MODEL
+at staff.MAIN_EFFORT) is the model and effort its Main pane starts on (`orche hr model <project> main`).
+
 A project's optional `team` is the team plugin id its repository declares (detect.team; written by
 `orche init` and `orche update`): such a project runs in team mode (`team(reg, key)` is the one read site).
 """
@@ -322,6 +325,14 @@ def _validate_project(key, proj, errors):
     if "staff" in proj and not (isinstance(proj["staff"], dict) and set(proj["staff"]) == {"status"}
                                 and proj["staff"]["status"] in STAFF_STATUSES):
         errors.append(f"{where}.staff: must be {{\"status\": {'|'.join(STAFF_STATUSES)}}}")
+    if "main" in proj:
+        main = proj["main"]
+        if not (isinstance(main, dict) and set(main) == {"model", "effort"}):
+            errors.append(f"{where}.main: must be {{\"model\": <model>, \"effort\": {'|'.join(EFFORTS)}}}")
+        else:
+            errors += [f"{where}.main.model: {e}" for e in model_errors(main["model"])]
+            if main["effort"] not in EFFORTS:
+                errors.append(f"{where}.main.effort: must be one of {'|'.join(EFFORTS)}, got {main['effort']!r}")
     if "orche_version" in proj and not (isinstance(proj["orche_version"], str)
                                         and ORCHE_VERSION.fullmatch(proj["orche_version"])):
         errors.append(f"{where}.orche_version: must be a version like 0.6.0")
