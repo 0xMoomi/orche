@@ -53,6 +53,9 @@ reconcile/heartbeat.json last. Classes:
 - janitor (a full pass only, after review): the janitor's last pass a day old (janitor.due) and none running
   -> `orche janitor run` started detached (janitor.heartbeat), never inline; also when a brief day began
   after its last pass and a daily brief is not built yet (flow.daily);
+- statusline (a full pass only, after janitor): Orche installed under this ORCHE_HOME, its parent's
+  `statusline-command.sh` without the Orche block (another tool rewrote the file) -> the block put
+  back, no backup (install.statusline.heartbeat);
 - daily <project> (after janitor): the daily brief the janitor's pass built for the day, not sent yet,
   outside quiet hours, the project not paused -> one urgent `info` from `orche` to Main, once a day;
 - silent <unit>: the target's newest unit, a pane unit (never Main) whose dispatch was delivered,
@@ -1247,6 +1250,7 @@ def _pass(cfg_all, cfg, now, started, dry_run, out, keys=None, as_json=False) ->
         return key is not None
     from . import janitor, runs
     from .flow import daily
+    from .install import statusline as line_script
     from .review import build
     _phase("runs")
     for key in every:
@@ -1299,6 +1303,7 @@ def _pass(cfg_all, cfg, now, started, dry_run, out, keys=None, as_json=False) ->
     if dry_run:
         later = build.heartbeat(reg, scope(), True, started + BUDGET_S)
         later += janitor.heartbeat(True) if keys is None else []
+        later += line_script.heartbeat(True) if keys is None else []
         later += daily.heartbeat(reg, now, True, scope(), cfg_all)
         for row in shut + notes:
             emit(row, row["line"])
@@ -1347,6 +1352,12 @@ def _pass(cfg_all, cfg, now, started, dry_run, out, keys=None, as_json=False) ->
     _phase("janitor")      # the janitor's daily pass, detached, when the last one is a day old
     for row in janitor.heartbeat(False) if keys is None else []:
         log.log("events", "reconcile action=janitor attempt=1/1" + (f" failed={row['failed']}" if row["failed"] else ""))
+        emit(row, row["line"] + (f" (failed: {row['failed']})" if row["failed"] else ""))
+        done += 1
+    _phase("statusline-block")   # another tool rewrote the status line script: the Orche block back
+    for row in line_script.heartbeat(False) if keys is None else []:
+        log.log("events", f"reconcile action=statusline-repair target={row['target']} attempt=1/1"
+                          + (f" failed={row['failed']}" if row["failed"] else ""))
         emit(row, row["line"] + (f" (failed: {row['failed']})" if row["failed"] else ""))
         done += 1
     _phase("daily")        # the daily brief the janitor's pass built: one waking pointer to Main, once a day

@@ -628,6 +628,142 @@ class SegmentTest(InstallCase):
         self.assertEqual(self.run_sh(script, self.home).stdout, f"dir:{self.home.name}\n")
 
 
+class StatuslineHeartbeatTest(support.TempHomeCase):
+    """The heartbeat puts the Orche block back when another tool rewrote the script. ORCHE_HOME sits at
+    <temp>/h/.claude/orche, so its parent is a temp Claude folder; nothing reaches the real home."""
+
+    def setUp(self):
+        super().setUp()
+        from orche.install import statusline
+        self.sl = statusline
+        self.c = self.home / "h" / ".claude"
+        self.oh = self.c / "orche"
+        (self.oh / "reconcile").mkdir(parents=True)
+        (self.oh / "reconcile" / ".kicked").touch()
+        (self.oh / "janitor").mkdir()
+        (self.oh / "janitor" / "last-report.md").touch()
+        (self.oh / "config.json").write_text((self.home / "config.json").read_text())
+        os.environ["ORCHE_HOME"] = str(self.oh)
+        self.script = self.c / "statusline-command.sh"
+        self.script.write_text(STATUSLINE)
+        self.blk = SEGMENT.read_text()
+
+    def installed(self):
+        (self.oh / "install-state.json").write_text(json.dumps({"mode": "plugin", "plugin_root": str(PLUGIN_ROOT)}))
+
+    def untouched(self, before):
+        self.assertEqual(self.script.read_bytes(), before)
+
+    def test_a_missing_block_goes_back_once_without_a_backup(self):
+        self.installed()
+        mode = self.script.stat().st_mode
+        rows = self.sl.heartbeat(False)
+        self.assertEqual([(r["action"], r["class"], r["target"], r["failed"], r["line"]) for r in rows],
+                         [("statusline-repair", "statusline", str(self.script), None,
+                           f"put the Orche block back into {self.script} (another tool rewrote the file)")])
+        self.assertEqual(self.script.read_text(), self.sl.place(STATUSLINE, self.blk))
+        self.assertEqual(self.script.stat().st_mode, mode)
+        self.assertEqual(self.sl.heartbeat(False), [])          # present now: nothing more
+        self.assertEqual(sorted(p.name for p in self.c.iterdir()), ["orche", "statusline-command.sh"])
+
+    def test_the_block_goes_before_a_final_exit(self):
+        self.installed()
+        self.script.write_text(STATUSLINE.rstrip("\n") + "\nexit 0\n")
+        self.assertEqual(len(self.sl.heartbeat(False)), 1)
+        text = self.script.read_text()
+        self.assertLess(text.index("# >>> orche >>>"), text.index("\nexit 0"))
+        self.assertFalse(self.sl.after_exit(text))
+
+    def test_a_present_block_is_never_rewritten_or_moved(self):
+        self.installed()
+        for text in (STATUSLINE + "\n" + self.blk.replace("\n", "\n# old\n", 1),          # a stale block
+                     STATUSLINE.rstrip("\n") + "\nexit 0\n\n" + self.blk):                 # after an exit
+            self.script.write_text(text)
+            before = self.script.read_bytes()
+            self.assertEqual(self.sl.heartbeat(False), [])
+            self.untouched(before)
+
+    def test_no_script_no_row(self):
+        self.installed()
+        self.script.unlink()
+        self.assertEqual(self.sl.heartbeat(False), [])
+        self.assertFalse(self.script.exists())
+
+    def test_not_installed_or_unreadable_state_leaves_the_script(self):
+        before = self.script.read_bytes()
+        self.assertEqual(self.sl.heartbeat(False), [])
+        (self.oh / "install-state.json").write_text("{not json")
+        self.assertEqual(self.sl.heartbeat(False), [])
+        self.untouched(before)
+
+    def test_dry_run_reports_and_writes_nothing(self):
+        self.installed()
+        before = self.script.read_bytes()
+        rows = self.sl.heartbeat(True)
+        self.assertEqual([r["line"] for r in rows],
+                         [f"would put the Orche block back into {self.script} (another tool rewrote the file)"])
+        self.untouched(before)
+
+    def test_an_unreadable_script_never_raises(self):
+        self.installed()
+        self.script.write_bytes(b"#!/bin/bash\necho \xff\n")
+        self.assertEqual(self.sl.heartbeat(False), [])
+        self.script.write_text(STATUSLINE)
+        self.script.chmod(0)
+        try:
+            if os.geteuid() != 0:
+                self.assertEqual(self.sl.heartbeat(False), [])
+        finally:
+            self.script.chmod(0o600)
+        self.assertTrue((self.oh / "logs" / "hooks.log").exists())
+
+    def test_a_symlinked_script_is_written_through_to_its_target(self):
+        self.installed()
+        target = self.home / "h" / "dotfiles" / "statusline.sh"
+        target.parent.mkdir()
+        target.write_text(STATUSLINE)
+        self.script.unlink()
+        self.script.symlink_to(target)
+        self.assertEqual(len(self.sl.heartbeat(False)), 1)
+        self.assertTrue(self.script.is_symlink())
+        self.assertIn("# >>> orche >>>", target.read_text())
+
+    def test_doctor_names_the_heartbeat_only_when_it_keeps_the_script(self):
+        self.assertFalse(doctor._kept_by_heartbeat(self.script))
+        self.installed()
+        self.assertTrue(doctor._kept_by_heartbeat(self.script))
+        self.assertFalse(doctor._kept_by_heartbeat(self.home / "elsewhere.sh"))
+
+    def run_pass(self, dry_run=False):
+        from orche import reconcile
+        registry.save(registry.empty())
+        os.environ["ORCHE_FAKE_ORCA"] = "1"
+        (self.oh / "fake-orca.json").write_text(json.dumps({"terminal list": {"terminals": []}}))
+        lines = []
+        self.assertEqual(reconcile.run_pass(dry_run=dry_run, out=lines.append), 0)
+        return lines
+
+    def test_a_reconcile_pass_puts_the_block_back_and_logs_it(self):
+        self.installed()
+        before = self.script.read_bytes()
+        self.assertEqual(self.run_pass(dry_run=True),
+                         [f"would put the Orche block back into {self.script} (another tool rewrote the file)"])
+        self.untouched(before)
+        self.assertEqual(self.run_pass(),
+                         [f"put the Orche block back into {self.script} (another tool rewrote the file)"])
+        self.assertIn("# >>> orche >>>", self.script.read_text())
+        events = (self.oh / "logs" / "events.log").read_text()
+        self.assertIn(f"reconcile action=statusline-repair target={self.script} attempt=1/1", events)
+        self.assertEqual(self.run_pass(), [])
+
+    def test_a_reconcile_pass_without_install_state_leaves_the_script(self):
+        before = self.script.read_bytes()
+        self.assertNotIn("# >>> orche >>>", self.run_pass(dry_run=True)[0])
+        self.run_pass()
+        self.untouched(before)
+        self.assertEqual(sorted(p.name for p in self.c.iterdir()), ["orche", "statusline-command.sh"])
+
+
 LOGIN_SH = "/fake/login-sh"
 
 

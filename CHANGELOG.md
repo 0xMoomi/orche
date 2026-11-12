@@ -3,6 +3,13 @@
 All notable changes to Orche are listed here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow semantic versioning.
 
+## 0.20.1 — 2026-11-12
+
+### Fixed
+
+- Another tool that rewrites the status line script (such as a usage menu bar app) no longer removes Orche's
+  status segment for good: the heartbeat puts it back within five minutes, and `orche doctor` says so.
+
 ## 0.20.0 — 2026-11-10
 
 ### Added

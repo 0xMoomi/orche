@@ -4,9 +4,13 @@ The block (templates/statusline-segment.sh) walks up from `current_dir_path` to 
 `.orche/project` marker written by `orche init` and prints `<ORCHE_HOME>/status/<key>.line`
 using shell builtins only, silent on any error.
 """
+import os
 import re
+from pathlib import Path
 
-from . import block_re, has_block, insert_block, read_text, remove_block, write_file
+from .. import log, paths, util
+from . import (STATE_FILE, StateUnreadable, block_re, has_block, insert_block, load_state, read_text, remove_block,
+               write_file)
 
 STEP = "statusline"
 START, END = "# >>> orche >>>", "# <<< orche <<<"
@@ -17,7 +21,11 @@ def script_path(ctx):
 
 
 def block(ctx) -> str:
-    text = read_text(ctx.plugin_root / "templates" / "statusline-segment.sh")
+    return _segment(ctx.plugin_root)
+
+
+def _segment(plugin_root) -> str:
+    text = read_text(Path(plugin_root) / "templates" / "statusline-segment.sh")
     return text if text.endswith("\n") else text + "\n"
 
 
@@ -75,3 +83,46 @@ def present(ctx) -> bool:
         return path.is_file() and has_block(read_text(path), START, END)
     except OSError:
         return False
+
+
+def heartbeat_target():
+    """The script the heartbeat keeps the block in, or None: only when Orche is installed under this
+    ORCHE_HOME (install-state.json readable) and ORCHE_HOME's parent, the Claude folder of the default
+    `<home>/.claude/orche`, holds `statusline-command.sh`. Never `Path.home()`: a temp ORCHE_HOME (tests)
+    can never reach the real `~/.claude`."""
+    home = paths.orche_home()
+    if not (home / STATE_FILE).is_file():
+        return None
+    try:
+        load_state()
+    except StateUnreadable:
+        return None
+    path = home.parent / "statusline-command.sh"
+    return path if path.is_file() else None
+
+
+def heartbeat(dry_run) -> list:
+    """The heartbeat's class `statusline` (reconcile): another tool (a usage menu bar app) rewrote the
+    script and dropped the Orche block -> the block goes back in, placed as `place` does, written
+    atomically without a backup. Only ever adds a missing block. One row as janitor's, or none."""
+    try:
+        path = heartbeat_target()
+        if path is None:
+            return []
+        text = read_text(path)
+    except Exception as exc:  # noqa: BLE001 - an unreadable state or script never stops the pass
+        log.log("hooks", f"reconcile: statusline: {type(exc).__name__}: {exc}")
+        return []
+    if has_block(text, START, END):
+        return []
+    failed = None
+    if not dry_run:
+        try:
+            util.atomic_write(os.path.realpath(path), place(text, _segment(paths.PLUGIN_ROOT)))
+        except Exception as exc:  # noqa: BLE001 - tried again next pass
+            failed = type(exc).__name__
+            log.log("hooks", f"reconcile: statusline: {failed}: {exc}")
+    return [{"action": "statusline-repair", "class": "statusline", "project": None, "target": str(path),
+             "rev": None, "attempt": 1, "cap": 1, "failed": failed,
+             "line": f"{'would put' if dry_run else 'put'} the Orche block back into {path} "
+                     "(another tool rewrote the file)"}]

@@ -562,9 +562,13 @@ def checks(ctx) -> list:
     if statusline.present(ctx) and statusline.after_exit(script.read_text(encoding="utf-8")):
         add("WARN", "statusline", f"Orche block in {script} sits after an `exit` line and never runs "
                                   "(re-run orche install)")
+    elif statusline.present(ctx):
+        add("OK", "statusline", f"Orche block present in {script}")
+    elif _kept_by_heartbeat(script):
+        add("WARN", "statusline", f"Orche block missing in {script} (another tool rewrote it); the heartbeat "
+                                  "puts it back within 5 minutes")
     else:
-        add("OK" if statusline.present(ctx) else "WARN", "statusline",
-            f"Orche block {'present' if statusline.present(ctx) else 'missing'} in {script}")
+        add("WARN", "statusline", f"Orche block missing in {script}")
     days = data.get("cleanupPeriodDays")
     add("OK" if days == settings.CLEANUP_DAYS else "WARN", "cleanupPeriodDays",
         f"{days if days is not None else '(absent)'}" + ("" if days == settings.CLEANUP_DAYS
@@ -573,6 +577,15 @@ def checks(ctx) -> list:
         add("WARN", "careful hook", "careful hook registered in settings.json — its approval dialogs stall "
                                     "unattended Orche panes; remove it or keep it only for your own sessions")
     return out
+
+
+def _kept_by_heartbeat(script) -> bool:
+    """The heartbeat (install.statusline.heartbeat) keeps the Orche block in this very script."""
+    target = statusline.heartbeat_target()
+    try:
+        return target is not None and os.path.samefile(target, script)
+    except OSError:
+        return False
 
 
 HOOKS_OFF = ("Orche's hooks are off: new sessions run without Orche. Say \"repair the setup\"; Main runs "
