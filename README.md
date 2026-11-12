@@ -8,9 +8,9 @@ For developers on macOS who want several agents on one repository without watchi
 ## What's new
 
 <!-- whats-new: scripts/release.py keeps the three newest -->
+- **0.21.1** (2026-11-13): Longer usage gauges in the status line, split into quarters. [Notes](https://github.com/0xMoomi/orche/releases/tag/v0.21.1)
 - **0.21.0** (2026-11-12): Staff runs small errands in the background and brings you the result, and Orche has its own status line. [Notes](https://github.com/0xMoomi/orche/releases/tag/v0.21.0)
 - **0.20.1** (2026-11-12): The status segment comes back by itself when another tool rewrites the status line script. [Notes](https://github.com/0xMoomi/orche/releases/tag/v0.20.1)
-- **0.20.0** (2026-11-10): one final report per request, wake without typing, a daily brief, live progress of workers, less rework and Claude Fable 5.2. [Notes](https://github.com/0xMoomi/orche/releases/tag/v0.20.0)
 <!-- /whats-new -->
 
 Every version: [releases](https://github.com/0xMoomi/orche/releases) and [CHANGELOG.md](CHANGELOG.md).

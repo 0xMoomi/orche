@@ -3,6 +3,13 @@
 All notable changes to Orche are listed here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow semantic versioning.
 
+## 0.21.1 — 2026-11-13
+
+### Changed
+
+- The usage gauges in Orche's status line are twice as long (20 cells, 5% each) and split into four groups, so
+  each gap marks a quarter: you can read 25%, 50% and 75% at a glance.
+
 ## 0.21.0 — 2026-11-12
 
 ### Added
