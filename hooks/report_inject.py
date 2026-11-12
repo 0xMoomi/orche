@@ -5,8 +5,9 @@ Triage (lib/orche/triage.py, off unless `triage.enabled`) may route a simple pro
 division and print `{"decision": "block", ...}` so Main spends no turn; otherwise the prompt reaches
 Main and the inbox text (plus any triage note) is printed and injected, within inbox.BUDGET characters
 (Claude Code caps hook stdout at 10,000). A project's CEO Staff (ORCHE_SESSION `staff-<project>`) gets no
-triage and no inbox: only the exchanges between the owner and that project's Main since its last prompt
-(lib/orche/staff.py), within the same budget. A Main's terminal is recorded for the bell; a Main identified
+triage: its turn record is written, then its current rules when the session was given another version, its
+pending errand results and Main's replies (drained), and the exchanges between the owner and that project's
+Main since its last prompt (staff.prompt_text), within the same budget. A Main's terminal is recorded for the bell; a Main identified
 without ORCHE_SESSION is marked for the heartbeat, and Main's own pane clears the mark (roster.note_pane).
 Fail-open.
 """
@@ -73,10 +74,13 @@ def main():
         roster.note_pane(who)   # Main's terminal for the bell; a Main outside Orche's pane command is marked
         from orche import staff
         if staff.is_staff(who.session):
+            if os.environ.get("ORCHE_RUNNER"):   # an errand's own prompt: never Staff's turn, items or exchanges
+                return 0
             key = staff.project_of(r.reg, who.session)
-            text = staff.prompt_text(r.reg, key, inbox.BUDGET) if key is not None else ""
+            text = staff.prompt_text(r.reg, key, inbox.BUDGET, payload) if key is not None else ""
             if text:
                 print(text)
+            _kick()
             return 0
         _owner_seen(payload, who)          # before triage: a routed prompt is still the owner's word
         outcome = triage.handle(payload, STARTED, r, who)   # never raises

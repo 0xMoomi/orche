@@ -4,8 +4,13 @@ feature's scope globs. Always allowed: `.orche/`, `docs/` and `.claude/agent-mem
 worktree, `~/.claude/agent-memory/`, the session scratch root (`/private/tmp/claude-<uid>/`,
 `$TMPDIR/claude-*`, or $ORCHE_SCRATCH_ROOT), and the session's own unit folders under the real
 project root (`<root>/.orche/units/<u>/…` when unit <u>'s brief is addressed to the session),
-except their `BRIEF.md`, `BRIEF.rev<N>.md` and `RUN.json`. A CEO Staff (ORCHE_SESSION `staff-<project>`)
-edits nothing anywhere (lib/orche/staff.py). Internal error -> allow + log."""
+except their `BRIEF.md`, `BRIEF.rev<N>.md` and `RUN.json`. A CEO Staff pane (ORCHE_SESSION `staff-<project>`)
+edits nothing anywhere (lib/orche/staff.py). A Staff errand (the same session under ORCHE_RUNNER,
+lib/orche/errand.py) may write only in the unit folder of the unit it runs (its ORCHE_RUN_ID, else the live
+run of its target lock; none: refused), except the files Orche owns there (ERRAND_FIXED), and the scratch
+root, and may create a new file (Write, nothing there yet) inside a folder its brief's GOAL or CONTEXT names
+by path when that folder is a safe place in the owner's home (safe_folder); everything else is refused.
+Internal error -> allow + log."""
 import json
 import os
 import re
@@ -19,8 +24,11 @@ if not pyguard.check_hook("scope_gate"):
     sys.exit(0)  # fail-open: the hook does nothing, a gate allows
 
 ALWAYS = (".orche/", "docs/", ".claude/agent-memory/")
+NAMED_PATH = re.compile(r"(?:~|/)[^\s\"'`<>|;,()]*")   # a path written in an errand's GOAL or CONTEXT
 UNIT_FIXED = re.compile(r"^(BRIEF\.md|BRIEF\.rev\d+\.md|RUN\.json)$", re.IGNORECASE)   # dispatch and the runner only;
 # any case: macOS file systems are case-insensitive, so `brief.md` is BRIEF.md
+ERRAND_FIXED = re.compile(r"^(BRIEF\.md|BRIEF\.rev\d+\.md|RUN\.json|PROGRESS\.json|REPORT\.md|REPLY\.md|JOINED)$",
+                          re.IGNORECASE)   # an errand's unit folder: what the runner and Orche write
 
 
 def scratch_allowed(path) -> bool:
@@ -53,10 +61,97 @@ def own_unit_file(reg, unit, path) -> bool:
     return b is not None and b.rev > 0 and b.to == unit.session
 
 
+def safe_folder(reg, folder) -> bool:
+    """`folder` (resolved) is a place an errand may create files in: inside the owner's home folder but not
+    the home itself, below no dot folder (`~/.claude`, `~/.ssh`, ...) and not in `~/Library`, neither inside
+    nor holding a registered project, the Orche plugin or ORCHE_HOME."""
+    from orche import paths, units
+    home = os.path.realpath(os.path.expanduser("~"))
+    folder = os.path.realpath(folder)
+    if not os.path.isabs(home) or home == os.sep or folder == home or not units.is_within(folder, home):
+        return False
+    parts = os.path.relpath(folder, home).split(os.sep)
+    if parts[0] == "Library" or any(p.startswith(".") for p in parts):
+        return False
+    roots = [paths.PLUGIN_ROOT, paths.orche_home()]
+    roots += [p.get("path") for p in ((reg or {}).get("projects") or {}).values() if isinstance(p, dict)]
+    return not any(r and (units.is_within(folder, r) or units.is_within(r, folder)) for r in roots)
+
+
+def named_new_file(reg, b, tool, path) -> bool:
+    """True when the errand of brief `b` may create `path` with `tool`: a Write of a file that does not
+    exist yet, inside a folder its GOAL or CONTEXT names by path (`~` expanded) that is a safe_folder, the
+    path itself below no dot folder of it."""
+    if tool != "Write" or os.path.lexists(path):
+        return False
+    text = f"{b.fields.get('GOAL') or ''}\n{b.fields.get('CONTEXT') or ''}"
+    for raw in NAMED_PATH.findall(text):
+        folder = os.path.realpath(os.path.expanduser(raw.rstrip(".:!?")))
+        if len(folder) > 1 and os.path.isabs(folder) and folder != path and _below(path, folder) \
+                and safe_folder(reg, folder):
+            return True
+    return False
+
+
+def _below(path, folder) -> bool:
+    """`path` is inside `folder` and no part of it below `folder` is a dot name."""
+    from orche import units
+    if not units.is_within(path, folder):
+        return False
+    return not any(p.startswith(".") for p in os.path.relpath(path, folder).split(os.sep))
+
+
+def errand_unit(reg, m):
+    """The errand brief of the unit the errand run of Staff member `m` is running: its ORCHE_RUN_ID
+    (`<unit>@<ns>`), else the unit of the live run holding `m`'s target lock; None when neither names an
+    errand of `m`."""
+    from orche import brief, errand, runs, util
+    unit = (os.environ.get("ORCHE_RUN_ID") or "").rpartition("@")[0]
+    if not unit:
+        try:
+            lock = util.read_dict(runs.target_lock(m.project, m.session)) or {}
+        except OSError:     # unreadable: no unit, so refused
+            lock = {}
+        unit = str(lock.get("unit") or "") if runs.alive(lock.get("pid")) else ""
+    if not unit or brief.unit_id_error(unit):
+        return None
+    b = brief.find(reg, unit, project=m.project)
+    return b if errand.is_errand(b) and b.to == m.session else None
+
+
+def own_errand_file(b, path) -> bool:
+    """`path` is inside errand `b`'s own unit folder and is not a file Orche writes there (ERRAND_FIXED)."""
+    from orche import units
+    folder = os.path.realpath(b.folder)
+    if not units.is_within(path, folder) or path == folder:
+        return False
+    return not ERRAND_FIXED.match(os.path.relpath(path, folder).replace(os.sep, "/"))
+
+
+def _errand_allows(payload) -> bool:
+    """A Staff errand's file tool on a path it may write: its own unit folder, scratch, or a named new file."""
+    from orche import errand, registry, staff
+    tool_input = payload.get("tool_input") or {}
+    target = tool_input.get("file_path") or tool_input.get("notebook_path")
+    if not target or payload.get("tool_name") not in staff.FILE_TOOLS:
+        return False
+    reg = registry.load()
+    m = errand.member(reg, os.environ.get("ORCHE_SESSION"))
+    b = errand_unit(reg, m) if m is not None else None
+    if b is None:
+        return False
+    cwd = payload.get("cwd") or os.getcwd()
+    path = os.path.realpath(os.path.join(cwd, os.path.expanduser(target)))
+    return (own_errand_file(b, path) or scratch_allowed(path)
+            or named_new_file(reg, b, payload.get("tool_name"), path))
+
+
 def decide(payload):
     """Deny reason, or None to stay silent."""
     from orche import registry, roster, staff, units
     if staff.is_staff(os.environ.get("ORCHE_SESSION")):
+        if os.environ.get("ORCHE_RUNNER") and _errand_allows(payload):
+            return None
         return staff.reason(payload.get("tool_name"), payload.get("tool_input"))
     tool_input = payload.get("tool_input") or {}
     target = tool_input.get("file_path") or tool_input.get("notebook_path")

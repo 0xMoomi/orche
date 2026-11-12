@@ -112,11 +112,33 @@ def gate_lines(cfg, reg, project=None) -> list:
             for key, base, remote in missing]
 
 
+def _statusline_state() -> dict:
+    from .install import StateUnreadable, load_state
+    try:
+        return load_state()
+    except StateUnreadable:
+        return {}
+
+
+def statusline_line():
+    """(on?, line): the status line's mode (install-state.json) and the words that change it."""
+    from .install import statusline
+    mode = statusline.recorded(_statusline_state()).get("mode")
+    state = {"orche": "Now: Orche's", "keep": "Now: yours, with Orche's project line under it",
+             "off": "Now: off"}.get(mode, "Not set up")
+    return mode in ("orche", "keep"), (
+        "- Status line: Orche's own (branch, model and effort, plan usage, project line) or yours with Orche's "
+        f'project line under it. {state}. Say "use Orche\'s status line", "keep my status line" or "turn the '
+        'status line off"; Main runs `orche install --statusline orche`, `keep` or `off`.')
+
+
 def lines(cfg, reg, project=None) -> list:
     """The "Any time" lines: off first, then on, then the always-present ones (<= MAX_LINES); the merge
     queue lines of `project` only when given (a project's setup report), of every project otherwise."""
     jev_state, janitor_state = jev_line(cfg), janitor_line(cfg)
+    line_state = statusline_line()
     states = [jev_state, codex_line(), token_line(), janitor_state, scale_line(cfg, reg)]
+    states += [line_state] if statusline_mode_of() == "off" else []   # on: in Running now; not installed: none
     states = [s for s in states if not (s[0] and s in (jev_state, janitor_state))]   # on: in Running now
     states += [(False, line) for line in gate_lines(cfg, reg, project)]
     off = [line for on, line in states if not on]
@@ -129,7 +151,8 @@ def lines(cfg, reg, project=None) -> list:
 SETUP_ASK = ("read the report at report: and start your reply with its banner in a code block, copied exactly and "
              "never translated; then tell the owner, in their language, the \"How Orche works\" lines, what was set "
              "up and the \"Any time\" list as short lines: translate every line, keep the numbers and the quoted "
-             "owner words; then ask for the first request")
+             "owner words; then ask each line under \"Ask the owner once\" with AskUserQuestion as it says and run "
+             "the command the answer picks; then ask for the first request")
 SETUP_REPORT = "SETUP.md"
 PRESET_LINES = {"build": "- Preset: build-focused (Build's workers specialise in front, back and infra).",
                 "operations": "- Preset: operations."}
@@ -280,7 +303,27 @@ def running_lines(reg, key, root, cfg, gate=None) -> list:
             "- Jev: " + ("on: sorts incoming requests and checks gates before Main spends tokens." if jev_on
                          else 'off; say "turn on Jev" (listed below).'),
             "- Notifications: Orca shows one when Main finishes a reply; Orche rings Main's tab when a decision still "
-            "waits after 30 minutes (Orca shows it when its Terminal Bell notifications are on)."]
+            "waits after 30 minutes (Orca shows it when its Terminal Bell notifications are on)."] + (
+            [f"- Status line: {statusline_mode()}; to change it say \"use Orche's status line\", \"keep my "
+             "status line\" or \"turn the status line off\"."] if statusline_mode_of() else [])
+
+
+def statusline_mode_of():
+    """The recorded status line mode (orche, keep, off), None before an install recorded one."""
+    from .install import statusline
+    return statusline.recorded(_statusline_state()).get("mode")
+
+
+def statusline_mode() -> str:
+    from .install import statusline
+    return statusline.mode_words(_statusline_state())
+
+
+def ask_once_lines() -> list:
+    """The setup report's "Ask the owner once" section: the open status line choice, or nothing."""
+    from .install import statusline
+    line = statusline.asked_line(_statusline_state())
+    return ["", "## Ask the owner once", "", line] if line else []
 
 
 def _team_lines(key, root, detected) -> list:
@@ -318,7 +361,7 @@ def write_report(reg, key, root, intake_line=None, detected=(), created=(), gate
                       "excluded from git",
                       f"- Intake: {_intake_text(key, root, intake_line)}", *_team_lines(key, root, detected),
                       "", "## How Orche works", "", *how_lines(proj, key, cfg),
-                      "", "## Running now", "", *running_lines(reg, key, root, cfg, gate),
+                      "", "## Running now", "", *running_lines(reg, key, root, cfg, gate), *ask_once_lines(),
                       "", "## Any time", "",
                       *lines(cfg, reg, key), "",
                       'Say "what else can Orche do?" to see this list again (Main runs `orche doctor`).', ""])

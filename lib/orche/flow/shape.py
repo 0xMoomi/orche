@@ -11,9 +11,10 @@ last prompt or local midnight) count as the previous one, so a re-run the owner 
 Lineage batch: a report that ends its unit (done, failed, stopped) is posted `quiet: "batch"` while its
 recipient, Main or a division, still waits on another unit of the lineage, and `quiet: true` when it is
 for an older rev (flow.lineage.quiets); blocked, question, an owner step and urgent reports wake at once,
-and the batch's close wakes the recipient once. A `lineage_closed` pointer is never shaped.
+and the batch's close wakes the recipient once. A `lineage_closed` pointer and a pointer to a Staff session
+(an errand's result or Main's reply, lib/orche/errand.py) are never shaped.
 """
-from .. import inbox, registry, roster
+from .. import inbox, registry, roster, staff
 from . import guard, lineage
 
 REPEATS = 3          # `orche status` names a unit whose newest report repeated this many times
@@ -21,8 +22,8 @@ REPEATS = 3          # `orche status` names a unit whose newest report repeated 
 
 def _report(ptr):
     """A unit session's report filed under a brief (not orche's own feedback, a dispatch, a STOP, a runner's
-    filing, an external request or a brief-less unit)."""
-    return not (ptr.get("from") in (None, "orche") or ptr.get("via") in ("dispatch", "runner")
+    filing, a Staff errand's item (`via` staff or main), an external request or a brief-less unit)."""
+    return not (ptr.get("from") in (None, "orche") or ptr.get("via") in ("dispatch", "runner", "staff", "main")
                 or ptr.get("status") in ("stop", "external-request")
                 or str(ptr.get("unit") or "").startswith(("adhoc-", "xreq-")))
 
@@ -38,8 +39,8 @@ def _order(path, ptr):
 
 def shape(ptr, sc=None):
     """Mark `ptr` (in place) as a repeat when it is one, or quiet when `sc` (its lineage scope) has it so.
-    Returns `ptr`."""
-    if ptr.get("lineage_closed"):
+    Returns `ptr`. A pointer to a Staff session (an errand's) is never shaped: it always wakes Staff."""
+    if ptr.get("lineage_closed") or staff.is_staff(ptr.get("to")):
         return ptr
     q = lineage.quiets(sc, ptr)
     if q:

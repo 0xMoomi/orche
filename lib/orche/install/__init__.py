@@ -1,6 +1,7 @@
 """Building blocks for `orche install` / `uninstall`: every write into the user's home is
-backup-first (`<file>.bak-<ts>` next to the original), guarded (marker-delimited blocks),
-idempotent (a second run changes nothing) and fully previewed under `--dry-run`.
+backup-first (`<file>.bak-<ts>` next to the original), idempotent (a second run changes nothing) and
+fully previewed under `--dry-run`. `has_block`/`remove_block` find and remove the marker-delimited
+blocks older versions added (nothing adds one any more).
 
 Each step records actions on a `Ctx`; the command prints them one line per fact.
 """
@@ -141,26 +142,6 @@ def block_re(start, end):
 
 def has_block(text, start, end) -> bool:
     return bool(block_re(start, end).search(text))
-
-
-def insert_block(text, block, start, end) -> str:
-    """Append `block` (markers included, ending in a newline) preceded by one newline, or replace
-    the existing block in place. Extra copies are dropped. `remove_block` restores the text exactly.
-    """
-    pattern = block_re(start, end)
-    found = list(pattern.finditer(text))
-    if not found:
-        return f"{text}\n{block}"
-    first = found[0]
-    lead = "\n" if first.group(0).startswith("\n") else ""
-    out, pos = [], 0
-    for i, m in enumerate(found):
-        out.append(text[pos:m.start()])
-        if i == 0:
-            out.append(lead + block)
-        pos = m.end()
-    out.append(text[pos:])
-    return "".join(out)
 
 
 def remove_block(text, start, end) -> str:

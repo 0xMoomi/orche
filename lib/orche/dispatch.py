@@ -10,8 +10,8 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 
-from . import (brief, config, deliver, donegate, inbox, log, mask, orca, registry, roster, runs, transcript,
-               units, util, vendors)
+from . import (brief, config, deliver, donegate, inbox, log, mask, orca, registry, roster, runs, staff,
+               transcript, units, util, vendors)
 from .flow import guard, lineage, owner
 
 # ---- targets -------------------------------------------------------------
@@ -464,7 +464,7 @@ def handle_stop_failure(payload: dict) -> None:
     who = roster.Roster(registry.load()).identify(payload.get("cwd") or os.getcwd(),
                                                   transcript=payload.get("transcript_path"))
     if who.session:
-        inbox.rearm(who.session, unread=_orche_turn(who))
+        inbox.rearm(who.session, unread=_orche_turn(who, staff_too=not os.environ.get("ORCHE_RUNNER")))
 
 
 def final_text(payload: dict):
@@ -484,7 +484,9 @@ def final_text(payload: dict):
 def handle_stop(payload: dict, started=None):
     """(exit_code, stderr_message) for the Stop hook. It relays nothing: briefs go out through
     `orche dispatch`, and a fenced block left in the reply is plain text. A Main session's turn that
-    may stop (also under stop_hook_active) hands its closing line to flow.owner (the owner's voice)."""
+    may stop (also under stop_hook_active) hands its closing line to flow.owner (the owner's voice); when
+    Orche started the turn and it took errand items, the final message also goes to Staff (_forward). A
+    headless run's Stop (ORCHE_RUNNER) skips everything errands added: no forward, no Staff unread mark."""
     deadline = orca.hook_deadline(started)
     cwd = payload.get("cwd") or os.getcwd()
     tpath = payload.get("transcript_path")
@@ -496,37 +498,73 @@ def handle_stop(payload: dict, started=None):
         units.touch_activity(me)
     code, msg = donegate.may_stop(text, r, who, cwd, tpath, deadline,
                                   stop_hook_active=bool(payload.get("stop_hook_active")))
+    turn = _turn(me) if code == 0 else None     # read once: forward, closing and the unread mark share it
+    for_staff, runner = False, bool(os.environ.get("ORCHE_RUNNER"))
     if code == 0 and who.member is not None and who.member.kind == "main":
-        _closing(who.member.project, text, me)
+        for_staff = not runner and _forward(r.reg, me, text, turn)
+        _closing(who.member.project, text, me, turn=turn, errand=for_staff)
     if code == 0 and me:
-        # reports that landed mid-turn: the turn is over, wake the pane now; Main's turn Orche started is marked unread
-        inbox.rearm(me, unread=_orche_turn(who))
+        # reports that landed mid-turn: the turn is over, wake the pane now; Main's turn Orche started is marked
+        # unread (Staff's: its own workspace), except a Main turn whose reply went to Staff
+        inbox.rearm(me, unread=not for_staff and _orche_turn(who, turn, staff_too=not runner))
     return code, msg
 
 
-def _orche_turn(who) -> bool:
-    """The turn ending now is Main's and Orche started it (a wake or a delivered line, not the owner's
-    prompt: the prompt hook's turn record says `owner: false`). Never raises."""
-    if who.member is None or who.member.kind != "main":
-        return False
-    try:
-        turn = lineage.read_turn(who.session)
-    except Exception:  # noqa: BLE001 - fail-open: no mark
-        return False
-    return turn is not None and turn.get("owner") is False
+_UNREAD = object()
 
 
-def _closing(project, text, session) -> None:
-    """flow.owner.closing for Main's final message, with the turn's start (the prompt hook's turn record,
-    lineage.read_turn): a tag covers the reports that turn read; never fails the hook (the type only: no text).
-    First the `main reply` event: who started the turn (owner, orche, unknown without a record), the closing
-    line's tag (none) and the reply's non-blank lines; never its text."""
+def _turn(session):
+    """The prompt hook's record of the turn ending now (lineage.read_turn); None without one. Never raises."""
     try:
         turn = lineage.read_turn(session) if session else None
+    except Exception:  # noqa: BLE001 - fail-open: an unknown start
+        return None
+    return turn if isinstance(turn, dict) else None
+
+
+def _forward(reg, session, text, turn) -> bool:
+    """Main's final message of an Orche turn that took errand items goes to Staff (errand.forward_reply). True
+    when the turn was `staff_only` and its reply reached Staff: the owner hears it there, so Main records no
+    open ask and is not marked unread. Never raises."""
+    if not turn or turn.get("owner") is not False or not turn.get("errands"):
+        return False
+    try:
+        from . import errand     # errand loads dispatch lazily: resolved at call time
+        sent = errand.forward_reply(reg, session, text, turn)
+    except Exception as exc:  # noqa: BLE001 - fail-open: a normal turn
+        log.log("hooks", f"dispatch: errand forward for {session}: {type(exc).__name__}")
+        return False
+    return bool(turn.get("staff_only")) and bool(sent)
+
+
+def _orche_turn(who, turn=_UNREAD, staff_too=True) -> bool:
+    """The turn ending now is Main's or (`staff_too`: not a headless run) a project's Staff's and Orche
+    started it (a wake or a delivered line, not the owner's prompt: the prompt hook's turn record says
+    `owner: false`). `turn`: that record when the caller read it already. Never raises."""
+    main = who.member is not None and who.member.kind == "main"
+    if not main and not (staff_too and staff.is_staff(who.session)):
+        return False
+    if turn is _UNREAD:
+        turn = _turn(who.session)
+    return isinstance(turn, dict) and turn.get("owner") is False
+
+
+def _closing(project, text, session, turn=_UNREAD, errand=False) -> None:
+    """flow.owner.closing for Main's final message, with the turn's start (the prompt hook's turn record,
+    lineage.read_turn; `turn` when the caller read it): a tag covers the reports that turn read; never fails
+    the hook (the type only: no text). First the `main reply` event: who started the turn (owner, orche,
+    unknown without a record), the closing line's tag (none) and the reply's non-blank lines; never its text.
+    `errand`: the reply went to Staff (a `staff_only` turn): the event says ` errand=1` and nothing waits on
+    the owner here, so owner.closing is skipped."""
+    try:
+        if turn is _UNREAD:
+            turn = _turn(session)
         by = "unknown" if not isinstance(turn, dict) or "owner" not in turn else "owner" if turn["owner"] else "orche"
         hit = owner.parse(text or "")
         lines = sum(1 for ln in str(text or "").splitlines() if ln.strip())
-        log.log("events", f"main reply project={project} by={by} tag={hit[0] if hit else 'none'} lines={lines}")
-        owner.closing(project, text, units.now(), turn_at=units.parse_iso((turn or {}).get("at")))
+        log.log("events", f"main reply project={project} by={by} tag={hit[0] if hit else 'none'} lines={lines}"
+                          + (" errand=1" if errand else ""))
+        if not errand:
+            owner.closing(project, text, units.now(), turn_at=units.parse_iso((turn or {}).get("at")))
     except Exception as exc:  # noqa: BLE001 - fail-open
         log.log("hooks", f"dispatch: closing line for {project}: {type(exc).__name__}")

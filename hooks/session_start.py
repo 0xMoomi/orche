@@ -9,10 +9,11 @@ checkout), skills/orche-build (the div-*-build worktree) or skills/orche (every 
 Total output stays under 6,000 characters; the card is trimmed first. A project's CEO Staff
 (ORCHE_SESSION `staff-<project>`, lib/orche/staff.py) gets its own text instead: its role and persona, the
 project's card line and the newest exchanges between the owner and that project's Main, within the same
-cap; on `startup` (a fresh Staff session, never a resume) as JSON whose `systemMessage` shows the owner
-Staff's greeting in their language (no model call) and whose `additionalContext` is that text. A pane session
-Orche wakes (Main, a division, a feature; never the Staff or a headless run), when it is the pane's own session
-and runs the wake hook (_watch), gets JSON instead of plain text: `watchPaths` holds its wake file and
+cap, always as JSON whose `additionalContext` is that text; on `startup` (a fresh Staff session, never a
+resume) its `systemMessage` shows the owner Staff's greeting in their language (no model call). The Claude
+session is recorded as given the current Staff rules (staff.rules_given). A pane session Orche wakes (Main,
+a division, a feature, a project's Staff; never a headless run), when it is the pane's own session and runs
+the wake hook (_watch, _watch_staff), gets JSON instead of plain text: `watchPaths` holds its wake file and
 `additionalContext` the text, and its WATCH record names this Claude session (lib/orche/watch.py, R-INBOX-4).
 Fail-open."""
 import json
@@ -250,12 +251,18 @@ def main():
         from orche import staff
         key = staff.project_of(r.reg, who.session)
         if key is not None:
-            if payload.get("source") != "startup":
-                print(staff.start_text(r.reg, key, CAP))
+            if os.environ.get("ORCHE_RUNNER"):   # an errand runs on its own persona and brief, not Staff's text
                 return 0
-            text, greeting = staff.opening(r.reg, key, CAP)   # a fresh session: the owner sees the greeting
-            print(json.dumps({"systemMessage": greeting, "hookSpecificOutput": {
-                "hookEventName": "SessionStart", "additionalContext": text}}, ensure_ascii=False))
+            out = {}
+            if payload.get("source") == "startup":
+                text, out["systemMessage"] = staff.opening(r.reg, key, CAP)   # fresh: the owner sees the greeting
+            else:
+                text = staff.start_text(r.reg, key, CAP)
+            staff.rules_given(key, payload.get("session_id"))
+            watch = _watch_staff(who.session, payload.get("session_id"))
+            out["hookSpecificOutput"] = ({"hookEventName": "SessionStart", "additionalContext": text}
+                                         | ({"watchPaths": watch} if watch else {}))
+            print(json.dumps(out, ensure_ascii=False))
             return 0
         sections = _sections(r, who)
         text = build(sections) if sections else ""
@@ -282,7 +289,8 @@ def _watch(who, session_id):
     else []. Only the pane's own session: its ORCHE_SESSION names the unit, or it is a Main the transcript
     rule identified (Orca reopened it without ORCHE_SESSION); a session someone opened in a unit's worktree
     gets none. Only when this session runs the wake hook (watch.hooked); otherwise the pane keeps typed
-    wakes. The Staff never gets here. Fail-open: an error leaves the pane on typed wakes."""
+    wakes. A Staff is armed in its own branch (_watch_staff). Fail-open: an error leaves the pane on typed
+    wakes."""
     from orche import roster
     m = who.member
     if (m is None or m.kind not in ("main", "div", "feat") or m.status == "retired" or not session_id
@@ -298,6 +306,25 @@ def _watch(who, session_id):
     except Exception as exc:  # noqa: BLE001 - fail-open
         from orche import log
         log.log("hooks", f"session_start: watch {m.session}: {type(exc).__name__}: {exc}")
+        return []
+
+
+def _watch_staff(session, session_id):
+    """[the wake file] for a project's Staff pane, after its WATCH record names this Claude session; else [].
+    Only the pane's own session (ORCHE_SESSION is `session`), never a headless errand (ORCHE_RUNNER), and
+    only when this session runs the wake hook (watch.hooked). Fail-open."""
+    from orche import roster
+    if not session_id or os.environ.get("ORCHE_RUNNER") or roster.env_session() != session:
+        return []
+    try:
+        from orche import watch
+        if not watch.hooked():
+            return []
+        watch.arm(session, session_id)
+        return [str(watch.wake_path(session))]
+    except Exception as exc:  # noqa: BLE001 - fail-open
+        from orche import log
+        log.log("hooks", f"session_start: watch {session}: {type(exc).__name__}: {exc}")
         return []
 
 

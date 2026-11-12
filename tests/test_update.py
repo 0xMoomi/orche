@@ -32,6 +32,8 @@ if sys.argv[1] == "install":
               "and the orche plugin not enabled)")
         sys.exit(1)
     print("hooks: ok (on for new sessions: all 8 in /h/.claude/settings.json)")
+    if (home / "statusline-note").exists():   # the status line step's note
+        print((home / "statusline-note").read_text(), end="")
     if (home / "staff-lines").exists():   # the Staff panes the install opened
         print((home / "staff-lines").read_text(), end="")
     if (home / "fail-install").exists():
@@ -144,6 +146,16 @@ class UpdateTest(support.TempHomeCase):
         self.assertEqual(calls[0]["argv"], ["install", "--mode", "settings", "--no-jev"])
         self.assertEqual([c["argv"] for c in calls[1:]], [["init", "acme", "--refresh"], ["init", "beta", "--refresh"]])
         self.assertEqual((self.home / "status" / "lang").read_text(), "en\n")   # the status line's language
+
+    def test_the_status_line_takeover_note_is_forwarded(self):
+        from orche.install import statusline
+        note = f"statusline: note ({statusline.TAKEN})"
+        (self.home / "statusline-note").write_text(note + "\nstatusline: mode (x)\n")
+        self.publish()
+        code, out, _ = self.update()
+        self.assertEqual(code, 0, out)
+        self.assertIn(note, out.splitlines())
+        self.assertNotIn("statusline: mode (x)", out)
 
     def test_refresh_runs_as_no_session(self):  # R-TEAM-5: an update never opens a team repository's gate PR
         self.publish()

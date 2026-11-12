@@ -13,7 +13,7 @@ from pathlib import Path
 
 from .. import (__version__, config, github, headless, jev_setup, ladder, mask, notify, oauth, orca, paths, procs,
                 registry, runs, shell, units, util, vendors)
-from . import plugin, settings, statusline
+from . import StateUnreadable, load_state, plugin, settings, statusline
 
 TOOLS = ("gcloud", "gh", "vercel", "age", "zstd")
 WRITE_PERMS = ("ADMIN", "MAINTAIN", "WRITE")     # gh viewerPermission the merge queue can merge with
@@ -558,17 +558,11 @@ def checks(ctx) -> list:
         add("WARN", "settings", err)
         data = {}
     add(*hooks_row(ctx))
-    script = statusline.script_path(ctx)
-    if statusline.present(ctx) and statusline.after_exit(script.read_text(encoding="utf-8")):
-        add("WARN", "statusline", f"Orche block in {script} sits after an `exit` line and never runs "
-                                  "(re-run orche install)")
-    elif statusline.present(ctx):
-        add("OK", "statusline", f"Orche block present in {script}")
-    elif _kept_by_heartbeat(script):
-        add("WARN", "statusline", f"Orche block missing in {script} (another tool rewrote it); the heartbeat "
-                                  "puts it back within 5 minutes")
-    else:
-        add("WARN", "statusline", f"Orche block missing in {script}")
+    try:
+        for row in statusline.rows(ctx, load_state()):
+            add(*row)
+    except StateUnreadable as exc:
+        add("WARN", "statusline", f"{exc}; say \"repair the setup\"; Main runs orche install")
     days = data.get("cleanupPeriodDays")
     add("OK" if days == settings.CLEANUP_DAYS else "WARN", "cleanupPeriodDays",
         f"{days if days is not None else '(absent)'}" + ("" if days == settings.CLEANUP_DAYS
@@ -577,15 +571,6 @@ def checks(ctx) -> list:
         add("WARN", "careful hook", "careful hook registered in settings.json — its approval dialogs stall "
                                     "unattended Orche panes; remove it or keep it only for your own sessions")
     return out
-
-
-def _kept_by_heartbeat(script) -> bool:
-    """The heartbeat (install.statusline.heartbeat) keeps the Orche block in this very script."""
-    target = statusline.heartbeat_target()
-    try:
-        return target is not None and os.path.samefile(target, script)
-    except OSError:
-        return False
 
 
 HOOKS_OFF = ("Orche's hooks are off: new sessions run without Orche. Say \"repair the setup\"; Main runs "

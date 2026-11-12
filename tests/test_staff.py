@@ -2,6 +2,7 @@
 knows of that project's Main, its gates and its notes."""
 import datetime as dt
 import hashlib
+import importlib.util
 import json
 import os
 import subprocess
@@ -11,20 +12,22 @@ from unittest import mock
 
 import support
 import test_hooks
-from orche import inbox, mask, orca, registry, staff
+from orche import errand, inbox, mask, orca, registry, runs, staff, watch
+from orche.flow import lineage
 from orche.janitor import discover
 
 CANARY = "sk-" + "CANARY" + "abcdefghijklmnop" + "0123456789"
 FIXTURE = support.FIXTURES / "transcripts" / "staff_main.jsonl"
 GREETING_EN = (
-    "Hi, I'm the Staff of acme: a window under its Main for your everyday questions.\n"
+    "Hi, this is acme's Staff, not its Main: a window under Main for your everyday questions.\n"
     "I know everything you've told acme's Main and what it answered, and I catch up again with every question.\n"
-    "I don't do the work myself: no code, no pushes, no merges. Work always goes through Main.\n"
-    'To hand something over, say "tell Main: ..." and I\'ll leave acme\'s Main a note.\n'
+    "I don't change anything myself: no code, no pushes, no merges.\n"
+    "I run small errands in the background (look-ups, drafts, status checks) and hand project work to Main for "
+    "you; the answers come back here.\n"
     "I run at a lighter effort than Main, so ask away, even about small things.")
 # The Korean greeting lives only in templates/staff/greeting.ko.txt (Hangul only in such per-language
 # text files, HangulTest): pinned by its hash here, its shape below.
-GREETING_KO_SHA256 = "af3b84870bc8a5b7e580e29c2570a108f266e742bc8a1be5f92e191264ce7537"
+GREETING_KO_SHA256 = "fbeb2ce7619811b3f4fa8bcd02e042f967816f5ef9b66937c1c1b7a99924889e"
 KO_PROMPT = "\uc624\ub298 \ubc30\ud3ec \uc0c1\ud669 \uc54c\ub824 \uc918"   # a Korean owner prompt
 
 
@@ -273,9 +276,10 @@ class GreetingTest(StaffCase):
         ko = staff.greeting("acme", "ko")
         self.assertTrue(staff.is_korean(ko))
         self.assertIn("acme", ko)
-        self.assertIn('"Main', ko)
+        self.assertIn("Main", ko.splitlines()[0])      # line 1 says plainly: this is Staff, not Main
+        self.assertIn("not its Main", GREETING_EN.splitlines()[0])
         for text in (GREETING_EN, ko):
-            self.assertLessEqual(len(text.splitlines()), 6)
+            self.assertLessEqual(len(text.splitlines()), 5)
             self.assertNotRegex(text, "[\u2013\u2014]")
             self.assertNotIn("{project}", text)
             self.assertIn("Main", text)
@@ -416,25 +420,40 @@ class KnowledgeTest(StaffCase):
         self.assertEqual(staff.prompt_text(self.reg(), "beta", inbox.BUDGET), "")
         self.assertIn("owner: acme later", staff.prompt_text(self.reg(), "acme", inbox.BUDGET))
 
-    def test_the_hooks_inject_it_and_skip_the_inbox(self):
-        self.main_transcript()
-        res = self.staff_hook("session_start.py", "session_start_clear.json")
+    def test_the_hooks_inject_the_inbox_first_then_the_exchanges(self):
+        path = self.main_transcript()
+        res = self.staff_hook("session_start.py", "session_start_clear.json", session_id="sess-staff-0001")
         self.assertEqual(res.returncode, 0, res.stderr)
         self.assertIn("session: staff-acme", res.stdout)
         self.assertIn("owner: what about the docs?", res.stdout)
-        self.assertLessEqual(len(res.stdout), 6001)
-        res = self.staff_hook("report_inject.py", "prompt.json")
-        self.assertEqual((res.returncode, res.stdout), (0, ""), res.stderr)
-        self.assertFalse((self.home / "sessions").exists())        # no standing orders, no inbox turn
+        self.assertLessEqual(len(res.stdout), 6000)
+        res = self.staff_hook("report_inject.py", "prompt.json", session_id="sess-staff-0001")
+        self.assertEqual((res.returncode, res.stdout), (0, ""), res.stderr)    # nothing new, rules already given
+        unit = self.root / "acme" / ".orche" / "units" / "acme-x-20261112-1"
+        unit.mkdir(parents=True)
+        (unit / "REPORT.md").write_text("Two PRs touch the payment page: #12 and #14.\n")
+        inbox.write(inbox.make("acme-x-20261112-1", "staff-acme", "staff-acme", "done", via="runner",
+                               report_path=str(unit / "REPORT.md"), summary="two PRs"))
+        self.append(path, *self.turn("2026-10-30T09:00:00Z", "and the blog?", "Blog after docs.", "m8"))
+        res = self.staff_hook("report_inject.py", "prompt.json", session_id="sess-staff-0001")
+        self.assertEqual(res.returncode, 0, res.stderr)
+        out = res.stdout
+        self.assertLess(out.index("## Inbox (1)"), out.index("#12 and #14"))
+        self.assertLess(out.index("#12 and #14"), out.index(staff.OWNER_ITEMS_LINE))
+        self.assertLess(out.index(staff.OWNER_ITEMS_LINE), out.index("owner: and the blog?"))
+        self.assertNotIn(staff.RULES_HEAD, out)
+        self.assertEqual(inbox.pending("staff-acme"), [])
+        self.assertEqual(len(self.inbox("staff-acme", drained=True)), 1)
+        self.assertIs(lineage.read_turn("staff-acme")["owner"], True)
         self.assertEqual(self.orca_calls(), [])
         res = self.staff_hook("report_inject.py", "prompt.json", session="staff-gone")   # no registered project
         self.assertEqual((res.returncode, res.stdout), (0, ""), res.stderr)
 
 
 class GateTest(StaffCase):
-    def decision(self, hook, tool, tool_input, session="staff-acme"):
+    def decision(self, hook, tool, tool_input, session="staff-acme", **env):
         res = self.run_hook(hook, self.payload("pretool_bash.json", cwd=str(self.ws), tool_name=tool,
-                                               tool_input=tool_input), ORCHE_SESSION=session)
+                                               tool_input=tool_input), ORCHE_SESSION=session, **env)
         self.assertEqual(res.returncode, 0, res.stderr)
         return json.loads(res.stdout)["hookSpecificOutput"]["permissionDecisionReason"] if res.stdout else None
 
@@ -453,12 +472,69 @@ class GateTest(StaffCase):
                                                                        "notebook_path": "/tmp/x.ipynb"}, session),
                                  staff.DENY, (session, tool))
 
+    def test_every_working_tree_git_word_and_pr_write_is_refused(self):
+        for word in ("commit", "push", "checkout", "switch", "reset", "stash", "restore", "clean", "rebase", "merge",
+                     "pull", "cherry-pick", "revert", "am", "apply", "rm", "mv", "add", "fetch", "update-ref",
+                     "config", "ci", "worktree", "tag", "branch", "remote", "gc", "notes", "replace"):
+            self.assertTrue(staff._denied(f"git {word} x", 0), word)
+            self.assertTrue(staff._denied(f"git -C /tmp/r -c a=b {word}", 0), word)
+        for word in ("merge", "create", "review", "close", "reopen", "ready", "edit", "comment", "lock", "delete"):
+            self.assertTrue(staff._denied(f"gh pr {word} 12", 0), word)
+        for command in ("git checkout main", "git stash", "git reset --hard", "git add .", "gh pr review 3 -a",
+                        "gh pr edit 3 --title x"):
+            self.assertEqual(self.decision("env_read_gate.py", "Bash", {"command": command}), staff.DENY, command)
+        for command in ("git log --grep merge", "git diff HEAD~1 -- add.py", "git diff main...HEAD",
+                        "git branch --merged", "gh pr view 12", "gh pr checks 12", "gh issue view 3",
+                        "gh pr view 12 --json state"):
+            self.assertFalse(staff._denied(command, 0), command)
+
+    def test_git_and_gh_are_allowlists(self):
+        refused = ("git branch -D main", "git update-ref -d refs/heads/main", "git tag -d v1", "git tag v2",
+                   "git worktree remove ../x", "git fetch origin main:main", "git -c alias.x=commit x -m y",
+                   "git config alias.ci commit", "git ci", "git -C /tmp/r status", "git --git-dir .git log",
+                   "git --work-tree . status", "git --exec-path=/x log", "git branch new", "git branch -m a b",
+                   "git remote add o u", "git stash", "git stash drop", "git config --unset user.name",
+                   "git config --get user.name --add x y", "git log --output=/tmp/x", "git ls-remote --upload-pack=x .",
+                   "git grep -Ovim x", "git", "git --version",
+                   "gh -R a/b pr merge 1", "gh pr --repo a/b merge 1", "gh api -X PUT repos/a/b/pulls/1/merge",
+                   "gh api repos/a/b", "gh release create v9", "gh issue create", "gh repo clone a/b",
+                   "gh run rerun 1", "gh auth login", "gh pr comment 3 -b x", "gh issue comment 3 -b x", "gh",
+                   "gh alias set co 'pr checkout'", "gh co 3")
+        for command in refused:
+            self.assertTrue(staff._denied(command, 0), command)
+        allowed = ("git status", "git --no-pager log -5", "git -P show HEAD", "git blame x.py", "git ls-files",
+                   "git rev-parse HEAD", "git cat-file -p HEAD", "git for-each-ref", "git merge-base a b",
+                   "git remote", "git remote -v", "git remote show origin", "git branch", "git branch -a -vv",
+                   "git branch --show-current", "git branch --contains abc123", "git branch --list 'feat*'",
+                   "git tag", "git tag -l 'v*'", "git stash list", "git worktree list", "git config --get user.name",
+                   "git config --list", "git config --global --get-all alias.x",
+                   "gh pr list", "gh pr diff 3", "gh pr status", "gh issue list", "gh issue status", "gh repo view",
+                   "gh run list", "gh run view 5 --log", "gh release list", "gh release view v1",
+                   "gh search prs --author x", "gh auth status", "gh status")
+        for command in allowed:
+            self.assertFalse(staff._denied(command, 0), command)
+        with mock.patch.dict(os.environ, {"ORCHE_RUNNER": "1"}):    # the owner's dictated comment, in an errand
+            for command in ("gh pr comment 3 -b x", "gh issue comment 3 -b x"):
+                self.assertFalse(staff._denied(command, 0), command)
+            self.assertTrue(staff._denied("gh pr merge 3", 0))
+        self.assertIn("read-only git and gh commands", staff.DENY)
+
+    def test_an_errand_is_started_from_the_pane_never_under_the_runner(self):
+        for command in ('orche errand --goal "list open PRs"', "orche errand acme-x-20261112-1 --stop",
+                        "orche --dry-run errand --main --goal x"):
+            self.assertIsNone(self.decision("env_read_gate.py", "Bash", {"command": command}), command)
+            self.assertEqual(self.decision("env_read_gate.py", "Bash", {"command": command}, ORCHE_RUNNER="1"),
+                             staff.DENY, command)
+        self.assertIn("orche errand --main", staff.DENY)
+
     def test_reads_are_allowed(self):
         for command in ("orche status", "orche status acme", "orche card acme", 'orche ask acme "why?"',
                         "orche metrics", "orche doctor", "orche --json queue acme", "orche hr log",
                         'orche report info --summary "tell Main: x"', "git log --oneline | head",
-                        "cat README.md"):
+                        "git status", "cat README.md"):
             self.assertIsNone(self.decision("env_read_gate.py", "Bash", {"command": command}), command)
+            self.assertIsNone(self.decision("env_read_gate.py", "Bash", {"command": command}, ORCHE_RUNNER="1"),
+                              command)
         self.assertIsNone(self.decision("env_read_gate.py", "Read", {"file_path": str(support.ROOT / "README.md")}))
 
     def test_other_sessions_are_not_touched(self):
@@ -466,23 +542,339 @@ class GateTest(StaffCase):
         self.assertIsNone(self.decision("scope_gate.py", "Edit", {"file_path": str(self.repo / "x.md")}, "main-acme"))
 
 
-class NoteTest(StaffCase):
+class ErrandCase(StaffCase):
+    def start(self, goal="List open PRs", context="Owner's words: which PRs?", running=True):
+        """An errand of acme (brief written, the run not started); `running`: a live run lock for it."""
+        with mock.patch.object(runs, "start", return_value=True):
+            unit = errand.start(registry.load(), "staff-acme", goal, context)
+        if running:
+            lock = runs.run_dir("acme") / f"{unit}.lock"
+            lock.parent.mkdir(parents=True, exist_ok=True)
+            lock.write_text(json.dumps({"pid": os.getpid(), "unit": unit}))
+        return unit
+
+
+class ErrandScopeTest(ErrandCase):
+    """The scope gate: an errand (ORCHE_RUNNER) writes only in the unit folder of the unit it runs (its
+    ORCHE_RUN_ID, else its target lock), the scratch root and new files in a safe folder its brief names;
+    the pane writes nowhere. HOME is the test's temp root, never the real home."""
+
+    def setUp(self):
+        super().setUp()
+        self.unit = None
+
+    def write(self, path, tool="Write", runner=True, run_id=True, home=None):
+        payload = self.payload("pretool_bash.json", cwd=str(self.repo), tool_name=tool,
+                               tool_input={"file_path": str(path), "content": "x"})
+        env = {"HOME": str(home or self.root)}
+        if runner:
+            env["ORCHE_RUNNER"] = "1"
+        if runner and run_id and self.unit:
+            env["ORCHE_RUN_ID"] = f"{self.unit}@1700000000000000000"
+        res = self.run_hook("scope_gate.py", payload, ORCHE_SESSION="staff-acme", **env)
+        self.assertEqual(res.returncode, 0, res.stderr)
+        return json.loads(res.stdout)["hookSpecificOutput"]["permissionDecisionReason"] if res.stdout else None
+
+    def start(self, *args, **kw):
+        self.unit = super().start(*args, **kw)
+        return self.unit
+
+    def test_an_errand_writes_in_its_own_unit_folder_only(self):
+        unit = self.start()
+        folder = self.units_dir() / unit
+        self.assertIsNone(self.write(folder / "draft.md"))
+        self.assertIsNone(self.write(folder / "sub" / "notes.md", tool="Edit"))
+        self.assertIsNone(self.write(self.root / "scratch" / "s1" / "x.md"))
+        for name in ("BRIEF.md", "RUN.json", "BRIEF.rev2.md", "PROGRESS.json", "REPORT.md", "REPLY.md", "report.md",
+                     "JOINED"):
+            self.assertEqual(self.write(folder / name), staff.DENY, name)
+        for path in (self.repo / "README", self.repo / "web" / "pay.tsx", self.home / "registry.json",
+                     self.root / "acme-build" / "x"):
+            self.assertEqual(self.write(path), staff.DENY, path)
+        for path in (folder / "draft.md", self.root / "scratch" / "s1" / "x.md"):
+            self.assertEqual(self.write(path, runner=False), staff.DENY, path)    # the pane writes nowhere
+
+    def test_never_another_errands_folder(self):
+        other = self.start("Another errand", running=False)
+        unit = self.start()
+        for name in ("REPORT.md", "REPLY.md", "draft.md"):
+            self.assertEqual(self.write(self.units_dir() / other / name), staff.DENY, name)
+        self.assertIsNone(self.write(self.units_dir() / unit / "draft.md"))
+
+    def test_the_unit_comes_from_the_target_lock_or_nowhere(self):
+        unit = self.start()
+        draft = self.units_dir() / unit / "draft.md"
+        self.assertEqual(self.write(draft, run_id=False), staff.DENY)          # no ORCHE_RUN_ID, no target lock
+        lock = runs.target_lock("acme", "staff-acme")
+        lock.write_text(json.dumps({"pid": os.getpid(), "unit": unit}))
+        self.assertIsNone(self.write(draft, run_id=False))
+        lock.write_text(json.dumps({"pid": 999999999, "unit": unit}))           # a dead run names nothing
+        self.assertEqual(self.write(draft, run_id=False), staff.DENY)
+
+    def test_new_files_only_in_a_folder_its_brief_names(self):
+        out = self.root / "elsewhere" / "exports"
+        out.mkdir()
+        (out / "old.png").write_text("x")
+        self.start(goal="Re-export the logos as PNG", context=f"Owner's words: put them in {out}.")
+        self.assertIsNone(self.write(out / "logo.png"))
+        self.assertIsNone(self.write(out / "new" / "logo.png"))
+        self.assertEqual(self.write(out / "old.png"), staff.DENY)                 # never overwrite
+        self.assertEqual(self.write(out / "logo.png", tool="Edit"), staff.DENY)
+        self.assertEqual(self.write(out / ".hidden" / "x.png"), staff.DENY)       # no dot folder below it
+        self.assertEqual(self.write(self.root / "elsewhere" / "other.png"), staff.DENY)   # not the named folder
+        self.assertEqual(self.write(out / "logo.png", runner=False), staff.DENY)
+
+    def test_a_named_folder_counts_only_for_its_own_errand(self):
+        out = self.root / "elsewhere"
+        named = self.start(goal=f"Draft the notes into {out}", running=False)
+        self.start(goal="Something else")
+        self.assertEqual(self.write(out / "notes.md"), staff.DENY)
+        self.unit = named
+        self.assertIsNone(self.write(out / "notes.md"))
+
+    def test_a_folder_that_holds_the_project_is_never_named(self):
+        self.start(goal=f"Write the notes into {self.root}")
+        self.assertEqual(self.write(self.root / "notes.md"), staff.DENY)
+
+    def test_unsafe_named_folders_are_refused(self):
+        patcher = mock.patch.object(errand, "OPEN_MAX", 99)     # one errand per folder below
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        home = self.root
+        (home / "Downloads" / "out").mkdir(parents=True)
+        beta = home / "work" / "beta"
+        beta.mkdir(parents=True)
+        registry.update(lambda r: r["projects"].__setitem__("beta", {
+            "repo_id": "repo-beta", "path": str(beta), "stage": "building", "aliases": [], "main_session": "main-beta",
+            "card": "x", "standing": ".orche/STANDING.md", "divisions": {}}))
+        cases = {"~/.claude/skills/x": "SKILL.md", "~/.config/app": "x.conf", "~/.ssh": "id_new",
+                 "~/Library/LaunchAgents": "zz.plist", "~/work": "notes.md", f"{beta}/docs": "notes.md",
+                 str(self.home): "x.md", str(support.ROOT / "hooks"): "zz.py", "~/Downloads/../.ssh": "id_new",
+                 "/tmp/outside-c123f": "x.md"}
+        for folder, name in cases.items():
+            self.start(goal=f"Write the file into {folder}", running=False)
+            path = os.path.join(os.path.realpath(os.path.expanduser(folder.replace("~", str(home), 1))), name)
+            self.assertEqual(self.write(path, home=home), staff.DENY, folder)
+        self.start(goal="Re-export the logo into ~/Downloads/out", running=False)
+        self.assertIsNone(self.write(home / "Downloads" / "out" / "logo.png", home=home))
+        self.start(goal="Write the notes into ~", running=False)                # the home itself
+        self.assertEqual(self.write(home / "notes.md", home=home), staff.DENY)
+
+
+class SafeFolderTest(StaffCase):
+    """scope_gate.safe_folder, each rule alone, under a temp HOME that holds every place it names."""
+
+    def setUp(self):
+        super().setUp()
+        spec = importlib.util.spec_from_file_location("scope_gate_c123f", support.ROOT / "hooks" / "scope_gate.py")
+        self.gate = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(self.gate)
+        self.h = self.root / "home"
+        for d in ("Downloads/out", ".claude/skills", "x/.cache/y", "Library/LaunchAgents", "work/beta/docs",
+                  "plugin/hooks", "ohome/inbox", "Documents"):
+            (self.h / d).mkdir(parents=True)
+        (self.h / "Documents" / "link").symlink_to(self.h / ".claude")
+        patches = [mock.patch.dict(os.environ, {"HOME": str(self.h), "ORCHE_HOME": str(self.h / "ohome")}),
+                   mock.patch("orche.paths.PLUGIN_ROOT", self.h / "plugin")]
+        for p in patches:
+            p.start()
+            self.addCleanup(p.stop)
+        self.reg = {"projects": {"beta": {"path": str(self.h / "work" / "beta")}}}
+
+    def test_each_rule(self):
+        h = self.h
+        refused = {h: "the home itself", h / ".claude" / "skills": "a dot folder",
+                   h / "x" / ".cache" / "y": "dot below", h / "Library" / "LaunchAgents": "Library",
+                   h / "work" / "beta" / "docs": "inside a project", h / "work": "holds a project",
+                   h / "plugin" / "hooks": "inside the plugin", h / "plugin": "the plugin",
+                   h / "ohome" / "inbox": "inside ORCHE_HOME", h / "Documents" / "link": "a symlink to a dot folder",
+                   h / "Downloads" / ".." / ".claude": "dot dot", self.root / "elsewhere": "outside the home"}
+        for folder, why in refused.items():
+            self.assertFalse(self.gate.safe_folder(self.reg, str(folder)), why)
+        self.assertTrue(self.gate.safe_folder(self.reg, str(h / "Downloads" / "out")))
+        self.assertTrue(self.gate.safe_folder(self.reg, str(h / "Documents")))
+        self.assertFalse(self.gate.safe_folder({"projects": {"beta": {"path": str(h / "Downloads")}}},
+                                               str(h / "Downloads" / "out")))      # any registered project
+
+
+class WatchTest(StaffCase):
+    """Staff listens on its wake file: SessionStart arms it for the pane's own session, SessionEnd disarms it."""
+
+    def start(self, source="resume", session_id="sess-staff-0001", **env):
+        payload = self.payload("session_start_clear.json", cwd=str(self.ws), source=source, session_id=session_id)
+        base = {"ORCHE_SESSION": "staff-acme", "CLAUDE_CONFIG_DIR": str(self.claude)}
+        res = self.run_hook("session_start.py", payload, **{**base, **env})
+        self.assertEqual(res.returncode, 0, res.stderr)
+        return res
+
+    def test_startup_and_resume_arm_the_wake_file(self):
+        wake = str(self.home / "inbox" / "staff-acme" / watch.WAKE)
+        res = self.start("resume")
+        self.assertEqual(res.watch, [wake])
+        self.assertIn("session: staff-acme", res.stdout)
+        self.assertEqual(watch.marker("staff-acme")["session_id"], "sess-staff-0001")
+        res = self.start("startup", session_id="sess-staff-0002")
+        out = json.loads(res.raw)
+        self.assertEqual(out["hookSpecificOutput"]["watchPaths"], [wake])
+        self.assertIn("session: staff-acme", out["hookSpecificOutput"]["additionalContext"])
+        self.assertIn("Staff", out["systemMessage"])
+        self.assertEqual(watch.marker("staff-acme")["session_id"], "sess-staff-0002")
+
+    def test_not_unhooked_not_under_the_runner_not_another_session(self):
+        bare = self.home / "bare-claude"
+        bare.mkdir()
+        res = self.start("resume", CLAUDE_CONFIG_DIR=str(bare))
+        out = json.loads(res.raw)["hookSpecificOutput"]
+        self.assertNotIn("watchPaths", out)
+        self.assertIn("session: staff-acme", out["additionalContext"])
+        res = self.start("resume", ORCHE_RUNNER="1")
+        self.assertEqual(res.raw, "")
+        self.assertIsNone(watch.marker("staff-acme"))
+        payload = self.payload("session_start_clear.json", cwd=str(self.ws), source="resume")
+        res = self.run_hook("session_start.py", payload, CLAUDE_CONFIG_DIR=str(self.claude))   # no ORCHE_SESSION
+        self.assertEqual(res.returncode, 0, res.stderr)
+        self.assertIsNone(watch.marker("staff-acme"))
+
+    def test_session_end_disarms_only_its_own_record(self):
+        self.start("resume")
+        end = self.payload("session_end.json", cwd=str(self.ws), session_id="sess-other-0001")
+        self.assertEqual(self.run_hook("session_end.py", end, ORCHE_SESSION="staff-acme").returncode, 0)
+        self.assertIsNotNone(watch.marker("staff-acme"))
+        end["session_id"] = "sess-staff-0001"
+        self.assertEqual(self.run_hook("session_end.py", end, ORCHE_SESSION="staff-acme").returncode, 0)
+        self.assertIsNone(watch.marker("staff-acme"))
+
+
+class PromptTest(StaffCase):
+    """The prompt hook in the Staff pane: the turn record, the pending items with Orche's line, the drain."""
+
+    WAKE_PROMPT = "<task>\n[orche] inbox: new reports\n</task>"
+
+    def setUp(self):
+        super().setUp()
+        staff.rules_given("acme", "sess-staff-0001")
+
+    def prompt(self, prompt, prompt_id, session_id="sess-staff-0001"):
+        res = self.staff_hook("report_inject.py", "prompt.json", prompt=prompt, prompt_id=prompt_id,
+                              session_id=session_id)
+        self.assertEqual(res.returncode, 0, res.stderr)
+        return res.stdout
+
+    def item(self, unit="acme-x-20261112-1", status="done", summary="the answer", **extra):
+        return inbox.write(inbox.make(unit, "staff-acme", "staff-acme", status, via="runner", summary=summary,
+                                      **extra))
+
+    def test_a_typed_prompt_is_the_owners_turn(self):
+        nudged = self.home / "inbox" / "staff-acme" / inbox.NUDGED
+        nudged.parent.mkdir(parents=True, exist_ok=True)
+        nudged.write_text("x")
+        self.item()
+        out = self.prompt("what did the errand find?", "p1")
+        self.assertIn("## Inbox (1)", out)
+        self.assertIn("summary: the answer", out)
+        self.assertTrue(out.rstrip().endswith(staff.OWNER_ITEMS_LINE), out)
+        turn = lineage.read_turn("staff-acme")
+        self.assertEqual((turn["owner"], turn["lineages"]), (True, []))
+        self.assertFalse(nudged.exists())
+        self.assertEqual((len(inbox.pending("staff-acme")), len(self.inbox("staff-acme", drained=True))), (0, 1))
+        self.assertEqual(self.prompt("thanks", "p2"), "")                 # drained: never shown twice
+
+    def test_the_wake_line_is_orches_turn(self):
+        self.item(status="blocked", owner="Which logo? Recommend the blue one; default blue.")
+        out = self.prompt(self.WAKE_PROMPT, "p1")
+        self.assertIn("OWNER STEP: Which logo?", out)
+        self.assertIn(staff.ORCHE_ITEMS_LINE, out)
+        self.assertIs(lineage.read_turn("staff-acme")["owner"], False)
+        self.prompt("ok, the blue one", "p2")
+        self.assertIs(lineage.read_turn("staff-acme")["owner"], True)
+
+    def test_a_wake_delivered_inside_the_running_turn_keeps_its_record(self):
+        self.prompt("check the PRs", "p1")
+        self.item()
+        out = self.prompt(self.WAKE_PROMPT, "p1")       # same prompt id: Claude Code delivered it mid-turn
+        self.assertIn(staff.OWNER_ITEMS_LINE, out)
+        self.assertIs(lineage.read_turn("staff-acme")["owner"], True)
+        self.prompt(self.WAKE_PROMPT, "p4")
+        self.prompt("typed while Orche's turn runs", "p4")
+        self.assertIs(lineage.read_turn("staff-acme")["owner"], False)
+
+    def test_the_inbox_leaves_room_for_the_exchanges(self):
+        path = self.main_transcript()
+        staff.start_text(self.reg(), "acme", 6000)
+        for i in range(12):
+            self.item(unit=f"acme-x-20261112-{i + 1}", summary="\n".join(["z" * 300] * 5))
+        self.append(path, *self.turn("2026-10-30T09:00:00Z", "and the blog?", "Blog after docs.", "m8"))
+        out = self.prompt("news?", "p1")
+        self.assertLessEqual(len(out), inbox.BUDGET)
+        self.assertIn("owner: and the blog?", out)
+        self.assertIn("left pending for size", out)
+        self.assertLess(out.index("## Inbox"), out.index("owner: and the blog?"))
+        self.assertTrue(inbox.pending("staff-acme"))       # the rest waits for the next prompt
+
+    def test_an_item_larger_than_the_room_is_cut_never_stuck(self):
+        self.item(summary="\n".join(["w" * 3000] * 5))
+        out = staff.prompt_text(self.reg(), "acme", inbox.BUDGET, {"session_id": "sess-staff-0001", "prompt": "x"})
+        self.assertLessEqual(len(out), inbox.BUDGET)
+        self.assertIn(staff.CUT_LINE, out)
+        self.assertTrue(out.endswith(staff.OWNER_ITEMS_LINE))
+        self.assertEqual(inbox.pending("staff-acme"), [])
+
+
+class RulesTest(StaffCase):
+    """A Staff session that was given other rules (a pane started before an update) gets the current ones once."""
+
+    def payload_of(self, session_id, prompt="hi", prompt_id="p1"):
+        return {"session_id": session_id, "prompt": prompt, "prompt_id": prompt_id}
+
+    def test_an_old_session_gets_the_rules_once(self):
+        text = staff.prompt_text(self.reg(), "acme", inbox.BUDGET, self.payload_of("sess-old-0001"))
+        self.assertTrue(text.startswith(staff.RULES_HEAD + "\n# CEO Staff"), text[:200])
+        self.assertIn("orche errand --main", text)
+        self.assertEqual(staff.prompt_text(self.reg(), "acme", inbox.BUDGET,
+                                           self.payload_of("sess-old-0001", "x", "p2")), "")
+        seen = json.loads((self.home / "inbox" / "staff-acme" / staff.RULES).read_text())
+        self.assertEqual(seen, {"sess-old-0001": staff.rules_hash()})
+
+    def test_a_session_started_on_this_version_gets_nothing_extra(self):
+        res = self.staff_hook("session_start.py", "session_start_clear.json", session_id="sess-new-0001")
+        self.assertEqual(res.returncode, 0, res.stderr)
+        self.assertEqual(staff.prompt_text(self.reg(), "acme", inbox.BUDGET, self.payload_of("sess-new-0001")), "")
+        res = self.staff_hook("report_inject.py", "prompt.json", session_id="sess-new-0001")
+        self.assertEqual((res.returncode, res.stdout), (0, ""), res.stderr)
+
+    def test_changed_rules_reach_a_running_session_first(self):
+        path = self.home / "inbox" / "staff-acme" / staff.RULES
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps({"sess-a-0001": "0" * 12}))
+        inbox.write(inbox.make("acme-x-20261112-1", "staff-acme", "staff-acme", "done", via="runner",
+                               summary="the answer"))
+        self.main_transcript()
+        out = staff.prompt_text(self.reg(), "acme", inbox.BUDGET, self.payload_of("sess-a-0001"))
+        self.assertLessEqual(len(out), inbox.BUDGET)
+        self.assertLess(out.index(staff.RULES_HEAD), out.index("## Inbox (1)"))
+        self.assertLess(out.index("## Inbox (1)"), out.index("## Owner and Main"))
+        for n in range(staff.RULES_KEEP + 5):
+            staff.rules_given("acme", f"sess-many-{n:04d}")
+        self.assertEqual(len(json.loads(path.read_text())), staff.RULES_KEEP)
+
+
+class NoteTest(ErrandCase):
     def report(self, *argv, session="staff-acme"):
         return subprocess.run([sys.executable, str(support.ROOT / "bin" / "orche.py"), "report", *argv],
                               env=child_env(self.home, self.claude, session), cwd=str(self.ws),
                               capture_output=True, text=True, timeout=30)
 
-    def test_tell_main_leaves_a_held_note_that_does_not_wake(self):
+    def test_a_note_is_quiet_and_shown_at_mains_next_prompt(self):
         (self.home / "config.json").write_text(json.dumps({"inbox": {"wake": True, "quiet_s": 0}}))
-        res = self.report("info", "--summary", f"tell Main: ship it ({CANARY})")
+        res = self.report("info", "--summary", f"FYI: the owner prefers blue ({CANARY})")
         self.assertEqual(res.returncode, 0, res.stderr)
         self.assertIn("note left for main-acme", res.stdout)
         [path] = self.inbox("main-acme")
         ptr = json.loads(path.read_text())
-        self.assertEqual((ptr["from"], ptr["status"], ptr["urgent"]), ("staff-acme", "info", False))
+        self.assertEqual((ptr["from"], ptr["status"], ptr["urgent"], ptr["quiet"], ptr["via"]),
+                         ("staff-acme", "info", False, True, "staff"))
         self.assertTrue(ptr["unit"].startswith("adhoc-staff-acme-"))
         self.assertNotIn(CANARY, ptr["summary"])
-        self.assertTrue(inbox.held(ptr))
         self.assertFalse(inbox.wakes(ptr))
         self.assertFalse((self.home / "logs" / "nudge.log").exists())
         self.assertEqual(self.report("info", "--to", "shop", "--summary", "x").returncode, 0)   # its own, by alias
@@ -495,10 +887,22 @@ class NoteTest(StaffCase):
                      ("info", "--to", "main-beta", "--summary", "x")):
             res = self.report(*argv)
             self.assertEqual(res.returncode, 1, argv)
+        self.assertIn("hand it over: `orche errand --main --goal ...`",
+                      self.report("info", "--urgent", "--summary", "x").stderr)
         res = self.report("info", "--summary", "x", session="staff-gone")
         self.assertEqual(res.returncode, 1)
         for session in ("main-acme", "div-acme-build", "main-beta"):
             self.assertEqual(self.inbox(session), [], session)
+
+    def test_a_report_on_an_errand_unit_is_refused_for_everyone(self):
+        unit = self.start(running=False)
+        for session in ("main-acme", "div-acme-build"):
+            res = self.report("info", "--unit", unit, "--summary", "x", session=session)
+            self.assertEqual(res.returncode, 1, (session, res.stderr))
+            self.assertIn(f"{unit} is the owner's errand: your reply in this turn reaches Staff by itself",
+                          res.stderr)
+        self.assertEqual(inbox.pending("staff-acme"), [])
+        self.assertEqual(self.inbox("main-acme"), [])
 
 
 if __name__ == "__main__":

@@ -1,6 +1,9 @@
 """`orche install|uninstall|doctor` — set up (and take down) Orche in the user's home.
 
-install patches only: `~/.claude/settings.json`, `~/.claude/statusline-command.sh`,
+install patches only: `~/.claude/settings.json` (and the Orca profile's, install/settings.session_dirs),
+`ORCHE_HOME/statusline.sh` with `statusLine.command` pointed at it (`--statusline orche|keep|off`, see
+install/statusline.py; the block older versions put in a status line script is removed; on an installed
+home `--statusline` runs only that step),
 `~/.claude/agents/<ours>.md` (symlinks), `~/.claude/skills/<ours>` (symlinks, settings mode only;
 a plugin-mode install removes them), `~/Library/LaunchAgents/com.orche.reconcile.plist` (macOS; the
 heartbeat job, loaded only when the target home is the real one; `--no-reconcile` skips it),
@@ -51,6 +54,9 @@ def register(subparsers):
     p.add_argument("--mode", choices=MODES, default=None,
                    help="plugin: hooks from the Claude Code plugin once it is enabled; settings: hooks in "
                         "settings.json (default: the existing install's mode, else plugin)")
+    p.add_argument("--statusline", choices=statusline.MODES, default=None,
+                   help="orche: Orche's status line; keep: your status line with Orche's project line under it; "
+                        "off: Orche adds nothing (default: the recorded choice, else keep when you have one)")
     p.add_argument("--no-jev", action="store_true", help="do not ask for a Jev key (add one later: orche jev setup)")
     p.add_argument("--jev-key-stdin", action="store_true", help="read a Jev key from stdin, no prompts")
     p.add_argument("--jev-kind", choices=("gateway", "direct"), default=None,
@@ -292,12 +298,28 @@ def _hooks_check(ctx, mode) -> None:
             + ", ".join(str(d / "settings.json") for d in settings.session_dirs(ctx))))
 
 
+def _statusline_only(args, ctx, state) -> int:
+    """`--statusline` on an installed home: only the status line step (no LaunchAgent reload, no wait)."""
+    new_state = dict(state)
+    _run_steps(ctx, "install", [("statusline", lambda: statusline.install(ctx, new_state, args.statusline))])
+    _save_state(ctx, new_state)
+    lines = ([f"dry run: nothing written (home {ctx.home})"] if ctx.dry_run else []) + ctx.lines()
+    out(args, {"home": str(ctx.home), "dry_run": ctx.dry_run, "actions": ctx.actions, "errors": ctx.errors},
+        lines)
+    return EXIT_USER if ctx.errors else EXIT_OK
+
+
 def cmd_install(args):
     if getattr(args, "grant", False):
         return cmd_grant(args)
     started = units.now()
     ctx = _ctx(args)
     state = _state_or_error(ctx, "install", "install refused, settings.json not touched")
+    problem = statusline.keep_problem(ctx, state or {}, getattr(args, "statusline", None))
+    if problem:
+        return fail(EXIT_USER, problem)
+    if state is not None and getattr(args, "statusline", None) and _state_path().is_file():
+        return _statusline_only(args, ctx, state)
     jev_result = None
     wanted = mode = args.mode
     if state is not None:
@@ -310,7 +332,8 @@ def cmd_install(args):
             _run_steps(ctx, "install", [("ORCHE_HOME", lambda: _orche_home(ctx)),
                                         ("settings.json", lambda: settings.install(ctx, mode, new_state))])
             _save_state(ctx, new_state)  # before the riskier file edits: uninstall must see added hooks
-            _run_steps(ctx, "install", [("statusline-command.sh", lambda: statusline.install(ctx)),
+            _run_steps(ctx, "install", [("statusline", lambda: statusline.install(ctx, new_state,
+                                                                                   getattr(args, "statusline", None))),
                                         ("agents", lambda: agents.install(ctx)),
                                         ("skills", lambda: skills.install(ctx, mode)),
                                         (RECONCILE_STEP, lambda: _reconcile_job(ctx, args, new_state)),
@@ -355,8 +378,9 @@ def cmd_install(args):
 def cmd_uninstall(args):
     ctx = _ctx(args)
     state = _state_or_error(ctx, "uninstall", "hooks/values not restored")
-    steps = [("statusline-command.sh", lambda: statusline.uninstall(ctx))]
-    if state is not None:
+    steps = []
+    if state is not None:   # an unreadable state: statusLine and settings.json stay as they are
+        steps.append(("statusline", lambda: statusline.uninstall(ctx, state)))
         steps.append(("settings.json", lambda: settings.uninstall(ctx, state)))
     steps.append(("agents", lambda: agents.uninstall(ctx, state or {})))
     steps.append(("skills", lambda: skills.uninstall(ctx, state or {})))

@@ -46,6 +46,10 @@ reconcile/heartbeat.json last. Classes:
   git, no gh in the pass; quiet hours and usage holds do not stop it);
 - usage <vendor>: an active hold nobody told yet -> the owner notice once; a hold past
   its `until` -> `usage resume` logged once;
+- errands (after the repairs, never in a dry run, which says `would sweep staff inboxes` when a Staff item
+  waits): errand.sweep: a Staff item pending 10 min with no nudge in flight woken again, one pending 30 min
+  forwarded to Main, an errand with no result 60 min after its brief revision filed `failed`; its failure
+  is logged and never fails the pass;
 - review <project>: a pending Build review (review/build.py: a run's RUN.json `review.build: pending`)
   not running that may_start() lets start -> started detached (`orche review --pr N --head --unit U`,
   never inline), at most one per project a pass, after the repairs and never past
@@ -53,9 +57,6 @@ reconcile/heartbeat.json last. Classes:
 - janitor (a full pass only, after review): the janitor's last pass a day old (janitor.due) and none running
   -> `orche janitor run` started detached (janitor.heartbeat), never inline; also when a brief day began
   after its last pass and a daily brief is not built yet (flow.daily);
-- statusline (a full pass only, after janitor): Orche installed under this ORCHE_HOME, its parent's
-  `statusline-command.sh` without the Orche block (another tool rewrote the file) -> the block put
-  back, no backup (install.statusline.heartbeat);
 - daily <project> (after janitor): the daily brief the janitor's pass built for the day, not sent yet,
   outside quiet hours, the project not paused -> one urgent `info` from `orche` to Main, once a day;
 - silent <unit>: the target's newest unit, a pane unit (never Main) whose dispatch was delivered,
@@ -102,7 +103,7 @@ import time
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 
-from . import __version__, brief, config, inbox, log, orca, paths, procs, registry, roster, units, util
+from . import __version__, brief, config, inbox, log, orca, paths, procs, registry, roster, staff, units, util
 from .flow import guard, lineage, owner, usage
 from .runs import progress
 
@@ -1250,7 +1251,6 @@ def _pass(cfg_all, cfg, now, started, dry_run, out, keys=None, as_json=False) ->
         return key is not None
     from . import janitor, runs
     from .flow import daily
-    from .install import statusline as line_script
     from .review import build
     _phase("runs")
     for key in every:
@@ -1303,12 +1303,13 @@ def _pass(cfg_all, cfg, now, started, dry_run, out, keys=None, as_json=False) ->
     if dry_run:
         later = build.heartbeat(reg, scope(), True, started + BUDGET_S)
         later += janitor.heartbeat(True) if keys is None else []
-        later += line_script.heartbeat(True) if keys is None else []
         later += daily.heartbeat(reg, now, True, scope(), cfg_all)
         for row in shut + notes:
             emit(row, row["line"])
         for a in actions:
             emit(_row(a, ""), f"would {a.describe()}")
+        if _staff_pending(reg, scope()):
+            later.insert(0, _sweep_row("-", "staff", "would sweep staff inboxes"))
         for row in later:
             emit(row, row["line"])
         if not actions and not shut and not notes and not later and not as_json:
@@ -1343,7 +1344,11 @@ def _pass(cfg_all, cfg, now, started, dry_run, out, keys=None, as_json=False) ->
         log.log("events", a.event() + (f" failed={failed}" if failed else ""))
         emit(_row(a, failed), a.describe() + (f" — failed ({failed})" if failed else ""))
         done += 1
-    _phase("review")       # 0.9.0: a pending Build review, at most one a pass, after the repairs
+    _phase("errands")      # c123: Staff items renudged or forwarded to Main, lost errands filed (never fails the pass)
+    for row in _sweep(reg, now, scope()):
+        emit(row, row["line"])
+        done += 1
+    _phase("review")      # 0.9.0: a pending Build review, at most one a pass, after the repairs
     for row in build.heartbeat(reg, scope(), False, started + BUDGET_S):
         log.log("events", f"reconcile action={row['action']} project={row['project']} target={row['target']} "
                           f"rev=- attempt=1/1" + (f" failed={row['failed']}" if row["failed"] else ""))
@@ -1352,12 +1357,6 @@ def _pass(cfg_all, cfg, now, started, dry_run, out, keys=None, as_json=False) ->
     _phase("janitor")      # the janitor's daily pass, detached, when the last one is a day old
     for row in janitor.heartbeat(False) if keys is None else []:
         log.log("events", "reconcile action=janitor attempt=1/1" + (f" failed={row['failed']}" if row["failed"] else ""))
-        emit(row, row["line"] + (f" (failed: {row['failed']})" if row["failed"] else ""))
-        done += 1
-    _phase("statusline-block")   # another tool rewrote the status line script: the Orche block back
-    for row in line_script.heartbeat(False) if keys is None else []:
-        log.log("events", f"reconcile action=statusline-repair target={row['target']} attempt=1/1"
-                          + (f" failed={row['failed']}" if row["failed"] else ""))
         emit(row, row["line"] + (f" (failed: {row['failed']})" if row["failed"] else ""))
         done += 1
     _phase("daily")        # the daily brief the janitor's pass built: one waking pointer to Main, once a day
@@ -1382,6 +1381,43 @@ def _pass(cfg_all, cfg, now, started, dry_run, out, keys=None, as_json=False) ->
     write_heartbeat(now, cfg, took, done, unreadable=sorted(blocked),
                     readable=[k for k in every if k not in blocked and k not in shielded])
     return done_json()
+
+
+def _sweep_row(project, target, line) -> dict:
+    return {"action": "errand-sweep", "class": "errand", "project": project, "target": target, "rev": None,
+            "attempt": 1, "cap": 1, "line": line, "failed": None}
+
+
+def _staff_pending(reg, keys) -> bool:
+    """Some project in `keys` (None: all) has an item pending in its Staff's inbox. Never raises."""
+    try:
+        return any(inbox.pending(staff.session_of(k))
+                   for k in (reg.get("projects") or {}) if keys is None or k in keys)
+    except Exception:  # noqa: BLE001 - a dry run only reports
+        return False
+
+
+def _sweep(reg, now, keys) -> list:
+    """The pass's Staff errand sweep (`errand.sweep`) over the projects in `keys` (None: all): one row per
+    event word (`renudge <session>`, `forward <session> <n>`, `lost <unit>`); errand.sweep logs its own
+    events lines. Never raises: a failure is logged and the pass goes on."""
+    try:
+        from . import errand
+        projects = {k: v for k, v in (reg.get("projects") or {}).items() if keys is None or k in keys}
+        words = errand.sweep({**reg, "projects": projects}, now)
+    except Exception as exc:  # noqa: BLE001 - the sweep never fails the pass
+        log.log("hooks", f"reconcile: errand sweep: {type(exc).__name__}: {exc}")
+        return []
+    rows = []
+    for word in words:
+        kind, _sp, rest = str(word).partition(" ")
+        target = rest.split(" ")[0] if rest else "-"
+        project = target[len(staff.PREFIX):] if staff.is_staff(target) else "-"
+        line = {"renudge": f"woke {target} again: errand results wait",
+                "forward": f"forwarded {target}'s waiting items to Main",
+                "lost": f"filed errand {target} as lost"}.get(kind, f"errand sweep: {word}")
+        rows.append(_sweep_row(project, target, line))
+    return rows
 
 
 MAIN_REOPENED = ".main-reopened"   # in inbox/<main-p>/: {at} of the heartbeat's last reopen of Main's pane

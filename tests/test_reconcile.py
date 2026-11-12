@@ -591,12 +591,13 @@ class OwnerNoticeTest(ReconcileCase):
 
 class StaffIgnoredTest(ReconcileCase):
     def test_the_heartbeat_never_reminds_wakes_or_reopens_staff(self):
-        """A project's CEO Staff is no member: a waiting pointer, a gone pane or a quiet one changes nothing."""
-        self.pointer("staff-acme-shop", 120, status="question", urgent=True)
+        """A project's CEO Staff is no member: a gone pane or a quiet one is never reminded, woken or reopened
+        by the repair classes (its waiting items are the errand sweep's: tests/test_errand_delivery.py)."""
+        self.pointer("staff-acme-shop", 5, status="question", urgent=True)
         (self.home / "fake-orca.json").write_text(json.dumps({"terminal list": {"terminals": [
             {"title": "main-acme-shop"}, {"title": "div-acme-shop-build"}, {"title": "main-docs-site"},
             {"title": "staff-acme-shop", "handle": "t-staff", "connected": False, "lastOutputAt": 0}]}}))
-        for minutes in (0, 30, 240):
+        for minutes in (0, 4):           # under errand.RENUDGE_AFTER (10 min): the sweep does nothing either
             self.assertEqual(self.run_at(minutes)[1], [])
             self.assertEqual(self.spawned, [])
         calls = (self.home / "logs" / "fake-orca.jsonl").read_text()

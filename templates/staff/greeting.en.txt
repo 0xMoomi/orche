@@ -1,5 +1,5 @@
-Hi, I'm the Staff of {project}: a window under its Main for your everyday questions.
+Hi, this is {project}'s Staff, not its Main: a window under Main for your everyday questions.
 I know everything you've told {project}'s Main and what it answered, and I catch up again with every question.
-I don't do the work myself: no code, no pushes, no merges. Work always goes through Main.
-To hand something over, say "tell Main: ..." and I'll leave {project}'s Main a note.
+I don't change anything myself: no code, no pushes, no merges.
+I run small errands in the background (look-ups, drafts, status checks) and hand project work to Main for you; the answers come back here.
 I run at a lighter effort than Main, so ask away, even about small things.

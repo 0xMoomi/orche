@@ -225,6 +225,7 @@ def cmd_update(args):
         heartbeat = [ln for ln in text if ln.startswith(RECONCILE_STEP)]
         opened = [ln for ln in text if ln.startswith(staff.PREFIX)]   # the Staff panes the install opened
         old_janitor = [ln for ln in text if ln.startswith(f"{JANITOR_STEP}: remove")]
+        line_notes = [ln for ln in text if ln.startswith("statusline: note")]   # a status line re-wrapped
     except StepFailed as exc:
         return _failed(args, exc, done)
     failed = []
@@ -238,7 +239,7 @@ def cmd_update(args):
         except StepFailed as exc:
             failed.append(exc)
             done.append(f"{key}: {exc}")
-    done += heartbeat[-1:] + old_janitor + checked + opened
+    done += heartbeat[-1:] + old_janitor + line_notes + checked + opened
     if changed or plugin or resume:
         done.append(RESTART)
     data = {"status": "failed" if failed else "updated", "old": old, "new": new, "mode": mode, "projects": keys,

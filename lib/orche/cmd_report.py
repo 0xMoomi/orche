@@ -20,15 +20,17 @@ In a team repository (registry.team) a gated done publishes nothing: it is filed
 `ready: say "push <unit>" (<branch>)` (publish.ready_line); `orche queue add <unit>` publishes on the owner's word.
 Under the runner (ORCHE_RUNNER set by `orche run`) it refuses with exit 2: the runner files the pointer.
 A project's CEO Staff (ORCHE_SESSION `staff-<p>`, not a member) files only `info` to its own project's Main
-(`--to`, when given, must name that project or its Main): a held note from `staff-<p>` (unit
-`adhoc-staff-<p>-<yyyymmdd>`) that never wakes Main; Main reads it at its next wake.
+(`--to`, when given, must name that project or its Main): a quiet note `via: staff` from `staff-<p>` (unit
+`adhoc-staff-<p>-<yyyymmdd>`) that never wakes Main and is shown at Main's next prompt. Work for Main, or
+anything urgent, goes as a handover (`orche errand --main`). A report on an errand unit (its brief is
+addressed to a Staff session) is refused for everyone: Main's reply of that turn reaches Staff by itself.
 """
 import json
 import os
 import sys
 from pathlib import Path
 
-from . import brief, cli, donegate, inbox, mask, publish, registry, roster, staff, units, util
+from . import brief, cli, donegate, errand, inbox, mask, publish, registry, roster, staff, units, util
 from .flow import lineage, owner
 
 EXIT_OK, EXIT_USER, EXIT_RUNNER, EXIT_BLOCKED = 0, 1, 2, 3
@@ -58,10 +60,12 @@ def unidentified_message(r, place) -> str:
 
 
 def _staff_note(args, r, session) -> int:
-    """A Staff's note to its own project's Main: `info`, never urgent, held (it does not wake Main)."""
+    """A Staff's note to its own project's Main: `info`, never urgent, quiet and `via: staff` (it does not wake
+    Main; Main sees it at its next prompt)."""
     if args.status != "info" or args.urgent or args.owner or args.unit:
-        return cli.fail(EXIT_USER, "Staff files only `orche report info --summary ...` (no --urgent, --owner "
-                                   "or --unit): a note its project's Main reads at its next wake")
+        return cli.fail(EXIT_USER, "Staff files only FYI notes: `orche report info --summary ...` (no --urgent, "
+                                   "--owner or --unit). For work Main must do, or anything urgent, hand it over: "
+                                   "`orche errand --main --goal ...`.")
     main = r.main(staff.project_of(r.reg, session))
     if main is None:
         return cli.fail(EXIT_USER, f"{session} belongs to no registered project with a Main")
@@ -73,14 +77,14 @@ def _staff_note(args, r, session) -> int:
     if not summary:
         return cli.fail(EXIT_USER, "--summary is empty")
     ptr = inbox.make(f"adhoc-{util.slugify(session)}-{units.now():%Y%m%d}", session, main.session, "info",
-                     summary=summary)
+                     summary=summary, quiet=True, via=errand.VIA_STAFF)
     path = None if args.dry_run else inbox.post(ptr)
     if args.json:
         print(json.dumps(ptr, indent=2, ensure_ascii=False))
     elif args.dry_run:
         print(f"[dry-run] would leave {target.session} a note")
     else:
-        print(f"note left for {target.session} (it reads it at its next wake): {path}")
+        print(f"note left for {target.session} (it sees it at its next prompt): {path}")
     return EXIT_OK
 
 
@@ -113,6 +117,9 @@ def cmd_report(args):
         b = brief.find(reg, unit, project=key)
         if b is None or b.rev == 0:
             return cli.fail(EXIT_USER, f"unknown unit {unit!r} (no .orche/units/{unit}/BRIEF.md)")
+        if errand.is_errand(b):
+            return cli.fail(EXIT_USER, f"{unit} is the owner's errand: your reply in this turn reaches Staff by "
+                                       "itself; send units for it as usual")
     else:
         b = brief.newest(reg, key, me)
         if b is None and args.status not in ADHOC_STATUSES:

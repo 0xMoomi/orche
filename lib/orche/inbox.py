@@ -28,6 +28,15 @@ OWNER_LINE = ("[orche] The owner's message comes first: answer it before the inb
               "it. Then mention the reports in one short line and dispatch the next step they need; a lineage "
               "shown closed with nothing more to dispatch still gets its final report after your answer. An "
               "urgent report, or anything the owner must decide or do, still goes first. " + CLOSING)
+# Shown when the injected pointers include a Staff handover (a `via staff` external-request): directly after
+# the inbox items, or after OWNER_LINE in the owner's own turn (its last sentence then HANDOVER_OWNER); in an
+# Orche turn whose every item is a handover it replaces REPORT_LINE, CLOSING appended (_handover_line).
+HANDOVER_LINE = ("[orche] The external-request from {staff} above is the owner's own request, handed over by his "
+                 "Staff. It is not done: do it now as if he had typed it here (dispatch the units it needs; in a team "
+                 "repository the tracker issue for a code unit first). Your final message of this turn goes to his "
+                 "Staff by itself, and Staff tells him: write it for him, with the usual closing line, and do not ask "
+                 "him to come to this window.")
+HANDOVER_OWNER = "Finish his request first; your reply in this turn is his."
 # Added to either order line when the injected pointers include the daily brief (unit DAILY_UNIT from
 # `orche`, lib/orche/flow/daily.py): its summary is hidden under an inlined body, its unit stays visible.
 DAILY_UNIT = "daily-brief"
@@ -57,7 +66,8 @@ TRUNCATED = "[…truncated]"
 BUDGET = 9500
 BODY_MAX = 1800                         # characters of one inlined REPORT.md
 LINEAGE_MAX = 4000                      # characters of one inlined LINEAGE.md (the request's record)
-BODY_FILES = ("LINEAGE.md", "REPORT.md")
+BODY_FILES = ("LINEAGE.md", "REPORT.md", "REPLY.md")   # REPLY.md: Main's reply forwarded to Staff (errand)
+NEVER_HELD = ("dispatch", "runner", "staff", "main")    # `via` values never held (errand.VIA_STAFF, VIA_MAIN)
 _CTRL = re.compile(r"[\x00-\x08\x0b-\x1f\x7f]")
 
 
@@ -213,8 +223,9 @@ def pending(session: str) -> list:
 
 
 def held(ptr: dict) -> bool:
-    """A note that waits for a drain trigger: a non-urgent `info` that is not a dispatch or a runner filing."""
-    return ptr.get("status") == "info" and not ptr.get("urgent") and ptr.get("via") not in ("dispatch", "runner")
+    """A note that waits for a drain trigger: a non-urgent `info` of Orche's own, not a dispatch, a runner
+    filing, a Staff item (`via: staff`: the owner's words relayed) or Main's reply to Staff (`via: main`)."""
+    return ptr.get("status") == "info" and not ptr.get("urgent") and ptr.get("via") not in NEVER_HELD
 
 
 def wakes(ptr: dict) -> bool:
@@ -300,8 +311,9 @@ def render(items: list, stalled=(), bodies=None) -> str:
                      f"status {_one(p.get('status', '?'))}{' · URGENT' if p.get('urgent') else ''}{mark}")
         if p.get("owner"):
             lines.append("  OWNER STEP: " + _one(p["owner"]))
-        lines.append(f"  brief_rev {_one(p.get('brief_rev', '?'))} · head {sha} · ledger_row "
-                     f"{'yes' if p.get('ledger_row') else 'no'}")
+        if p.get("status") != "external-request":   # a request is no unit's report: no rev, head or row
+            lines.append(f"  brief_rev {_one(p.get('brief_rev', '?'))} · head {sha} · ledger_row "
+                         f"{'yes' if p.get('ledger_row') else 'no'}")
         if i in bodies:
             lines += ["  report: " + _one(p["report_path"]), bodies[i]]
             continue
@@ -507,6 +519,44 @@ def _order(prompt) -> str:
     return OWNER_LINE
 
 
+def is_handover(ptr) -> bool:
+    """A Staff handover: the owner's request as a `via staff` external-request (errand.hand_over), not a
+    forwarded Staff item."""
+    return ptr.get("status") == "external-request" and ptr.get("via") == "staff" and not ptr.get("forwarded")
+
+
+def _handover_line(project, owner, alone) -> str:
+    """HANDOVER_LINE for Staff `staff-<project>`: in the owner's turn its last sentence is HANDOVER_OWNER;
+    `alone` (an Orche turn of handovers only): CLOSING appended, as it stands in for REPORT_LINE."""
+    from . import staff
+    text = HANDOVER_LINE.format(staff=staff.session_of(project))
+    if owner:
+        return text[:text.index(" Your final message")] + " " + HANDOVER_OWNER
+    return text + " " + CLOSING if alone else text
+
+
+def _turn_errands(reg, project, shown, lins, owner, prior=None) -> tuple:
+    """(errands, staff_only) for Main's turn record from the pointers `shown` this prompt (`lins`: their
+    lineages by path, already resolved, so each errand check reads one BRIEF.md per lineage):
+    errand.turn_errands, merged into `prior` (a running turn's) with close over handover over item;
+    staff_only: an Orche turn whose every shown pointer is an item of an errand lineage (a forwarded Staff
+    result is not: Main tells the owner itself). Never raises ({}, False)."""
+    try:
+        from . import errand     # errand imports inbox: resolved at call time
+        ptrs = [(p, {**x, "lineage": lins[p]}) for p, x in shown if lins.get(p)]
+        found = errand.turn_errands(reg, project, ptrs)
+        staff_only = (not owner and bool(shown)
+                      and all(not x.get("forwarded") and lins.get(p) in found for p, x in shown))
+        merged = dict(prior) if isinstance(prior, dict) else {}
+        for lin, kind in found.items():
+            if errand.RANK.get(kind, -1) > errand.RANK.get(merged.get(lin), -1):
+                merged[lin] = kind
+        return merged, staff_only
+    except Exception as exc:  # noqa: BLE001 - the turn record never costs the prompt
+        log.log("hooks", f"inbox: turn errands: {type(exc).__name__}: {exc}")
+        return dict(prior) if isinstance(prior, dict) else {}, False
+
+
 def _prompt_text(payload, started, r, who, me, budget) -> str:
     prompt = payload.get("prompt") or ""
     main = who.member is not None and who.member.kind == "main"
@@ -526,7 +576,7 @@ def _prompt_text(payload, started, r, who, me, budget) -> str:
     head = "\n\n".join(_standing_once(r, payload, who))
     read_at = units.now()   # before the inbox is read: a report landing after it is not this turn's
     items = _jev(prompt, pending(me), terms.deadline)
-    block, tail, named = "", [], []
+    block, tail, named, shown, lins = "", [], [], [], {}
     # Orche's order line follows who started the turn: a mid-turn wake in the owner's turn stays background.
     order = (OWNER_LINE if turn is not None and owner else REPORT_LINE if not owner else _order(prompt)) if main else ""
     if items:
@@ -536,23 +586,49 @@ def _prompt_text(payload, started, r, who, me, budget) -> str:
         inject = by_lineage([it for it in items if drain_all or not held(it[1])])
         if main and any(x.get("unit") == DAILY_UNIT and x.get("from") == "orche" for _p, x in inject):
             order += " " + DAILY_LINE    # the daily brief is urgent: always shown (fit)
+        hand = ""
         if inject:
             if main:     # only a lineage field, or the brief of the pointer's unit, names a lineage
-                named = [n for n in (lineage.of_pointer(x, r.reg, who.member.project) for _p, x in inject) if n]
-                tail.extend(lineage.lines(r.reg, who.member.project, [{"lineage": n} for n in named]))
+                lins = {p: lineage.of_pointer(x, r.reg, who.member.project) for p, x in inject}
+                named = [lins[p] for p, _x in inject if lins[p]]
+                # A lineage handed over now is the owner's open request: its errand's own end never reads closed.
+                closing = {lins[p] for p, x in inject if x.get("lineage_closed")}
+                handed = {lins[p] for p, x in inject if is_handover(x)} - closing
+                tail.extend(lineage.lines(r.reg, who.member.project,
+                                          [{"lineage": n} for n in named if n not in handed]))
+                if any(is_handover(x) for _p, x in inject):
+                    alone = not owner and all(is_handover(x) for _p, x in inject)
+                    hand = _handover_line(who.member.project, owner, alone)
+                    if alone:
+                        order = ""
             held_back = "[orche] inbox: 0000 report(s) left pending for size; they come with the next prompt"
-            fixed = len("\n\n".join(t for t in (head, *tail, held_back, order) if t))
+            fixed = len("\n\n".join(t for t in (head, hand, *tail, held_back, order) if t))
             block, shown = fit(inject, _stalled(r, inject, terms), budget - fixed - 4)
             drain([p for p, _x in shown])
             if len(shown) < len(inject):
                 tail.append(held_back.replace("0000", str(len(inject) - len(shown))))
+            if hand and not any(is_handover(x) for _p, x in shown):
+                hand = ""    # every handover was left pending for size: it comes with its line next prompt
         waiting = len(items) - len(inject)
         if waiting:
             tail.append(f"[orche] inbox: {waiting} note(s) held — FYI from Orche, no action needed; [drain] shows them")
         if inject and main:
-            tail.append(order)  # Orche's own order, last in every block Main gets (§14.2)
-    if main and turn is not None:   # mid-turn: the running turn also carries the lineages injected now
-        util.write_json(lineage.turn_path(me), {**turn, "lineages": sorted(set(turn.get("lineages") or []) | set(named))})
-    elif main:
-        lineage.write_turn(me, owner, named, at=read_at)   # after the drain; `at` is when the inbox was read
+            # Orche's own order, last in every block Main gets (§14.2); a handover's line goes directly after
+            # the items, or after OWNER_LINE in the owner's turn.
+            if hand and owner:
+                tail.extend([order, hand])
+            else:
+                tail[:0] = [hand] if hand else []
+                if order:
+                    tail.append(order)
+    errands, staff_only = (_turn_errands(r.reg, who.member.project, shown, lins, owner,
+                                         turn.get("errands") if turn is not None else None)
+                           if main and shown else ((turn or {}).get("errands") or {}, False))
+    if main and turn is not None:   # mid-turn: the running turn also carries the lineages and errands injected now
+        rec = {**turn, "lineages": sorted(set(turn.get("lineages") or []) | set(named)), "errands": errands}
+        if shown:   # and-ed: one non-errand item makes the turn a normal one
+            rec["staff_only"] = bool(turn.get("staff_only")) and staff_only
+        util.write_json(lineage.turn_path(me), rec)
+    elif main:     # after the drain; `at` is when the inbox was read
+        lineage.write_turn(me, owner, named, at=read_at, errands=errands, staff_only=staff_only)
     return _within(head, block, "\n\n".join(tail), budget)

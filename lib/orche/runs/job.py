@@ -69,6 +69,15 @@ and marks it ended when the attempts are over. What the run files still comes fr
 
 headless.run is the one way Orche starts claude (SPEC §14.10), codex.run the one way it starts codex;
 this module holds the unit-worker policy (call_for) and files the run.
+
+A Staff errand (a brief to `staff-<p>`, errand.py) runs as the Staff pseudo-member (errand.member): in the main
+checkout on OPUS's standard rung, with errand.PERSONA, the tools ERRAND_TOOLS and the footer errand.FOOTER
+(templates/run/errand.md, its unit folder named); its result goes to Staff (filing.recipient), a stopped one
+says "stopped by the owner", and a capped start parks no ask for Main. `git status --porcelain` of the
+checkout (`.orche/` left out) is read before and after its attempts; when they differ the result filed to
+Staff starts with CHANGED_LINE (at most CHANGED_SHOWN paths, then "and N more") and the events line
+`errand changed unit=<u> files=<n>` is logged; nothing is reverted. No git repository or a git error: no
+check.
 """
 import math
 import os
@@ -78,8 +87,8 @@ import traceback
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 
-from .. import (brief, codex, config, donegate, headless, intake, ladder, log, mask, paths, procs, publish,
-                registry, roster, runs, shell, templates, units, util, vendors)
+from .. import (brief, codex, config, donegate, errand, headless, intake, ladder, log, mask, paths, procs,
+                publish, registry, roster, runs, shell, templates, units, util, vendors)
 from ..flow import usage as holds
 from . import filing, history, progress
 
@@ -98,6 +107,10 @@ GRACE_S = 60
 CODEX_OWNER = "fix codex: orche doctor (row vendors) names the step; then orche run {unit}"
 STOPPED = "stopped by Main"
 STOPPED_BEFORE_START = "stopped by Main before start"
+STOPPED_ERRAND = "stopped by the owner"     # a Staff errand (errand.py): only the owner stops one
+ERRAND_TOOLS = "Read,Write,Edit,Glob,Grep,Bash,WebFetch,WebSearch"
+CHANGED_LINE = "CHANGED PROJECT FILES: "   # an errand that changed the checkout (porcelain before and after)
+CHANGED_SHOWN = 5
 FINISH_TURNS = 8
 FINISH_MIN_S = 60       # TIMEBOX left below which no finishing continuation starts
 FINISH_PROMPT = ("Your run ended without a valid completion: {gap}. Do only the closing steps your brief requires "
@@ -133,6 +146,7 @@ class Job:
     pin_note: str = ""       # why a MODEL pin no longer runs (ladder.pin_error at run time): the rung runs
     team: str = ""           # the team plugin the project declares (registry.team): a gated done publishes nothing
     plugin: Path = None      # that plugin's folder when installed for this user: its rules and gates reach the worker
+    porcelain: frozenset = None   # an errand's `git status --porcelain` before its attempts (_porcelain), else None
 
     @property
     def vendor(self) -> str:
@@ -192,7 +206,7 @@ def resolve(reg, unit, cfg=None) -> Job:
     if b.rev == 0:
         raise runs.RunError(EXIT_NOT_FOUND, f"no brief: {b.path}")
     proj, root, folder, fields, to = b.project, b.root, b.folder, b.fields, b.to
-    target = roster.Roster(reg).member(to)
+    target = roster.Roster(reg).member(to) or errand.member(reg, to)
     if target is None:
         raise runs.RunError(EXIT_NOT_FOUND, f"{unit}: unknown target session {to!r}")
     if target.owns_worktree:
@@ -200,7 +214,8 @@ def resolve(reg, unit, cfg=None) -> Job:
         branch = target.branch or "-"
     else:  # Main works in the main checkout
         wt, branch = str(root), "-"
-    persona = Path(wt or root) / ".claude" / "agents" / f"{to}.md"
+    persona = (errand.PERSONA if target.kind == errand.KIND       # a Staff errand: the errand persona
+               else Path(wt or root) / ".claude" / "agents" / f"{to}.md")
     context = intake.context_path(root, target.division) if target.owns_worktree else None
     base = vendors.of(reg, target) if target.owns_worktree else OPUS
     cfg = cfg if cfg is not None else config.load()
@@ -252,13 +267,13 @@ def call_for(job, cfg, tag=None):
                           cwd=job.worktree, writable=writable_roots(job),
                           out=codex.out_path(tag),
                           sandbox=sandbox_of(cfg), env=env, tag=tag)
-    mechanical = job.tier == "mechanical"
+    mechanical = job.tier == "mechanical" and job.kind != errand.KIND
+    allowed = ERRAND_TOOLS if job.kind == errand.KIND else MECH_TOOLS if mechanical else MECH_TOOLS + ",Bash"
     return headless.Call(
         context="project", model=job.model, effort=job.effort,
         max_turns=max_turns(job.timebox_s, cfg.get("runner")),
         timeout=job.timebox_s + GRACE_S, cwd=job.worktree,
-        allowed=MECH_TOOLS if mechanical else MECH_TOOLS + ",Bash",
-        denied=MECH_DENIED if mechanical else "", append_file=job.persona,
+        allowed=allowed, denied=MECH_DENIED if mechanical else "", append_file=job.persona,
         env=env, tag=tag, team=job.plugin)
 
 
@@ -338,8 +353,11 @@ def prompt(job, cfg) -> str:
         text += "\n\n" + rules
     if job.sync_note:
         text += "\n\n" + job.sync_note
-    footer = templates.load("run/footer.md", WORKTREE=job.worktree,
-                            COMMIT=templates.load("run/commit-gated.md" if job.gated else "run/commit.md"))
+    if job.kind == errand.KIND:     # a Staff errand: its own footer, files only in its unit folder
+        footer = templates.load(errand.FOOTER, UNIT=job.unit_dir)
+    else:
+        footer = templates.load("run/footer.md", WORKTREE=job.worktree,
+                                COMMIT=templates.load("run/commit-gated.md" if job.gated else "run/commit.md"))
     if job.vendor == vendors.CODEX:
         role = persona_body(job.persona)
         if role:
@@ -499,7 +517,8 @@ def _capped(reg, job, capped) -> Outcome:
     guard.logged(capped.rule, roster.actor(), job.unit, capped.n)
     out = _unrun(reg, job, "info", f"not started: {capped.text}; ask the owner", f"not started: {capped.text}",
                  "capped", EXIT_BLOCKED, record=False)
-    owner.parked(job.project, job.unit, f"not started: {capped.text}", units.now())
+    if job.kind != errand.KIND:     # an errand's refusal wakes Staff, which tells the owner (errand.py)
+        owner.parked(job.project, job.unit, f"not started: {capped.text}", units.now())
     return out
 
 
@@ -563,6 +582,13 @@ def run_since() -> int:
     return since if 0 < since <= now else now
 
 
+def stopped_text(job, before=False) -> str:
+    """The summary of a stopped run: "stopped by Main" (STOPPED, STOPPED_BEFORE_START), or for a Staff errand
+    "stopped by the owner" (STOPPED_ERRAND), with " before start" when claude never ran."""
+    text = STOPPED_ERRAND if job.kind == errand.KIND else STOPPED
+    return f"{text} before start" if before else text
+
+
 def _cancel(job, since, stop):
     """Why a run waiting for a slot gives up: a STOP marker written since it started, or SIGTERM."""
     if runs.stop_requested(job.project, job.unit, since):
@@ -579,8 +605,8 @@ def _not_started(reg, job, since, stop, record=True) -> tuple:
     the marker is left to that run, which then files "stopped by Main" and clears it."""
     at = runs.marker_time(job.project, job.unit)
     if at is not None and at >= since:
-        rec = filing.unrun(reg, who(job), job.rev, job.unit_dir, "info", STOPPED_BEFORE_START,
-                           STOPPED_BEFORE_START, "stopped", record)
+        text = stopped_text(job, before=True)
+        rec = filing.unrun(reg, who(job), job.rev, job.unit_dir, "info", text, text, "stopped", record)
         log.log("events", f"run unit={job.unit} to={job.to} delivery=runner-stopped")
         return rec, (at if record else None)
     error = stop.reason or "terminated by SIGTERM"
@@ -717,7 +743,7 @@ def _attempt(reg, job, call, cfg, lock, since, stop, head_before, text, kind="wo
     head = shell.git_head(job.worktree)
     dead, owner = did_not_start(call, res), owner_of(result)
     if stopped:
-        status, summary = "info", STOPPED
+        status, summary = "info", stopped_text(job)
     elif dead:
         status, summary, owner = "blocked", f"codex did not start: {error}", CODEX_OWNER.format(unit=job.unit)
     else:
@@ -806,6 +832,8 @@ def _run_locked(reg, job, call, cfg, lock, since, stop) -> tuple:
     before = filing.worker_pointers(recipient, job.unit, job.to)
     if stop.signum is not None or runs.stop_requested(job.project, job.unit, since):
         return _not_started(reg, job, since, stop)      # STOP/SIGTERM before claude started
+    if job.kind == errand.KIND:
+        job.porcelain = _porcelain(job.worktree)
     _audit(job, cfg)
     base_prompt = prompt(job, cfg)
     prog = _recorder(job, call, lock)
@@ -815,6 +843,35 @@ def _run_locked(reg, job, call, cfg, lock, since, stop) -> tuple:
         if prog is not None:
             prog.close()
     return _file(reg, job, cfg, since, head_before, tries, recipient, before)
+
+
+def _porcelain(where):
+    """The lines of `git status --porcelain` in `where` outside `.orche/` (Orche's own folders), as a
+    frozenset; None when `where` is no git repository or git fails."""
+    res = shell.git(where, "status", "--porcelain", timeout=30)
+    if not res.ok:
+        return None
+    return frozenset(ln for ln in res.out.splitlines()
+                     if ln.strip() and not _porcelain_path(ln).startswith(".orche/"))
+
+
+def _porcelain_path(line) -> str:
+    """The path a porcelain line names (a rename's new path)."""
+    return line[3:].split(" -> ")[-1].strip().strip('"')
+
+
+def _changed(job) -> str:
+    """CHANGED_LINE and the paths whose porcelain line differs from the errand's start, '' when none or
+    either reading failed; logs `errand changed`."""
+    if job.kind != errand.KIND or job.porcelain is None:
+        return ""
+    after = _porcelain(job.worktree)
+    if after is None or after == job.porcelain:
+        return ""
+    found = sorted({_porcelain_path(ln) for ln in job.porcelain ^ after})
+    log.log("events", f"errand changed unit={job.unit} files={len(found)}")
+    more = f" and {len(found) - CHANGED_SHOWN} more" if len(found) > CHANGED_SHOWN else ""
+    return CHANGED_LINE + ", ".join(found[:CHANGED_SHOWN]) + more
 
 
 def _recorder(job, call, lock):
@@ -885,6 +942,9 @@ def _file(reg, job, cfg, since, head_before, tries, recipient, before) -> tuple:
         hit.status, hit.summary = status, summary
     if job.pin_note:
         summary = f"{summary}\n{job.pin_note}".strip()
+    changed = _changed(job)
+    if changed:
+        summary = f"{changed}\n{summary or ''}".rstrip()
     t = tries[-1]          # the last attempt: exit code, error, stop reason
     call, started, finished, res = t.call, tries[0].started, tries[-1].finished, t.res
     data, code, error = res.data, res.code, res.failure

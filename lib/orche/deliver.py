@@ -21,6 +21,13 @@ Enter press instead of the text (`_press_enter`); that line is never typed again
 typed is never pointer content. `orche nudge --unread` (the Stop hook, when a Main turn Orche started
 ends) first marks Main's Orca workspace unread (`mark_unread`), then wakes as above.
 
+A project's Staff (`staff-<p>`, not a registry member) is woken the same way, for its errand results and
+Main's replies (lib/orche/errand.py): by file, else typed into with Main's rules (a person types there), with
+no quiet window. A Staff whose pane is gone is opened again (`_staff_closed`: `staff.open_pane`, no switch)
+and typed into once; when that fails its items are copied to Main and drained (`errand.forward`,
+`undelivered`, which wakes Main); an asleep Staff (closed in words) is never opened: its items go to Main
+quietly (`asleep`). `--unread` marks the Staff workspace for a Staff session.
+
 The Stop hook writes a pane unit's pointer (`via: dispatch`) and starts `orche deliver <unit>`
 (spawn). The deliverer holds the target's own `.deliver.lock` (never the wake lock: a brief is not
 held up behind a wake's quiet window), wakes by file when it can, else waits up to DELIVER_WAIT_S for
@@ -38,7 +45,7 @@ import json
 import re
 import time
 
-from . import brief, config, inbox, log, orca, paths, procs, roster, runs, shell, units, util, vendors, watch
+from . import brief, config, inbox, log, orca, paths, procs, roster, runs, shell, staff, units, util, vendors, watch
 
 WAKE_LOCK = ".wake.lock"        # one nudger per session
 DELIVER_LOCK = ".deliver.lock"  # one deliverer per target pane
@@ -64,7 +71,8 @@ WAKE_HOLD_S = (CALL_S + 2 * (IDLE_WAIT_S + WAIT_SLACK_S + CALL_S) + SUBMIT_WAIT_
 WAKE_WAIT_S = 5           # after writing the wake file: this long for the session to show it took the wake
 AGENTS_S = 2              # `claude agents --json` (about 0.12 s): its failure is never an error
 ARMED_SLACK_S = 2         # a WATCH record's `at` keeps whole seconds (_armed_before)
-OK_STATES = ("nudged", "queued", "already-nudged", "nothing-pending")
+# forwarded: a closed or asleep Staff's items went to Main (_staff_closed)
+OK_STATES = ("nudged", "queued", "already-nudged", "nothing-pending", "forwarded")
 FAILED = ("no-pane", "needs-wake", "wake-requested", "dialog", "no-agent", "refused", "nudge-failed", "locked")
 
 
@@ -236,12 +244,14 @@ def _dead(session, handle) -> bool:
 
 def reopen_pane(reg, session, handle, done=None):
     """Close `session`'s dead pane `handle` and reopen it through the wake path (Main: `hr.project_pane`;
-    a division or feature: `hr.wake`, which reopens an active unit's pane), then wait for the new pane to
-    be listed connected. The new handle, or None. Logs `reopen session=… state=reopened` and appends
-    the time to `done`. A connected pane another process already reopened is taken as it is."""
+    a division or feature: `hr.wake`, which reopens an active unit's pane; a project's Staff that is not
+    asleep: `staff.open_pane`, no switch), then wait for the new pane to be listed connected. The new
+    handle, or None. Logs `reopen session=… state=reopened` and appends the time to `done`. A connected
+    pane another process already reopened is taken as it is."""
     from . import hr
     m = roster.Roster(reg).member(session)
-    if m is None:
+    key = staff.project_of(reg, session) if m is None else None
+    if m is None and (key is None or staff.asleep(reg["projects"][key])):
         return None
     with _lock(session, REOPEN_LOCK, REOPEN_WAIT_S + CALL_S) as ok:
         now = _listed(session)
@@ -255,7 +265,9 @@ def reopen_pane(reg, session, handle, done=None):
         except Exception as exc:  # noqa: BLE001 - a pane Orca already dropped is closed
             log.log("hooks", f"deliver: close {session} pane {handle}: {exc}")
         try:
-            if m.kind == "main":
+            if m is None:
+                staff.open_pane(key, reg["projects"][key], switch=False)
+            elif m.kind == "main":
                 hr.project_pane(m.project, reg["projects"][m.project], dry_run=False, switch=False)
             else:
                 hr.wake(reg, m)
@@ -492,7 +504,10 @@ def _event(session, state, pending, waited, quiet=0) -> None:
 
 def _quiet(session, cfg) -> int:
     """The quiet window: wait (polling every QUIET_POLL_S) while the newest waking pointer is younger
-    than `quiet_s` and none is urgent, for at most `quiet_max_s`; returns the seconds waited."""
+    than `quiet_s` and none is urgent, for at most `quiet_max_s`; returns the seconds waited. A Staff has
+    none (0): its errand results are few and the owner waits for each."""
+    if staff.is_staff(session):
+        return 0
     quiet_s, cap = float(cfg.get("quiet_s", 90)), float(cfg.get("quiet_max_s", 240))
     started = time.monotonic()
     while True:
@@ -508,10 +523,46 @@ def _quiet(session, cfg) -> int:
     return int(time.monotonic() - started)
 
 
-def _is_main(r, session) -> bool:
-    """`session` is a project's Main in roster `r`: a person types in its pane (`_type`'s owner)."""
+def _owner_pane(r, session) -> bool:
+    """`session` is a project's Main in roster `r`, or a project's Staff: a person types in its pane
+    (`_type`'s owner)."""
     m = r.member(session)
-    return m is not None and m.kind == "main"
+    return (m is not None and m.kind == "main") or (m is None and staff.project_of(r.reg, session) is not None)
+
+
+def _staff_closed(session) -> str:
+    """A Staff `session` whose pane the typing fallback did not find (`no-pane`): asleep, its pending items
+    go to Main quietly (`errand.forward`, `asleep`); else its pane is opened again (`staff.open_pane`, no
+    switch: it resumes its conversation and its SessionStart arms the wake file) and the wake typed once;
+    when that fails the items go to Main and wake it (`undelivered`). The owner typing in the reopened
+    pane keeps them (his next prompt shows them). `nudged`, `queued`, `user-typing`, `nothing-pending`,
+    `forwarded`, or `no-pane` (no registered project's Staff). One events line `wake session=<s>
+    via=reopen state=<state>`. An Orca failure is logged, never raised."""
+    from . import errand, registry
+    reg = registry.load()
+    key = staff.project_of(reg, session)
+    if key is None:
+        return "no-pane"
+    proj = reg["projects"][key]
+    state, reason = "forwarded", "asleep"
+    if not staff.asleep(proj):
+        reason, state = "undelivered", "nudge-failed"
+        try:
+            staff.open_pane(key, proj, switch=False)
+            end = time.monotonic() + REOPEN_WAIT_S
+            while _listed(session) is None and time.monotonic() < end:
+                time.sleep(POLL_S)
+            state, _waited = _type(session, inbox.WAKE_TEXT, strict=True, wait_s=IDLE_WAIT_S,
+                                   still_needed=lambda: _waking(session) > 0, before_send=lambda: _mark(session),
+                                   on_fail=lambda: _unmark(session), owner=True)
+        except Exception as exc:  # noqa: BLE001 - Orca down: the items go to Main instead
+            log.log("hooks", f"deliver: reopen {session}: {type(exc).__name__}: {exc}")
+    if state not in ("nudged", "queued", "nothing-pending", "user-typing"):
+        errand.forward(reg, key, inbox.pending(session), reason)
+        state = "forwarded"
+    log.log("events", f"wake session={session} via=reopen state={state}" + (f" reason={reason}"
+                                                                           if state == "forwarded" else ""))
+    return state
 
 
 def _reopener(session):
@@ -524,14 +575,24 @@ def _reopener(session):
 
 def mark_unread(session) -> str:
     """Mark Main's Orca workspace unread in the sidebar (`orca worktree set --worktree id:<repo_id>::<path>
-    --unread`, the workspace hr.project_pane opens Main in): `marked`, `not-main` (only Main is marked) or
-    `mark-failed`. Never raises; one events line `unread session=<s> state=<state>`."""
+    --unread`, the workspace hr.project_pane opens Main in), or a project's Staff workspace (the worktree
+    named staff.WORKTREE that `orca worktree list` shows; none listed: `mark-failed`): `marked`, `not-main`
+    (only Main and Staff are marked) or `mark-failed`. Never raises; one events line `unread session=<s>
+    state=<state>`."""
     from . import registry
+    from .hr import onboarding
     state = "mark-failed"
     try:
         reg = registry.load()
         m = roster.Roster(reg).member(session)
-        if m is None or m.kind != "main":
+        key = staff.project_of(reg, session) if m is None else None
+        if key is not None:
+            found = onboarding.listed_worktree(orca.worktree("list", timeout=CALL_S),
+                                               reg["projects"][key]["repo_id"], staff.WORKTREE)
+            if found:
+                orca.worktree("set", "--worktree", f"id:{found[0]}", "--unread", timeout=CALL_S)
+                state = "marked"
+        elif m is None or m.kind != "main":
             state = "not-main"
         else:
             proj = reg["projects"][m.project]
@@ -583,7 +644,9 @@ def nudge(session, unread=False) -> tuple:
                                                   wait_s=IDLE_WAIT_S, still_needed=lambda: _waking(session) > 0,
                                                   before_send=lambda: _mark(session), on_fail=lambda: _unmark(session),
                                                   settle=again, reopen=_reopener(session),
-                                                  owner=_is_main(roster.Roster(registry.load()), session))
+                                                  owner=_owner_pane(roster.Roster(registry.load()), session))
+                            if state == "no-pane" and staff.is_staff(session):
+                                state = _staff_closed(session)
                 except Exception as exc:  # noqa: BLE001 - recorded below, under the lock
                     log.log("hooks", f"deliver: nudge {session}: {type(exc).__name__}: {exc}")
                     state, waited = "nudge-failed", int(time.monotonic() - started)
@@ -819,7 +882,7 @@ def _pane(r, b, to, sent, reopened=None):
         else:
             state, waited = _type(to, watch.brief_line(b.unit, b.rev), strict=False, wait_s=DELIVER_WAIT_S,
                                   still_needed=path.exists, reopen=lambda h: reopen_pane(r.reg, to, h, reopened),
-                                  owner=_is_main(r, to))
+                                  owner=_owner_pane(r, to))
         if stop and state == "no-pane":
             drain_dispatch(to, b.unit, b.rev)
             return "stop-idle", waited
@@ -952,7 +1015,7 @@ def remind(reg, unit, reason) -> tuple:
                     state, waited = "locked", int(time.monotonic() - started)
                 else:
                     state, waited = _type(to, remind_text(unit, b.rev, reason), strict=False,
-                                          wait_s=DELIVER_WAIT_S, still_needed=needed, owner=_is_main(r, to))
+                                          wait_s=DELIVER_WAIT_S, still_needed=needed, owner=_owner_pane(r, to))
             if state == "nothing-pending":
                 state = "already-reported"
     except Exception as exc:  # noqa: BLE001 - the events line is always written

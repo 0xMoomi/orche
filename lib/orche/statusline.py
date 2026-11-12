@@ -1,7 +1,7 @@
 """Per-project visibility counts and the compact status-line segment (registry + file counts only).
 
 No orca calls, no transcript read, no subprocess here: `orche statusline` must stay under 50 ms. The
-status line itself only prints the cached ORCHE_HOME/status/<proj>.line (templates/statusline-segment.sh):
+status line itself only prints the cached ORCHE_HOME/status/<proj>.line (templates/statusline.sh):
 its first line is the segment, with its ANSI colours (the one place they are added is segment(); the
 plain readers, `orche statusline --json` and the tests, strip them with plain()); a second line
 `spent <YYYY-MM-DD> <usd|n/a>` keeps the day's spend (project.spent_today) for the refreshes that do not

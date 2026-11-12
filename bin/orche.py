@@ -36,7 +36,7 @@ GROUPS = (
     ("What you say to Main (Main runs these for you; you can run them too)",
      ("init", "status", "projects", "dispatch", "hr", "feat", "sleep", "wake", "stage", "flow", "queue", "review",
       "secret", "dev", "auth", "jev", "metrics", "update", "install", "uninstall", "doctor", "version")),
-    ("What Main and the units run", ("ask", "card", "decide", "depts", "discard", "report", "ledger")),
+    ("What Main and the units run", ("ask", "card", "decide", "depts", "discard", "report", "ledger", "errand")),
     ("What Orche runs by itself",
      ("nudge", "deliver", "reconcile", "statusline", "run", "janitor", "intake", "triage")),
 )

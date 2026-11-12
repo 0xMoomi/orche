@@ -9,7 +9,7 @@ runs.job, dispatch or cmd_report: reconcile loads it inside the prompt hook.
 """
 import os
 
-from .. import brief, inbox, ledger, log, mask, roster, runs, units, util
+from .. import brief, inbox, ledger, log, mask, roster, runs, staff, units, util
 from . import history
 
 VIA = "runner"       # pointer field `via` on every pointer the runner files
@@ -52,9 +52,11 @@ def masked(value):
 
 
 def recipient(reg, who):
-    """Where who["to"]'s pointers for who["unit"] go: the sender of the unit's brief when it is a live
-    Main or division of the project other than the target; else a feature: its division; else the
-    project's Main; else None."""
+    """Where who["to"]'s pointers for who["unit"] go: a Staff target (an errand) to itself when it is the Staff
+    of who["project"], else nowhere; the sender of the unit's brief when it is a live Main or division of the
+    project other than the target; else a feature: its division; else the project's Main; else None."""
+    if staff.is_staff(who["to"]):
+        return who["to"] if staff.project_of(reg, who["to"]) == who["project"] else None
     b = brief.find(reg, who["unit"], project=who["project"])
     return roster.Roster(reg).recipient(who["to"], b.sender if b is not None else None)
 
@@ -98,11 +100,14 @@ def filed_since(rcpt, unit, to, started) -> bool:
 def file_pointer(reg, who, rev, folder, status, summary, head=None, link_report=True, extra=None) -> bool:
     """The pointer from who["to"] to its recipient, `via: runner`, `brief_rev` `rev`, REPORT.md
     linked when asked and present, the summary masked then inbox.clip'ped. False (logged to
-    hooks.log) when the target routes nowhere."""
+    hooks.log) when the target routes nowhere. To a Staff session (an errand) `quiet` and `retry` are dropped
+    from `extra`: every errand outcome wakes Staff and is final."""
     to = recipient(reg, who)
     if not to:
         log.log("hooks", f"runner: no recipient for {who['to']}; pointer for {who['unit']} not filed")
         return False
+    if staff.is_staff(to):
+        extra = {k: v for k, v in (extra or {}).items() if k not in ("quiet", "retry")}
     report = folder / "REPORT.md"
     linked = link_report and report.is_file()
     from ..flow import lineage     # flow imports inbox; filing stays importable without it at load

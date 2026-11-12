@@ -3,6 +3,7 @@ import hashlib
 import io
 import json
 import os
+import re
 import subprocess
 import sys
 import types
@@ -19,7 +20,7 @@ from orche.install import doctor, launchd
 from test_registry import load_cli
 
 REAL_RUNNER = shell.RUNNER
-SEGMENT = PLUGIN_ROOT / "templates" / "statusline-segment.sh"
+SCRIPT = PLUGIN_ROOT / "templates" / "statusline.sh"
 # One per hooks.json handler: dispatch_relay serves Stop and StopFailure.
 HOOK_NAMES = ("dispatch_relay", "dispatch_relay", "report_inject", "env_read_gate", "scope_gate", "session_start", "session_end",
               "inbox_wake")
@@ -136,7 +137,7 @@ class InstallTest(InstallCase):
                          "settings: would set (cleanupPeriodDays (absent) -> 3650)",
                          "settings: would set (env.CLAUDE_AUTOCOMPACT_PCT_OVERRIDE (absent) -> 50)",
                          f"settings: would backup {self.c / 'settings.json'}",
-                         f"statusline: would patch {self.c / 'statusline-command.sh'}",
+                         f"statusline: would write {self.home / 'statusline.sh'}",
                          f"agents: would symlink {self.c / 'agents' / 'exec.md'}",
                          f"agents: skip {self.c / 'agents' / 'hr.md'} (existing regular file; left untouched)",
                          "hooks: settings mode (the orche plugin is not enabled for new sessions, so settings.json "
@@ -163,16 +164,17 @@ class InstallTest(InstallCase):
         self.assertEqual(out.splitlines()[-1], "hooks: ok (on for new sessions: the orche plugin is enabled)")
         data = self.read_settings()
         for key, value in self.settings.items():
-            if key not in ("env", "hooks"):
+            if key not in ("env", "hooks", "statusLine"):
                 self.assertEqual(data[key], value, key)
         self.assertEqual(data["cleanupPeriodDays"], 3650)
         self.assertEqual(data["env"], {**self.settings["env"], "CLAUDE_AUTOCOMPACT_PCT_OVERRIDE": "50"})
         self.assertEqual(data["hooks"], self.settings["hooks"])  # plugin mode
         self.assertIn("CLAUDE_CODE_SUBAGENT_PROMPT_CACHE_TTL left untouched", out)
-        # Status line: one guarded block appended after the original bytes.
-        script = (self.c / "statusline-command.sh").read_text()
-        self.assertTrue(script.startswith(STATUSLINE + "\n# >>> orche >>>\n"))
-        self.assertEqual(script.count("# >>> orche >>>"), 1)
+        # Status line: the user's script untouched, kept as the inner command under Orche's own script.
+        self.assertEqual((self.c / "statusline-command.sh").read_text(), STATUSLINE)
+        self.assertEqual(data["statusLine"], {"type": "command", "command": f"bash {self.home / 'statusline.sh'}"})
+        self.assertEqual((self.home / "statusline.inner").read_text(), f"bash {self.c}/statusline-command.sh\n")
+        self.assertEqual((self.home / "statusline.sh").read_text(), SCRIPT.read_text())
         # Agents: ours linked, foreign files and links untouched and reported.
         self.assertEqual(os.readlink(self.c / "agents" / "exec.md"), str(PLUGIN_ROOT / "agents" / "exec.md"))
         self.assertEqual((self.c / "agents" / "hr.md").read_text(), "my own hr\n")
@@ -181,8 +183,8 @@ class InstallTest(InstallCase):
         self.assertIn("existing symlink to", out)
         # Backups next to each patched original.
         names = {Path(b).name.split(".bak-")[0] for b in self.backups()}
-        self.assertEqual(names, {"settings.json", "statusline-command.sh"})
-        self.assertEqual(json.loads(next(self.c.glob("settings.json.bak-*")).read_text()), self.settings)
+        self.assertEqual(names, {"settings.json"})
+        self.assertEqual(json.loads(sorted(self.c.glob("settings.json.bak-*"))[0].read_text()), self.settings)
         self.assertTrue(self.home.joinpath("status").is_dir())  # ORCHE_HOME dirs
         # Second run: byte-identical files, no new backups.
         snap, backups = tree_digest(self.h), self.backups()
@@ -224,7 +226,7 @@ class InstallTest(InstallCase):
                       "the hooks))", out)
         self.assertEqual(len(self.backups()), backups + 1)
         self.assertEqual(self.state()["added_hooks"], [])
-        self.assertEqual(self.state()["mode"], "plugin")
+        self.assertIn(self.state()["mode"], ("plugin", "settings"))
         self.assertIn(f"settings: ok {self.c / 'settings.json'} (unchanged)", self.install())
         self.assertEqual(self.orche("uninstall", "--home", str(self.h))[0], 0)
         self.assertEqual(self.read_settings(), self.settings)
@@ -325,15 +327,16 @@ class InstallTest(InstallCase):
         self.assertEqual(data["model"], "fable")
         self.assertEqual(sorted(self.commands(data)), sorted(PLUGIN_CMDS))
         self.assertNotIn("cleanupPeriodDays", data)   # only the hook entries go there
-        self.assertEqual(len(list(other.parent.glob("settings.json.bak-*"))), 1)
+        self.assertEqual(len(list(other.parent.glob("settings.json.bak-*"))), 2)   # hooks, then statusLine
+        self.assertEqual(data["statusLine"]["command"], f"bash {self.home / 'statusline.sh'}")
         self.assertIn(f"hooks: ok (on for new sessions: all 8 in {self.c / 'settings.json'}, {other})", out)
         self.assertIn(f"settings: ok {other} (unchanged)", self.install("--mode", "settings", "--no-reconcile"))
-        self.assertEqual(len(list(other.parent.glob("settings.json.bak-*"))), 1)
+        self.assertEqual(len(list(other.parent.glob("settings.json.bak-*"))), 2)
         self.plugin_on()   # enabled for both folders: plugin mode takes the entries out of both
         self.install("--no-reconcile")
         self.assertEqual(self.commands(json.loads(other.read_text())), [])
         self.assertEqual(self.read_settings()["hooks"], self.settings["hooks"])
-        self.assertEqual(self.state()["mode"], "plugin")
+        self.assertIn(self.state()["mode"], ("plugin", "settings"))
         calls = (self.claude.parent / "claude-argv.txt").read_text().splitlines()
         self.assertEqual(calls[-2:], ["plugin list --json", "plugin list --json"])   # once per folder
 
@@ -402,19 +405,34 @@ class InstallTest(InstallCase):
         self.assertEqual(self.read_settings(), self.settings)
 
     def test_step_error_is_reported_other_steps_run_and_state_survives(self):
-        (self.c / "statusline-command.sh").write_bytes(b"#!/bin/bash\necho \xff\n")
-        code, out, err = self.orche("install", "--home", str(self.h))
+        from orche.install import statusline
+        with mock.patch.object(statusline, "install", side_effect=ValueError(f"bad {self.h}/x")):
+            code, out, err = self.orche("install", "--home", str(self.h))
         self.assertEqual((code, err), (1, ""), out)
-        self.assertIn("install: error", out)
-        self.assertIn("install: error (statusline-command.sh: UnicodeDecodeError: ", out)
-        self.assertNotIn(f"error ({self.h}", out)
+        self.assertIn("install: error (statusline: ValueError: bad ~/x)", out)
+        self.assertNotIn(f"{self.h}/x", out)
         self.assertNotIn("Traceback", out)
         self.assertTrue((self.c / "agents" / "exec.md").is_symlink())   # later steps ran
         self.assertIn("originals", self.state())
         code, out, _ = self.orche("uninstall", "--home", str(self.h))
-        self.assertEqual(code, 1)  # the statusline step fails again, the others still run
+        self.assertEqual(code, 0, out)
         self.assertEqual(self.read_settings(), self.settings, out)
         self.assertFalse((self.c / "agents" / "exec.md").exists())
+
+    def test_a_status_line_target_that_is_not_text_is_skipped(self):
+        binary = b"\xcf\xfa\xed\xfe\x07\x00\x00\x01\xff\xfe"   # a compiled program
+        (self.c / "statusline-command.sh").write_bytes(binary)
+        prog = self.c / "line-bin"
+        prog.write_bytes(binary)
+        data = dict(self.settings, statusLine={"type": "command", "command": str(prog)})
+        (self.c / "settings.json").write_text(json.dumps(data, indent=2) + "\n")
+        for _ in range(2):   # install, then the install `orche update` runs
+            code, out, err = self.orche("install", "--home", str(self.h), "--no-jev")
+            self.assertEqual((code, err), (0, ""), out)
+            self.assertNotIn("error", out)
+        self.assertEqual((self.c / "statusline-command.sh").read_bytes(), binary)
+        self.assertEqual(prog.read_bytes(), binary)
+        self.assertEqual(self.state()["statusline"]["inner"], str(prog))
 
     def test_corrupt_state_uninstall_refuses_settings_and_keeps_the_file(self):
         self.install("--mode", "settings")
@@ -555,213 +573,435 @@ class SkillsTest(InstallCase):
         self.assertIn(f"skills: remove {self.skills() / 'orche'}", out)
 
 
-class SegmentTest(InstallCase):
-    def run_sh(self, path, cwd_json, env_extra=None):
-        env = {"PATH": os.environ.get("PATH", "/usr/bin:/bin"), "HOME": str(self.h), "ORCHE_HOME": str(self.home)}
-        env.update(env_extra or {})
-        stdin = json.dumps({"model": {"display_name": "Fable"}, "workspace": {"current_dir": str(cwd_json)}},
-                           separators=(",", ":"))
-        return subprocess.run(["bash", str(path)], input=stdin, capture_output=True, text=True, env=env,
-                              cwd=str(self.home), timeout=10)
-
-    def test_segment_prints_cached_line_and_nothing_when_absent(self):
-        repo = self.home / "repo"
-        (repo / ".orche").mkdir(parents=True)
-        (repo / "src" / "deep").mkdir(parents=True)
-        (self.home / "status").mkdir()
-        res = self.run_sh(SEGMENT, repo / "src" / "deep")
-        self.assertEqual((res.stdout, res.stderr, res.returncode), ("", "", 0))  # no marker yet
-        (repo / ".orche" / "project").write_text("acme-shop\n")
-        res = self.run_sh(SEGMENT, repo / "src" / "deep")
-        self.assertEqual((res.stdout, res.stderr, res.returncode), ("", "", 0))  # no .line yet
-        (self.home / "status" / "acme-shop.line").write_text("R&D● BUILD●3 · new1\n")
-        res = self.run_sh(SEGMENT, repo / "src" / "deep")
-        self.assertEqual((res.stdout, res.stderr, res.returncode), ("R&D● BUILD●3 · new1\n", "", 0))
-        coloured = "\033[33m⚠ waiting 1\033[0m · BUILD 0/1 · \033[2mR&D ○\033[0m"   # statusline.segment()
-        (self.home / "status" / "acme-shop.line").write_text(f"{coloured}\nspent 2026-11-01 4.200000\n")
-        res = self.run_sh(SEGMENT, repo / "src" / "deep")
-        self.assertEqual((res.stdout, res.stderr, res.returncode), (coloured + "\n", "", 0))  # as cached, line 1 only
-        (repo / ".orche" / "project").write_text("../../etc/passwd\n")  # not a project key
-        self.assertEqual(self.run_sh(SEGMENT, repo).stdout, "")
-        self.assertEqual(self.run_sh(SEGMENT, self.home / "elsewhere").stdout, "")
-
-    def test_block_goes_before_a_final_exit_and_uninstall_restores(self):
-        script = self.c / "statusline-command.sh"
-        original = STATUSLINE.rstrip("\n") + "\nexit 0\n# trailing comment\n"
-        script.write_text(original)
-        self.install()
-        text = script.read_text()
-        self.assertLess(text.index("# >>> orche >>>"), text.index("\nexit 0"))
-        repo = self.home / "repo"
-        (repo / ".orche").mkdir(parents=True)
-        (repo / ".orche" / "project").write_text("acme-shop\n")
-        (self.home / "status").mkdir(exist_ok=True)
-        (self.home / "status" / "acme-shop.line").write_text("BUILD●\n")
-        self.assertEqual(self.run_sh(script, repo).stdout, "dir:repo\nBUILD●\n")
-        code, out, _ = self.orche("uninstall", "--home", str(self.h))
-        self.assertEqual(code, 0, out)
-        self.assertEqual(script.read_text(), original)
-
-    def test_doctor_warns_when_block_after_exit(self):
-        from orche.install import statusline
-        script = self.c / "statusline-command.sh"
-        blk = SEGMENT.read_text()
-        script.write_text(STATUSLINE.rstrip("\n") + "\nexit 0\n\n" + blk)
-        self.assertTrue(statusline.after_exit(script.read_text()))
-        registry.save(registry.empty())
-        with mock.patch.dict(os.environ, {"SHELL": str(self.home / "no-login-shell")}):  # never the real one
-            _, out, _ = self.orche("doctor", "--home", str(self.h))
-        self.assertTrue(any(l.startswith("WARN\tstatusline\t") and "after an `exit`" in l
-                            for l in out.splitlines()), out)
-        self.install()  # re-install moves the block before the exit
-        self.assertFalse(statusline.after_exit(script.read_text()))
-
-    def test_installed_script_keeps_its_output_and_adds_the_segment(self):
-        self.install()
-        repo = self.home / "repo"
-        (repo / ".orche").mkdir(parents=True)
-        (repo / ".orche" / "project").write_text("acme-shop\n")
-        (self.home / "status").mkdir(exist_ok=True)
-        (self.home / "status" / "acme-shop.line").write_text("BUILD●\n")
-        script = self.c / "statusline-command.sh"
-        self.assertEqual(self.run_sh(script, repo).stdout, "dir:repo\nBUILD●\n")
-        self.assertEqual(self.run_sh(script, self.home).stdout, f"dir:{self.home.name}\n")
+OLD_BLOCK = ("\n# >>> orche >>>\n# Orche project segment (added by `orche install`, removed by `orche uninstall`).\n"
+             "{\n  printf 'old\\n'\n} 2>/dev/null || true\n# <<< orche <<<\n")
+ANSI = re.compile(r"\x1b\[[0-9;]*m")
 
 
-class StatuslineHeartbeatTest(support.TempHomeCase):
-    """The heartbeat puts the Orche block back when another tool rewrote the script. ORCHE_HOME sits at
-    <temp>/h/.claude/orche, so its parent is a temp Claude folder; nothing reaches the real home."""
+class StatuslineInstallTest(InstallCase):
+    """Orche's own status line script: modes, defaults, migration of the old block, uninstall, doctor and the
+    setup report. Temp homes only."""
 
     def setUp(self):
         super().setUp()
         from orche.install import statusline
         self.sl = statusline
-        self.c = self.home / "h" / ".claude"
-        self.oh = self.c / "orche"
-        (self.oh / "reconcile").mkdir(parents=True)
-        (self.oh / "reconcile" / ".kicked").touch()
-        (self.oh / "janitor").mkdir()
-        (self.oh / "janitor" / "last-report.md").touch()
-        (self.oh / "config.json").write_text((self.home / "config.json").read_text())
-        os.environ["ORCHE_HOME"] = str(self.oh)
-        self.script = self.c / "statusline-command.sh"
-        self.script.write_text(STATUSLINE)
-        self.blk = SEGMENT.read_text()
+        self.ours = f"bash {self.home / 'statusline.sh'}"
+        self.mine = f"bash {self.c}/statusline-command.sh"
 
-    def installed(self):
-        (self.oh / "install-state.json").write_text(json.dumps({"mode": "plugin", "plugin_root": str(PLUGIN_ROOT)}))
+    def write_settings(self, path=None, **line):
+        data = {k: v for k, v in self.settings.items() if k != "statusLine"}
+        if line:
+            data["statusLine"] = line
+        (path or self.c / "settings.json").write_text(json.dumps(data, indent=2) + "\n")
+        return data
 
-    def untouched(self, before):
-        self.assertEqual(self.script.read_bytes(), before)
+    def line_of(self, path=None):
+        return json.loads((path or self.c / "settings.json").read_text()).get("statusLine")
 
-    def test_a_missing_block_goes_back_once_without_a_backup(self):
-        self.installed()
-        mode = self.script.stat().st_mode
-        rows = self.sl.heartbeat(False)
-        self.assertEqual([(r["action"], r["class"], r["target"], r["failed"], r["line"]) for r in rows],
-                         [("statusline-repair", "statusline", str(self.script), None,
-                           f"put the Orche block back into {self.script} (another tool rewrote the file)")])
-        self.assertEqual(self.script.read_text(), self.sl.place(STATUSLINE, self.blk))
-        self.assertEqual(self.script.stat().st_mode, mode)
-        self.assertEqual(self.sl.heartbeat(False), [])          # present now: nothing more
-        self.assertEqual(sorted(p.name for p in self.c.iterdir()), ["orche", "statusline-command.sh"])
+    def state(self):
+        return json.loads((self.home / "install-state.json").read_text())
 
-    def test_the_block_goes_before_a_final_exit(self):
-        self.installed()
-        self.script.write_text(STATUSLINE.rstrip("\n") + "\nexit 0\n")
-        self.assertEqual(len(self.sl.heartbeat(False)), 1)
-        text = self.script.read_text()
-        self.assertLess(text.index("# >>> orche >>>"), text.index("\nexit 0"))
-        self.assertFalse(self.sl.after_exit(text))
+    def rec(self):
+        return {k: v for k, v in self.state()["statusline"].items() if k != "previous"}
 
-    def test_a_present_block_is_never_rewritten_or_moved(self):
-        self.installed()
-        for text in (STATUSLINE + "\n" + self.blk.replace("\n", "\n# old\n", 1),          # a stale block
-                     STATUSLINE.rstrip("\n") + "\nexit 0\n\n" + self.blk):                 # after an exit
-            self.script.write_text(text)
-            before = self.script.read_bytes()
-            self.assertEqual(self.sl.heartbeat(False), [])
-            self.untouched(before)
+    def profile(self, line=None):
+        profile = self.home / "profile"
+        profile.mkdir()
+        (profile / "settings.json").write_text(json.dumps({"statusLine": line} if line is not None else {}) + "\n")
+        support.no_staff(self)
+        return profile / "settings.json"
 
-    def test_no_script_no_row(self):
-        self.installed()
-        self.script.unlink()
-        self.assertEqual(self.sl.heartbeat(False), [])
-        self.assertFalse(self.script.exists())
+    def in_profile(self, profile, *argv):
+        with mock.patch.dict(os.environ, {"HOME": str(self.h), "CLAUDE_CONFIG_DIR": str(profile.parent)}):
+            return self.orche(*argv)
 
-    def test_not_installed_or_unreadable_state_leaves_the_script(self):
-        before = self.script.read_bytes()
-        self.assertEqual(self.sl.heartbeat(False), [])
-        (self.oh / "install-state.json").write_text("{not json")
-        self.assertEqual(self.sl.heartbeat(False), [])
-        self.untouched(before)
+    def test_a_fresh_home_gets_orches_line_in_every_session_file(self):
+        self.write_settings()
+        profile = self.home / "profile"
+        profile.mkdir()
+        (profile / "settings.json").write_text("{}\n")
+        support.no_staff(self)
+        with mock.patch.dict(os.environ, {"HOME": str(self.h), "CLAUDE_CONFIG_DIR": str(profile)}):
+            out = self.install("--mode", "settings", "--no-reconcile", "--no-jev")
+        for path in (self.c / "settings.json", profile / "settings.json"):
+            self.assertEqual(self.line_of(path), {"type": "command", "command": self.ours}, path)
+        self.assertEqual(self.state()["statusline"], {"mode": "orche", "inner": None, "asked": False, "previous": {
+            str(self.c / "settings.json"): None, str(profile / "settings.json"): None}})
+        self.assertFalse((self.home / "statusline.inner").exists())
+        self.assertIn("statusline: mode (Orche's status line)", out)
+        self.assertNotIn("statusline: note", out)
 
-    def test_dry_run_reports_and_writes_nothing(self):
-        self.installed()
-        before = self.script.read_bytes()
-        rows = self.sl.heartbeat(True)
-        self.assertEqual([r["line"] for r in rows],
-                         [f"would put the Orche block back into {self.script} (another tool rewrote the file)"])
-        self.untouched(before)
+    def test_a_foreign_command_is_kept_with_its_other_keys(self):
+        self.write_settings(type="command", command=self.mine, padding=2, refreshInterval=5)
+        out = self.install("--no-jev")
+        self.assertEqual(self.line_of(), {"type": "command", "command": self.ours, "padding": 2,
+                                          "refreshInterval": 5})
+        self.assertEqual(self.state()["statusline"], {"mode": "keep", "inner": self.mine, "asked": False, "previous": {
+            str(self.c / "settings.json"): {"type": "command", "command": self.mine, "padding": 2,
+                                            "refreshInterval": 5}}})
+        self.assertEqual((self.home / "statusline.inner").read_text(), self.mine + "\n")
+        self.assertIn(f"statusline: note ({self.sl.TAKEN})", out)   # told once, on the takeover
+        self.assertIn('say "use Orche\'s status line" to switch, or "turn the status line off"', out)
+        self.assertNotIn("statusline: note", self.install("--no-jev"))
 
-    def test_an_unreadable_script_never_raises(self):
-        self.installed()
-        self.script.write_bytes(b"#!/bin/bash\necho \xff\n")
-        self.assertEqual(self.sl.heartbeat(False), [])
-        self.script.write_text(STATUSLINE)
-        self.script.chmod(0)
-        try:
-            if os.geteuid() != 0:
-                self.assertEqual(self.sl.heartbeat(False), [])
-        finally:
-            self.script.chmod(0o600)
-        self.assertTrue((self.oh / "logs" / "hooks.log").exists())
+    def test_the_old_block_is_removed_from_statusline_command_and_from_the_script_statusline_runs(self):
+        (self.c / "statusline-command.sh").write_text(STATUSLINE + OLD_BLOCK)
+        own = self.c / "mine.sh"
+        own.write_text("#!/bin/bash\necho mine\n" + OLD_BLOCK + "exit 0\n")
+        self.write_settings(type="command", command="bash ~/.claude/mine.sh")
+        out = self.install("--no-jev")
+        self.assertEqual((self.c / "statusline-command.sh").read_text(), STATUSLINE)
+        self.assertEqual(own.read_text(), "#!/bin/bash\necho mine\nexit 0\n")
+        self.assertEqual(len(list(self.c.glob("mine.sh.bak-*"))), 1)
+        self.assertEqual(len(list(self.c.glob("statusline-command.sh.bak-*"))), 1)
+        self.assertIn(f"statusline: patch {own} (old Orche block removed)", out)
+        self.assertEqual(self.state()["statusline"]["inner"], "bash ~/.claude/mine.sh")
+        self.assertEqual(self.line_of()["command"], self.ours)
+        self.install("--no-jev")   # nothing adds a block back
+        self.assertNotIn("# >>> orche >>>", own.read_text() + (self.c / "statusline-command.sh").read_text())
 
-    def test_a_symlinked_script_is_written_through_to_its_target(self):
-        self.installed()
-        target = self.home / "h" / "dotfiles" / "statusline.sh"
-        target.parent.mkdir()
-        target.write_text(STATUSLINE)
-        self.script.unlink()
-        self.script.symlink_to(target)
-        self.assertEqual(len(self.sl.heartbeat(False)), 1)
-        self.assertTrue(self.script.is_symlink())
-        self.assertIn("# >>> orche >>>", target.read_text())
+    def test_each_mode_by_flag_and_keep_without_a_command_is_an_error(self):
+        before = self.write_settings()
+        code, out, err = self.orche("install", "--home", str(self.h), "--statusline", "keep")
+        self.assertEqual((code, out), (1, ""))
+        self.assertEqual(err, f"orche: {self.sl.NO_KEEP}\n")
+        self.assertEqual(json.loads((self.c / "settings.json").read_text()), before)
+        self.write_settings(type="command", command=self.mine, padding=1)
+        self.install("--no-jev", "--statusline", "orche")
+        self.assertEqual(self.rec(), {"mode": "orche", "inner": self.mine, "asked": True})
+        self.assertEqual(self.line_of(), {"type": "command", "command": self.ours, "padding": 1})
+        self.assertFalse((self.home / "statusline.inner").exists())
+        self.install("--no-jev", "--statusline", "off")
+        self.assertEqual(self.line_of(), {"type": "command", "command": self.mine, "padding": 1})
+        self.assertEqual(self.state()["statusline"]["mode"], "off")
+        self.install("--no-jev")   # off stays off and the user's line stays theirs
+        self.assertEqual(self.line_of()["command"], self.mine)
+        self.assertEqual(self.state()["statusline"]["mode"], "off")
+        self.install("--no-jev", "--statusline", "keep")   # the stored command is enough
+        self.assertEqual(self.line_of()["command"], self.ours)
+        self.assertEqual((self.home / "statusline.inner").read_text(), self.mine + "\n")
+        self.write_settings()
+        self.install("--no-jev", "--statusline", "off")   # none before Orche: the key goes
+        self.assertEqual(self.state()["statusline"]["mode"], "off")
 
-    def test_doctor_names_the_heartbeat_only_when_it_keeps_the_script(self):
-        self.assertFalse(doctor._kept_by_heartbeat(self.script))
-        self.installed()
-        self.assertTrue(doctor._kept_by_heartbeat(self.script))
-        self.assertFalse(doctor._kept_by_heartbeat(self.home / "elsewhere.sh"))
+    def test_off_without_a_command_removes_the_key(self):
+        self.write_settings()
+        self.install("--no-jev")
+        self.install("--no-jev", "--statusline", "off")
+        self.assertNotIn("statusLine", json.loads((self.c / "settings.json").read_text()))
 
-    def run_pass(self, dry_run=False):
-        from orche import reconcile
-        registry.save(registry.empty())
-        os.environ["ORCHE_FAKE_ORCA"] = "1"
-        (self.oh / "fake-orca.json").write_text(json.dumps({"terminal list": {"terminals": []}}))
-        lines = []
-        self.assertEqual(reconcile.run_pass(dry_run=dry_run, out=lines.append), 0)
-        return lines
+    def test_a_command_set_after_install_is_wrapped_again(self):
+        self.write_settings()
+        self.install("--no-jev")
+        data = json.loads((self.c / "settings.json").read_text())
+        data["statusLine"] = {"type": "command", "command": "npx other-line", "padding": 0}
+        (self.c / "settings.json").write_text(json.dumps(data) + "\n")
+        out = self.install("--no-jev")
+        self.assertIn("statusline: note (your status line changed after install (npx other-line); Orche runs it "
+                      "now and adds its project line under it)", out)
+        self.assertEqual(self.line_of(), {"type": "command", "command": self.ours, "padding": 0})
+        self.assertEqual(self.rec(), {"mode": "keep", "inner": "npx other-line", "asked": False})
+        self.assertEqual((self.home / "statusline.inner").read_text(), "npx other-line\n")
+        self.assertEqual(self.state()["statusline"]["previous"],
+                         {str(self.c / "settings.json"): {"type": "command", "command": "npx other-line", "padding": 0}})
+        self.install("--no-jev")   # Orche's own value never replaces it
+        self.assertEqual(self.state()["statusline"]["previous"][str(self.c / "settings.json")]["command"],
+                         "npx other-line")
+        self.assertEqual(self.orche("uninstall", "--home", str(self.h))[0], 0)
+        self.assertEqual(self.line_of(), {"type": "command", "command": "npx other-line", "padding": 0})
 
-    def test_a_reconcile_pass_puts_the_block_back_and_logs_it(self):
-        self.installed()
-        before = self.script.read_bytes()
-        self.assertEqual(self.run_pass(dry_run=True),
-                         [f"would put the Orche block back into {self.script} (another tool rewrote the file)"])
-        self.untouched(before)
-        self.assertEqual(self.run_pass(),
-                         [f"put the Orche block back into {self.script} (another tool rewrote the file)"])
-        self.assertIn("# >>> orche >>>", self.script.read_text())
-        events = (self.oh / "logs" / "events.log").read_text()
-        self.assertIn(f"reconcile action=statusline-repair target={self.script} attempt=1/1", events)
-        self.assertEqual(self.run_pass(), [])
+    def test_the_profiles_command_wins_over_the_home_one(self):
+        self.write_settings(type="command", command=self.mine)
+        profile = self.home / "profile"
+        profile.mkdir()
+        (profile / "settings.json").write_text(json.dumps({"statusLine": {"type": "command",
+                                                                          "command": "sh /p/line.sh"}}))
+        support.no_staff(self)
+        with mock.patch.dict(os.environ, {"HOME": str(self.h), "CLAUDE_CONFIG_DIR": str(profile)}):
+            out = self.install("--mode", "settings", "--no-reconcile", "--no-jev")
+        self.assertEqual(self.state()["statusline"]["inner"], "sh /p/line.sh")
+        self.assertIn(f"statusline: note (settings files name different status lines; using "
+                      f"{profile / 'settings.json'}'s (the one sessions read))", out)
+        self.assertEqual(self.line_of(profile / "settings.json")["command"], self.ours)
 
-    def test_a_reconcile_pass_without_install_state_leaves_the_script(self):
-        before = self.script.read_bytes()
-        self.assertNotIn("# >>> orche >>>", self.run_pass(dry_run=True)[0])
-        self.run_pass()
-        self.untouched(before)
-        self.assertEqual(sorted(p.name for p in self.c.iterdir()), ["orche", "statusline-command.sh"])
+    def test_each_settings_file_gets_its_own_line_back_on_uninstall_and_off(self):
+        home_line = {"type": "command", "command": self.mine, "padding": 1}
+        prof_line = {"type": "command", "command": "sh /p/line.sh"}
+        self.write_settings(**home_line)
+        prof = self.profile(prof_line)
+        args = ("install", "--home", str(self.h), "--mode", "settings", "--no-reconcile", "--no-jev")
+        self.assertEqual(self.in_profile(prof, *args)[0], 0)
+        self.assertEqual(self.rec()["inner"], "sh /p/line.sh")   # the run-time inner: the profile's
+        self.assertEqual(self.in_profile(prof, *args, "--statusline", "off")[0], 0)
+        self.assertEqual((self.line_of(), self.line_of(prof)), (home_line, prof_line))
+        self.assertEqual(self.in_profile(prof, *args, "--statusline", "orche")[0], 0)
+        self.assertEqual(self.line_of(prof)["command"], self.ours)
+        code, out, _ = self.in_profile(prof, "uninstall", "--home", str(self.h))
+        self.assertEqual(code, 0, out)
+        self.assertEqual((self.line_of(), self.line_of(prof)), (home_line, prof_line))
+
+    def test_a_status_line_of_another_shape_is_restored_exactly(self):
+        for odd in ("echo hi", ["bash", "x.sh"], {"type": "static", "text": "hi"}, {"type": "command"}):
+            with self.subTest(odd=odd):
+                (self.home / "install-state.json").unlink(missing_ok=True)
+                data = {k: v for k, v in self.settings.items() if k != "statusLine"}
+                (self.c / "settings.json").write_text(json.dumps({**data, "statusLine": odd}) + "\n")
+                self.install("--no-jev")
+                self.assertEqual(self.line_of()["command"], self.ours)
+                self.assertEqual(self.rec(), {"mode": "orche", "inner": None, "asked": False})
+                self.assertEqual(self.orche("uninstall", "--home", str(self.h))[0], 0)
+                self.assertEqual(self.line_of(), odd)
+                self.assertEqual(self.read_settings(), {**data, "statusLine": odd})
+
+    def test_an_odd_home_line_falls_back_to_the_profiles_command(self):
+        self.write_settings(type="static", text="hi")
+        prof = self.profile({"type": "command", "command": "sh /p/line.sh"})
+        args = ("install", "--home", str(self.h), "--mode", "settings", "--no-reconcile", "--no-jev")
+        self.assertEqual(self.in_profile(prof, *args)[0], 0)
+        self.assertEqual(self.rec(), {"mode": "keep", "inner": "sh /p/line.sh", "asked": False})
+        self.assertEqual(self.in_profile(prof, *args, "--statusline", "off")[0], 0)
+        self.assertEqual(self.line_of(), {"type": "static", "text": "hi"})
+        self.assertEqual(self.line_of(prof), {"type": "command", "command": "sh /p/line.sh"})
+
+    def test_changing_the_mode_on_an_installed_home_runs_only_the_status_line_step(self):
+        from orche import cmd_install
+        from orche.install import agents, settings, skills
+        self.write_settings(type="command", command=self.mine)
+        self.install("--no-jev")
+        boom = mock.Mock(side_effect=AssertionError("not this step"))
+        with mock.patch.object(settings, "install", boom), mock.patch.object(agents, "install", boom), \
+                mock.patch.object(skills, "install", boom), mock.patch.object(cmd_install, "_reconcile_job", boom), \
+                mock.patch.object(cmd_install, "_janitor_job", boom), mock.patch.object(cmd_install, "_jev_step", boom):
+            out = self.install("--statusline", "orche")
+        boom.assert_not_called()
+        self.assertEqual(self.rec(), {"mode": "orche", "inner": self.mine, "asked": True})
+        self.assertEqual(self.line_of()["command"], self.ours)
+        self.assertIn("statusline: mode (Orche's status line)", out)
+        self.assertFalse([ln for ln in out.splitlines() if not ln.startswith("statusline:")], out)
+
+    def test_a_first_install_with_a_mode_runs_every_step(self):
+        from orche.install import agents
+        self.write_settings()
+        with mock.patch.object(agents, "install", wraps=agents.install) as spy:
+            self.install("--no-jev", "--statusline", "orche")
+        spy.assert_called_once()
+        self.assertIn(self.state()["mode"], ("plugin", "settings"))
+
+    def test_uninstall_restores_and_removes_the_script(self):
+        self.write_settings()
+        self.install("--no-jev")
+        (self.c / "statusline-command.sh").write_text(STATUSLINE + OLD_BLOCK)   # a leftover block
+        code, out, _ = self.orche("uninstall", "--home", str(self.h))
+        self.assertEqual(code, 0, out)
+        self.assertNotIn("statusLine", json.loads((self.c / "settings.json").read_text()))
+        self.assertFalse((self.home / "statusline.sh").exists())
+        self.assertEqual((self.c / "statusline-command.sh").read_text(), STATUSLINE)
+        self.assertNotIn("statusline", self.state())
+
+    def test_doctor_rows(self):
+        from orche.install import Ctx
+        ctx = Ctx(self.h)
+        self.assertEqual(self.sl.rows(ctx, {})[0][:2], ("WARN", "statusline"))
+        self.install("--no-jev")
+        self.assertEqual(self.sl.rows(ctx, self.state()),
+                         [("OK", "statusline", "your status line with Orche's project line under it")])
+        self.write_settings(type="command", command="npx other-line")
+        level, _, detail = self.sl.rows(ctx, self.state())[0]
+        self.assertEqual(level, "WARN")
+        self.assertIn(str(self.c / "settings.json"), detail)
+        self.assertTrue(detail.endswith('say "repair the setup"; Main runs orche install'), detail)
+        self.install("--no-jev", "--statusline", "orche")
+        self.assertEqual(self.sl.rows(ctx, self.state()), [("OK", "statusline", "Orche's status line")])
+        self.install("--no-jev", "--statusline", "off")
+        self.assertEqual(self.sl.rows(ctx, self.state()),
+                         [("OK", "statusline", "off: Orche adds nothing to the status line")])
+
+    def test_doctor_keep_without_a_stored_command_and_an_unreadable_settings_file(self):
+        from orche.install import Ctx
+        ctx = Ctx(self.h)
+        self.install("--no-jev")   # keep
+        (self.home / "statusline.inner").write_text("\n")
+        self.assertEqual(self.sl.rows(ctx, self.state()), [("WARN", "statusline", (
+            "your status line command is not stored; Orche shows its own line; say \"repair the setup\"; Main runs "
+            "orche install"))])
+        (self.home / "statusline.inner").unlink()
+        self.assertEqual(self.sl.rows(ctx, self.state())[0][0], "WARN")
+        (self.c / "settings.json").write_text("{not json")
+        level, _, detail = self.sl.rows(ctx, self.state())[0]
+        self.assertEqual(level, "WARN")
+        self.assertTrue(detail.startswith(f"cannot read {self.c / 'settings.json'}; fix the file"), detail)
+        self.assertNotIn("does not run Orche's script", detail)
+
+    def test_setup_report_states_the_mode_and_asks_once(self):
+        from orche import guide
+        self.install("--no-jev")   # the user's own line kept by default
+        self.assertEqual(guide.statusline_mode(), "your status line with Orche's project line under it")
+        ask = guide.ask_once_lines()
+        self.assertEqual(ask[:3], ["", "## Ask the owner once", ""])
+        for words in ("AskUserQuestion", "`orche install --statusline keep`", "`orche install --statusline orche`",
+                      "`orche install --statusline off`"):
+            self.assertIn(words, ask[3])
+        self.assertIn("Ask the owner once", guide.SETUP_ASK)
+        on, line = guide.statusline_line()
+        self.assertTrue(on)
+        self.assertIn('Say "use Orche\'s status line", "keep my status line" or "turn the status line off"', line)
+        from orche import config
+        reg = registry.empty()
+        self.assertFalse(any(ln.startswith("- Status line") for ln in guide.lines(config.load(), reg)))   # on
+        self.install("--no-jev", "--statusline", "keep")   # the owner chose: never asked again
+        self.assertEqual(guide.ask_once_lines(), [])
+        self.install("--no-jev")
+        self.assertEqual(guide.ask_once_lines(), [])
+        self.assertTrue(self.state()["statusline"]["asked"])
+        self.install("--no-jev", "--statusline", "off")   # off: listed under "Any time" to switch back on
+        lines = guide.lines(config.load(), reg)
+        self.assertTrue([ln for ln in lines if ln.startswith("- Status line") and ". Now: off. " in ln], lines)
+
+    def test_a_fresh_home_is_not_asked(self):
+        from orche import guide
+        self.write_settings()
+        self.install("--no-jev")
+        self.assertEqual(guide.ask_once_lines(), [])
+        self.assertEqual(guide.statusline_mode(), "Orche's status line")
+
+
+class StatuslineScriptTest(support.TempHomeCase):
+    """templates/statusline.sh run with bash as Claude Code runs it: stdin JSON, exit 0, no jq."""
+
+    def setUp(self):
+        super().setUp()
+        self.dir = self.home / "sl"
+        self.dir.mkdir()
+        self.script = self.dir / "statusline.sh"
+        self.script.write_text(SCRIPT.read_text())
+        self.repo = self.home / "repo"
+        self.repo.mkdir()
+        subprocess.run(["git", "init", "-q", "-b", "feat-x", str(self.repo)], check=True, capture_output=True)
+        self.now = int(__import__("time").time())
+
+    def run_sh(self, stdin, env=None, cwd=None):
+        env = env if env is not None else {"PATH": "/usr/bin:/bin", "HOME": str(self.home)}
+        res = subprocess.run(["/bin/bash", str(self.script)], input=stdin, capture_output=True, text=True, env=env,
+                             cwd=str(cwd or self.home), timeout=10)
+        self.assertEqual((res.returncode, res.stderr), (0, ""))
+        return res.stdout
+
+    def payload(self, rate_limits=None, compact=True, **extra):
+        data = {"session_id": "s", "cwd": str(self.repo), "effort": {"level": "high"},
+                "model": {"id": "claude-fable-5-2", "display_name": "Fable 5.2"},
+                "workspace": {"current_dir": str(self.repo), "project_dir": str(self.repo), "added_dirs": []},
+                "context_window": {"used_percentage": 22, "remaining_percentage": 78}, **extra}
+        if rate_limits is not None:
+            data["rate_limits"] = rate_limits
+        return json.dumps(data, separators=(",", ":") if compact else (", ", ": "))
+
+    def when(self, epoch, fmt):
+        import time
+        return time.strftime(fmt, time.localtime(epoch))
+
+    def weekly(self):
+        reset = self.now + 2 * 86400
+        return {"used_percentage": 78, "resets_at": reset}, \
+            f"Weekly: 78% ▓▓▓▓▓▓▓┃░░ → Reset: {self.when(reset, '%a %I:%M %p')}"
+
+    def test_orche_mode_on_the_sample_compact_and_spaced(self):
+        week, text = self.weekly()
+        for compact in (True, False):
+            out = self.run_sh(self.payload({"seven_day": week}, compact=compact))
+            self.assertEqual(ANSI.sub("", out), f"⎇ feat-x │ Fable 5.2 · high │ {text}\n")
+            self.assertIn("\x1b[0;32m⎇ feat-x\x1b[0m", out)
+
+    def test_missing_rate_limits_and_both_windows(self):
+        self.assertEqual(ANSI.sub("", self.run_sh(self.payload())), "⎇ feat-x │ Fable 5.2 · high\n")
+        week, text = self.weekly()
+        five = {"used_percentage": 12.4, "resets_at": self.now + 3600}
+        out = ANSI.sub("", self.run_sh(self.payload({"five_hour": five, "seven_day": week})))
+        self.assertEqual(out, f"⎇ feat-x │ Fable 5.2 · high │ Session: 12% ▓░░░░░░░┃░ → Reset: "
+                              f"{self.when(self.now + 3600, '%I:%M %p')} │ {text}\n")
+
+    def test_empty_stdin_and_no_git_print_what_they_have(self):
+        plain = self.home / "plain"
+        plain.mkdir()
+        env = {"PATH": "/usr/bin:/bin", "HOME": str(self.home), "GIT_CEILING_DIRECTORIES": str(self.home)}
+        self.assertEqual(self.run_sh("", env=env, cwd=plain), "")
+        out = self.run_sh(json.dumps({"model": {"display_name": "Opus"}}), env=env, cwd=plain)
+        self.assertEqual(ANSI.sub("", out), "Opus\n")
+
+    def project(self):
+        (self.repo / ".orche").mkdir()
+        (self.repo / ".orche" / "project").write_text("acme-shop\n")
+        (self.dir / "status").mkdir()
+        (self.dir / "status" / "acme-shop.line").write_text("BUILD●\nspent 2026-11-01 4.2\n")
+
+    def test_keep_mode_runs_the_inner_command_with_the_same_stdin_then_the_project_line(self):
+        self.project()
+        (self.dir / "statusline.inner").write_text("printf X\n")
+        self.assertEqual(self.run_sh(self.payload()), "X\nBUILD●\n")
+        (self.dir / "statusline.inner").write_text("cat\n")
+        stdin = self.payload()
+        self.assertEqual(self.run_sh(stdin), stdin + "\nBUILD●\n")
+
+    def test_orche_mode_adds_the_project_line_under_its_own(self):
+        self.project()
+        lines = ANSI.sub("", self.run_sh(self.payload())).splitlines()
+        self.assertEqual(lines, ["⎇ feat-x │ Fable 5.2 · high", "BUILD●"])
+
+    def test_a_staff_pane_gets_the_staff_label_without_a_marker(self):
+        self.project()
+        base = {"PATH": "/usr/bin:/bin", "HOME": str(self.home)}
+        elsewhere = self.payload(workspace={"current_dir": str(self.home)})   # no `.orche/project` above it
+        (self.dir / "status" / "demo.line").write_text("⚠ waiting 1\nspent 2026-11-01 1.0\n")
+        out = ANSI.sub("", self.run_sh(elsewhere, env={**base, "ORCHE_SESSION": "staff-demo"}))
+        self.assertEqual(out.splitlines()[-1], "STAFF · ⚠ waiting 1")
+        (self.dir / "status" / "demo.line").unlink()
+        out = ANSI.sub("", self.run_sh(elsewhere, env={**base, "ORCHE_SESSION": "staff-demo"}))
+        self.assertEqual(out.splitlines()[-1], "STAFF · demo")
+        (self.dir / "status" / "demo.line").write_text("")
+        self.assertEqual(self.run_sh(elsewhere, env={**base, "ORCHE_SESSION": "staff-demo"}).splitlines()[-1],
+                         "STAFF · demo")
+        plain = self.run_sh(self.payload(), env=base)
+        for session in ("main-demo", "staff-Bad/../x"):
+            self.assertEqual(self.run_sh(self.payload(), env={**base, "ORCHE_SESSION": session}), plain, session)
+        self.assertEqual(ANSI.sub("", plain).splitlines(), ["⎇ feat-x │ Fable 5.2 · high", "BUILD●"])
+
+    def test_an_inner_command_that_is_orches_script_falls_back_to_the_built_in_line(self):
+        for inner in (f"bash {self.script}", "bash ~/.claude/orche/statusline.sh"):
+            (self.dir / "statusline.inner").write_text(inner + "\n")
+            self.assertEqual(ANSI.sub("", self.run_sh(self.payload())), "⎇ feat-x │ Fable 5.2 · high\n", inner)
+
+    def test_a_multi_line_inner_runs_whole(self):
+        self.project()
+        (self.dir / "statusline.inner").write_text("printf A\nprintf B\n")
+        self.assertEqual(self.run_sh(self.payload()), "AB\nBUILD●\n")
+
+    def test_an_inner_that_runs_a_copy_of_the_script_prints_the_project_line_once(self):
+        self.project()
+        copy = self.home / "elsewhere" / "line.sh"
+        copy.parent.mkdir()
+        copy.write_text(SCRIPT.read_text())
+        (self.dir / "statusline.inner").write_text(f"bash {copy}\n")
+        self.assertEqual(self.run_sh(self.payload()), "BUILD●\n")
+        env = {"PATH": "/usr/bin:/bin", "HOME": str(self.home), "ORCHE_STATUSLINE": "1"}
+        self.assertEqual(self.run_sh(self.payload(), env=env), "")
+
+    def test_a_reset_in_the_past_shows_no_time_and_no_pace_marker(self):
+        five = {"used_percentage": 12, "resets_at": self.now - 600}
+        out = ANSI.sub("", self.run_sh(self.payload({"five_hour": five})))
+        self.assertEqual(out, "⎇ feat-x │ Fable 5.2 · high │ Session: 12% ▓░░░░░░░░░\n")
+
+    def test_no_jq_needed(self):
+        self.assertNotIn("jq", SCRIPT.read_text())
+        week, text = self.weekly()
+        out = self.run_sh(self.payload({"seven_day": week}), env={"PATH": "/usr/bin:/bin"})
+        self.assertEqual(ANSI.sub("", out), f"⎇ feat-x │ Fable 5.2 · high │ {text}\n")
+        tools = self.home / "bin"   # only git and date on PATH
+        tools.mkdir()
+        for name in ("git", "date"):
+            found = __import__("shutil").which(name, path="/usr/bin:/bin")
+            (tools / name).symlink_to(found)
+        out = self.run_sh(self.payload({"seven_day": week}), env={"PATH": str(tools)})
+        self.assertEqual(ANSI.sub("", out), f"⎇ feat-x │ Fable 5.2 · high │ {text}\n")
 
 
 LOGIN_SH = "/fake/login-sh"

@@ -8,9 +8,9 @@ For developers on macOS who want several agents on one repository without watchi
 ## What's new
 
 <!-- whats-new: scripts/release.py keeps the three newest -->
+- **0.21.0** (2026-11-12): Staff runs small errands in the background and brings you the result, and Orche has its own status line. [Notes](https://github.com/0xMoomi/orche/releases/tag/v0.21.0)
 - **0.20.1** (2026-11-12): The status segment comes back by itself when another tool rewrites the status line script. [Notes](https://github.com/0xMoomi/orche/releases/tag/v0.20.1)
 - **0.20.0** (2026-11-10): one final report per request, wake without typing, a daily brief, live progress of workers, less rework and Claude Fable 5.2. [Notes](https://github.com/0xMoomi/orche/releases/tag/v0.20.0)
-- **0.19.14** (2026-11-09): every version has its GitHub release, and the README shows what's new. [Notes](https://github.com/0xMoomi/orche/releases/tag/v0.19.14)
 <!-- /whats-new -->
 
 Every version: [releases](https://github.com/0xMoomi/orche/releases) and [CHANGELOG.md](CHANGELOG.md).
@@ -25,7 +25,7 @@ Every version: [releases](https://github.com/0xMoomi/orche/releases) and [CHANGE
 - **Workers** carry out one slice each, headless (`claude -p`, no tab), and open their own pull requests. Build reviews each one, and the merge queue runs `scripts/verify/ci.sh` on the base branch and lands it when green. While a worker runs, `orche status` shows its elapsed time, turn, last tool and cost so far. In team mode (a repository that declares its team plugin) push, pull request and merge wait for your word; in an issue-tracked project (Linear) each worker's name carries the issue key and its PR says `Fixes DES-57`.
 - **One report per request.** While work runs, Main adds one status line per step and asks a decision only once. When the last piece has ended you get one final report that stands on its own: the result, each piece of work with its PR, what failed, what you need to decide. Say "the last report again" to get it again.
 - **No typing into your panes.** Orche wakes a pane through a file that the pane's own hook watches, so text you left in the input box is never touched, and a busy pane gets new reports at its next tool step.
-- **The CEO Staff**, one per project, opens by default in its own workspace under that project's Main: it knows what you said to that Main and what it answered, answers everyday questions, changes nothing, and "tell Main: …" leaves its Main a note.
+- **The CEO Staff**, one per project, opens by default in its own workspace under that project's Main, with `STAFF` at the start of its status line. It knows what you said to that Main and what it answered, and answers everyday questions. Ask it for a small task (a look-up, a draft, a status check): it says the task is handed over, and the result arrives in the Staff window by itself. Work only Main can do (a code change, a division, a merge) goes to Main through Staff, and Main's answer comes back to Staff, so you never carry messages between windows. Staff itself changes nothing in your project; the work only Main can do still runs in Main's window, quietly (no alert, no unread mark).
 - **The heartbeat**, a LaunchAgent pass every 5 minutes that makes no model call itself, reopens closed panes (also a Main that Orca reopened without Orche), re-delivers stuck briefs, notices a worker that has gone silent, rings reminders and keeps the merge queue moving.
 - **The daily brief.** Once a day, after quiet hours, Main opens with what landed, what failed, what has waited for you and for how long, and yesterday's spend. A quiet project gets none.
 
@@ -50,6 +50,7 @@ Re-running it on a Mac that already has Orche keeps that install (its folder and
 - A first message from Main: the install banner, how Orche works, what was made and what you can switch on any time (also in `<project>/.orche/SETUP.md`).
 - Nothing committed to your repository: the project's Orche files (`.orche/`, `PROJECT_CARD.md`, `AGENTS.md`) stay untracked.
 - A status line in Main's pane, in your language (English or Korean) and in colour: what waits on you and what runs first, then each division's running/assigned workers and today's spend (`⚠ waiting 2 · ▶ running 3 (oldest 22m/30m) · BUILD 3/8 · … · $4.20 today`), with `⚠ stalled 1` when a worker has printed nothing for 10 minutes.
+- Orche's own status line: your branch, the model and its effort, your plan usage (session and weekly, with when each resets), then the project line above. If you already have a status line, Orche keeps it and adds only the project line under it, and Main asks you once at setup which one you want. Orche never edits your status line file.
 - Notifications: Orca shows one when Main ends a reply, and Orche rings Main's tab when a decision still waits after 30 minutes; Orca shows that ring as its own notification when its Terminal Bell notifications are on (Settings > Notifications > Terminal Bell; `orche doctor` says if they are off). Missed one? Main's workspace stays marked unread in Orca's sidebar after every turn Orche started there, until you open it.
 - Files: the install in `~/orche`, config, registry and logs in `~/.claude/orche`, units and briefs in `<project>/.orche`, the heartbeat in `~/Library/LaunchAgents/com.orche.reconcile.plist`.
 - Spend per day: every division is a Claude Code session on your own plan; `orche status` shows each project's spend today, `orche metrics` the detail.
@@ -74,7 +75,9 @@ Say it to Main in your own words; Main runs the command.
 | "the last report again" | Main writes the final report of the newest finished request again |
 | "stop the morning brief", "start it again" | `orche flow brief off` / `orche flow brief on` |
 | "run Main on Fable", "put Main back on Opus" | `orche hr model <project> main fable --effort high`: the model Main's pane starts on, from its next start. Fable 5.2 costs twice Opus 5.5 per token, so try it on one project and compare the Rework block of `orche metrics` |
+| "which open PRs touch the payment page?" (said to Staff) | Staff hands it to a background errand (`orche errand`) and the answer arrives in the Staff window by itself; work only Main can do goes to Main (`orche errand --main`) and Main's answer comes back to Staff |
 | "close the staff window", "open the staff window" | `orche sleep staff-<project>` keeps that project's Staff closed until you ask again; `orche wake staff-<project>` opens it |
+| "use Orche's status line", "keep my status line", "turn the status line off" | `orche install --statusline orche`, `keep` or `off`: Orche's line, yours with the project line under it, or yours alone |
 | "check the setup", "what else can Orche do?" | `orche doctor`, ending with the next steps |
 | "continue" | after a cut-off or /clear, Main picks the work up from `orche status <project>` |
 | "uninstall Orche" | `orche uninstall`, after one confirmation: every setting the install changed is restored |

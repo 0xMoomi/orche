@@ -76,7 +76,8 @@ A turn you typed is left to Orca. `orche depts` prints the same table in the ter
 
 ## Status line
 
-`orche install` adds an Orche segment to `~/.claude/statusline-command.sh`:
+`orche install` points `statusLine.command` at Orche's own script (`ORCHE_HOME/statusline.sh`), which prints
+your status line or Orche's, then this project line:
 
 ```
 ⚠ waiting 1 · ▶ running 3 · BUILD 3/8 · RS ● · R&D ○ GTM ○ DES ○ · 🔑1 · $10.75 today

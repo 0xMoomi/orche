@@ -3,6 +3,48 @@
 All notable changes to Orche are listed here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow semantic versioning.
 
+## 0.21.0 — 2026-11-12
+
+### Added
+
+- Orche has its own status line: your branch, the model and its effort, your plan usage (session and weekly,
+  with when each resets), then the project line. Say "use Orche's status line" to switch to it.
+- First setup with a status line of your own: Orche keeps yours and adds its project line under it, and Main
+  asks you once which you want: yours with the project line, Orche's, or yours alone. Say "keep my status
+  line", "use Orche's status line" or "turn the status line off" to change it later.
+- The CEO Staff now runs small errands for you in the background (a look-up, a draft, a status check): it
+  says the task is handed over, and the result arrives in the Staff window by itself. Errands run on Opus 5.5
+  at medium, 10 minutes by default and 20 at most, and never change your project's existing files, branches,
+  pull requests or secrets (`orche errand`).
+- Work only Main can do goes to Main through Staff, and Main's answer comes back to the Staff window: you
+  never carry messages between windows. That work still runs in Main's window, quietly (no alert, no unread
+  mark there).
+- The Staff window shows `STAFF` at the start of its status line.
+- If the Staff window is closed when a result arrives, Orche opens it again; if you closed it in words, the
+  result goes to Main instead. The heartbeat wakes Staff again for a result that waits 10 minutes, hands it to
+  Main after 30, and reports an errand that never came back after an hour.
+
+### Changed
+
+- The project line no longer lives inside your status line file: Orche runs its own small script and your file
+  is not edited any more. `orche update` removes the block older versions added to your file (a backup is
+  kept) and keeps showing your status line.
+- Staff's notes to Main reach Main at its next prompt, in full, instead of waiting for `[drain]`. They still
+  never interrupt Main.
+- Staff is refused more commands that change things (switching or resetting branches, stashing, and closing,
+  reopening or editing pull requests); it hands such work to Main instead.
+
+### Removed
+
+- The 0.20.1 heartbeat repair that put the block back into your status line file. Nothing writes to that file
+  now, so there is nothing to repair.
+
+### Fixed
+
+- A note from Staff reached Main only as "notes held, FYI from Orche, no action needed", so a request you
+  gave Staff could wait unseen. Requests now go to Main as requests, and notes are shown in full.
+- Main had no way to answer Staff. Main's reply to anything Staff handed over now comes back to Staff.
+
 ## 0.20.1 — 2026-11-12
 
 ### Fixed

@@ -1,8 +1,8 @@
 """The wake file: how Orche starts a turn in a session without typing (R-INBOX-4).
 
-Each pane session (Main, a division, a feature; never the Staff or a headless run) that runs the wake hook
-(hooked) watches `inbox/<session>/.wake`: its SessionStart hook returns that path in `watchPaths` and records
-WATCH, {session_id, at}, in the same folder ("this pane's current session listens on the wake file"). WATCH is
+Each pane session (Main, a division, a feature or a project's Staff; never a headless run) that runs the
+wake hook (hooked) watches `inbox/<session>/.wake`: its SessionStart hook returns that path in `watchPaths`
+and records WATCH, {session_id, at}, in the same folder ("this pane's current session listens on the wake file"). WATCH is
 replaced on every SessionStart and removed at SessionEnd (only by the session it names). Writing the wake
 file (ring) fires Claude Code's FileChanged event; the `inbox_wake` hook (asyncRewake) then prints
 Orche's own line (due) to stderr and exits 2, which starts a turn in an idle session, or delivers at the

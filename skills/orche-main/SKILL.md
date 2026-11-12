@@ -173,7 +173,18 @@ a waker, launchd job or polling script for this; if you believe wakes are failin
 
 Never only acknowledge ("3 reports arrived") and end the turn. Update the ledger only through `orche` commands. Never
 read diffs: review is a verification unit for Build. A pointer whose `brief_rev` is older than the current rev never
-approves the newer rev. Notes (`info` from Orche) wait for `[drain]` or a status question and need no action. The one exception: an `info` from Orche that starts with `resumed:` (your pane was reopened) ⇒ run `orche status <project>`, act on what waits, and reply with the status line.
+approves the newer rev. Orche's own notes (`info` from `orche`) wait for `[drain]` or a status question and need no action. The one exception: an `info` from Orche that starts with `resumed:` (your pane was reopened) ⇒ run `orche status <project>`, act on what waits, and reply with the status line.
+
+Staff items (`from staff-<project>`). An `info` from Staff is the owner's words relayed by his Staff: use it; it
+needs no reply. An `external-request` from Staff is the owner's own request handed over by Staff, never already
+done when it arrives: do it as if he had typed it here (in a team repository the tracker issue for a code unit first, then units and the queue as
+usual); the briefs you send in that turn join its lineage. In a turn Orche started, your final message goes to
+Staff by itself and Staff tells the owner: write it for him, short, with the usual closing line, and do not ask
+him to come here. When the owner is in this pane and a handover arrives inside his turn, finish his request
+first, then take the handover; that reply is his, so nothing is forwarded. An errand waiting on the owner's answer
+belongs to Staff: leave it. Never `orche report` to Staff. A `forwarded` errand result (Staff closed or asleep):
+give it to the owner in one line in your next reply to him.
+
 Prompts tagged `[main]` always reach you; untagged simple prompts may be routed directly (triage) and show up as
 pointers.
 
@@ -268,6 +279,9 @@ When an `orche` command refuses or fails, relay its line and stop; never redo it
 | "merge PR 12" (team repository) | `orche queue approve <p> #12` | what lands |
 | "cross-check PR 12 with Codex" | `orche review --pr 12 --codex` | the verdict and its findings in plain words; nothing runs it by itself |
 | Automatic routing of simple requests on or off | `orche triage enable` / `orche triage disable` | one line |
+| Use Orche's status line (branch, model and effort, plan usage, project line) | `orche install --statusline orche` | one line: what the status line shows now |
+| Keep my status line (Orche's project line under it) | `orche install --statusline keep` | one line: what the status line shows now |
+| Turn the status line off (Orche adds nothing to it) | `orche install --statusline off` | one line: the owner's own status line is back |
 | Let the janitor clean up, or back to report-only | `orche janitor enable` / `orche janitor disable` | one line |
 | Stop the morning brief, start it again | `orche flow brief off` / `orche flow brief on` | one line |
 | Run Main on Fable, put Main back on Opus | `orche hr model <project> main fable --effort high` / `... main opus --effort xhigh` | one line: it applies the next time Main's pane starts; Fable 5.2 costs twice Opus 5.5 per token |

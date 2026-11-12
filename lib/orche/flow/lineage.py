@@ -7,12 +7,13 @@ from the unit's brief.
 Assignment for a new brief (AMEND keeps both):
   division  parent = the division's current unit (brief.newest), lineage inherited from it
   triage    starts a lineage
-  Main      joins lineage L when the turn began with an Orche line ([orche] …) and the pointers
+  Main      joins the (first) errand lineage a Staff handover injected into a turn Orche started;
+            else lineage L when the turn began with an Orche line ([orche] …) and the pointers
             injected into it carry exactly one lineage L; otherwise the turn's first new brief starts
             a lineage that its later new briefs share (parent: -)
 
-The turn record `ORCHE_HOME/sessions/<session>.turn.json` {owner, lineages, at, started} is written
-by the prompt hook for Main and read here.
+The turn record `ORCHE_HOME/sessions/<session>.turn.json` {owner, lineages, at, started, errands,
+staff_only} is written by the prompt hook for Main (and Staff) and read here.
 
 Batch and close: a member (a brief whose lineage is L) ends when the newest report for its current rev,
 from its target to the session its reports go to (route: roster.recipient), is `done`, `failed`, `stop`,
@@ -50,14 +51,16 @@ def read_turn(session):
     return util.read_dict(turn_path(session))
 
 
-def write_turn(session, owner, lineages, at=None):
+def write_turn(session, owner, lineages, at=None, errands=None, staff_only=False):
     """A new turn began for `session`: `owner` (the owner typed it) and the injected pointers' lineages.
-    `at` is the time the turn read its inbox (an aware datetime); without one, now."""
+    `at` is the time the turn read its inbox (an aware datetime); without one, now. Main's record also
+    carries `errands` ({lineage: "close"|"handover"|"item"}, errand.turn_errands) and `staff_only` (an Orche
+    turn that took only errand items: its reply goes to Staff, dispatch.handle_stop)."""
     path = turn_path(session)
     path.parent.mkdir(parents=True, exist_ok=True)
     stamp = at.isoformat(timespec="seconds") if at is not None else util.now_iso()
     util.write_json(path, {"owner": bool(owner), "lineages": sorted(set(lineages)), "at": stamp,
-                           "started": None})
+                           "started": None, "errands": dict(errands or {}), "staff_only": bool(staff_only)})
 
 
 def begin_turn(session, owner):
@@ -111,6 +114,11 @@ def assign(reg, frm, by=None):
     if turn is None:
         return None, None
     lineages = turn.get("lineages") or []
+    if not turn.get("owner"):     # a Staff handover in Orche's turn: Main's briefs join the errand's lineage
+        errands = turn.get("errands") if isinstance(turn.get("errands"), dict) else {}
+        handed = sorted(str(n) for n, kind in errands.items() if kind == "handover")
+        if handed:
+            return handed[0], None
     if not turn.get("owner") and len(lineages) == 1:
         return lineages[0], None
     return turn.get("started"), None
@@ -859,9 +867,28 @@ def stalled(reg, project, now=None):
         return []
 
 
+def _handed(reads, project, ms) -> bool:
+    """Every member of the lineage is an errand (a brief to a Staff session) and one of them was handed to
+    Main (a `via staff` external-request for it in Main's inbox, pending or drained): the owner's request
+    waits on Main's units, whatever the errand's own end marker says."""
+    from .. import staff
+    main = reads.roster.main(project)
+    if main is None or not all(staff.is_staff(b.to) for b, _f, _s in ms):
+        return False
+    for b, _f, _s in ms:
+        try:
+            found = reads.about(main.session, b.unit, b.to)
+        except ValueError:
+            continue
+        if any(p.get("status") == "external-request" and p.get("via") == "staff" for _x, p in found):
+            return True
+    return False
+
+
 def line(reg, project, lineage, reads=None):
     """The prompt hook's line for `lineage`, one member or many (None: no member in `project`): closed
-    once Main's batch is complete, else open, naming the first unit it waits on and why."""
+    once Main's batch is complete, else open, naming the first unit it waits on and why. An errand lineage
+    handed to Main that holds no unit of Main's yet reads open (_handed)."""
     reads = reads or Reads(reg)
     ms = _effective(reads, members(reg, project, lineage, reads))
     if not ms:
@@ -869,6 +896,8 @@ def line(reg, project, lineage, reads=None):
     name = " ".join(str(lineage).split())
     n = f"{len(ms)} unit{'' if len(ms) == 1 else 's'}"
     wait = waiting(reads, project, lineage, None, ms)
+    if not wait and _handed(reads, project, ms):
+        return f"[orche] lineage {name}: open; the owner's request handed over by his Staff waits on your units"
     if not wait:
         c = _counts(ms)
         parts = ", ".join(f"{c[s]} {s}" for s in LABELS if c[s])
