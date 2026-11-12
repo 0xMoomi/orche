@@ -26,7 +26,8 @@ jobs:
         # macos-latest already points at macOS 26. Bump these deliberately.
         os: [ubuntu-24.04, macos-15]
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 10
+    # The suite takes about 6 minutes on Ubuntu and 9 to 10 on the macOS runner; 10 cancelled a green run.
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7
