@@ -19,9 +19,12 @@ Batch and close: a member (a brief whose lineage is L) ends when the newest repo
 from its target to the session its reports go to (route: roster.recipient), is `done`, `failed`, `stop`,
 a runner `info` without `retry` (stopped), `blocked` or `question` (STOPS); or when no run of it is live
 and its target is unknown or retired (gone), or a `via: dispatch` STOP at its rev or later from its sender
-or Main sits in the target's inbox (stop): both count as stopped. It settles once it ended, every child
-(a member whose `parent:` is its unit) settled and, when it has children and is not gone, its newest
-report is not a runner filing and is newer than every child's (a head files its unit after its workers).
+or Main sits in the target's inbox (stop): both count as stopped. A waiting report (blocked, question)
+stops counting once its sender or Main ended the unit after it: such a STOP (stopped) or their own report on
+the unit at its rev, `done`, `failed` or `stop`, in any inbox it went to (that status; _ended_after). It
+settles once it ended, every child (a member whose `parent:` is its unit) settled and, when it has
+children and is not gone, its newest report is not a runner filing and is newer than every child's (a
+head files its unit after its workers).
 A session waits on the members routed to it (Main: the lineage's roots) and everything under them.
 Under `ORCHE_HOME/flow/<p>/.lock`, a report that ends its unit, would wake, is filed on its unit's route
 and at its rev, while its recipient waits on two or more units, is posted `quiet: "batch"` (flow.shape;
@@ -335,18 +338,56 @@ def status_of(p):
 
 
 def members(reg, project, lineage, reads=None):
-    """[(Brief, (path, pointer) | None, status)] for `lineage` in `project`."""
+    """[(Brief, (path, pointer) | None, status)] for `lineage` in `project`; a member whose newest report
+    waits (blocked, question) and that was ended after it reads as ended (_ended_after)."""
     reads = reads or Reads(reg)
     out = []
     for b in reads.groups(project).get(lineage, []):
         found = _newest(b, reads)
-        out.append((b, found, status_of(found[1] if found else None)))
+        s = status_of(found[1] if found else None)
+        if s in WAITING:
+            found, s = _ended_after(b, found, reads) or (found, s)
+        out.append((b, found, s))
     return out
 
 
 def _rev(p):
     """A pointer's `brief_rev` as an int (missing: 1)."""
     return int(p.get("brief_rev") or 1)
+
+
+def _ended_after(b, found, reads):
+    """(found, status) for `b`, whose newest report `found` waits, when someone above it ended it after that
+    report: a `via: dispatch` STOP at its rev or later in the target's inbox ((found, "stopped")), or a closing
+    report at its rev, not `via: dispatch`, `done`, `failed`, `stopped` or `stop`, in the inbox of the target,
+    its route, its sender or Main (that report, its status_of). Both from its sender or Main, never from the
+    target; the newest such pointer filed after `found` decides. None: it still waits. A gone target alone
+    never ends a wait: the owner's step may still be owed."""
+    target, to = route(b, reads)
+    sender = _ends(b)[1]
+    main = reads.roster.main(b.project)
+    main = main.session if main is not None else ""
+    above = {sender, main} - {"", target}
+    best = (report_key(*found), None)
+    for box in dict.fromkeys(x for x in (target, to, sender, main) if x):
+        for frm in above:
+            try:
+                items = reads.about(box, b.unit, frm)
+            except ValueError:
+                continue
+            for path, p in items:
+                k = report_key(path, p)
+                if k <= best[0]:
+                    continue
+                try:
+                    if p.get("via") == "dispatch":
+                        if box == target and p.get("status") == "stop" and _rev(p) >= b.rev:
+                            best = (k, (found, "stopped"))
+                    elif str(p.get("brief_rev")) == str(b.rev) and p.get("status") in TERMINAL + ("stop",):
+                        best = (k, ((path, p), status_of(p)))
+                except (TypeError, ValueError):
+                    continue
+    return best[1]
 
 
 def _ended_by(b, reads):
@@ -498,8 +539,16 @@ def _closed_path(project):
     return folder(project) / "closed.json"
 
 
-def _signature(ms):
-    return [f"{b.unit}@{b.rev}:{s}" for b, _f, s in ms]
+def _signature(ms, reads):
+    """`unit@rev:status` per member; a member ended after a waiting report (_ended_after) keeps that report's
+    status, so a close sent while it waited is not sent again."""
+    out = []
+    for b, _f, s in ms:
+        if s in TERMINAL:
+            own = _newest(b, reads)
+            s = own_s if (own_s := status_of(own[1] if own else None)) in WAITING else s
+        out.append(f"{b.unit}@{b.rev}:{s}")
+    return out
 
 
 def _recorded(project):
@@ -511,9 +560,9 @@ def _recorded(project):
     return data if isinstance(data, dict) else {}
 
 
-def _record(project, lineage, ms):
+def _record(project, lineage, ms, reads):
     rec = _recorded(project)
-    rec[lineage] = {"members": _signature(ms), "at": util.now_iso()}
+    rec[lineage] = {"members": _signature(ms, reads), "at": util.now_iso()}
     path = _closed_path(project)
     path.parent.mkdir(parents=True, exist_ok=True)
     util.write_json(path, rec)
@@ -573,7 +622,7 @@ def close(reg, project, lineage, ms, reads=None):
         ptr = inbox.make(lineage, "orche", main.session, "done", report_path=str(md), brief_rev=head.rev,
                          summary=summary, lineage=lineage, lineage_closed=True)
         inbox.write(ptr)
-    _record(project, lineage, ms)
+    _record(project, lineage, ms, reads)
     log.log("events", f"lineage closed {lineage} project={project} n={len(ms)}")
     _finished(project, lineage)
     return ptr
@@ -611,7 +660,7 @@ def _due(reads, project, lineage):
     if len(ms) < 2 or waiting(reads, project, lineage, None, ms):
         return ms, False
     rec = _recorded(project).get(lineage)
-    return ms, not (isinstance(rec, dict) and rec.get("members") == _signature(ms))
+    return ms, not (isinstance(rec, dict) and rec.get("members") == _signature(ms, reads))
 
 
 def _holding(session, lineage=None):
@@ -729,7 +778,7 @@ def _repair(reg, project, gs, lins, now, dry_run):
             try:
                 m = _missed(reads, project, lin, now)
                 if m is not None and m[1]:
-                    _record(project, lin, m[0])          # the close went out; only its record was lost
+                    _record(project, lin, m[0], reads)   # the close went out; only its record was lost
                 elif m is not None:
                     posted.append((lin, close(reg, project, lin, m[0], reads)))
             except Exception as exc:  # noqa: BLE001 - one lineage never stops the others

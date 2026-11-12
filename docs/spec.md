@@ -1245,7 +1245,11 @@ its current rev, from its target to the session its reports go to (`roster.recip
 timeout and a dead run filed `runner died` too), `stop`, a runner `info` without retry (stopped), `blocked` or
 `question`; or, with no live run, when its target is unknown or retired (gone), or a `via: dispatch` STOP at its rev
 or later from its sender or Main sits in the target's inbox, pending or drained (the STOP marker never counts: an
-AMEND writes one). A gone or STOPped unit counts as `stopped`. Its children are the units whose `parent:` is it. A
+AMEND writes one). A gone or STOPped unit counts as `stopped`. A `blocked` or `question` report stops waiting (no
+longer the daily brief's or `orche status`'s `waits: owner`) once its sender or Main ended the unit after it: such a
+STOP (then `stopped`) or their own report on the unit at its rev, not `via: dispatch`, `done`, `failed` or `stop`, in
+any inbox (then that status, and that report is the unit's result); a gone target alone never ends a wait. Its
+children are the units whose `parent:` is it. A
 unit *settles* when it ended, every child settled and, when it has children and is not gone, its newest report is not
 a runner filing (`via: runner`) and is newer than every child's: a head files its unit after its workers. Main waits
 on L's roots (units whose parent is not in L), any other session on the units whose reports go to it, each with

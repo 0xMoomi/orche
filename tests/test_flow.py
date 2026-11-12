@@ -1285,6 +1285,150 @@ class BatchTest(FlowCase):
         self.assertEqual((self.woke(), self.closes(self.BUILD)), ([self.BUILD], []))   # the block's wake reads it
 
 
+class EndedWaitTest(FlowCase):
+    """c127: a blocked or question report stops waiting once its sender or Main ended the unit after it: a
+    `via: dispatch` STOP at its rev or later in the target's inbox (stopped), or their own report on the unit
+    at its rev (done, failed, stop), wherever it was posted; a gone target alone does not."""
+    L, BUILD, MAIN, FEAT, RND = BatchTest.L, BatchTest.BUILD, BatchTest.MAIN, BatchTest.FEAT, BatchTest.RND
+    make, post, closes, woke = BatchTest.make, BatchTest.post, BatchTest.closes, BatchTest.woke
+
+    def setUp(self):
+        super().setUp()
+        self.t = units.now() - _dt.timedelta(minutes=30)
+        patcher = mock.patch.object(inbox, "wake")
+        self.wake = patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def stop(self, unit, frm, to, rev=1, at=None):
+        """A pane STOP (`via: dispatch`) in `to`'s inbox, filed after the posts so far (or at `at`)."""
+        self.t += _dt.timedelta(seconds=1)
+        ptr = inbox.make(unit, frm, to, "stop", brief_rev=rev, via="dispatch", summary="STOP")
+        ptr["at"] = (at or self.t).isoformat(timespec="seconds")
+        inbox.write(ptr)
+
+    def member(self, unit, lin=None):
+        from orche import registry
+        from orche.flow import lineage
+        [(b, f, s)] = [m for m in lineage.members(registry.load(), "acme", lin or self.L) if m[0].unit == unit]
+        return f[1] if f else None, s
+
+    def blocked(self, unit, frm, to, rev=1):
+        return self.post(unit, frm, to, "blocked", rev=rev, via="runner", summary=f"{unit} stuck",
+                         owner="approve the paid plan")
+
+    def test_a_retired_feature_stopped_by_main_after_its_block(self):           # shape 1
+        u = self.make("acme-v-20261029-2", self.FEAT, self.BUILD)
+        self.blocked(u, self.FEAT, self.BUILD)
+        self.assertEqual(self.member(u)[1], "blocked")
+        self.stop(u, self.MAIN, self.FEAT)
+        p, s = self.member(u)
+        self.assertEqual((s, p["status"], p["from"]), ("stopped", "blocked", self.FEAT))   # its result stays
+        self.t += _dt.timedelta(days=16)
+        self.post(u, self.MAIN, self.BUILD, "stop")
+        self.post(u, self.BUILD, self.MAIN, "stop")
+        from orche import registry
+        reg = registry.load()
+        reg["projects"]["acme"]["divisions"]["build"]["features"][0]["status"] = "retired"
+        registry.save(reg)
+        p, s = self.member(u)
+        self.assertEqual((s, p["from"], p["to"]), ("stopped", self.BUILD, self.MAIN))
+
+    def test_a_division_stopped_then_reported_done_by_main(self):               # shapes 2 and 3
+        for div, rev, lin in ((self.RND, 2, "acme-r-20261029-3"), (self.BUILD, 1, "acme-b-20261029-4")):
+            u = self.make(lin, div, self.MAIN, lin=lin, rev=rev)
+            self.blocked(u, div, self.MAIN, rev=rev)
+            self.assertEqual(self.member(u, lin)[1], "blocked")
+            self.stop(u, self.MAIN, div, rev=rev)
+            self.assertEqual(self.member(u, lin)[1], "stopped")
+            self.stop(u, self.MAIN, div, rev=rev, at=self.t + _dt.timedelta(days=2))
+            self.t += _dt.timedelta(days=3)
+            self.post(u, self.MAIN, self.MAIN, "done", lin=lin, rev=rev, summary="closed by Main")   # Main to itself
+            p, s = self.member(u, lin)
+            self.assertEqual((s, p["summary"]), ("done", "closed by Main"))
+
+    def test_an_external_request_in_between_changes_nothing(self):             # shape 4
+        self.add_project_b()
+        u = self.make(self.L, self.RND, self.MAIN)
+        self.blocked(u, self.RND, self.MAIN)
+        self.t += _dt.timedelta(seconds=1)
+        inbox.write(inbox.make(u, self.MAIN, "main-beta", "external-request", summary="ask beta"))
+        self.assertEqual(self.member(u)[1], "blocked")
+        self.stop(u, self.MAIN, self.RND)
+        self.post(u, self.MAIN, self.MAIN, "done")
+        self.assertEqual(self.member(u)[1], "done")
+
+    def test_a_redispatch_that_blocks_again_waits_again(self):
+        u = self.make(self.L, self.BUILD, self.MAIN)
+        self.blocked(u, self.BUILD, self.MAIN)
+        self.stop(u, self.MAIN, self.BUILD)
+        self.assertEqual(self.member(u)[1], "stopped")
+        self.make(u, self.BUILD, self.MAIN, rev=2)                                # the AMEND
+        self.assertEqual(self.member(u), (None, "running"))
+        self.blocked(u, self.BUILD, self.MAIN, rev=2)
+        self.assertEqual(self.member(u)[1], "blocked")
+        self.post(u, self.MAIN, self.MAIN, "done", rev=1)                         # the old rev's close: not this one
+        self.assertEqual(self.member(u)[1], "blocked")
+
+    def test_what_does_not_end_a_wait(self):
+        u = self.make(self.L, self.BUILD, self.MAIN, rev=2)
+        self.stop(u, self.MAIN, self.BUILD, rev=2)                                # older than the block
+        self.blocked(u, self.BUILD, self.MAIN, rev=2)
+        self.stop(u, self.MAIN, self.BUILD, rev=1)                                # newer, a lower rev
+        self.post(u, self.RND, self.MAIN, "done", rev=2)                          # not its sender or Main
+        self.post(u, self.BUILD, self.MAIN, "done", rev=2)                        # the target itself: its report
+        self.assertEqual(self.member(u)[1], "done")
+        v = self.make("acme-q-20261029-7", self.BUILD, self.MAIN)
+        self.post(v, self.BUILD, self.MAIN, "question")
+        self.post(v, self.RND, self.MAIN, "stop")
+        self.post(v, self.MAIN, self.MAIN, "info")                                # not a closing status
+        self.stop(v, self.MAIN, self.RND)                                         # not the target's inbox
+        self.assertEqual(self.member(v)[1], "question")
+
+    def test_a_retired_target_alone_still_waits(self):
+        u = self.make(self.L, self.FEAT, self.BUILD)
+        self.blocked(u, self.FEAT, self.BUILD)
+        from orche import registry
+        reg = registry.load()
+        reg["projects"]["acme"]["divisions"]["build"]["features"][0]["status"] = "retired"
+        registry.save(reg)
+        self.assertEqual(self.member(u)[1], "blocked")
+
+    def test_the_lineage_closes_with_the_ended_status(self):
+        from orche import registry
+        from orche.flow import lineage
+        a, b = (self.make(self.L, self.BUILD, self.MAIN),
+                self.make("acme-b-20261029-2", self.RND, self.MAIN))
+        self.blocked(a, self.BUILD, self.MAIN)
+        self.stop(a, self.MAIN, self.BUILD)
+        self.post(b, self.RND, self.MAIN, "done")
+        [close] = self.closes()
+        self.assertEqual(close["summary"].splitlines()[0], f"lineage {self.L} closed: 2 units: 1 done, 0 failed, 1 stopped")
+        text = (self.units_dir() / self.L / "LINEAGE.md").read_text()
+        self.assertIn("units: 2, 1 done, 0 failed, 1 stopped\n", text)
+        self.assertIn(f"| {a} | main | stopped | - | {a} stuck OWNER: approve the paid plan |", text)
+        self.assertEqual(lineage.line(registry.load(), "acme", self.L),
+                         f"[orche] lineage {self.L}: closed — 2 units (1 done, 1 stopped)")
+        self.post(a, self.MAIN, self.MAIN, "done")                                # Main closes it too: no new close
+        self.assertEqual(len(self.closes()), 1)
+        self.assertEqual(lineage.repair(registry.load()), [])
+
+    def test_a_close_sent_while_it_waited_is_not_sent_again(self):
+        from orche import registry
+        from orche.flow import lineage
+        a, b = (self.make(self.L, self.BUILD, self.MAIN),
+                self.make("acme-b-20261029-2", self.RND, self.MAIN))
+        self.post(b, self.RND, self.MAIN, "done")
+        self.blocked(a, self.BUILD, self.MAIN)
+        [close] = self.closes()
+        self.assertIn("1 done, 0 failed, 0 stopped, 1 blocked", close["summary"])
+        self.stop(a, self.MAIN, self.BUILD)
+        self.post(a, self.MAIN, self.MAIN, "done")
+        self.assertEqual(len(self.closes()), 1)
+        self.assertEqual(lineage.repair(registry.load()), [])
+        self.assertEqual(lineage.line(registry.load(), "acme", self.L),
+                         f"[orche] lineage {self.L}: closed — 2 units (2 done)")
+
+
 class GuardEdgesTest(FlowCase):
     """Review 2: the guards cover external briefs, fail open, and count a batch; G7 follows flow.enabled."""
 

@@ -111,6 +111,18 @@ class CardTest(FlowCase):
         self.assertNotIn("[orche] resume", out)
 
 
+    def test_a_question_main_stopped_waits_no_more(self):
+        from orche import project, registry
+        a, _b, _c = self.three()
+        self.assertIn(f"waits: owner — {a} (question)", self.orche("status", "acme").stdout)
+        inbox.write(inbox.make(a, "main-acme", "div-acme-build", "stop", brief_rev=1, via="dispatch", summary="STOP"))
+        [row] = [r for r in project.lineages(registry.load(), "acme", members=True) if r["lineage"] == a]
+        self.assertEqual((row["open"], row["states"]), (False, {"stopped": 1}))
+        out = self.orche("status", "acme").stdout
+        self.assertNotIn("waits: owner", out)
+        self.assertIn(f"closed L {a}", out)
+
+
 class CardDocsTest(FlowCase):
     def test_rulebook_and_readme_name_the_card(self):
         skill = (support.ROOT / "skills" / "orche-main" / "SKILL.md").read_text()

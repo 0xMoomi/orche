@@ -285,6 +285,30 @@ class WakeTest(DailyCase):
         self.assertIsNone(daily.read("acme")["sent_at"])
 
 
+class EndedWaitTest(DailyCase):
+    """c127: a unit that waited for the owner and was then stopped by Main, or closed by Main's own report, is
+    no longer listed as waiting."""
+
+    def test_a_wait_main_stopped_or_closed_is_not_listed(self):
+        now, since = self.now, self.now - dt.timedelta(hours=24)
+        a, b, c = self.unit("A"), self.unit("B"), self.unit("C")
+        self.post(a, "blocked", "Needs the deploy key", at=now - dt.timedelta(hours=3), owner="approve the deploy")
+        self.post(b, "question", "Which rounding rule?", at=now - dt.timedelta(hours=3), owner="pick a rule")
+        self.post(c, "question", "Which tax rule?", at=now - dt.timedelta(hours=3), owner="pick a tax rule")
+        self.assertEqual(len(daily.facts(registry.load(), "acme", now, since)["waiting"]), 3)
+        stop = inbox.make(a, "main-acme", "div-acme-build", "stop", brief_rev=1, via="dispatch", summary="STOP")
+        stop["at"] = units.iso(now - dt.timedelta(hours=2))
+        inbox.write(stop)
+        done = inbox.make(b, "main-acme", "main-acme", "done", brief_rev=1, summary="Closed by Main", lineage=b)
+        done["at"] = units.iso(now - dt.timedelta(hours=1))
+        with mock.patch.object(inbox, "wake"):
+            inbox.post(done)
+        f = daily.facts(registry.load(), "acme", now, since)
+        self.assertEqual(f["waiting"], [f"  - waiting 3 h: {c} asks: pick a tax rule"])
+        self.assertEqual(f["ended"], [])
+        self.assertEqual(f["landed"], [f"  - {b} (done, no PR): Closed by Main"])
+
+
 class PassTest(ReconcileCase):
     """`orche reconcile` posts a built brief in its `daily` step: once, through the inbox's wake."""
 
