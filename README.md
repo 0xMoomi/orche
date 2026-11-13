@@ -8,9 +8,9 @@ For developers on macOS who want several agents on one repository without watchi
 ## What's new
 
 <!-- whats-new: scripts/release.py keeps the three newest -->
+- **0.21.4** (2026-11-13): the status line gauges are split in seven, with a thinner pace marker. [Notes](https://github.com/0xMoomi/orche/releases/tag/v0.21.4)
 - **0.21.3** (2026-11-13): the status line gauges are split in three. [Notes](https://github.com/0xMoomi/orche/releases/tag/v0.21.3)
 - **0.21.2** (2026-11-13): a task Main stopped or closed no longer shows as waiting for the owner. [Notes](https://github.com/0xMoomi/orche/releases/tag/v0.21.2)
-- **0.21.1** (2026-11-13): Longer usage gauges in the status line, split into quarters. [Notes](https://github.com/0xMoomi/orche/releases/tag/v0.21.1)
 <!-- /whats-new -->
 
 Every version: [releases](https://github.com/0xMoomi/orche/releases) and [CHANGELOG.md](CHANGELOG.md).

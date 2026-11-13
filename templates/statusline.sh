@@ -4,8 +4,8 @@
 #
 # Line 1: when ORCHE_HOME/statusline.inner holds a command (mode `keep`: your own status line), that
 # command runs with the same stdin and its output is printed as it is; else (mode `orche`) Orche's line:
-#   ⎇ branch │ model · effort │ Session: 12% ▓▓░░░ ░░░░░ ░░░░░ ░░░░░ → Reset: 09:31 PM │ Weekly: 78% ▓▓▓▓▓ ▓▓▓▓▓ ▓▓▓▓┃ ▓░░░░ → Reset: Sun 04:00 PM
-# Each gauge has 21 cells (about 5% each) in three groups of seven, so every gap is a third mark.
+#   ⎇ branch │ model · effort │ Session: 12% ▓▓▓ ░░░ ░░░ ░░░ ░░░ ░░░ ░░░ → Reset: 09:31 PM │ Weekly: 78% ▓▓▓ ▓▓▓ ▓▓▓ ▓▓▓ ▓▓▓ │░░ ░░░ → Reset: Sun 04:00 PM
+# Each gauge has 21 cells (about 5% each) in seven groups of three; for the week, a group is about a day.
 # Then the Orche project line: walk up from the session directory to the first `.orche/project` marker
 # and print the cached first line of ORCHE_HOME/status/<project>.line.
 # Tools: bash 3.2 builtins, git, date; no JSON tool. Never fails loudly: any error prints what it has and exits 0.
@@ -108,9 +108,9 @@
         fi
       fi
       while [ "$i" -lt 21 ]; do
-        [ "$i" -gt 0 ] && [ $(( i % 7 )) -eq 0 ] && bar="${bar} "   # a gap at each third
+        [ "$i" -gt 0 ] && [ $(( i % 3 )) -eq 0 ] && bar="${bar} "   # a gap after every third cell
         if [ "$i" -eq "$marker" ]; then
-          bar="${bar}${pace}┃${RESET}${colour}"
+          bar="${bar}${pace}│${RESET}${colour}"
         elif [ "$i" -lt "$filled" ]; then
           bar="${bar}▓"
         else

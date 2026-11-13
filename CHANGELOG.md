@@ -3,6 +3,13 @@
 All notable changes to Orche are listed here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow semantic versioning.
 
+## 0.21.4 — 2026-11-13
+
+### Changed
+
+- The usage gauges in the status line are split into seven parts (for the week, one part is about a day),
+  and the marker that shows how far the week has gone is a thinner line.
+
 ## 0.21.3 — 2026-11-13
 
 ### Changed
