@@ -903,7 +903,7 @@ class StatuslineScriptTest(support.TempHomeCase):
     def weekly(self):
         reset = self.now + 2 * 86400
         return {"used_percentage": 78, "resets_at": reset}, \
-            f"Weekly: 78% ▓▓▓▓▓ ▓▓▓▓▓ ▓▓▓▓┃ ▓░░░░ → Reset: {self.when(reset, '%a %I:%M %p')}"
+            f"Weekly: 78% ▓▓▓▓▓▓▓ ▓▓▓▓▓▓▓ ▓┃░░░░░ → Reset: {self.when(reset, '%a %I:%M %p')}"
 
     def test_orche_mode_on_the_sample_compact_and_spaced(self):
         week, text = self.weekly()
@@ -917,7 +917,7 @@ class StatuslineScriptTest(support.TempHomeCase):
         week, text = self.weekly()
         five = {"used_percentage": 12.4, "resets_at": self.now + 3600}
         out = ANSI.sub("", self.run_sh(self.payload({"five_hour": five, "seven_day": week})))
-        self.assertEqual(out, f"⎇ feat-x │ Fable 5.2 · high │ Session: 12% ▓▓░░░ ░░░░░ ░░░░░ ░┃░░░ → Reset: "
+        self.assertEqual(out, f"⎇ feat-x │ Fable 5.2 · high │ Session: 12% ▓▓▓░░░░ ░░░░░░░ ░░░┃░░░ → Reset: "
                               f"{self.when(self.now + 3600, '%I:%M %p')} │ {text}\n")
 
     def test_empty_stdin_and_no_git_print_what_they_have(self):
@@ -988,7 +988,7 @@ class StatuslineScriptTest(support.TempHomeCase):
     def test_a_reset_in_the_past_shows_no_time_and_no_pace_marker(self):
         five = {"used_percentage": 12, "resets_at": self.now - 600}
         out = ANSI.sub("", self.run_sh(self.payload({"five_hour": five})))
-        self.assertEqual(out, "⎇ feat-x │ Fable 5.2 · high │ Session: 12% ▓▓░░░ ░░░░░ ░░░░░ ░░░░░\n")
+        self.assertEqual(out, "⎇ feat-x │ Fable 5.2 · high │ Session: 12% ▓▓▓░░░░ ░░░░░░░ ░░░░░░░\n")
 
     def test_no_jq_needed(self):
         self.assertNotIn("jq", SCRIPT.read_text())

@@ -181,9 +181,23 @@ class MetricsTest(support.TempHomeCase):
         registry.save(reg)
         return reg
 
+    def freeze(self):
+        """The CLI takes no `now`: metrics reads NOW as the clock, so the dated fixture transcripts stay in
+        its 30-day window whatever the real date is."""
+        class Frozen(dt.datetime):
+            @classmethod
+            def now(cls, tz=None):
+                return NOW.astimezone(tz) if tz is not None else NOW.astimezone().replace(tzinfo=None)
+
+        clock = mock.patch.object(metrics, "_dt", mock.Mock(datetime=Frozen, timedelta=dt.timedelta,
+                                                             timezone=dt.timezone))
+        clock.start()
+        self.addCleanup(clock.stop)
+
     def test_cli_runner_section_from_registered_projects(self):
         self.registry()
-        self.run_lines(dt.datetime.now(dt.timezone.utc))
+        self.freeze()
+        self.run_lines(NOW)
         cli, out = load_cli(), io.StringIO()
         with redirect_stdout(out):
             self.assertEqual(cli.main(["metrics", "--root", str(self.root), "--json"]), 0)

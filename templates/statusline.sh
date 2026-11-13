@@ -5,7 +5,7 @@
 # Line 1: when ORCHE_HOME/statusline.inner holds a command (mode `keep`: your own status line), that
 # command runs with the same stdin and its output is printed as it is; else (mode `orche`) Orche's line:
 #   ⎇ branch │ model · effort │ Session: 12% ▓▓░░░ ░░░░░ ░░░░░ ░░░░░ → Reset: 09:31 PM │ Weekly: 78% ▓▓▓▓▓ ▓▓▓▓▓ ▓▓▓▓┃ ▓░░░░ → Reset: Sun 04:00 PM
-# Each gauge has 20 cells (5% each) in four groups of five, so every gap is a quarter mark.
+# Each gauge has 21 cells (about 5% each) in three groups of seven, so every gap is a third mark.
 # Then the Orche project line: walk up from the session directory to the first `.orche/project` marker
 # and print the cached first line of ORCHE_HOME/status/<project>.line.
 # Tools: bash 3.2 builtins, git, date; no JSON tool. Never fails loudly: any error prints what it has and exits 0.
@@ -80,16 +80,16 @@
       [ "$idx" -lt 0 ] && idx=0
       [ "$idx" -gt 9 ] && idx=9
       colour=$'\033[38;5;'"${levels[$idx]}m"
-      filled=$(( (pct * 20 + 50) / 100 ))
-      [ "$filled" -gt 20 ] && filled=20
+      filled=$(( (pct * 21 + 50) / 100 ))
+      [ "$filled" -gt 21 ] && filled=21
       if [ -n "$reset" ]; then
         [ -n "$now" ] || now=$(date +%s)
         remaining=$(( reset - now ))
         if [ "$remaining" -gt 0 ] && [ "$remaining" -lt "$win" ]; then
           # Pace marker: a bar at how far the window has gone, coloured by where it would end at this pace.
           elapsed=$(( win - remaining ))
-          marker=$(( (elapsed * 20 + win / 2) / win ))
-          [ "$marker" -gt 19 ] && marker=19
+          marker=$(( (elapsed * 21 + win / 2) / win ))
+          [ "$marker" -gt 20 ] && marker=20
           pace="$colour"
           if [ "$elapsed" -ge $(( win / 200 )) ]; then
             projected=$(( pct * win / elapsed ))
@@ -107,8 +107,8 @@
           [ -n "$when" ] && reset_text=" → Reset: ${when}"
         fi
       fi
-      while [ "$i" -lt 20 ]; do
-        [ "$i" -gt 0 ] && [ $(( i % 5 )) -eq 0 ] && bar="${bar} "   # a gap at each quarter
+      while [ "$i" -lt 21 ]; do
+        [ "$i" -gt 0 ] && [ $(( i % 7 )) -eq 0 ] && bar="${bar} "   # a gap at each third
         if [ "$i" -eq "$marker" ]; then
           bar="${bar}${pace}┃${RESET}${colour}"
         elif [ "$i" -lt "$filled" ]; then
