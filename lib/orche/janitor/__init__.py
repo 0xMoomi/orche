@@ -1,9 +1,14 @@
 """Janitor: state-based cleanup (SPEC §11).
 
 Only state retires things: registry `retired`, `docs/GRAVEYARD.md` pointer rows, a worktree gone
-from Orca (confirmed with `--apply-removed`), `orche discard`. Age only touches regenerable
-artifacts. Sessions are archived, never deleted; files go to a 30-day trash. Every action writes
-a manifest and a GRAVEYARD row before anything is removed.
+from Orca (confirmed with `--apply-removed`), `orche discard`, a worker whose work landed and that is
+quiet `idle_days` (retired through hr; a retired worker's leftover worktree is removed through Orca).
+Age only touches regenerable artifacts. Sessions are archived, never deleted; files go to a 30-day
+trash, except git-ignored dependencies and build output, which are deleted outright with a row in the
+global graveyard only. A large git-ignored folder that is not known to be cheap to recreate is never
+deleted: one urgent `info` per project asks Main to put it to the owner (`asked` in state.json, once per
+path). Every action writes its GRAVEYARD row (and a manifest for archive and trash) before anything is
+removed.
 
 Layout: `rules` decides (plan, no side effects), `discover` reads git/Orca/filesystem,
 `archive` / `trash` act, `graveyard` records. This module runs one pass and renders the report.
@@ -29,7 +34,8 @@ DEFAULTS = {
     "claude_projects": "~/.claude/projects",
     "idle_days": 7,
     "trash_days": 30,
-    "cache_names": [".next", "dist", "out", "build", "coverage", ".turbo"],
+    # fnmatch patterns on a directory's own name: regenerable dependencies and build output
+    "cache_names": [".next", ".next-*", "node_modules", "dist", "out", "build", "coverage", ".turbo"],
 }
 ACTOR = "janitor"
 DAILY_S = 24 * 3600         # the heartbeat starts a pass when the last one is this old
@@ -38,14 +44,14 @@ LOCK_STALE_S = 2 * 3600     # a `.pass.lock` this old belongs to a dead pass
 
 @dataclass
 class Candidate:
-    trigger: str            # retired | graveyard | orca-removed | age:build-cache | age:codex-tmp | age:scratch | age:trash
-    action: str             # archive | trash | purge | retire | skip
+    trigger: str            # retired | graveyard | orca-removed | landed | age:build-cache | age:costly | age:codex-tmp | age:scratch | age:trash
+    action: str             # archive | trash | delete | purge | retire | remove | ask | skip
     target: str             # what the report shows
     reason: str
     size: int = 0
-    kind: str = "path"      # path | sessions | purge | unit
-    path: str = ""          # trash/purge: absolute path
-    root: str = ""          # trash: base for the relative path kept inside the trash
+    kind: str = "path"      # path | sessions | purge | unit | worktree
+    path: str = ""          # trash/delete/purge/remove/ask: absolute path
+    root: str = ""          # trash: base for the relative path kept inside the trash; delete: the worktree
     unit: str = ""          # sessions/unit: session name
     project: str = ""
     files: list = field(default_factory=list)
@@ -200,7 +206,7 @@ def context(reg, *, apply_removed=False, claude_projects=None):
         reg=reg, st=st, now=units.now(), units=recs, retired=retired, all_sessions=every,
         worktrees=discover.orca_worktrees(), terminals=discover.orca_terminals(),
         state=load_state(), apply_removed=apply_removed, home=paths.orche_home(),
-        claude_root=_opt_path(configured_dir(st["claude_projects"])), wip={}, silent_rows=[])
+        claude_root=_opt_path(configured_dir(st["claude_projects"])), wip={}, silent_rows=[], leaving=set())
 
 
 def _opt_path(value):
@@ -263,21 +269,105 @@ def _retire(ctx, cand):
     return "retired"
 
 
+def _retire_landed(ctx, cand):
+    """A landed, quiet worker: `orche feat retire --yes` by the janitor (hr re-checks, with a fetch)."""
+    from .. import hr                      # function level: hr/retire.py imports the janitor's modules
+    unit = roster.Roster(ctx.reg).member(cand.unit)
+    if unit is None or unit.kind != "feat":
+        raise ValueError(f"no registered worker {cand.unit!r}")
+    _data, line = hr.retire(ctx.reg, unit, yes=True, by=ACTOR)
+    return line
+
+
+def _delete(ctx, cand):
+    """A regenerable directory: one row in the global graveyard (the project's file is tracked), then rmtree."""
+    import shutil
+    from . import graveyard
+    path, root = cand.path, cand.root
+    if not root or os.path.islink(path) or not os.path.isdir(path) \
+            or not units.is_within(path, root) or units.real(path) == units.real(root):
+        raise ValueError(f"not a directory strictly inside {root or '?'}: {path}")
+    graveyard.record(None, f"deleted {cand.target}", f"{cand.trigger}: {cand.reason}",
+                     "none: regenerable (reinstall or rebuild)", ACTOR, project=cand.project, date=ctx.now.date())
+    shutil.rmtree(path)
+    return "deleted"
+
+
+def _remove(ctx, cand):
+    """A retired worker's leftover worktree: GRAVEYARD row naming the branch, then `orca worktree rm`."""
+    from .. import orca
+    rec = next(u for u in ctx.units if u.session == cand.unit)
+    branch, name = rec.entry.get("branch", ""), rec.entry.get("name", "")
+    _recorder(ctx, cand, f"worktree {cand.path} of retired unit {cand.unit}",
+              lambda _: f"branch {branch} was tagged at retirement: git tag -l 'archive/feat-{name}-*'")(None)
+    orca.worktree("rm", "--worktree", f"id:{rec.raw_worktree}")
+    return "removed"
+
+
+ASK_SUMMARY = ("janitor: {n} large folders ({size}) in quiet worktrees were left alone because recreating them "
+               "may be slow; ask the owner before removing them")
+
+
+def _ask_owner(ctx, asks) -> None:
+    """One urgent `info` to each project's Main listing its new `ask` folders (REPORT.md beside the state), then
+    the paths go into `asked`. A paused project or one with no Main is not asked now: a later pass asks."""
+    from .. import inbox
+    from ..flow import guard
+    asked = ctx.state.setdefault("asked", {})
+    members = roster.Roster(ctx.reg)
+    for key, cands in sorted(asks.items()):
+        main = members.main(key)
+        why = "no Main registered" if main is None else "project paused" if guard.paused(key) else None
+        if why:
+            for c in cands:
+                c.result = f"not asked: {why}"
+            continue
+        try:
+            report = state_dir() / "asked" / key / "REPORT.md"
+            lines = [f"# Large folders left alone in {key}", "",
+                     "Recreating them may be slow; the owner decides. Delete exactly these on a yes:", ""]
+            lines += [f"- {c.path} ({human_size(c.size)}, unit {c.unit})" for c in cands]
+            util.atomic_write(report, "\n".join(lines) + "\n")
+            summary = ASK_SUMMARY.format(n=len(cands), size=human_size(sum(c.size for c in cands)))
+            inbox.post(inbox.make("janitor", ACTOR, main.session, "info", brief_rev=0, urgent=True,
+                                  summary=summary, report_path=str(report)))
+        except Exception as exc:  # noqa: BLE001 - one failure must not stop the pass; a later pass asks
+            for c in cands:
+                c.error = str(exc)
+            log.log("janitor", f"FAILED ask {key}: {exc}")
+            continue
+        for c in cands:
+            asked[c.path] = ctx.now.isoformat(timespec="seconds")
+            c.result = "asked"
+        log.log("janitor", f"ask {key}: {len(cands)} folders -> {main.session}")
+
+
 def execute(ctx, cands) -> None:
     """Carry out every non-skip candidate in plan order; errors are kept on the candidate."""
     from . import archive, trash
-    failed_units = set()
+    failed_units, asks = set(), {}
     for c in cands:
         if c.action == "skip":
             if c.settle:
                 _settle(ctx, c.rows, f"skipped: {c.reason}")
+            continue
+        if c.action == "ask":
+            at = (ctx.state.get("asked") or {}).get(c.path)
+            if at:
+                c.result = f"asked {str(at)[:10]}; left for the owner"
+            else:
+                asks.setdefault(c.project, []).append(c)
             continue
         if c.unit in failed_units:
             c.error = "skipped: retiring the unit failed"
             continue
         try:
             if c.action == "retire":
-                c.result = _retire(ctx, c)
+                c.result = _retire_landed(ctx, c) if c.trigger == "landed" else _retire(ctx, c)
+            elif c.action == "delete":
+                c.result = _delete(ctx, c)
+            elif c.action == "remove":
+                c.result = _remove(ctx, c)
             elif c.action == "archive":
                 rec = _recorder(ctx, c, f"archived {len(c.files)} session files of {c.unit}",
                                 lambda m: f"orche janitor restore {m['unit']}")
@@ -298,6 +388,7 @@ def execute(ctx, cands) -> None:
             if c.action == "retire":
                 failed_units.add(c.unit)
             log.log("janitor", f"FAILED {c.action} {c.target}: {exc}")
+    _ask_owner(ctx, asks)
     _settle(ctx, ctx.silent_rows, "refused: protected path")
     save_state(ctx.state)
 

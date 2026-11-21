@@ -1590,7 +1590,9 @@ Pre-commit: `gitleaks` (or equivalent).
 | Kind | Trigger | Applies to |
 |---|---|---|
 | State-based | registry `retired`, GRAVEYARD entry, Orca card removal, `orche discard` | Unit worktrees, sessions (archived), unit artifacts |
-| Age-based | Regenerable artifacts only | Build caches idle 7 days; temp dirs; one-off scratch with no owning unit. Implementation note: the Orca Codex `.tmp` sweep is opt-in (config `janitor.codex_tmp`, off by default) |
+| Finished workers | A worker (feature unit, never a division) whose work landed (its branch head in the local `origin/<base>` or logged `merged` by the merge queue) and that is quiet 7 days by `units.last_active` | Retired through `hr.retire` by `janitor` (active, paused or dormant; an open pane, a live terminal or `orche run` in it, or uncommitted work is listed as a skip); a retired worker's worktree still on disk is removed with `orca worktree rm` when Orca lists it and it is clean |
+| Age-based | Regenerable artifacts only | Dependencies and build output (config `janitor.cache_names`, fnmatch patterns on the directory's own name, default `.next`, `.next-*`, `node_modules`, `dist`, `out`, `build`, `coverage`, `.turbo`) that git ignores and does not track, of a unit of any status but `onboarding` quiet 7 days by `units.last_active` and untouched 7 days (`node_modules` only with a lockfile in its parent or an ancestor up to the worktree root, else a skip `no lockfile (not a one-command reinstall)`), deleted only when deleting it really frees at least 100 MB (`WORTH_MIN`; `discover.reclaim` counts each file once per inode by its APFS private size, so files a pnpm store clones or hard-links count nothing; a smaller tree gets no row, a larger one that frees less a skip `frees only <size> (files shared with the package store)`); inside the directory only `.env*` names protect it (none inside `node_modules`); temp dirs; one-off scratch with no owning unit. Implementation note: the Orca Codex `.tmp` sweep is opt-in (config `janitor.codex_tmp`, off by default) |
+| Costly to recreate (`age:costly`) | Any other git-ignored folder (`git ls-files --others --ignored --exclude-standard --directory`, outside `.orche/` and `.claude/`, no `.env*` inside) of a unit quiet 7 days, at least 200 MB apparent and really freed (`discover.reclaim`) and untouched 7 days | Never deleted: action `ask`; a live pass posts one urgent `info` from `janitor` per project to Main with the list (`ORCHE_HOME/janitor/asked/<project>/REPORT.md`) and records each path under `asked` in `janitor/state.json`, so it is asked once; a paused project or one with no Main is asked on a later pass |
 
 Dormant ≠ discarded. Sleep never triggers cleanup.
 
@@ -1600,8 +1602,8 @@ Dormant ≠ discarded. Sleep never triggers cleanup.
 |---|---|
 | R-JAN-1 | Sessions are never deleted by age. Set `cleanupPeriodDays: 3650` in Claude Code settings. |
 | R-JAN-2 | Sessions of retired/discarded units are compressed to `ORCHE_HOME/archive/<session>/` (archive, not delete). Archives are deleted only on explicit instruction. Implementation note: the path moved from `~/.orche-archive/<unit>/`. |
-| R-JAN-3 | Before deleting anything, append a GRAVEYARD line. |
-| R-JAN-4 | Deleted files go to `ORCHE_HOME/trash/<date>/`; permanently removed after 30 days. `orche janitor undo|restore` available. Implementation note: the path moved from `~/.orche-trash/<date>/`. `orche janitor restore <unit>` writes a unit's archived sessions (R-JAN-2) back to their original paths and refuses to overwrite an existing file (exit 3); a person says it to bring a retired unit's conversations back. |
+| R-JAN-3 | Before deleting anything, append a GRAVEYARD line. Implementation note: a deleted regenerable directory gets its line in the global graveyard only (`deleted <path>`, recovery `none: regenerable (reinstall or rebuild)`), since the project's `docs/GRAVEYARD.md` is tracked and a line per cache would dirty the main checkout every day. |
+| R-JAN-4 | Deleted files go to `ORCHE_HOME/trash/<date>/`; permanently removed after 30 days. `orche janitor undo|restore` available. Implementation note: the path moved from `~/.orche-trash/<date>/`. Implementation note: git-ignored dependencies and build output (§11.1) are deleted outright, not trashed, so their space comes back the same day; the trash stays for everything else. `orche janitor restore <unit>` writes a unit's archived sessions (R-JAN-2) back to their original paths and refuses to overwrite an existing file (exit 3); a person says it to bring a retired unit's conversations back. |
 | R-JAN-5 | First week runs dry-run only; the dry-run report is reviewed by the user. Implementation note: `orche janitor run` stays a dry run until `orche janitor enable`; `--dry-run` always forces one. Implementation note: the first `orche install` (and so `orche update`) writes the enabled flag (install-state `janitor_default`, so `orche janitor disable` stays) and the heartbeat runs the daily pass (§11.4). Implementation note: there is no janitor LaunchAgent. |
 | R-JAN-6 | Buckets are advice, not permission. |
 
@@ -1613,13 +1615,16 @@ GRAVEYARD format (`docs/GRAVEYARD.md` per repo + global `~/.claude/orche/graveya
 
 ### 11.3 Untouchables
 
-- Sessions and artifacts of active or dormant units (Implementation note: the protected statuses are `active`, `paused` and `onboarding`; a `dormant` unit's build caches may age out)
-- Uncommitted changes (`wip:N` state pauses; show diff, human decides)
+- Sessions and artifacts of active or dormant units (Implementation note: the protected statuses are `active`, `paused` and `onboarding`; regenerable directories of any unit but an `onboarding` one may age out, and a landed, quiet worker is retired (§11.1))
+- Uncommitted changes (`wip:N` state pauses; show diff, human decides). Implementation note: they no longer hold back git-ignored regenerable directories, which are nobody's work
 - Checkouts used by a live session (sacred)
 - `.env*`
 - `memory/` and `.claude/agent-memory/`
 - registry, cards, ledgers
-- Build caches used within 7 days
+- Build caches of a unit active within 7 days, or written within 7 days
+- The project's main checkout (a unit whose worktree is or holds it is never swept, retired or removed)
+- A worker whose checked-out HEAD has not landed, even when its registry branch has (the registry branch can be stale)
+- Anything whose recreation is not one standard command (a reinstall beside a lockfile, a rebuild): the owner decides, through Main (`age:costly`, §11.1)
 
 ### 11.4 Schedule
 
@@ -2062,6 +2067,7 @@ refused with an exit code; the `orche` commands keep argument parsing and output
 | Wake, already active | `wake` | Orca (1) | a pane only when none carries the title | `reopen S pane by B` (HR log only) |
 | Sleep | `sleep` | retired (3); onboarding (3); stale HANDOFF (3) unless the audit's idle rule; Orca (1) | close the titled pane; a division's resting note after the record | `sleep` event, save, `sleep S by B`, status line |
 | Retire feature | `retire` | onboarding (3); main checkout, uncommitted work, no `final:`, open pane (3); no `--yes` (1); kept files differ (1); a failed step (1, the kept results named) | tag, `worktree rm` | GRAVEYARD rows first; `retire` event, save, `retire S by B (tag T)`, status line |
+| Retire a landed, quiet worker (janitor) | `retire` with `by="janitor"` | as Retire feature (the janitor's report shows the refusal) | tag, `worktree rm` | as Retire feature, by janitor |
 | Retire a unit Orca removed | `retire_gone` (janitor) | — | — | the janitor's GRAVEYARD row first; `retire` event by janitor, save, `retire S by janitor (worktree gone from Orca)`, status line |
 | Stage change | `set_stage` | none (Ops refusals are notes; the stage still changes) | through wake/sleep of Ops | `stage` event, save, `stage K -> X by B`, status line; then Ops' own record |
 | Freeze / unfreeze | `set_frozen` | — | — | `freeze`/`unfreeze` event (project `*`), save, `freeze by B` |

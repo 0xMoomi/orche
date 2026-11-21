@@ -3,9 +3,12 @@
 Read-only. Orca listings run even under --dry-run (they mutate nothing); a failed listing
 returns None so the rules can skip whatever depends on it.
 """
+import fnmatch
 import json
 import os
 import re
+import struct
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -25,6 +28,7 @@ class UnitRec:
     last_activity: str
     entry: dict          # registry dict (mutations reach the registry)
     event_unit: str
+    kind: str = "div"    # div | feat
 
 
 def real(path):
@@ -55,7 +59,7 @@ def unit_records(reg) -> list:
                 wt = feat.get("worktree", "")
                 out.append(UnitRec(feat.get("session", ""), key, feat.get("status", ""),
                                    real(units.worktree_path(wt)) or "", wt, feat.get("last_activity", ""), feat,
-                                   f"{dname}/{feat.get('name', '')}"))
+                                   f"{dname}/{feat.get('name', '')}", "feat"))
     return out
 
 
@@ -95,6 +99,20 @@ def git_porcelain(root):
     return [line for line in res.out.splitlines() if line.strip()]
 
 
+def git_ignored(root, rel):
+    """True if git ignores `rel` (`git check-ignore`: exit 0), False if not (exit 1), None otherwise."""
+    res = shell.git(root, "check-ignore", "-q", "--", rel, timeout=60)
+    return True if res.code == 0 else False if res.code == 1 else None
+
+
+def git_ignored_dirs(root):
+    """Directories (relative, no trailing `/`) git reports as ignored in `root`, or None if git failed."""
+    res = shell.git(root, "ls-files", "--others", "--ignored", "--exclude-standard", "--directory", timeout=60)
+    if not res.ok:
+        return None
+    return [ln.rstrip("/") for ln in res.out.splitlines() if ln.endswith("/")]
+
+
 def git_tracked(root, rel):
     """True if git tracks anything under `rel`, False if not, None if git failed."""
     res = shell.git(root, "ls-files", "--", rel, timeout=60)
@@ -120,9 +138,57 @@ def tree_stats(path):
     return size, newest
 
 
-def cache_dirs(root, names) -> list:
-    """Directories named in `names` under `root` (depth <= CACHE_DEPTH, no dot-dirs/node_modules)."""
-    names, found, root = set(names), [], Path(root)
+_FSOPT_NOFOLLOW, _FSOPT_ATTR_CMN_EXTENDED, _ATTR_CMNEXT_PRIVATESIZE = 0x1, 0x20, 0x8
+_getattrlist = None
+
+
+def _private_size(path):
+    """darwin: the bytes only this file holds on its volume (APFS clones share theirs), or None."""
+    global _getattrlist
+    try:
+        import ctypes
+        import ctypes.util
+        if _getattrlist is None:
+            _getattrlist = ctypes.CDLL(ctypes.util.find_library("c"), use_errno=True).getattrlist
+        # struct attrlist: bitmapcount, reserved, common, vol, dir, file, fork (the fifth: extended common)
+        attrs = ctypes.create_string_buffer(struct.pack("=HHIIIII", 5, 0, 0, 0, 0, 0, _ATTR_CMNEXT_PRIVATESIZE))
+        buf = ctypes.create_string_buffer(12)       # uint32 length, then int64 private size (packed to 4)
+        if _getattrlist(os.fsencode(str(path)), attrs, buf, ctypes.sizeof(buf),
+                        _FSOPT_NOFOLLOW | _FSOPT_ATTR_CMN_EXTENDED) != 0:
+            return None
+        return struct.unpack("=Iq", buf.raw)[1]
+    except Exception:  # noqa: BLE001 - the fallback counts the file instead
+        return None
+
+
+def reclaim(path) -> int:
+    """Bytes deleting the tree at `path` really frees: each regular file once per inode, symlinks not followed.
+    darwin: the file's private size (getattrlist); otherwise, or when that fails, its blocks when it has one
+    link, else 0 (a hard-linked file frees nothing). Never raises."""
+    total, seen = 0, set()
+    try:
+        walk = [(str(path), [], [""])] if os.path.isfile(path) and not os.path.islink(path) else os.walk(path)
+        for dirpath, _dirs, files in walk:
+            for name in files:
+                full = os.path.join(dirpath, name) if name else dirpath
+                try:
+                    st = os.lstat(full)
+                except OSError:
+                    continue
+                if not os.path.stat.S_ISREG(st.st_mode) or (st.st_dev, st.st_ino) in seen:
+                    continue
+                seen.add((st.st_dev, st.st_ino))
+                own = _private_size(full) if sys.platform == "darwin" else None
+                total += own if own is not None else (st.st_blocks * 512 if st.st_nlink == 1 else 0)
+    except Exception:  # noqa: BLE001 - never raises: what was counted stands
+        pass
+    return total
+
+
+def cache_dirs(root, patterns) -> list:
+    """Directories whose own name matches one of the fnmatch `patterns` under `root` (depth <= CACHE_DEPTH;
+    a matched dir, other dot-dirs and node_modules are not descended into)."""
+    found, root = [], Path(root)
     for dirpath, dirnames, _ in os.walk(root):
         depth = len(Path(dirpath).relative_to(root).parts)
         keep = []
@@ -130,7 +196,7 @@ def cache_dirs(root, names) -> list:
             full = Path(dirpath) / d
             if full.is_symlink():
                 continue
-            if d in names:
+            if any(fnmatch.fnmatchcase(d, pat) for pat in patterns):
                 found.append(full)
             elif d not in PRUNE_DIRS and not d.startswith(".") and depth + 1 < CACHE_DEPTH:
                 keep.append(d)

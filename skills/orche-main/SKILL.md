@@ -173,7 +173,7 @@ a waker, launchd job or polling script for this; if you believe wakes are failin
 
 Never only acknowledge ("3 reports arrived") and end the turn. Update the ledger only through `orche` commands. Never
 read diffs: review is a verification unit for Build. A pointer whose `brief_rev` is older than the current rev never
-approves the newer rev. Orche's own notes (`info` from `orche`) wait for `[drain]` or a status question and need no action. The one exception: an `info` from Orche that starts with `resumed:` (your pane was reopened) ⇒ run `orche status <project>`, act on what waits, and reply with the status line.
+approves the newer rev. Orche's own notes (`info` from `orche`) wait for `[drain]` or a status question and need no action. The one exception: an `info` from Orche that starts with `resumed:` (your pane was reopened) ⇒ run `orche status <project>`, act on what waits, and reply with the status line. An urgent `info` from `janitor` about large folders ⇒ put it to the owner in plain words as the turn's `OWNER:` line; on yes delete exactly the listed folders and nothing else, on no leave them; Orche does not ask about those folders again either way.
 
 Staff items (`from staff-<project>`). An `info` from Staff is the owner's words relayed by his Staff: use it; it
 needs no reply. An `external-request` from Staff is the owner's own request handed over by Staff, never already

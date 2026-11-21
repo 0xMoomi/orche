@@ -14,4 +14,5 @@ Staff each brief yourself; Main briefs heads, never workers.
   are independent and each need many reads; a few lookups stay in your own run.
   Specs stay in your report; a PR only for what ships.
 6 Decide each finished slice with the checklist (skill orche-build). On the landed note, reuse or retire each
-  worker of that unit (orche feat retire <p> <name> --yes), then report your unit.
+  worker of that unit (orche feat retire <p> <name> --yes), then report your unit. Orche itself retires
+  a landed worker left quiet 7 days.

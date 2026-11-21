@@ -3,6 +3,36 @@
 All notable changes to Orche are listed here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow semantic versioning.
 
+## 0.22.0 — 2026-11-21
+
+### Changed
+
+- The janitor gives disk space back on its own. Dependencies and build output that git ignores
+  (`node_modules`, `.next` and `.next-*`, `dist`, `out`, `build`, `coverage`, `.turbo`) are deleted once
+  their unit has been quiet for 7 days and they have not been written for 7 days, whatever the unit's
+  status (active and paused included), and only when deleting them really frees at least 100 MB: files
+  shared with a package store (as pnpm does) do not count, so nothing is reinstalled for nothing. They
+  are deleted at once instead of waiting 30 days in the trash, since a reinstall or rebuild brings them
+  back; each gets a line in the global graveyard only.
+- The janitor reads a unit's quiet time from its real activity, not only from the registry, so a unit in
+  use keeps its build output and an idle one no longer hides behind an old registry date.
+- Uncommitted changes in a worktree no longer keep its ignored build output; the changes themselves stay
+  untouched.
+- Finished workers leave on their own: a worker whose work landed and that has been quiet for 7 days is
+  retired by the janitor (its branch is tagged as with `orche feat retire`), and a retired worker's
+  worktree still on disk is removed through Orca.
+- Left alone: onboarding units, divisions (never retired by the janitor), the project's main checkout,
+  anything git tracks or does not ignore, `.env` files and `memory/` folders (inside build output only a
+  `.env` file holds it back, and nothing inside `node_modules`), a worker whose checked-out work has not
+  landed even if its recorded branch has, and a worker with an open pane, a running `orche run` or
+  uncommitted work (the report says why it stays).
+- A folder the janitor cannot be sure is cheap to recreate is never deleted on its own decision:
+  `node_modules` is removed only when a lockfile sits beside it or above it, and any other large ignored
+  folder (200 MB or more) in a quiet worktree is put to you through Main once; on your yes Main deletes
+  exactly those folders.
+- Workers and division heads delete the throwaway files they made for a unit (test copies of a checkout,
+  dumps, one-off logs, discarded build variants) before they report it, keeping anything the report cites.
+
 ## 0.21.4 — 2026-11-13
 
 ### Changed

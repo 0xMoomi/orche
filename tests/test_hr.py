@@ -1557,6 +1557,20 @@ class FeatRetireTest(FeatCase):
         self.assertEqual(code, 0, err)
         self.assertIn("retired: landed", (self.repo / "docs" / "GRAVEYARD.md").read_text())
 
+    def test_landed_without_fetch_reads_the_local_ref_and_retire_names_its_actor(self):
+        origin = self.home / "origin.git"
+        git("init", "-q", "--bare", str(origin), cwd=self.home)
+        git("remote", "add", "origin", str(origin), cwd=self.wt)
+        git("push", "-q", "origin", "feat/checkout:main", cwd=self.wt)
+        git("remote", "set-head", "origin", "main", cwd=self.wt)
+        proj = self.reg["projects"]["acme-shop"]
+        self.assertTrue(hr.landed(str(self.wt), "feat/checkout", proj, "acme-shop", fetch=False))
+        self.assertEqual(hr.uncommitted(str(self.wt), "feat-acme-shop-checkout")[0], [])
+        unit = roster.Roster(registry.load()).member("feat-acme-shop-checkout")
+        with redirect_stderr(io.StringIO()):
+            hr.retire(registry.load(), unit, yes=True, by="janitor")
+        self.assertEqual(registry.load()["events"][-1]["by"], "janitor")
+
     def test_squash_landed_worker_retires_without_final_line(self):
         from orche.queue import store
         self.handoff.write_text("# HANDOFF\n\n## Next\nnothing\n")

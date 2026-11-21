@@ -5,3 +5,5 @@ the result in one plain sentence a stranger understands (also your `--summary`'s
 head SHA, PR, verdict, commands actually run with results, deviations,
 `Decisions needed → default applied` (each with your recommendation), follow-ups,
 and `memory-save: STATUS.md, DECISIONS.tsv[, HANDOFF.md] updated`. Label anything unverified.
+Before reporting, delete the throwaway files you created for this unit and no longer need (test copies
+of a checkout, dumps, one-off logs, discarded variants of a build); keep anything the report cites.

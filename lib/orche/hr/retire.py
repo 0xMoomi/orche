@@ -1,4 +1,5 @@
-"""Retiring units: `orche feat retire` (retire) and the janitor's orca-removed rule (retire_gone).
+"""Retiring units: `orche feat retire` and the janitor's landed rule (retire), the janitor's orca-removed
+rule (retire_gone).
 
 retire: refuses an onboarding entry, uncommitted work (anything in `git status` except untracked
         Orche-owned files), a HANDOFF.md without `final:` unless the branch head is already in
@@ -46,14 +47,10 @@ def _retire_problem(unit, proj, kept):
     wt = str(unit.worktree or Path("."))
     if not wt or units.is_within(proj["path"], wt) or discover.real(wt) == discover.real(proj["path"]):
         return f"{unit.session}'s worktree is the project's main checkout; refusing to remove it", [], None
-    res = shell.git(wt, "status", "--porcelain", "--untracked-files=all", timeout=60)
-    if not res.ok:
+    status = uncommitted(wt, unit.session)
+    if status is None:
         return f"cannot read git status of {wt}", [], None
-    lines = [ln for ln in res.out.splitlines() if ln.strip()]
-    owned = [units.porcelain_path(ln) for ln in lines
-             if ln.startswith("??") and units.orche_owned(units.porcelain_path(ln), unit.session)]
-    foreign = [units.porcelain_path(ln) for ln in lines
-               if not (ln.startswith("??") and units.orche_owned(units.porcelain_path(ln), unit.session))]
+    foreign, owned = status
     if foreign:
         listed = ", ".join(foreign[:10]) + (" …" if len(foreign) > 10 else "")
         return (f"worktree has uncommitted work: {listed}; commit or stash it "
@@ -63,19 +60,35 @@ def _retire_problem(unit, proj, kept):
     handoff = own if own.exists() else kept / "HANDOFF.md"
     if has_final(handoff):
         return None, owned, "HANDOFF final"
-    if _landed(wt, unit.branch, proj, unit.project):
+    if landed(wt, unit.branch, proj, unit.project):
         return None, owned, "landed"
     return f"HANDOFF.md has no 'final:' line in its first {FINAL_LINES} lines: {own}", owned, None
 
 
-def _landed(wt, branch, proj, project) -> bool:
-    """The worker's branch head is already in origin/<base> (fetched first; a failed fetch uses what is
-    there), or the merge queue logged it `merged` (a squash merge leaves no ancestor: id `pr<N>-<head7>`)."""
+def uncommitted(wt, session):
+    """(foreign, owned) paths of `git status --porcelain --untracked-files=all` in `wt`, or None when git
+    fails: `owned` are the untracked Orche-owned paths of `session`, `foreign` everything else (its work)."""
+    res = shell.git(wt, "status", "--porcelain", "--untracked-files=all", timeout=60)
+    if not res.ok:
+        return None
+    foreign, owned = [], []
+    for ln in res.out.splitlines():
+        if ln.strip():
+            rel = units.porcelain_path(ln)
+            (owned if ln.startswith("??") and units.orche_owned(rel, session) else foreign).append(rel)
+    return foreign, owned
+
+
+def landed(wt, branch, proj, project, *, fetch=True) -> bool:
+    """The worker's branch head is already in origin/<base> (fetched first unless `fetch` is false; a failed
+    fetch uses what is there), or the merge queue logged it `merged` (a squash merge leaves no ancestor: id
+    `pr<N>-<head7>`). The janitor's plan passes fetch=False: it has no side effects."""
     from .. import publish, queue   # here, not at the top: hr stays free of the git/gh publish layer at import
     base = publish.base(proj["path"], worktree=wt, project=project)
     if not base or not branch:
         return False
-    shell.git(wt, "fetch", "origin", base, timeout=publish.FETCH_TIMEOUT)
+    if fetch:
+        shell.git(wt, "fetch", "origin", base, timeout=publish.FETCH_TIMEOUT)
     if shell.git(wt, "merge-base", "--is-ancestor", branch, f"origin/{base}").ok:
         return True
     head = shell.git(wt, "rev-parse", branch, timeout=20)
@@ -154,9 +167,10 @@ def _ignored_files(wt) -> list:
     return [ln for ln in res.out.splitlines() if ln.strip() and not ln.startswith(".orche/")]
 
 
-def retire(reg, unit, *, yes=False, dry_run=False):
+def retire(reg, unit, *, yes=False, dry_run=False, by=None):
     """Retire feature agent `unit` (a roster.Member of `reg`): -> (data, line) for the CLI.
-    Raises book.Refused (code = the CLI exit code) where `orche feat retire` used to fail."""
+    Raises book.Refused (code = the CLI exit code) where `orche feat retire` used to fail.
+    `by` names the actor (default roster.actor(); the janitor passes its own name)."""
     key, name, proj = unit.project, unit.name, reg["projects"][unit.project]
     if unit.entry["status"] == "retired":
         return {"feature": name, "status": "retired", "changed": False}, f"{unit.session} is already retired"
@@ -230,7 +244,7 @@ def retire(reg, unit, *, yes=False, dry_run=False):
     except orca.OrcaError as exc:
         raise book.Refused(EXIT_USER, f"orca worktree rm failed: {exc} (tag {tag} and unit files in {kept} kept; "
                                       f"re-run `orche feat retire {key} {name} --yes` once it can be removed)") from None
-    by, now, archived = roster.actor(), units.now(), None
+    by, now, archived = by or roster.actor(), units.now(), None
     if files:
         def record(m):
             graveyard.record(proj["path"], f"archived {m['count']} session files of {unit.session}",

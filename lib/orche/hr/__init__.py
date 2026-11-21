@@ -16,10 +16,10 @@ from .limits import awake, set_frozen, stage_gate
 from .onboarding import session_name, session_owner
 from .panes import project_pane
 from .refresh import Refresh, refresh_project, stamp_version
-from .retire import retire, retire_gone
+from .retire import landed, retire, retire_gone, uncommitted
 from .transitions import run_verb, set_stage, sleep, wake
 
-__all__ = ["Refresh", "Refused", "add_division", "awake", "correct", "create_feature", "log_path", "onboard_project",
+__all__ = ["Refresh", "Refused", "add_division", "awake", "correct", "create_feature", "landed", "log_path", "onboard_project",
            "plan_divisions", "project_pane", "refresh_project", "retire", "retire_gone", "run_audit", "run_mistakes",
            "run_verb", "session_name", "session_owner", "set_frozen", "set_main", "set_model", "set_stage", "sleep", "stage_gate",
-           "stamp_version", "wake"]
+           "stamp_version", "uncommitted", "wake"]

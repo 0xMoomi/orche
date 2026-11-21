@@ -61,12 +61,16 @@ checklist. "Back to building" runs `orche stage set <proj> building --yes`; Ops'
 
 ## What does the Janitor never touch?
 
-Active, paused and onboarding units; `.env*` files; `memory/` and agent-memory directories; the
-registry and cards; ledger, GRAVEYARD, DECISIONS, STATUS, HANDOFF and CHARTER files. Dirty or
-live checkouts are reported as skips, not cleaned. Only state retires things (`retired`, a
-GRAVEYARD row, `orche discard`); age touches only regenerable artifacts. Sessions are archived,
-never deleted; files go to a 30-day trash with `orche janitor undo`. It stays a dry run until
-you tell Main to turn the janitor on (it runs `orche janitor enable`).
+Onboarding units; `.env*` files; `memory/` and agent-memory directories; the registry and cards;
+ledger, GRAVEYARD, DECISIONS, STATUS, HANDOFF and CHARTER files; the project's main checkout. Dirty
+or live checkouts are reported as skips, not cleaned. Only state retires things (`retired`, a
+GRAVEYARD row, `orche discard`, a worker whose work landed and that has been quiet 7 days); age
+touches only regenerable artifacts. Dependencies and build output git ignores (`node_modules`,
+`.next`, `dist` and the like) of a unit quiet 7 days are deleted outright when that really frees at
+least 100 MB (files shared with a package store do not count), since a reinstall or rebuild brings
+them back; build output is protected only where it holds a `.env` file. Sessions are archived, never deleted; other files go to a 30-day trash
+with `orche janitor undo`. It stays a dry run until you tell Main to turn the janitor on (it runs
+`orche janitor enable`).
 
 ## How does Keymaster keep secrets out of transcripts?
 

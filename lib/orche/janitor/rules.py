@@ -1,29 +1,38 @@
 """Janitor decisions: triggers, untouchables, and the plan for one run. No side effects.
 
-Triggers (only these archive or trash): registry `retired`; unprocessed `docs/GRAVEYARD.md` rows
-with a `path:`/`session:` pointer; a registry worktree Orca no longer lists (retired only with
-`--apply-removed`); `orche discard` (which writes a GRAVEYARD row). Age only for regenerable
-artifacts: build caches of idle dormant/retired units, Orca Codex `.tmp`, ownerless scratch.
-Untouchables are never listed: active/paused units, `.env*`, `memory/`, registry, cards,
-LEDGER/GRAVEYARD/DECISIONS/STATUS/HANDOFF/CHARTER. Dirty or live checkouts are listed as skips.
+Triggers (only these archive, trash, delete, retire or remove): registry `retired`; unprocessed
+`docs/GRAVEYARD.md` rows with a `path:`/`session:` pointer; a registry worktree Orca no longer lists
+(retired only with `--apply-removed`); `orche discard` (which writes a GRAVEYARD row); a finished worker
+(landed and quiet `idle_days`: retired; retired with its worktree still on disk: the worktree removed).
+Age only for regenerable artifacts: git-ignored dependencies and build output (`cache_names`) of any
+unit but an onboarding one, quiet `idle_days` (deleted outright; `node_modules` only beside a lockfile),
+Orca Codex `.tmp`, ownerless scratch. Other large git-ignored folders of a quiet unit are asked
+(`age:costly`): Main puts them to the owner; the janitor never deletes them.
+Untouchables are never listed: `.env*`, `memory/`, registry, cards, LEDGER/GRAVEYARD/DECISIONS/STATUS/
+HANDOFF/CHARTER, the project's main checkout. Dirty or live checkouts are listed as skips.
 """
+import fnmatch
 import hashlib
 import os
 import re
 from pathlib import Path
 
 from .. import log, orca, units
-from . import Candidate, configured_dir, discover, graveyard, trash, untouchable_sessions
+from . import Candidate, configured_dir, discover, graveyard, human_size, trash, untouchable_sessions
 
 DAY = 86400
 RECENT_WRITE_S = 3600
 PROTECTED_STEMS = {"LEDGER", "GRAVEYARD", "DECISIONS", "STATUS", "HANDOFF", "CHARTER"}
 PROTECTED_DIRS = {"memory", "cards", "agent-memory"}
 UNTOUCHABLE = ("active", "paused", "onboarding")
-CACHE_STATUSES = ("dormant", "retired")
+WORKER_STATUSES = ("active", "paused", "dormant")   # a landed, quiet worker in one of these is retired
 # Record files Orche itself appends to; their edits are not someone's work in progress.
 RECORD_FILES = {"docs/GRAVEYARD.md", "docs/LEDGER.tsv"}
 RECORD_NAMES_UNDER_ORCHE = {"DECISIONS.tsv", "STATUS.md", "HANDOFF.md"}
+LOCKFILES = ("pnpm-lock.yaml", "package-lock.json", "npm-shrinkwrap.json", "yarn.lock", "bun.lockb", "bun.lock")
+NO_LOCKFILE = "no lockfile (not a one-command reinstall)"
+ASK_MIN = 200 * 2**20     # an ignored folder this large that rule A does not know is asked, never deleted
+WORTH_MIN = 100 * 2**20   # rule A deletes only what really frees this much (recreating costs tokens)
 POINTER = re.compile(r"(?:^|\s)(path|session):(\S+)")
 
 
@@ -46,6 +55,15 @@ def is_protected(path, root=None) -> bool:
     return any(is_protected_name(x) for x in parts)
 
 
+def contains_env(path) -> bool:
+    """True when a `.env*` file or directory lies inside `path` (the one content guard of build output)."""
+    if os.path.isdir(path) and not os.path.islink(path):
+        for _, dirnames, filenames in os.walk(path):
+            if any(n.startswith(".env") for n in dirnames + filenames):
+                return True
+    return False
+
+
 def contains_protected(path, root=None) -> bool:
     if is_protected(path, root):
         return True
@@ -56,9 +74,9 @@ def contains_protected(path, root=None) -> bool:
     return False
 
 
-def idle_days(last_activity, now):
-    ts = units.parse_iso(last_activity)
-    return None if ts is None else (now - ts).total_seconds() / DAY
+def idle_days(last_active, now):
+    """Days since `last_active` (an aware datetime, `units.last_active`), or None when unknown."""
+    return None if last_active is None else (now - last_active).total_seconds() / DAY
 
 
 def pointer(what):
@@ -193,12 +211,14 @@ def plan(ctx) -> list:
     out = []
     _purge(ctx, out)
     _removed(ctx, out)
+    _finished(ctx, out)
     for u in ctx.units:
         if u.session in ctx.retired:
             trigger = "retired" if u.status == "retired" else "orca-removed"
             _sessions(ctx, out, u.session, u.project, u.worktree, trigger, [])
     _graveyard(ctx, out)
     _caches(ctx, out)
+    _costly(ctx, out)
     _codex_tmp(ctx, out)
     _scratch(ctx, out)
     return out
@@ -351,43 +371,205 @@ def _graveyard_path(ctx, out, key, root, value, why, h):
                          size, **base))
 
 
+def _main_checkout(ctx, u) -> bool:
+    """True when the unit's worktree is (or holds) its project's main checkout."""
+    main = discover.real((ctx.reg.get("projects", {}).get(u.project) or {}).get("path"))
+    return bool(main and u.worktree and units.is_within(main, u.worktree))
+
+
+def _has_lockfile(path, wt) -> bool:
+    """A lockfile in `path`'s parent or any ancestor up to and including the worktree root `wt`."""
+    p, root = Path(path).parent, Path(wt)
+    while units.is_within(p, root):
+        if any((p / name).is_file() for name in LOCKFILES):
+            return True
+        if p == root or p.parent == p:
+            return False
+        p = p.parent
+    return False
+
+
+def _sweepable(ctx, u) -> bool:
+    """Unit-level conditions of rules A and E: not onboarding, not leaving, a worktree on disk that is not
+    the project's main checkout."""
+    wt = u.worktree
+    return not (u.status == "onboarding" or u.session in ctx.leaving or not wt or not os.path.isdir(wt)
+                or _main_checkout(ctx, u))
+
+
 def _caches(ctx, out):
+    """Git-ignored dependencies and build output (`cache_names`, fnmatch on the dir's own name) of a unit
+    quiet `idle_days`, any status but onboarding: deleted outright (one standard command recreates them;
+    `node_modules` only beside a lockfile)."""
     days = float(ctx.st["idle_days"])
     for u in ctx.units:
-        if u.session not in ctx.retired and u.status not in CACHE_STATUSES:
-            continue
         wt = u.worktree
-        if not wt or not os.path.isdir(wt):
+        if not _sweepable(ctx, u):
             continue
-        caches = [c for c in discover.cache_dirs(wt, ctx.st["cache_names"]) if not contains_protected(c, wt)]
+        caches = []
+        for c in discover.cache_dirs(wt, ctx.st["cache_names"]):
+            if is_protected(c, wt) or (c.name != "node_modules" and contains_env(c)):
+                continue
+            size, newest = discover.tree_stats(c)
+            if size >= WORTH_MIN:      # smaller: not worth a rebuild, and not worth a report row
+                caches.append((c, size, newest))
         if not caches:
             continue
-        gate = _live(ctx, wt) or _wip(ctx, wt)
+        gate = _live(ctx, wt)
         if gate:
             out.append(Candidate("age:build-cache", "skip", wt, gate, kind="path", project=u.project,
                                  unit=u.session))
             continue
-        idle = idle_days(u.last_activity, ctx.now)
-        for c in caches:
+        idle = idle_days(units.last_active(u.entry), ctx.now)
+        for c, size, newest in caches:
             rel = c.relative_to(wt).as_posix()
-            size, newest = discover.tree_stats(c)
             age = (ctx.now.timestamp() - newest) / DAY
-            tracked = discover.git_tracked(wt, rel)
-            if tracked is None:
-                reason = "git-unknown"
-            elif tracked:
-                reason = "tracked in git (not regenerable)"
-            elif idle is None:
-                reason = "unit last_activity unknown"
-            elif idle <= days:
-                reason = f"unit active {idle:.0f}d ago"
-            elif age <= days:
-                reason = f"fresh: touched {age:.1f}d ago"
-            else:
-                reason = None
-            out.append(Candidate("age:build-cache", "skip" if reason else "trash", str(c),
-                                 reason or f"unit idle {idle:.0f}d, cache untouched {age:.0f}d", size,
+            reason = (NO_LOCKFILE if c.name == "node_modules" and not _has_lockfile(c, wt)
+                      else _cache_hold(wt, rel, idle, age, days))
+            if not reason:
+                size = discover.reclaim(c)
+                if size < WORTH_MIN:
+                    reason = f"frees only {human_size(size)} (files shared with the package store)"
+            out.append(Candidate("age:build-cache", "skip" if reason else "delete", str(c),
+                                 reason or f"unit idle {idle:.0f}d, untouched {age:.0f}d", size,
                                  path=str(c), root=wt, project=u.project, unit=u.session))
+
+
+def _cache_hold(wt, rel, idle, age, days):
+    """Why the regenerable dir `rel` of worktree `wt` stays, or None to delete it."""
+    tracked = discover.git_tracked(wt, rel)
+    if tracked is None:
+        return "git-unknown"
+    if tracked:
+        return "tracked in git (not regenerable)"
+    ignored = discover.git_ignored(wt, rel)
+    if ignored is None:
+        return "git-unknown"
+    if not ignored:
+        return "not ignored by git"
+    if idle is None:
+        return "unit last_activity unknown"
+    if idle <= days:
+        return f"unit active {idle:.0f}d ago"
+    if age <= days:
+        return f"fresh: touched {age:.1f}d ago"
+    return None
+
+
+def _handled_by_caches(ctx, wt, rel) -> bool:
+    """True when rule A handles `rel` or a directory above it (a `cache_names` match; `node_modules` with a
+    lockfile)."""
+    parts = Path(rel).parts
+    for i, name in enumerate(parts):
+        if any(fnmatch.fnmatchcase(name, pat) for pat in ctx.st["cache_names"]):
+            if name != "node_modules" or _has_lockfile(Path(wt, *parts[:i + 1]), wt):
+                return True
+    return False
+
+
+def _costly(ctx, out):
+    """Rule E: a large git-ignored folder of a quiet unit that rule A does not know how to recreate. The owner
+    decides (Main asks); the janitor never deletes it."""
+    days = float(ctx.st["idle_days"])
+    for u in ctx.units:
+        wt = u.worktree
+        if not _sweepable(ctx, u) or _live(ctx, wt):
+            continue
+        idle = idle_days(units.last_active(u.entry), ctx.now)
+        if idle is None or idle <= days:
+            continue
+        for rel in discover.git_ignored_dirs(wt) or []:
+            if rel.split("/", 1)[0] in (".orche", ".claude") or _handled_by_caches(ctx, wt, rel):
+                continue
+            path = os.path.join(wt, rel)
+            if os.path.islink(path) or not os.path.isdir(path) or is_protected(path, wt) \
+                    or (Path(rel).name != "node_modules" and contains_env(path)):
+                continue
+            size, newest = discover.tree_stats(path)
+            if size < ASK_MIN or (ctx.now.timestamp() - newest) / DAY <= days:
+                continue
+            size = discover.reclaim(path)
+            if size < ASK_MIN:
+                continue
+            out.append(Candidate("age:costly", "ask", path,
+                                 "large and not known to be cheap to recreate: the owner decides", size,
+                                 kind="path", path=path, root=wt, project=u.project, unit=u.session))
+
+
+def _finished(ctx, out):
+    """Finished workers (feature units only): a retired one whose worktree is still on disk has it removed;
+    an active/paused/dormant one whose work landed and that is quiet `idle_days` is retired."""
+    days = float(ctx.st["idle_days"])
+    live_runs = {}
+    for u in ctx.units:
+        if u.kind != "feat" or not u.worktree or not os.path.isdir(u.worktree):
+            continue
+        if u.status == "retired":
+            _leftover(ctx, out, u)
+            continue
+        if u.status not in WORKER_STATUSES:
+            continue
+        idle = idle_days(units.last_active(u.entry), ctx.now)
+        if idle is None or idle <= days or _main_checkout(ctx, u) or not _landed(ctx, u):
+            continue
+        if u.project not in live_runs:
+            live_runs[u.project] = _live_runs(u.project)
+        reason = (_session_live(ctx, u.session) or _live(ctx, u.worktree)
+                  or ("live orche run" if u.session in live_runs[u.project] else None)
+                  or _uncommitted(u))
+        base = dict(kind="unit", unit=u.session, project=u.project)
+        if reason:
+            out.append(Candidate("landed", "skip", u.session, f"work landed, quiet {idle:.0f}d; {reason}", **base))
+            continue
+        out.append(Candidate("landed", "retire", u.session, f"work landed, quiet {idle:.0f}d", **base))
+        ctx.leaving.add(u.session)
+
+
+def _leftover(ctx, out, u):
+    """A retired worker's worktree still on disk: removed through Orca when Orca lists it and it is clean."""
+    wt = u.worktree
+    base = dict(kind="worktree", unit=u.session, project=u.project, path=wt)
+    if ctx.worktrees is None:
+        reason = "orca-unavailable"
+    elif _main_checkout(ctx, u):
+        reason = "the project's main checkout"
+    elif u.raw_worktree not in ctx.worktrees and wt not in ctx.worktrees:
+        reason = "not listed by Orca"
+    else:
+        reason = _live(ctx, wt) or _uncommitted(u)
+    if reason:
+        out.append(Candidate("retired", "skip", wt, reason, **base))
+        return
+    size, _ = discover.tree_stats(wt)
+    out.append(Candidate("retired", "remove", wt, "retired unit's worktree still on disk", size, **base))
+    ctx.leaving.add(u.session)
+
+
+def _landed(ctx, u) -> bool:
+    from .. import hr                      # function level: hr/retire.py imports the janitor's modules
+    proj = ctx.reg["projects"].get(u.project) or {}
+    if not proj.get("path"):
+        return False
+    # Both: the registry branch can be stale (the worktree moved to `<branch>-3`); HEAD is what is checked out.
+    return all(hr.landed(u.worktree, ref, proj, u.project, fetch=False) for ref in (u.entry.get("branch", ""), "HEAD"))
+
+
+def _uncommitted(u):
+    """`uncommitted work: ...` (hr's rule: anything but untracked Orche-owned files), `git-unknown`, or None."""
+    from .. import hr
+    status = hr.uncommitted(u.worktree, u.session)
+    if status is None:
+        return "git-unknown"
+    foreign = status[0]
+    if not foreign:
+        return None
+    return "uncommitted work: " + ", ".join(foreign[:5]) + (" ..." if len(foreign) > 5 else "")
+
+
+def _live_runs(project) -> set:
+    """Sessions with a live `orche run` (the source of `orche depts`' running column)."""
+    from .. import runs
+    return {lock.get("to") for lock in runs.live(project) if lock.get("to")}
 
 
 def _aged_children(ctx, directory, trigger, keep=lambda p: True):
