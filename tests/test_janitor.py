@@ -46,6 +46,7 @@ class JanitorCase(support.TempHomeCase):
         self._orig_zstd, archive.zstd_bin = archive.zstd_bin, lambda: None
         self.addCleanup(setattr, archive, "zstd_bin", self._orig_zstd)
         self.calls, self.dirty, self.not_ignored, self.landed, self.ignored_dirs = [], {}, set(), set(), {}
+        self.submodules = {}   # worktree path -> `git submodule status --recursive` output
         self._orig_runner, shell.RUNNER = shell.RUNNER, self.fake_runner
         self.addCleanup(setattr, shell, "RUNNER", self._orig_runner)
         self.claude = self.w / "claude-projects"
@@ -72,6 +73,10 @@ class JanitorCase(support.TempHomeCase):
             return self.ok({"terminals": self.terminals})
         if argv[0] == "git" and argv[3] == "status":
             return shell.Result(0, self.dirty.get(argv[2], ""), "", argv)
+        if argv[0] == "git" and argv[3] == "submodule":
+            return shell.Result(0, self.submodules.get(argv[2], ""), "", argv)
+        if argv[0] == "git" and argv[3] in ("stash", "log"):
+            return shell.Result(0, "", "", argv)
         if argv[1:3] == ["worktree", "rm"]:
             return self.ok({"removed": True})
         if argv[0] == "git" and argv[3] == "ls-files" and "--directory" in argv:
@@ -893,6 +898,16 @@ class FinishedWorkerTest(JanitorCase):
         rows = (self.proj / "docs/GRAVEYARD.md").read_text()
         self.assertIn(f"| worktree {self.pay} of retired unit feat-acme-pay | retired: ", rows)
         self.assertIn("branch feat/pay was tagged at retirement", rows)
+
+    def test_a_retired_leftover_with_clean_submodules_is_removed_with_force(self):
+        self.set_pay(status="retired")
+        self.submodules[str(self.pay)] = " 1234567 contracts/lib/forge-std (v1.9.0)\n"
+        self.orche("janitor", "enable")
+        (row,) = self.rows(self.run_json())
+        self.assertEqual((row["result"], row.get("error")), ("removed", None))
+        self.assertIn(["git", "-C", str(self.pay / "contracts/lib/forge-std"), "stash", "list"], self.calls)
+        self.assertIn(["orca", "worktree", "rm", "--worktree", f"id:repo-acme::{self.pay}", "--force", "--json"],
+                      self.calls)
 
     def test_a_retired_leftover_orca_does_not_list_stays(self):
         self.set_pay(status="retired")

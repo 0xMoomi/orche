@@ -3,6 +3,15 @@
 All notable changes to Orche are listed here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow semantic versioning.
 
+## 0.22.1 — 2026-11-21
+
+### Fixed
+
+- A worker whose checkout holds submodules (for example Foundry libraries under `contracts/lib/`) can be
+  retired again, and the janitor can remove its leftover worktree. Git refuses to remove such a checkout
+  without force, so Orche now checks every submodule first and adds `--force` only when none of them holds
+  uncommitted changes, a stash or commits no remote has; otherwise it refuses and names the submodule.
+
 ## 0.22.0 — 2026-11-21
 
 ### Changed

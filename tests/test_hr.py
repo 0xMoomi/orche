@@ -14,7 +14,7 @@ from pathlib import Path
 from unittest import mock
 
 import support
-from orche import hr, notify, registry, roster, shell, statusline, templates, units
+from orche import hr, notify, orca, registry, roster, shell, statusline, templates, units
 from orche.hr import audit, book, limits, onboarding, refresh
 from orche.paths import PLUGIN_ROOT
 from test_registry import load_cli
@@ -1669,10 +1669,95 @@ class FeatRetireTest(FeatCase):
         self.assertIn(f"retire feat-acme-shop-checkout by user (tag {self.tag})", book.log_path().read_text())
         self.assertEqual(refresh.call_count, 1)
 
+    def test_retire_with_a_clean_submodule_uses_force(self):
+        add_submodule(self.wt, git_repo(self.home / "forge-std"), "contracts/lib/forge-std")
+        code, _, err = self.orche("--dry-run", "feat", "retire", "acme", "checkout")
+        self.assertEqual(code, 0, err)
+        self.assertIn(f"[dry-run] orca worktree rm --worktree id:repo-acme::{self.wt} --force --json", err)
+        code, _, err = self.orche("feat", "retire", "acme", "checkout", "--yes")
+        self.assertEqual(code, 0, err)
+        self.assertEqual(self.calls,
+                         [["orca", "worktree", "rm", "--worktree", f"id:repo-acme::{self.wt}", "--force", "--json"]])
+
     def test_retire_without_transcripts_logs(self):
         self.mine.unlink()
         self.assertEqual(self.orche("feat", "retire", "acme", "checkout", "--yes")[0], 0)
         self.assertIn("no transcripts to archive", hr.log_path().read_text())
+
+
+def add_submodule(parent, source, rel):
+    """Add `source` (a local repo) to `parent` as submodule `rel` and commit it."""
+    git("-c", "protocol.file.allow=always", "submodule", "add", "-q", str(source), rel, cwd=parent)
+    git("commit", "-q", "-m", f"add {rel}", cwd=parent)
+    sub = parent / rel
+    git("config", "user.email", "t@example.com", cwd=sub)
+    git("config", "user.name", "t", cwd=sub)
+    git("config", "commit.gpgsign", "false", cwd=sub)
+    return sub
+
+
+class RemoveWorktreeTest(HrCase):
+    """hr.remove_worktree: `--force` only when every initialised submodule holds nothing of its own."""
+    def setUp(self):
+        super().setUp()
+        self.lib = git_repo(self.home / "forge-std")
+        self.wt = git_repo(self.home / "wt-sub")
+
+    def rm_calls(self):
+        return self.orca_calls("worktree rm")
+
+    def remove(self):
+        hr.remove_worktree(self.wt, "repo-acme::wt")
+
+    def test_no_submodules_plain_rm(self):
+        self.remove()
+        self.assertEqual(self.rm_calls(), [["orca", "worktree", "rm", "--worktree", "id:repo-acme::wt", "--json"]])
+
+    def test_clean_submodule_rm_with_force(self):
+        add_submodule(self.wt, self.lib, "contracts/lib/forge-std")
+        self.remove()
+        self.assertEqual(self.rm_calls(),
+                         [["orca", "worktree", "rm", "--worktree", "id:repo-acme::wt", "--force", "--json"]])
+
+    def test_uninitialised_submodule_only_plain_rm(self):
+        add_submodule(self.wt, self.lib, "contracts/lib/forge-std")
+        git("submodule", "deinit", "-q", "-f", "contracts/lib/forge-std", cwd=self.wt)
+        self.remove()
+        self.assertEqual(self.rm_calls(), [["orca", "worktree", "rm", "--worktree", "id:repo-acme::wt", "--json"]])
+
+    def assert_refused(self, holds):
+        with self.assertRaises(orca.OrcaError) as ctx:
+            self.remove()
+        self.assertIn(f"submodule contracts/lib/forge-std holds {holds}", str(ctx.exception))
+        self.assertEqual(self.rm_calls(), [])
+
+    def test_uncommitted_change_refused(self):
+        sub = add_submodule(self.wt, self.lib, "contracts/lib/forge-std")
+        (sub / "README.md").write_text("changed\n")
+        self.assert_refused("uncommitted changes")
+
+    def test_stash_refused(self):
+        sub = add_submodule(self.wt, self.lib, "contracts/lib/forge-std")
+        (sub / "README.md").write_text("changed\n")
+        git("stash", "-q", cwd=sub)
+        self.assert_refused("a stash")
+
+    def test_local_commit_refused(self):
+        sub = add_submodule(self.wt, self.lib, "contracts/lib/forge-std")
+        (sub / "new.txt").write_text("x\n")
+        git("add", ".", cwd=sub)
+        git("commit", "-q", "-m", "local", cwd=sub)
+        self.assert_refused("commits no remote has")
+
+    def test_detached_commit_no_remote_has_refused(self):
+        sub = add_submodule(self.wt, self.lib, "contracts/lib/forge-std")
+        git("checkout", "-q", "--detach", cwd=sub)
+        (sub / "new.txt").write_text("x\n")
+        git("add", ".", cwd=sub)
+        git("commit", "-q", "-m", "detached", cwd=sub)
+        git("checkout", "-q", "--detach", "HEAD", cwd=sub)
+        git("branch", "-q", "-f", "main", "origin/main", cwd=sub)
+        self.assert_refused("commits no remote has")
 
 
 # ---- stage --------------------------------------------------------------------------------------

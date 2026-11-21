@@ -294,13 +294,14 @@ def _delete(ctx, cand):
 
 
 def _remove(ctx, cand):
-    """A retired worker's leftover worktree: GRAVEYARD row naming the branch, then `orca worktree rm`."""
-    from .. import orca
+    """A retired worker's leftover worktree: GRAVEYARD row naming the branch, then `orca worktree rm`
+    (through hr.remove_worktree: `--force` only when its submodules hold nothing of their own)."""
+    from .. import hr
     rec = next(u for u in ctx.units if u.session == cand.unit)
     branch, name = rec.entry.get("branch", ""), rec.entry.get("name", "")
     _recorder(ctx, cand, f"worktree {cand.path} of retired unit {cand.unit}",
               lambda _: f"branch {branch} was tagged at retirement: git tag -l 'archive/feat-{name}-*'")(None)
-    orca.worktree("rm", "--worktree", f"id:{rec.raw_worktree}")
+    hr.remove_worktree(cand.path, rec.raw_worktree)
     return "removed"
 
 

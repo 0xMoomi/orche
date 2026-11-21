@@ -167,6 +167,38 @@ def _ignored_files(wt) -> list:
     return [ln for ln in res.out.splitlines() if ln.strip() and not ln.startswith(".orche/")]
 
 
+SUBMODULE_CHECKS = (  # (git argv inside the submodule, what a non-empty answer means it holds)
+    (("status", "--porcelain"), "uncommitted changes"),
+    (("stash", "list"), "a stash"),
+    (("log", "--branches", "--not", "--remotes", "-1", "--format=%h"), "commits no remote has"),
+    (("log", "HEAD", "--not", "--remotes", "-1", "--format=%h"), "commits no remote has"),
+)
+
+
+def remove_worktree(wt, raw, *, dry_run=False):
+    """`orca worktree rm` of worktree `wt` (Orca id `raw`). Git refuses to remove a checkout holding
+    initialised submodules without force, and force deletes what exists only in them: so `--force` is
+    added only when every initialised submodule holds nothing of its own (no uncommitted change, stash,
+    or commit no remote has). Raises orca.OrcaError when git fails or a submodule is not clean."""
+    argv = ["rm", "--worktree", f"id:{raw}"]
+    res = shell.git(wt, "submodule", "status", "--recursive", timeout=60)
+    if not res.ok:
+        raise orca.OrcaError(f"cannot list the submodules of {wt}: {(res.err or res.out).strip()[:300]}",
+                             "submodules")
+    subs = [ln[1:].split()[1] for ln in res.out.splitlines()
+            if ln.strip() and not ln.startswith("-") and len(ln[1:].split()) > 1]
+    for rel in subs:
+        for check, holds in SUBMODULE_CHECKS:
+            out = shell.git(Path(wt) / rel, *check, timeout=60)
+            if not out.ok or out.out.strip():
+                what = holds if out.ok else "a state git cannot read"
+                raise orca.OrcaError(f"submodule {rel} holds {what}; removing the worktree would delete it",
+                                     "submodule_not_clean")
+    if subs:
+        argv.append("--force")
+    return orca.worktree(*argv, dry_run=dry_run)
+
+
 def retire(reg, unit, *, yes=False, dry_run=False, by=None):
     """Retire feature agent `unit` (a roster.Member of `reg`): -> (data, line) for the CLI.
     Raises book.Refused (code = the CLI exit code) where `orche feat retire` used to fail.
@@ -210,7 +242,10 @@ def retire(reg, unit, *, yes=False, dry_run=False, by=None):
         dry(f"reuse tag {tag} (points at {branch})" if _tag_at_head(wt, tag, branch) else shlex.join(tag_argv))
         if owned:
             dry(f"delete {len(owned)} Orche-owned untracked file(s) from {wt}")
-        orca.worktree("rm", "--worktree", f"id:{unit.entry['worktree']}", dry_run=True)
+        try:
+            remove_worktree(wt, unit.entry["worktree"], dry_run=True)
+        except orca.OrcaError as exc:
+            raise book.Refused(EXIT_BLOCKED, f"orca worktree rm would fail: {exc}") from None
         dry(f"archive {len(files)} transcript file(s) of {unit.session}" if files
             else f"no transcripts found for {unit.session}")
         dry(f"append GRAVEYARD row in {graveyard.project_file(proj['path'])}")
@@ -240,7 +275,7 @@ def retire(reg, unit, *, yes=False, dry_run=False, by=None):
         raise book.Refused(EXIT_USER, f"could not clear Orche files from {wt}: {exc} (tag {tag} and unit files in "
                                       f"{kept} kept; nothing else removed)") from None
     try:
-        orca.worktree("rm", "--worktree", f"id:{unit.entry['worktree']}")
+        remove_worktree(wt, unit.entry["worktree"])
     except orca.OrcaError as exc:
         raise book.Refused(EXIT_USER, f"orca worktree rm failed: {exc} (tag {tag} and unit files in {kept} kept; "
                                       f"re-run `orche feat retire {key} {name} --yes` once it can be removed)") from None

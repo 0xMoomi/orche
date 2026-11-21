@@ -8,9 +8,9 @@ For developers on macOS who want several agents on one repository without watchi
 ## What's new
 
 <!-- whats-new: scripts/release.py keeps the three newest -->
+- **0.22.1** (2026-11-21): a worktree that holds submodules can be removed again. [Notes](https://github.com/0xMoomi/orche/releases/tag/v0.22.1)
 - **0.22.0** (2026-11-21): the janitor gives disk space back: quiet worktrees lose their build output, finished workers retire. [Notes](https://github.com/0xMoomi/orche/releases/tag/v0.22.0)
 - **0.21.4** (2026-11-13): the status line gauges are split in seven, with a thinner pace marker. [Notes](https://github.com/0xMoomi/orche/releases/tag/v0.21.4)
-- **0.21.3** (2026-11-13): the status line gauges are split in three. [Notes](https://github.com/0xMoomi/orche/releases/tag/v0.21.3)
 <!-- /whats-new -->
 
 Every version: [releases](https://github.com/0xMoomi/orche/releases) and [CHANGELOG.md](CHANGELOG.md).
